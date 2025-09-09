@@ -87,28 +87,82 @@ class LibUIPC_Installer:
         return missing
 
     def install_vcpkg(self):
-        """Install or update vcpkg"""
+        """Install or update vcpkg according to LibUIPC requirements"""
         print(f"\n🛠️  Setting up vcpkg at {self.vcpkg_dir}")
         
+        # Create toolchain directory structure as specified
         self.toolchain_dir.mkdir(parents=True, exist_ok=True)
         
         if self.vcpkg_dir.exists():
             print("  ℹ️  vcpkg directory exists, updating...")
             self.run_command("git pull", cwd=self.vcpkg_dir)
         else:
-            print("  📥 Cloning vcpkg...")
-            self.run_command(f"git clone https://github.com/microsoft/vcpkg.git {self.vcpkg_dir}")
+            print("  📥 Cloning vcpkg repository...")
+            # Clone vcpkg as specified in requirements
+            self.run_command(["git", "clone", "https://github.com/microsoft/vcpkg.git"], cwd=self.toolchain_dir)
         
-        # Bootstrap vcpkg
+        # Bootstrap vcpkg as per requirements
         if self.platform_system == "windows":
             bootstrap_cmd = str(self.vcpkg_dir / "bootstrap-vcpkg.bat")
         else:
-            bootstrap_cmd = str(self.vcpkg_dir / "bootstrap-vcpkg.sh")
+            bootstrap_script = self.vcpkg_dir / "bootstrap-vcpkg.sh"
+            bootstrap_cmd = f"./{bootstrap_script.name}"
             # Make executable
-            os.chmod(bootstrap_cmd, 0o755)
+            os.chmod(bootstrap_script, 0o755)
             
         print("  🔧 Bootstrapping vcpkg...")
         self.run_command(bootstrap_cmd, cwd=self.vcpkg_dir)
+        
+        # Set up environment variable as specified in requirements
+        self.setup_vcpkg_environment()
+
+    def setup_vcpkg_environment(self):
+        """Set up CMAKE_TOOLCHAIN_FILE environment variable as per requirements"""
+        print("  🔧 Setting up vcpkg environment...")
+        
+        toolchain_file = self.get_cmake_toolchain_path()
+        
+        if self.platform_system == "windows":
+            # Set system environment variable on Windows
+            print(f"  📝 Setting CMAKE_TOOLCHAIN_FILE to: {toolchain_file}")
+            try:
+                # Set for current session
+                os.environ["CMAKE_TOOLCHAIN_FILE"] = toolchain_file
+                
+                # Attempt to set permanent environment variable (requires admin rights)
+                self.run_command([
+                    "setx", "CMAKE_TOOLCHAIN_FILE", toolchain_file
+                ], check=False)
+                print("  ✅ CMAKE_TOOLCHAIN_FILE set (may require restart)")
+            except Exception as e:
+                print(f"  ⚠️  Could not set permanent environment variable: {e}")
+        else:
+            # Write to ~/.bashrc on Linux/Unix systems as specified
+            bashrc_path = Path.home() / ".bashrc"
+            export_line = f'export CMAKE_TOOLCHAIN_FILE="{toolchain_file}"\n'
+            
+            print(f"  📝 Adding CMAKE_TOOLCHAIN_FILE to {bashrc_path}")
+            
+            # Check if already exists
+            if bashrc_path.exists():
+                with open(bashrc_path, 'r') as f:
+                    content = f.read()
+                if 'CMAKE_TOOLCHAIN_FILE' in content and 'vcpkg.cmake' in content:
+                    print("  ✅ CMAKE_TOOLCHAIN_FILE already configured in ~/.bashrc")
+                    return
+            
+            # Add export line to ~/.bashrc
+            try:
+                with open(bashrc_path, 'a') as f:
+                    f.write(f"\n# LibUIPC vcpkg toolchain file\n{export_line}")
+                print("  ✅ CMAKE_TOOLCHAIN_FILE added to ~/.bashrc")
+                print("  ℹ️  Run 'source ~/.bashrc' or restart shell to apply changes")
+                
+                # Set for current session
+                os.environ["CMAKE_TOOLCHAIN_FILE"] = toolchain_file
+                
+            except Exception as e:
+                print(f"  ❌ Failed to write to ~/.bashrc: {e}")
 
     def setup_conda_env(self):
         """Setup conda environment"""
