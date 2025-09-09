@@ -1,0 +1,54 @@
+# LibUIPC Installation Test - Ubuntu
+FROM nvidia/cuda:12.4-devel-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_VISIBLE_DEVICES=0
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    curl \
+    build-essential \
+    pkg-config \
+    tar \
+    unzip \
+    zip \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CMake (latest version)
+RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+    gpg --dearmor - | \
+    tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null && \
+    echo 'deb https://apt.kitware.com/ubuntu/ jammy main' | \
+    tee /etc/apt/sources.list.d/kitware.list >/dev/null && \
+    apt-get update && \
+    apt-get install -y cmake && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Miniconda
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh && \
+    bash miniconda.sh -b -p /opt/conda && \
+    rm miniconda.sh
+ENV PATH="/opt/conda/bin:$PATH"
+
+# Create working directory
+WORKDIR /workspace
+
+# Copy installation scripts
+COPY auto_install.py .
+COPY install.sh .
+COPY setup_pip.py .
+
+# Make install script executable
+RUN chmod +x install.sh
+
+# Set up test environment
+COPY test/test_installation.py .
+
+# Default command
+CMD ["/bin/bash"]
