@@ -21,23 +21,76 @@ class InstallationTester:
         timestamp = time.strftime("%H:%M:%S")
         print(f"[{timestamp}] {level}: {message}")
         
-    def run_command(self, cmd, timeout=3600, check=True):
+    def run_command(self, cmd, timeout=3600, check=True, realtime=False):
         """Run command with timeout and logging"""
         self.log(f"Running: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
         
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                shell=isinstance(cmd, str)
-            )
-            
-            if result.stdout:
-                self.log(f"STDOUT: {result.stdout.strip()}")
-            if result.stderr:
-                self.log(f"STDERR: {result.stderr.strip()}")
+            if realtime:
+                # Real-time output version
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # Merge stderr to stdout
+                    text=True,
+                    shell=isinstance(cmd, str),
+                    bufsize=1,  # Line buffered
+                    universal_newlines=True
+                )
+                
+                output_lines = []
+                start_time = time.time()
+                
+                # Read output line by line in real-time
+                while True:
+                    # Check timeout
+                    if time.time() - start_time > timeout:
+                        process.kill()
+                        raise subprocess.TimeoutExpired(cmd, timeout)
+                    
+                    line = process.stdout.readline()
+                    if line:
+                        line = line.rstrip('\n\r')
+                        print(f"  {line}")  # Real-time output
+                        output_lines.append(line)
+                    
+                    # Check if process finished
+                    if process.poll() is not None:
+                        # Read any remaining output
+                        remaining = process.stdout.read()
+                        if remaining:
+                            for line in remaining.strip().split('\n'):
+                                if line:
+                                    print(f"  {line}")
+                                    output_lines.append(line)
+                        break
+                
+                returncode = process.returncode
+                stdout = '\n'.join(output_lines)
+                
+                # Create result object similar to subprocess.run
+                class Result:
+                    def __init__(self, returncode, stdout):
+                        self.returncode = returncode
+                        self.stdout = stdout
+                        self.stderr = ""
+                
+                result = Result(returncode, stdout)
+                
+            else:
+                # Original buffered version
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    shell=isinstance(cmd, str)
+                )
+                
+                if result.stdout:
+                    self.log(f"STDOUT: {result.stdout.strip()}")
+                if result.stderr:
+                    self.log(f"STDERR: {result.stderr.strip()}")
                 
             if check and result.returncode != 0:
                 raise RuntimeError(f"Command failed with code {result.returncode}")
@@ -100,7 +153,7 @@ class InstallationTester:
             cmd.extend(["--jobs", "2"])  # Limit jobs for container
             
             self.log("Starting installation process...")
-            result = self.run_command(cmd, timeout=7200)  # 2 hour timeout
+            result = self.run_command(cmd, timeout=7200, realtime=True)  # 2 hour timeout with real-time output
             
             return result.returncode == 0
             
