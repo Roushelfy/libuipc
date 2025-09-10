@@ -280,8 +280,8 @@ class LibUIPC_Installer:
             "cmake",
             "-S", ".",
             "-B", str(self.build_dir),
-            "-DUIPC_BUILD_PYBIND=ON",
-            "-DCMAKE_BUILD_TYPE=Release",
+            "-DUIPC_BUILD_PYBIND=1",
+            "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
             f"-DCMAKE_TOOLCHAIN_FILE={self.get_cmake_toolchain_path()}"
         ]
         
@@ -317,13 +317,13 @@ class LibUIPC_Installer:
         # Install using pip
         self.run_command(["pip", "install", "."], cwd=python_build_dir)
 
-    def verify_installation(self):
+    def verify_installation(self, python_executable=None):
         """Verify the installation"""
         print("\n✅ Verifying installation...")
         
         try:
             # Test import
-            result = self.run_command([sys.executable, "-c", "import uipc; print('✅ uipc import successful')"], check=False)
+            result = self.run_command([python_executable, "-c", "import uipc; print('✅ uipc import successful')"], check=False)
             if result.returncode == 0:
                 print("  ✅ Python package import successful")
             else:
@@ -334,7 +334,7 @@ class LibUIPC_Installer:
             info_script = Path("python/uipc_info.py")
             if info_script.exists():
                 print("  🔍 Running uipc_info.py...")
-                self.run_command([sys.executable, str(info_script)], check=False)
+                self.run_command([python_executable, str(info_script)], check=False)
                 
             return True
         except Exception as e:
@@ -389,7 +389,7 @@ class LibUIPC_Installer:
             self.install_python_package()
             
             # Verify installation
-            if self.verify_installation():
+            if self.verify_installation(python_executable):
                 print("\n🎉 Installation completed successfully!")
                 print("\nTo use LibUIPC:")
                 print("  import uipc")
