@@ -17,13 +17,22 @@ import tarfile
 import zipfile
 
 class LibUIPC_Installer:
-    def __init__(self, use_conda=True, toolchain_dir=None, build_dir=None, jobs=None):
+    def __init__(self, use_conda=None, toolchain_dir=None, build_dir=None, jobs=None):
         self.platform_system = platform.system().lower()
-        self.use_conda = use_conda
+        # Set platform-specific conda defaults: Windows=False, Linux=True
+        if use_conda is None:
+            self.use_conda = self.platform_system != "windows"
+        else:
+            self.use_conda = use_conda
         self.toolchain_dir = Path(toolchain_dir) if toolchain_dir else Path.home() / "Toolchain"
         self.build_dir = Path(build_dir) if build_dir else Path("CMakeBuild") 
-        self.jobs = jobs if jobs else os.cpu_count()
+        # Limit jobs to maximum of 8
+        cpu_count = os.cpu_count()
+        default_jobs = min(cpu_count, 8) if cpu_count else 4
+        self.jobs = min(jobs, 8) if jobs else default_jobs
         self.vcpkg_dir = self.toolchain_dir / "vcpkg"
+        self.conda_env = None  # Will be set after setup_conda_env
+        self._conda_env_ready = False  # Flag to indicate if conda environment is ready
         
         print(f"🚀 LibUIPC Auto-Installer")
         print(f"Platform: {self.platform_system}")
@@ -31,19 +40,109 @@ class LibUIPC_Installer:
         print(f"Toolchain Dir: {self.toolchain_dir}")
         print(f"Build Dir: {self.build_dir}")
 
-    def run_command(self, cmd, cwd=None, check=True):
-        """Execute shell command safely"""
+    def run_command(self, cmd, cwd=None, check=True, realtime=True):
+        """Execute shell command safely with optional real-time output"""
+        
+        # If using conda and environment is set up, wrap command with conda activate
+        # Skip conda commands themselves to avoid recursion
+        # Also skip if conda_env is None or "uipc_env" hasn't been created yet
+        should_wrap = (self.use_conda and 
+                      self.conda_env is not None and 
+                      self.conda_env != "None" and
+                      hasattr(self, '_conda_env_ready') and self._conda_env_ready and
+                      ((isinstance(cmd, str) and not cmd.startswith("conda")) or 
+                       (isinstance(cmd, list) and len(cmd) > 0 and cmd[0] != "conda")))
+        
+        if should_wrap:
+            print(f"  🐍 Executing in conda environment: {self.conda_env}")
+            if isinstance(cmd, str):
+                if self.platform_system == "windows":
+                    cmd = f"conda activate {self.conda_env} && {cmd}"
+                else:
+                    cmd = f"bash -c 'source activate {self.conda_env} && {cmd}'"
+            else:
+                # For list commands, we need to convert to string format
+                cmd_str = " ".join(cmd)
+                if self.platform_system == "windows":
+                    cmd = f"conda activate {self.conda_env} && {cmd_str}"
+                else:
+                    cmd = f"bash -c 'source activate {self.conda_env} && {cmd_str}'"
+        
         print(f"🔧 Running: {cmd}")
-        if isinstance(cmd, str):
+        
+        # Determine if we need shell=True (for commands with && or other shell operators)
+        use_shell = isinstance(cmd, str) and ('&&' in cmd or '||' in cmd or '|' in cmd or 'conda activate' in cmd)
+        
+        if not use_shell and isinstance(cmd, str):
             cmd = cmd.split()
         
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        
-        if result.stdout:
-            print(f"  📤 {result.stdout.strip()}")
-        if result.stderr:
-            print(f"  ❌ {result.stderr.strip()}")
+        if realtime:
+            # Real-time output version
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # Merge stderr to stdout
+                    text=True,
+                    bufsize=1,  # Line buffered
+                    universal_newlines=True,
+                    shell=use_shell
+                )
+                
+                output_lines = []
+                
+                # Read output line by line in real-time
+                while True:
+                    line = process.stdout.readline()
+                    if line:
+                        line = line.rstrip('\n\r')
+                        print(f"  {line}")  # Real-time output
+                        output_lines.append(line)
+                    
+                    # Check if process finished
+                    if process.poll() is not None:
+                        # Read any remaining output
+                        remaining = process.stdout.read()
+                        if remaining:
+                            for line in remaining.strip().split('\n'):
+                                if line:
+                                    print(f"  {line}")
+                                    output_lines.append(line)
+                        break
+                
+                returncode = process.returncode
+                stdout = '\n'.join(output_lines)
+                
+                # Create result object similar to subprocess.run
+                class Result:
+                    def __init__(self, returncode, stdout):
+                        self.returncode = returncode
+                        self.stdout = stdout
+                        self.stderr = ""
+                
+                result = Result(returncode, stdout)
+                
+            except Exception as e:
+                print(f"  ❌ Error during command execution: {e}")
+                if check:
+                    raise RuntimeError(f"Command failed: {' '.join(cmd)}")
+                # Return a failed result
+                class Result:
+                    def __init__(self, returncode, stdout, stderr):
+                        self.returncode = returncode
+                        self.stdout = stdout
+                        self.stderr = stderr
+                return Result(1, "", str(e))
+        else:
+            # Original buffered version
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, shell=use_shell)
             
+            if result.stdout:
+                print(f"  📤 {result.stdout.strip()}")
+            if result.stderr:
+                print(f"  ❌ {result.stderr.strip()}")
+        
         if check and result.returncode != 0:
             raise RuntimeError(f"Command failed: {' '.join(cmd)}")
             
@@ -57,10 +156,12 @@ class LibUIPC_Installer:
         """Check required dependencies"""
         print("\n📋 Checking dependencies...")
         
+        # CMake only required when not using conda
         required = {
-            "git": "Git is required for cloning repositories",
-            "cmake": "CMake ≥3.26 is required"
+            "git": "Git is required for cloning repositories"
         }
+        if not self.use_conda:
+            required["cmake"] = "CMake ≥3.26 is required"
         
         missing = []
         for cmd, desc in required.items():
@@ -192,6 +293,9 @@ class LibUIPC_Installer:
             if not env_exists:
                 self.run_command("conda create -n uipc_env python=3.11 cmake cuda-toolkit=12.4 -y")
         
+        # Set the conda environment name for subsequent commands
+        self.conda_env = "uipc_env"
+        self._conda_env_ready = True  # Mark conda environment as ready
         return "uipc_env"
 
     def get_cmake_toolchain_path(self):
@@ -209,8 +313,8 @@ class LibUIPC_Installer:
             "cmake",
             "-S", ".",
             "-B", str(self.build_dir),
-            "-DUIPC_BUILD_PYBIND=ON",
-            "-DCMAKE_BUILD_TYPE=Release",
+            "-DUIPC_BUILD_PYBIND=1",
+            "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
             f"-DCMAKE_TOOLCHAIN_FILE={self.get_cmake_toolchain_path()}"
         ]
         
@@ -246,13 +350,13 @@ class LibUIPC_Installer:
         # Install using pip
         self.run_command(["pip", "install", "."], cwd=python_build_dir)
 
-    def verify_installation(self):
+    def verify_installation(self, python_executable=None):
         """Verify the installation"""
         print("\n✅ Verifying installation...")
         
         try:
             # Test import
-            result = self.run_command([sys.executable, "-c", "import uipc; print('✅ uipc import successful')"], check=False)
+            result = self.run_command([python_executable, "-c", "import uipc; print('✅ uipc import successful')"], check=False)
             if result.returncode == 0:
                 print("  ✅ Python package import successful")
             else:
@@ -263,7 +367,7 @@ class LibUIPC_Installer:
             info_script = Path("python/uipc_info.py")
             if info_script.exists():
                 print("  🔍 Running uipc_info.py...")
-                self.run_command([sys.executable, str(info_script)], check=False)
+                self.run_command([python_executable, str(info_script)], check=False)
                 
             return True
         except Exception as e:
@@ -294,8 +398,8 @@ class LibUIPC_Installer:
             
             # Get Python executable
             if conda_env and self.use_conda:
-                # Try to get conda env python path
-                result = self.run_command(f"conda activate {conda_env} && python -c \"import sys; print(sys.executable)\"", check=False)
+                # With the new run_command wrapper, this will automatically use the conda environment
+                result = self.run_command("python -c \"import sys; print(sys.executable)\"", check=False, realtime=False)
                 python_executable = result.stdout.strip() if result.returncode == 0 else None
             else:
                 python_executable = sys.executable
@@ -312,7 +416,7 @@ class LibUIPC_Installer:
             self.install_python_package()
             
             # Verify installation
-            if self.verify_installation():
+            if self.verify_installation(python_executable):
                 print("\n🎉 Installation completed successfully!")
                 print("\nTo use LibUIPC:")
                 print("  import uipc")
@@ -327,15 +431,25 @@ class LibUIPC_Installer:
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-install LibUIPC with pybind support")
-    parser.add_argument("--no-conda", action="store_true", help="Don't use conda environment")
+    conda_group = parser.add_mutually_exclusive_group()
+    conda_group.add_argument("--conda", action="store_true", help="Force use conda environment")
+    conda_group.add_argument("--no-conda", action="store_true", help="Don't use conda environment")
     parser.add_argument("--toolchain-dir", help="Custom toolchain directory (default: ~/Toolchain)")
     parser.add_argument("--build-dir", help="Custom build directory (default: CMakeBuild)")
     parser.add_argument("--jobs", "-j", type=int, help="Number of parallel build jobs")
     
     args = parser.parse_args()
     
+    # Determine conda usage based on arguments
+    if args.conda:
+        use_conda = True
+    elif args.no_conda:
+        use_conda = False
+    else:
+        use_conda = None  # Use platform defaults
+    
     installer = LibUIPC_Installer(
-        use_conda=not args.no_conda,
+        use_conda=use_conda,
         toolchain_dir=args.toolchain_dir,
         build_dir=args.build_dir,
         jobs=args.jobs
