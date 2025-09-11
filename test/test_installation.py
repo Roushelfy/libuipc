@@ -178,9 +178,6 @@ class InstallationTester:
             
             os.chdir("libuipc")
             
-            # Copy pip setup
-            shutil.copy("../setup_pip.py", ".")
-            
             # Setup pip environment
             self.log("Setting up pip installation...")
             self.run_command(["python3", "setup_pip.py"])

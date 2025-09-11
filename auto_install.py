@@ -31,6 +31,7 @@ class LibUIPC_Installer:
         default_jobs = min(cpu_count, 8) if cpu_count else 4
         self.jobs = min(jobs, 8) if jobs else default_jobs
         self.vcpkg_dir = self.toolchain_dir / "vcpkg"
+        self.conda_env = None  # Will be set after setup_conda_env
         
         print(f"🚀 LibUIPC Auto-Installer")
         print(f"Platform: {self.platform_system}")
@@ -40,10 +41,32 @@ class LibUIPC_Installer:
 
     def run_command(self, cmd, cwd=None, check=True, realtime=True):
         """Execute shell command safely with optional real-time output"""
+        
+        # If using conda and environment is set up, wrap command with conda activate
+        # Skip conda commands themselves to avoid recursion
+        should_wrap = (self.use_conda and self.conda_env and 
+                      (isinstance(cmd, str) and not cmd.startswith("conda")) or 
+                      (isinstance(cmd, list) and len(cmd) > 0 and cmd[0] != "conda"))
+        
+        if should_wrap:
+            print(f"  🐍 Executing in conda environment: {self.conda_env}")
+            if isinstance(cmd, str):
+                if self.platform_system == "windows":
+                    cmd = f"conda activate {self.conda_env} && {cmd}"
+                else:
+                    cmd = f"bash -c 'source activate {self.conda_env} && {cmd}'"
+            else:
+                # For list commands, we need to convert to string format
+                cmd_str = " ".join(cmd)
+                if self.platform_system == "windows":
+                    cmd = f"conda activate {self.conda_env} && {cmd_str}"
+                else:
+                    cmd = f"bash -c 'source activate {self.conda_env} && {cmd_str}'"
+        
         print(f"🔧 Running: {cmd}")
         
         # Determine if we need shell=True (for commands with && or other shell operators)
-        use_shell = isinstance(cmd, str) and ('&&' in cmd or '||' in cmd or '|' in cmd)
+        use_shell = isinstance(cmd, str) and ('&&' in cmd or '||' in cmd or '|' in cmd or 'conda activate' in cmd)
         
         if not use_shell and isinstance(cmd, str):
             cmd = cmd.split()
@@ -128,10 +151,12 @@ class LibUIPC_Installer:
         """Check required dependencies"""
         print("\n📋 Checking dependencies...")
         
+        # CMake only required when not using conda
         required = {
-            "git": "Git is required for cloning repositories",
-            "cmake": "CMake ≥3.26 is required"
+            "git": "Git is required for cloning repositories"
         }
+        if not self.use_conda:
+            required["cmake"] = "CMake ≥3.26 is required"
         
         missing = []
         for cmd, desc in required.items():
@@ -263,6 +288,8 @@ class LibUIPC_Installer:
             if not env_exists:
                 self.run_command("conda create -n uipc_env python=3.11 cmake cuda-toolkit=12.4 -y")
         
+        # Set the conda environment name for subsequent commands
+        self.conda_env = "uipc_env"
         return "uipc_env"
 
     def get_cmake_toolchain_path(self):
@@ -365,14 +392,8 @@ class LibUIPC_Installer:
             
             # Get Python executable
             if conda_env and self.use_conda:
-                # Try to get conda env python path using shell execution
-                if self.platform_system == "windows":
-                    cmd = f"conda activate {conda_env} && python -c \"import sys; print(sys.executable)\""
-                    result = self.run_command(cmd, check=False, realtime=False)
-                else:
-                    # On Unix systems, use bash -c to ensure proper shell interpretation
-                    cmd = f"bash -c 'source activate {conda_env} && python -c \"import sys; print(sys.executable)\"'"
-                    result = self.run_command(cmd, check=False, realtime=False)
+                # With the new run_command wrapper, this will automatically use the conda environment
+                result = self.run_command("python -c \"import sys; print(sys.executable)\"", check=False, realtime=False)
                 python_executable = result.stdout.strip() if result.returncode == 0 else None
             else:
                 python_executable = sys.executable
