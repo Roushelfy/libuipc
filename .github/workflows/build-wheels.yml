@@ -81,6 +81,19 @@ jobs:
           restore-keys: |
             vcpkg-${{ matrix.os }}-
 
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/external
+            build/src
+            build/CMakeCache.txt
+            build/cmake_install.cmake
+          key: cmake-build-${{ matrix.os }}-${{ matrix.python }}-${{ hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.cu', 'src/**/*.h') }}
+          restore-keys: |
+            cmake-build-${{ matrix.os }}-${{ matrix.python }}-
+            cmake-build-${{ matrix.os }}-
+
       - name: Setup vcpkg
         run: |
           # Create Toolchain directory
@@ -123,7 +136,9 @@ jobs:
             -DUIPC_BUILD_GUI=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DUIPC_PYTHON_EXECUTABLE_PATH="$PYTHON_PATH" \
-            -DCMAKE_TOOLCHAIN_FILE="${{ env.CMAKE_TOOLCHAIN_FILE }}"
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.CMAKE_TOOLCHAIN_FILE }}" \
+            -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89" \
+            -DCUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
         shell: bash
 
       - name: Build LibUIPC
