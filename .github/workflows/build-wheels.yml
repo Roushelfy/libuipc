@@ -39,9 +39,8 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: '12.4.1'
-          method: 'network'
-          non-cuda-sub-packages: '["libcublas","libcublas-dev"]'
-          sub-packages: '["nvcc","compiler","libraries","libraries-dev","runtime"]'
+          method: 'local'
+          use-github-cache: false
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
