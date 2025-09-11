@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'support-pypi'  # Temporary: for testing
   pull_request:
     paths:
       - 'python/**'
