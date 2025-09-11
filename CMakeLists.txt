@@ -26,6 +26,7 @@ set(UIPC_PYTHON_EXECUTABLE_PATH "" CACHE PATH "Python executable path")
 # Backend Options
 # =========================================================================
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
+option(UIPC_WITH_CUDA_AL_BACKEND "Build with CUDA Augmented Lagrangian backend" ON)
 
 # =========================================================================
 # Show Logo and Options
