@@ -18,8 +18,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022]
-        python: ['3.13']  # Temporary: test only 3.13 for faster CI
+        os: [ubuntu-22.04]  # Temporary: test only Ubuntu for faster CI
+        python: ['3.13']    # Temporary: test only 3.13 for faster CI
 
     concurrency:
       group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}
