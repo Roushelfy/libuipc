@@ -170,13 +170,26 @@ jobs:
           # Copy built libraries to python directory
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             mkdir -p src/uipc/lib
-            cp ../build/Release/lib/*.so src/uipc/lib/ || cp ../build/lib/*.so src/uipc/lib/ || true
-            cp ../build/python/Release/*.so src/uipc/ || cp ../build/python/*.so src/uipc/ || true
+            # Copy all .so libraries (excluding the main pyuipc module)
+            cp ../build/Release/bin/lib*.so src/uipc/lib/ 2>/dev/null || true
+            cp ../build/python/src/uipc/modules/Release/bin/lib*.so src/uipc/lib/ 2>/dev/null || true
+            # Copy the main pyuipc module
+            cp ../build/Release/bin/pyuipc*.so src/uipc/ 2>/dev/null || true
+            cp ../build/python/src/uipc/modules/Release/bin/pyuipc*.so src/uipc/ 2>/dev/null || true
           else
             mkdir -p src/uipc/lib
-            cp ../build/Release/bin/*.dll src/uipc/lib/ || cp ../build/bin/*.dll src/uipc/lib/ || true
-            cp ../build/python/Release/*.pyd src/uipc/ || cp ../build/python/*.pyd src/uipc/ || true
+            # Copy .dll libraries (excluding the main pyuipc module)
+            cp ../build/RelWithDebInfo/bin/*.dll src/uipc/lib/ 2>/dev/null || true
+            # Copy the main pyuipc module
+            cp ../build/RelWithDebInfo/bin/pyuipc*.pyd src/uipc/ 2>/dev/null || true
           fi
+          
+          # List copied files for verification
+          echo "📦 Copied files:"
+          echo "Libraries:"
+          ls -la src/uipc/lib/ 2>/dev/null || echo "No lib directory"
+          echo "Main modules:"
+          ls -la src/uipc/pyuipc* 2>/dev/null || echo "No pyuipc module found"
           
           # Build wheel
           python -m build --wheel
