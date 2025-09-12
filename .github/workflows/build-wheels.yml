@@ -154,6 +154,16 @@ jobs:
         run: |
           cmake --build build --config Release --parallel 4
 
+      - name: Debug build directories
+        run: |
+          echo "🔍 Current directory: $(pwd)"
+          echo "📂 Build directory structure:"
+          find build -type f -name "*.so" -o -name "*.pyd" -o -name "*.dll" | head -20
+          echo "📂 Python-related files:"
+          find build -name "*pyuipc*" | head -10
+          echo "📂 Top-level build contents:"
+          ls -la build/
+
       - name: Build Python wheel
         working-directory: python
         run: |
