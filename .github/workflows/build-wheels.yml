@@ -168,35 +168,22 @@ jobs:
       - name: Build Python wheel
         working-directory: python
         run: |
-          # Copy built libraries to python directory
-          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
-            # Create the expected directory structure
-            mkdir -p src/uipc/lib
-            mkdir -p src/uipc/modules/Release/bin
-            # Copy all .so libraries to lib directory
-            cp ../build/Release/bin/lib*.so src/uipc/lib/ 2>/dev/null || true
-            cp ../build/python/src/uipc/modules/Release/bin/lib*.so src/uipc/lib/ 2>/dev/null || true
-            # Copy the main pyuipc module to the expected path
-            cp ../build/Release/bin/pyuipc*.so src/uipc/modules/Release/bin/ 2>/dev/null || true
-            cp ../build/python/src/uipc/modules/Release/bin/pyuipc*.so src/uipc/modules/Release/bin/ 2>/dev/null || true
-          else
-            # Create the expected directory structure for Windows
-            mkdir -p src/uipc/lib
-            mkdir -p src/uipc/modules/RelWithDebInfo/bin
-            # Copy .dll libraries to lib directory
-            cp ../build/RelWithDebInfo/bin/*.dll src/uipc/lib/ 2>/dev/null || true
-            # Copy the main pyuipc module to the expected path
-            cp ../build/RelWithDebInfo/bin/pyuipc*.pyd src/uipc/modules/RelWithDebInfo/bin/ 2>/dev/null || true
-          fi
+          # Use the properly built Python package from build/python
+          echo "📦 Using pre-built Python package from after_build_pyuipc.py script"
           
-          # List copied files for verification
-          echo "📦 Copied files:"
-          echo "Libraries:"
-          ls -la src/uipc/lib/ 2>/dev/null || echo "No lib directory"
-          echo "Main modules:"
-          ls -la src/uipc/pyuipc* 2>/dev/null || echo "No pyuipc module found"
+          # Check what was created by the build script
+          echo "📂 Build directory python package:"
+          find ../build/python -name "*.so" -o -name "*.pyd" -o -name "*.dll" | head -10
           
-          # Build wheel
+          # Copy the entire pre-built python package
+          cp -r ../build/python/* . 2>/dev/null || true
+          
+          # Verify the structure
+          echo "📂 Package structure:"
+          find src/uipc -name "*pyuipc*" | head -5
+          find src/uipc -name "modules" -type d
+          
+          # Build wheel from the properly prepared package
           python -m build --wheel
         shell: bash
 
