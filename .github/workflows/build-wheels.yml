@@ -84,12 +84,12 @@ jobs:
       - name: Cache CMake build
         uses: actions/cache@v4
         with:
-          path: |
-            build/
-          key: cmake-build-${{ matrix.os }}-py${{ matrix.python }}-${{ hashFiles('**/CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.cu', 'src/**/*.h', 'external/**') }}
+          path: build
+          key: cmake-build-${{ matrix.os }}-${{ matrix.python }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: |
-            cmake-build-${{ matrix.os }}-py${{ matrix.python }}-
+            cmake-build-${{ matrix.os }}-${{ matrix.python }}-
             cmake-build-${{ matrix.os }}-
+
 
       - name: Setup vcpkg
         run: |
