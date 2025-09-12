@@ -47,11 +47,11 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Setup ninja
+      - name: Setup ninja and patchelf
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt update
-          sudo apt install ninja-build
+          sudo apt install ninja-build patchelf
 
       - name: Setup ninja
         if: matrix.os == 'windows-2022'
@@ -177,6 +177,49 @@ jobs:
           
           # Copy the entire pre-built python package
           cp -r ../build/python/* . 2>/dev/null || true
+          
+          # Copy vcpkg dependencies and fix RPATH
+          echo "📦 Copying vcpkg dependencies and fixing RPATH:"
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            VCPKG_TRIPLET="x64-linux"
+            SHARED_LIB_EXT=".so"
+            BUILD_CONFIG="Release"
+          else
+            VCPKG_TRIPLET="x64-windows"
+            SHARED_LIB_EXT=".dll"
+            BUILD_CONFIG="RelWithDebInfo"
+          fi
+          
+          # Ensure the modules directory exists for all libraries
+          MODULES_DIR="src/uipc/modules/${BUILD_CONFIG}/bin"
+          mkdir -p "$MODULES_DIR"
+          
+          # Copy vcpkg dependencies to modules directory (same location as pyuipc.so)
+          VCPKG_BIN_DIR="../build/vcpkg_installed/${VCPKG_TRIPLET}/bin"
+          if [ -d "$VCPKG_BIN_DIR" ]; then
+            echo "📂 Found vcpkg dependencies in: $VCPKG_BIN_DIR"
+            # Copy all shared libraries from vcpkg to modules directory
+            find "$VCPKG_BIN_DIR" -name "*${SHARED_LIB_EXT}" -exec cp {} "$MODULES_DIR/" \;
+            echo "✅ Copied vcpkg dependencies to $MODULES_DIR"
+          else
+            echo "⚠️  Warning: vcpkg bin directory not found: $VCPKG_BIN_DIR"
+          fi
+          
+          # Fix RPATH for all shared libraries on Linux
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            echo "🔧 Fixing RPATH for all shared libraries..."
+            for lib in "$MODULES_DIR"/*${SHARED_LIB_EXT}; do
+              if [ -f "$lib" ]; then
+                echo "  Fixing RPATH for $(basename $lib)"
+                patchelf --set-rpath '$ORIGIN' "$lib" || echo "  ⚠️ Failed to set RPATH for $(basename $lib)"
+              fi
+            done
+            echo "✅ RPATH fix completed"
+          fi
+          
+          # List what was copied
+          echo "📋 All libraries in modules directory:"
+          ls -la "$MODULES_DIR"/*${SHARED_LIB_EXT} 2>/dev/null | head -15
           
           # Verify the structure
           echo "📂 Package structure:"
