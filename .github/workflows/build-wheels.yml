@@ -39,17 +39,6 @@ jobs:
         with:
           submodules: true
 
-      - name: Cache CUDA installation
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/cuda*
-            /opt/hostedtoolcache/cuda*
-          key: cuda-12.4.1-${{ matrix.os }}-${{ github.run_number }}
-          restore-keys: |
-            cuda-12.4.1-${{ matrix.os }}-
-            cuda-12.4-${{ matrix.os }}
-
       - name: Setup CUDA 12.4
         uses: Jimver/cuda-toolkit@v0.2.20
         id: cuda-toolkit
@@ -96,11 +85,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build/external
-            build/src
-            build/CMakeCache.txt
-            build/cmake_install.cmake
-          key: cmake-build-${{ matrix.os }}-py${{ matrix.python }}-${{ hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.cu') }}
+            build/
+          key: cmake-build-${{ matrix.os }}-py${{ matrix.python }}-${{ hashFiles('**/CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.cu', 'src/**/*.h', 'external/**') }}
           restore-keys: |
             cmake-build-${{ matrix.os }}-py${{ matrix.python }}-
             cmake-build-${{ matrix.os }}-
@@ -141,6 +127,7 @@ jobs:
           fi
           
           cmake -S . -B build \
+            -G Ninja \
             -DUIPC_BUILD_PYBIND=ON \
             -DUIPC_BUILD_EXAMPLES=OFF \
             -DUIPC_BUILD_TESTS=OFF \
@@ -183,43 +170,87 @@ jobs:
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             VCPKG_TRIPLET="x64-linux"
             SHARED_LIB_EXT=".so"
-            BUILD_CONFIG="Release"
           else
             VCPKG_TRIPLET="x64-windows"
             SHARED_LIB_EXT=".dll"
+          fi
+          
+          # Debug: Check what configurations were actually built
+          echo "🔍 Checking build configurations:"
+          find ../build -name "*pyuipc*" -type d | head -5
+          ls -la ../build/ | grep -E "(Release|RelWithDebInfo|Debug)" || echo "No config directories found"
+          
+          # Find the actual modules directory that was created by after_build_pyuipc.py
+          MODULES_BASE_DIR="src/uipc/modules"
+          if [ -d "$MODULES_BASE_DIR/Release/bin" ]; then
+            MODULES_DIR="$MODULES_BASE_DIR/Release/bin"
+            BUILD_CONFIG="Release"
+          elif [ -d "$MODULES_BASE_DIR/RelWithDebInfo/bin" ]; then
+            MODULES_DIR="$MODULES_BASE_DIR/RelWithDebInfo/bin"
             BUILD_CONFIG="RelWithDebInfo"
-          fi
-          
-          # Ensure the modules directory exists for all libraries
-          MODULES_DIR="src/uipc/modules/${BUILD_CONFIG}/bin"
-          mkdir -p "$MODULES_DIR"
-          
-          # Copy vcpkg dependencies to modules directory (same location as pyuipc.so)
-          VCPKG_BIN_DIR="../build/vcpkg_installed/${VCPKG_TRIPLET}/bin"
-          if [ -d "$VCPKG_BIN_DIR" ]; then
-            echo "📂 Found vcpkg dependencies in: $VCPKG_BIN_DIR"
-            # Copy all shared libraries from vcpkg to modules directory
-            find "$VCPKG_BIN_DIR" -name "*${SHARED_LIB_EXT}" -exec cp {} "$MODULES_DIR/" \;
-            echo "✅ Copied vcpkg dependencies to $MODULES_DIR"
+          elif [ -d "$MODULES_BASE_DIR/Debug/bin" ]; then
+            MODULES_DIR="$MODULES_BASE_DIR/Debug/bin"
+            BUILD_CONFIG="Debug"
           else
-            echo "⚠️  Warning: vcpkg bin directory not found: $VCPKG_BIN_DIR"
+            echo "❌ No modules directory found, creating Release directory as fallback"
+            MODULES_DIR="$MODULES_BASE_DIR/Release/bin"
+            BUILD_CONFIG="Release"
+            mkdir -p "$MODULES_DIR"
           fi
           
+          echo "📂 Using modules directory: $MODULES_DIR (config: $BUILD_CONFIG)"
+          
+          # Debug: Check what's in the modules directory before copying
+          echo "📋 Current modules directory contents:"
+          ls -la "$MODULES_DIR" || echo "Directory is empty or doesn't exist"
+          
+          # Copy vcpkg dependencies to modules directory
+          VCPKG_BIN_DIR="../build/vcpkg_installed/${VCPKG_TRIPLET}/bin"
+          echo "🔍 Looking for vcpkg dependencies in: $VCPKG_BIN_DIR"
+          if [ -d "$VCPKG_BIN_DIR" ]; then
+            echo "📂 Found vcpkg dependencies, copying to: $MODULES_DIR"
+            find "$VCPKG_BIN_DIR" -name "*${SHARED_LIB_EXT}" -exec cp {} "$MODULES_DIR/" \;
+            echo "✅ Copied vcpkg dependencies"
+          else
+            echo "⚠️  vcpkg bin directory not found, checking alternative locations:"
+            find ../build -name "vcpkg_installed" -type d | head -3
+            find ../build -path "*/vcpkg_installed/*/bin" -type d | head -3
+          fi
+          VCPKG_LIB_DIR="../build/vcpkg_installed/${VCPKG_TRIPLET}/lib"
+          echo "🔍 Looking for vcpkg dependencies in: $VCPKG_LIB_DIR"
+          if [ -d "$VCPKG_LIB_DIR" ]; then
+            echo "📂 Found vcpkg dependencies, copying to: $MODULES_DIR"
+            find "$VCPKG_LIB_DIR" -name "*${SHARED_LIB_EXT}" -exec cp {} "$MODULES_DIR/" \;
+            echo "✅ Copied vcpkg dependencies"
+          else
+            echo "⚠️  vcpkg lib directory not found, checking alternative locations:"
+            find ../build -name "vcpkg_installed" -type d | head -3
+            find ../build -path "*/vcpkg_installed/*/lib" -type d | head -3
+          fi
           # Fix RPATH for all shared libraries on Linux
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
-            echo "🔧 Fixing RPATH for all shared libraries..."
+            echo "🔧 Fixing RPATH for all shared libraries in: $MODULES_DIR"
             for lib in "$MODULES_DIR"/*${SHARED_LIB_EXT}; do
               if [ -f "$lib" ]; then
-                echo "  Fixing RPATH for $(basename $lib)"
+                echo "  📝 Fixing RPATH for $(basename $lib)"
                 patchelf --set-rpath '$ORIGIN' "$lib" || echo "  ⚠️ Failed to set RPATH for $(basename $lib)"
               fi
             done
             echo "✅ RPATH fix completed"
+            
+            # Verify RPATH was set correctly
+            echo "🔍 Verifying RPATH for first few libraries:"
+            for lib in "$MODULES_DIR"/*${SHARED_LIB_EXT}; do
+              if [ -f "$lib" ]; then
+                echo "  $(basename $lib):"
+                readelf -d "$lib" | grep -E "(RPATH|RUNPATH)" || echo "    No RPATH/RUNPATH found"
+              fi
+            done | head -10
           fi
           
-          # List what was copied
-          echo "📋 All libraries in modules directory:"
-          ls -la "$MODULES_DIR"/*${SHARED_LIB_EXT} 2>/dev/null | head -15
+          # List final contents
+          echo "📋 Final modules directory contents:"
+          ls -la "$MODULES_DIR"/ 2>/dev/null || echo "Directory empty or not found"
           
           # Verify the structure
           echo "📂 Package structure:"
