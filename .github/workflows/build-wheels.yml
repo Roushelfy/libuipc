@@ -34,6 +34,22 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Cache CUDA installation
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cuda*
+            /opt/hostedtoolcache/cuda*
+          key: cuda-12.4.1-${{ matrix.os }}-${{ github.run_number }}
+          restore-keys: |
+            cuda-12.4.1-${{ matrix.os }}-
+            cuda-12.4-${{ matrix.os }}
+
       - name: Setup CUDA 12.4
         uses: Jimver/cuda-toolkit@v0.2.20
         id: cuda-toolkit
@@ -60,22 +76,6 @@ jobs:
       - name: Setup msvc sysroot for cmake
         if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Cache CUDA installation
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/cuda*
-            /opt/hostedtoolcache/cuda*
-          key: cuda-12.4.1-${{ matrix.os }}-${{ github.run_number }}
-          restore-keys: |
-            cuda-12.4.1-${{ matrix.os }}-
-            cuda-12.4-${{ matrix.os }}
 
       - name: Install Python build dependencies
         run: |
