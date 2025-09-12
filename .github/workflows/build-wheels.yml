@@ -169,11 +169,12 @@ jobs:
           echo "📦 Copying vcpkg dependencies and fixing RPATH:"
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             VCPKG_TRIPLET="x64-linux"
-            SHARED_LIB_EXT=".so"
+            SHARED_LIB_EXT=".so*"
           else
             VCPKG_TRIPLET="x64-windows"
             SHARED_LIB_EXT=".dll"
           fi
+
           
           # Debug: Check what configurations were actually built
           echo "🔍 Checking build configurations:"
