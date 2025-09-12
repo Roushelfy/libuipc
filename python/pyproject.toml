@@ -50,8 +50,11 @@ where = ["src", "typings"]
 
 [tool.setuptools.package-data]
 "*" = ["*.dll", "*.so", "*.dylib", "*.pyd", "*.pyi"]
-"uipc" = ["lib/*.dll", "lib/*.so", "*.pyd"]
-"uipc.lib" = ["*.dll", "*.so"]
+"uipc" = [
+    "lib/*.dll", "lib/*.so", 
+    "modules/Release/bin/*.so", "modules/Release/bin/*.pyd",
+    "modules/RelWithDebInfo/bin/*.dll", "modules/RelWithDebInfo/bin/*.pyd"
+]
 
 [tool.pytest.ini_options]
 addopts = ["-s"]
