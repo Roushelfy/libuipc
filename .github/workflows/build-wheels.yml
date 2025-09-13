@@ -24,7 +24,7 @@ jobs:
         exclude:
           # Exclude some combinations to reduce CI time
           - os: windows-2022
-            cuda: '12.8.0'  # Keep only 12.4 and 13.0 for Windows
+            cuda: '13.0.0'  # Keep only 12.4 and 13.0 for Windows
 
     concurrency:
       group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
@@ -45,7 +45,7 @@ jobs:
           submodules: true
 
       - name: Setup CUDA ${{ matrix.cuda }}
-        uses: N-Storm/cuda-toolkit@v0.2.27m
+        uses: Jimver/cuda-toolkit@v0.2.27
         id: cuda-toolkit
         with:
           cuda: ${{ matrix.cuda }}
