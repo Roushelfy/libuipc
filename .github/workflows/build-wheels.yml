@@ -21,9 +21,10 @@ jobs:
         os: [ubuntu-22.04, windows-2022]
         python: ['3.11', '3.12', '3.13']
         cuda: ['12.4.1']
+        variant: ['full', 'lite']
 
     concurrency:
-      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
+      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}-${{ matrix.variant }}
       cancel-in-progress: true
 
     steps:
@@ -47,7 +48,7 @@ jobs:
           cuda: ${{ matrix.cuda }}
           method: 'local'
           use-local-cache: true
-          log-file-suffix: '${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}.txt'
+          log-file-suffix: '${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ matrix.variant }}.txt'
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
@@ -184,6 +185,17 @@ jobs:
       - name: Build Python wheel
         working-directory: python
         run: |
+          # Set package name based on variant
+          if [ "${{ matrix.variant }}" = "full" ]; then
+            PACKAGE_NAME="zhaofeng-pyuipc-full"
+          else
+            PACKAGE_NAME="zhaofeng-pyuipc"
+          fi
+          echo "📦 Building ${{ matrix.variant }} variant as: $PACKAGE_NAME"
+          
+          # Update package name in pyproject.toml
+          sed -i 's/name = "zhaofeng-pyuipc"/name = "'$PACKAGE_NAME'"/' pyproject.toml
+          
           # Use the properly built Python package from build/python
           echo "📦 Using pre-built Python package from after_build_pyuipc.py script"
           
@@ -310,16 +322,31 @@ jobs:
         working-directory: python
         run: |
           pip install auditwheel
-          echo "🔧 Repairing wheels for PyPI compatibility..."
+          echo "🔧 Repairing wheels for PyPI compatibility (${{ matrix.variant }} variant)..."
           mkdir -p wheelhouse
+          
           for wheel in dist/*.whl; do
             echo "  Repairing $(basename $wheel)"
-            auditwheel repair "$wheel" -w wheelhouse/
+            if [ "${{ matrix.variant }}" = "full" ]; then
+              # Full version: include all CUDA libraries
+              auditwheel repair "$wheel" -w wheelhouse/
+            else
+              # Lite version: exclude CUDA libraries
+              auditwheel repair "$wheel" \
+                --exclude libcublas \
+                --exclude libcublasLt \
+                --exclude libcusparse \
+                --exclude libcusolver \
+                --exclude libnvJitLink \
+                --exclude libcudart \
+                -w wheelhouse/
+            fi
           done
+          
           # Replace original wheels with repaired ones
           rm dist/*.whl
           mv wheelhouse/*.whl dist/
-          echo "✅ Wheel repair completed"
+          echo "✅ Wheel repair completed (${{ matrix.variant }} variant)"
           ls -la dist/
         shell: bash
 
@@ -334,7 +361,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ github.run_id }}-${{ github.job }}
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ matrix.variant }}-${{ github.run_id }}
           path: python/dist/*.whl
           retention-days: 7
 
