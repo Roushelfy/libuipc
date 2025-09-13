@@ -68,6 +68,12 @@ jobs:
         if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
+          max-size: 2G
+
       - name: Install Python build dependencies
         run: |
           python -m pip install --upgrade pip
@@ -86,11 +92,16 @@ jobs:
       - name: Cache CMake build
         uses: actions/cache@v4
         with:
-          path: build
-          key: cmake-build-${{ matrix.os }}-${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ hashFiles('CMakeLists.txt') }}
+          path: |
+            build/CMakeCache.txt
+            build/cmake_install.cmake
+            build/CMakeFiles
+            build/*.ninja
+            build/vcpkg_installed
+          key: cmake-config-${{ matrix.os }}-${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ hashFiles('**/CMakeLists.txt', '**/vcpkg.json') }}
           restore-keys: |
-            cmake-build-${{ matrix.os }}-${{ matrix.python }}-
-            cmake-build-${{ matrix.os }}-
+            cmake-config-${{ matrix.os }}-${{ matrix.python }}-
+            cmake-config-${{ matrix.os }}-
 
 
       - name: Setup vcpkg
@@ -158,6 +169,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DUIPC_PYTHON_EXECUTABLE_PATH="$PYTHON_PATH" \
             -DCMAKE_TOOLCHAIN_FILE="${{ env.CMAKE_TOOLCHAIN_FILE }}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
             -DUIPC_GITHUB_ACTIONS=ON
         shell: bash
 
