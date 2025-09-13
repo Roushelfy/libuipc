@@ -50,6 +50,7 @@ jobs:
         with:
           cuda: ${{ matrix.cuda }}
           method: 'local'
+          use-local-cache: false
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
