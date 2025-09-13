@@ -127,6 +127,27 @@ jobs:
           # Set Python executable path based on OS
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             PYTHON_PATH="${{ env.pythonLocation }}/bin/python"
+            
+            # Set CUDA compiler path for Linux
+            CUDA_VERSION="${{ matrix.cuda }}"
+            CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d. -f1)
+            CUDA_MINOR=$(echo $CUDA_VERSION | cut -d. -f2)
+            CUDA_PATH="/usr/local/cuda-${CUDA_MAJOR}.${CUDA_MINOR}"
+            
+            # Check if CUDA is installed and set compiler
+            if [ -f "$CUDA_PATH/bin/nvcc" ]; then
+              export CMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
+              export CUDACXX="$CUDA_PATH/bin/nvcc"
+            elif [ -f "/usr/local/cuda/bin/nvcc" ]; then
+              export CMAKE_CUDA_COMPILER="/usr/local/cuda/bin/nvcc"
+              export CUDACXX="/usr/local/cuda/bin/nvcc"
+            else
+              echo "❌ CUDA compiler not found in expected locations"
+              find /usr/local -name "nvcc" 2>/dev/null || echo "nvcc not found"
+              exit 1
+            fi
+            
+            echo "✅ Using CUDA compiler: $CMAKE_CUDA_COMPILER"
           else
             PYTHON_PATH="${{ env.pythonLocation }}/python.exe"
           fi
