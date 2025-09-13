@@ -315,8 +315,9 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ github.run_id }}
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ github.run_id }}-${{ github.job }}
           path: python/dist/*.whl
+          retention-days: 7
 
   upload_pypi:
     name: Upload to PyPI
