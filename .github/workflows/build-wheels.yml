@@ -47,6 +47,7 @@ jobs:
           cuda: ${{ matrix.cuda }}
           method: 'local'
           use-local-cache: true
+          log-file-suffix: '${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}.txt'
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
