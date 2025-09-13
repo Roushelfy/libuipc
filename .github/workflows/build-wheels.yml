@@ -337,20 +337,11 @@ jobs:
             
             # Create full variant (include all CUDA libraries)
             echo "  Creating full variant: zhaofeng-pyuipc-full"
-            cp "$wheel" temp-full.whl
-            # Rename package in wheel filename
-            FULL_WHEEL=$(echo "$(basename $wheel)" | sed 's/zhaofeng_pyuipc/zhaofeng_pyuipc_full/')
-            auditwheel repair temp-full.whl -w wheelhouse-full/
-            # Rename the repaired wheel
-            for repaired in wheelhouse-full/*.whl; do
-              FINAL_NAME=$(echo "$(basename $repaired)" | sed 's/zhaofeng_pyuipc-/zhaofeng_pyuipc_full-/')
-              mv "$repaired" "dist-final/$FINAL_NAME"
-            done
+            auditwheel repair "$wheel" -w wheelhouse-full/
             
             # Create lite variant (exclude CUDA libraries)  
             echo "  Creating lite variant: zhaofeng-pyuipc"
-            cp "$wheel" temp-lite.whl
-            auditwheel repair temp-lite.whl \
+            auditwheel repair "$wheel" \
               --exclude libcublas \
               --exclude libcublasLt \
               --exclude libcusparse \
@@ -358,11 +349,18 @@ jobs:
               --exclude libnvJitLink \
               --exclude libcudart \
               -w wheelhouse-lite/
+            
+            # Rename and move wheels to final directory
+            for repaired in wheelhouse-full/*.whl; do
+              FINAL_NAME=$(echo "$(basename $repaired)" | sed 's/zhaofeng_pyuipc-/zhaofeng_pyuipc_full-/')
+              mv "$repaired" "dist-final/$FINAL_NAME"
+            done
+            
             # Move lite wheel to final directory
             mv wheelhouse-lite/*.whl dist-final/
             
-            # Cleanup
-            rm -f temp-full.whl temp-lite.whl
+            # Clear wheelhouse directories for next iteration
+            rm -rf wheelhouse-full/* wheelhouse-lite/*
           done
           
           # Replace original dist with final variants
