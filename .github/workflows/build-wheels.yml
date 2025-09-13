@@ -296,7 +296,7 @@ jobs:
           mkdir -p wheelhouse
           for wheel in dist/*.whl; do
             echo "  Repairing $(basename $wheel)"
-            auditwheel repair "$wheel" --plat-tag manylinux2014_x86_64 -w wheelhouse/
+            auditwheel repair "$wheel" -w wheelhouse/
           done
           # Replace original wheels with repaired ones
           rm dist/*.whl
