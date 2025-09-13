@@ -169,11 +169,17 @@ jobs:
         run: |
           echo "🔍 Current directory: $(pwd)"
           echo "📂 Build directory structure:"
-          find build -type f -name "*.so" -o -name "*.pyd" -o -name "*.dll" | head -20
-          echo "📂 Python-related files:"
-          find build -name "*pyuipc*" | head -10
-          echo "📂 Top-level build contents:"
-          ls -la build/
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            find build -type f -name "*.so" -o -name "*.pyd" -o -name "*.dll" 2>/dev/null | head -20 || echo "No shared libraries found"
+            find build -name "*pyuipc*" 2>/dev/null | head -10 || echo "No pyuipc files found"
+            ls -la build/ 2>/dev/null || echo "Build directory not found"
+          else
+            # Windows commands using bash-compatible tools
+            find build -name "*.dll" -o -name "*.pyd" 2>/dev/null | head -20 || echo "No shared libraries found"
+            find build -name "*pyuipc*" 2>/dev/null | head -10 || echo "No pyuipc files found"
+            ls build/ 2>/dev/null || echo "Build directory not found"
+          fi
+        shell: bash
 
       - name: Build Python wheel
         working-directory: python
@@ -201,8 +207,12 @@ jobs:
           
           # Debug: Check what configurations were actually built
           echo "🔍 Checking build configurations:"
-          find ../build -name "*pyuipc*" -type d | head -5
-          ls -la ../build/ | grep -E "(Release|RelWithDebInfo|Debug)" || echo "No config directories found"
+          find ../build -name "*pyuipc*" -type d 2>/dev/null | head -5 || echo "No pyuipc directories found"
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            ls -la ../build/ | grep -E "(Release|RelWithDebInfo|Debug)" || echo "No config directories found"
+          else
+            ls ../build/ | findstr /C:"Release" /C:"RelWithDebInfo" /C:"Debug" 2>/dev/null || echo "No config directories found"
+          fi
           
           # Find the actual modules directory that was created by after_build_pyuipc.py
           MODULES_BASE_DIR="src/uipc/modules"
@@ -226,7 +236,11 @@ jobs:
           
           # Debug: Check what's in the modules directory before copying
           echo "📋 Current modules directory contents:"
-          ls -la "$MODULES_DIR" || echo "Directory is empty or doesn't exist"
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            ls -la "$MODULES_DIR" || echo "Directory is empty or doesn't exist"
+          else
+            ls "$MODULES_DIR" || echo "Directory is empty or doesn't exist"
+          fi
           
           # Copy vcpkg dependencies to modules directory
           VCPKG_BIN_DIR="../build/vcpkg_installed/${VCPKG_TRIPLET}/bin"
@@ -276,12 +290,16 @@ jobs:
           
           # List final contents
           echo "📋 Final modules directory contents:"
-          ls -la "$MODULES_DIR"/ 2>/dev/null || echo "Directory empty or not found"
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            ls -la "$MODULES_DIR"/ 2>/dev/null || echo "Directory empty or not found"
+          else
+            ls "$MODULES_DIR"/ 2>/dev/null || echo "Directory empty or not found"
+          fi
           
           # Verify the structure
           echo "📂 Package structure:"
-          find src/uipc -name "*pyuipc*" | head -5
-          find src/uipc -name "modules" -type d
+          find src/uipc -name "*pyuipc*" 2>/dev/null | head -5 || echo "No pyuipc files found"
+          find src/uipc -name "modules" -type d 2>/dev/null || echo "No modules directory found"
           
           # Build wheel from the properly prepared package
           python -m build --wheel
