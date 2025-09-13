@@ -18,11 +18,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-22.04]  # Temporary: test only Ubuntu for faster CI
-        python: ['3.13']    # Temporary: test only 3.13 for faster CI
+        os: [ubuntu-22.04, windows-2022]
+        python: ['3.11', '3.12', '3.13']
+        cuda: ['12.4.1', '12.8.0', '13.0.0']
+        exclude:
+          # Exclude some combinations to reduce CI time
+          - os: windows-2022
+            cuda: '12.8.0'  # Keep only 12.4 and 13.0 for Windows
 
     concurrency:
-      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}
+      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
       cancel-in-progress: true
 
     steps:
@@ -39,11 +44,11 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup CUDA 12.4
+      - name: Setup CUDA ${{ matrix.cuda }}
         uses: Jimver/cuda-toolkit@v0.2.20
         id: cuda-toolkit
         with:
-          cuda: '12.4.1'
+          cuda: ${{ matrix.cuda }}
           method: 'local'
           use-github-cache: true
 
@@ -85,7 +90,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: cmake-build-${{ matrix.os }}-${{ matrix.python }}-${{ hashFiles('CMakeLists.txt') }}
+          key: cmake-build-${{ matrix.os }}-${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: |
             cmake-build-${{ matrix.os }}-${{ matrix.python }}-
             cmake-build-${{ matrix.os }}-
@@ -264,6 +269,24 @@ jobs:
           python -m build --wheel
         shell: bash
 
+      - name: Repair wheel for PyPI compatibility
+        if: matrix.os == 'ubuntu-22.04'
+        working-directory: python
+        run: |
+          pip install auditwheel
+          echo "🔧 Repairing wheels for PyPI compatibility..."
+          mkdir -p wheelhouse
+          for wheel in dist/*.whl; do
+            echo "  Repairing $(basename $wheel)"
+            auditwheel repair "$wheel" --plat-tag manylinux2014_x86_64 -w wheelhouse/
+          done
+          # Replace original wheels with repaired ones
+          rm dist/*.whl
+          mv wheelhouse/*.whl dist/
+          echo "✅ Wheel repair completed"
+          ls -la dist/
+        shell: bash
+
       - name: Test wheel installation
         working-directory: python
         run: |
@@ -275,7 +298,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-${{ github.run_number }}
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ github.run_number }}
           path: python/dist/*.whl
 
   upload_pypi:
