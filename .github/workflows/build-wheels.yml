@@ -21,10 +21,9 @@ jobs:
         os: [ubuntu-22.04, windows-2022]
         python: ['3.11', '3.12', '3.13']
         cuda: ['12.4.1']
-        variant: ['full', 'lite']
 
     concurrency:
-      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}-${{ matrix.variant }}
+      group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
       cancel-in-progress: true
 
     steps:
@@ -48,7 +47,7 @@ jobs:
           cuda: ${{ matrix.cuda }}
           method: 'local'
           use-local-cache: true
-          log-file-suffix: '${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ matrix.variant }}.txt'
+          log-file-suffix: '${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}.txt'
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
@@ -185,16 +184,7 @@ jobs:
       - name: Build Python wheel
         working-directory: python
         run: |
-          # Set package name based on variant
-          if [ "${{ matrix.variant }}" = "full" ]; then
-            PACKAGE_NAME="zhaofeng-pyuipc-full"
-          else
-            PACKAGE_NAME="zhaofeng-pyuipc"
-          fi
-          echo "📦 Building ${{ matrix.variant }} variant as: $PACKAGE_NAME"
-          
-          # Update package name in pyproject.toml
-          sed -i 's/name = "zhaofeng-pyuipc"/name = "'$PACKAGE_NAME'"/' pyproject.toml
+          echo "📦 Building base wheel (will create full and lite variants during repair)..."
           
           # Use the properly built Python package from build/python
           echo "📦 Using pre-built Python package from after_build_pyuipc.py script"
@@ -317,37 +307,65 @@ jobs:
           python -m build --wheel
         shell: bash
 
-      - name: Repair wheel for PyPI compatibility
+      - name: Repair wheels for PyPI compatibility (create both variants)
         if: matrix.os == 'ubuntu-22.04'
         working-directory: python
         run: |
           pip install auditwheel
-          echo "🔧 Repairing wheels for PyPI compatibility (${{ matrix.variant }} variant)..."
-          mkdir -p wheelhouse
+          echo "🔧 Repairing wheels for PyPI compatibility (creating both full and lite variants)..."
+          
+          # Create directories for both variants
+          mkdir -p wheelhouse-full wheelhouse-lite dist-final
           
           for wheel in dist/*.whl; do
-            echo "  Repairing $(basename $wheel)"
-            if [ "${{ matrix.variant }}" = "full" ]; then
-              # Full version: include all CUDA libraries
-              auditwheel repair "$wheel" -w wheelhouse/
-            else
-              # Lite version: exclude CUDA libraries
-              auditwheel repair "$wheel" \
-                --exclude libcublas \
-                --exclude libcublasLt \
-                --exclude libcusparse \
-                --exclude libcusolver \
-                --exclude libnvJitLink \
-                --exclude libcudart \
-                -w wheelhouse/
-            fi
+            echo ""
+            echo "📦 Processing $(basename $wheel)..."
+            
+            # Create full variant (include all CUDA libraries)
+            echo "  Creating full variant: zhaofeng-pyuipc-full"
+            cp "$wheel" temp-full.whl
+            # Rename package in wheel filename
+            FULL_WHEEL=$(echo "$(basename $wheel)" | sed 's/zhaofeng_pyuipc/zhaofeng_pyuipc_full/')
+            auditwheel repair temp-full.whl -w wheelhouse-full/
+            # Rename the repaired wheel
+            for repaired in wheelhouse-full/*.whl; do
+              FINAL_NAME=$(echo "$(basename $repaired)" | sed 's/zhaofeng_pyuipc-/zhaofeng_pyuipc_full-/')
+              mv "$repaired" "dist-final/$FINAL_NAME"
+            done
+            
+            # Create lite variant (exclude CUDA libraries)  
+            echo "  Creating lite variant: zhaofeng-pyuipc"
+            cp "$wheel" temp-lite.whl
+            auditwheel repair temp-lite.whl \
+              --exclude libcublas \
+              --exclude libcublasLt \
+              --exclude libcusparse \
+              --exclude libcusolver \
+              --exclude libnvJitLink \
+              --exclude libcudart \
+              -w wheelhouse-lite/
+            # Move lite wheel to final directory
+            mv wheelhouse-lite/*.whl dist-final/
+            
+            # Cleanup
+            rm -f temp-full.whl temp-lite.whl
           done
           
-          # Replace original wheels with repaired ones
-          rm dist/*.whl
-          mv wheelhouse/*.whl dist/
-          echo "✅ Wheel repair completed (${{ matrix.variant }} variant)"
+          # Replace original dist with final variants
+          rm -rf dist wheelhouse-full wheelhouse-lite
+          mv dist-final dist
+          
+          echo "✅ Wheel repair completed (both variants created)"
           ls -la dist/
+        shell: bash
+
+      - name: Prepare Windows wheels (lite variant only)
+        if: matrix.os == 'windows-2022'
+        working-directory: python
+        run: |
+          echo "📦 Windows wheels prepared (lite variant only - no CUDA libraries included)"
+          echo "✅ Using original wheel as zhaofeng-pyuipc (lite)"
+          ls dist/ 2>/dev/null || dir dist
         shell: bash
 
       - name: Test wheel installation
@@ -361,7 +379,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ matrix.variant }}-${{ github.run_id }}
+          name: wheels-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-${{ github.run_id }}
           path: python/dist/*.whl
           retention-days: 7
 
@@ -375,7 +393,7 @@ jobs:
       - name: Download all wheels
         uses: actions/download-artifact@v4
         with:
-          pattern: wheel-*
+          pattern: wheels-*
           path: dist
           merge-multiple: true
 
