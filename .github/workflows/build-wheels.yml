@@ -20,11 +20,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2022]
         python: ['3.11', '3.12', '3.13']
-        cuda: ['12.4.1', '12.8.0', '13.0.0']
-        exclude:
-          # Exclude some combinations to reduce CI time
-          - os: windows-2022
-            cuda: '13.0.0'  # Keep only 12.4 and 13.0 for Windows
+        cuda: ['12.4.1']
 
     concurrency:
       group: ${{ github.ref }}-build-wheels-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.cuda }}
@@ -45,12 +41,12 @@ jobs:
           submodules: true
 
       - name: Setup CUDA ${{ matrix.cuda }}
-        uses: Jimver/cuda-toolkit@v0.2.27
+        uses: Jimver/cuda-toolkit@v0.2.24
         id: cuda-toolkit
         with:
           cuda: ${{ matrix.cuda }}
           method: 'local'
-          use-local-cache: false
+          use-local-cache: true
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
