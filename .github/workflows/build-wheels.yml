@@ -350,10 +350,28 @@ jobs:
               --exclude libcudart \
               -w wheelhouse-lite/
             
-            # Rename and move wheels to final directory
+            # Properly rename full variant wheel with internal metadata
             for repaired in wheelhouse-full/*.whl; do
+              echo "  Renaming full variant wheel metadata..."
+              TEMP_DIR="temp-rename-$(basename $repaired .whl)"
+              mkdir -p "$TEMP_DIR"
+              cd "$TEMP_DIR"
+              
+              # Extract wheel
+              unzip -q "../$repaired"
+              
+              # Rename .dist-info directory
+              mv zhaofeng_pyuipc-*.dist-info zhaofeng_pyuipc_full-0.9.0.dist-info
+              
+              # Update METADATA file
+              sed -i 's/Name: zhaofeng-pyuipc$/Name: zhaofeng-pyuipc-full/' zhaofeng_pyuipc_full-*.dist-info/METADATA
+              
+              # Create new wheel
               FINAL_NAME=$(echo "$(basename $repaired)" | sed 's/zhaofeng_pyuipc-/zhaofeng_pyuipc_full-/')
-              mv "$repaired" "dist-final/$FINAL_NAME"
+              zip -r "../dist-final/$FINAL_NAME" .
+              
+              cd ..
+              rm -rf "$TEMP_DIR"
             done
             
             # Move lite wheel to final directory
