@@ -342,13 +342,12 @@ jobs:
             # Create lite variant (exclude CUDA libraries)  
             echo "  Creating lite variant: zhaofeng-pyuipc"
             auditwheel repair "$wheel" \
-              --exclude libcublas \
-              --exclude libcublasLt \
-              --exclude libcusparse \
-              --exclude libcusolver \
-              --exclude libnvJitLink \
-              --exclude libcudart \
-              -w wheelhouse-lite/
+            --exclude '*libcublas*' \
+            --exclude '*libcudart*' \
+            --exclude '*libcusparse*' \
+            --exclude '*libcusolver*' \
+            --exclude '*libnvJitLink*' \
+            -w wheelhouse-lite/
             
             # Properly rename full variant wheel with internal metadata
             for repaired in wheelhouse-full/*.whl; do
@@ -393,16 +392,16 @@ jobs:
         if: matrix.os == 'windows-2022'
         working-directory: python
         run: |
-          echo "📦 Windows wheels prepared (lite variant only - no CUDA libraries included)"
-          echo "✅ Using original wheel as zhaofeng-pyuipc (lite)"
+          echo "Windows wheels prepared (lite variant only - no CUDA libraries included)"
+          echo "Using original wheel as zhaofeng-pyuipc (lite)"
           ls dist/ 2>/dev/null || dir dist
         shell: bash
 
       - name: Test wheel installation
         working-directory: python
         run: |
-          python -m pip install dist/*.whl
-          python -c "import uipc; print('✅ uipc import successful')"
+          python -m pip install --force-reinstall dist/*.whl
+          python -c "import uipc; print('uipc import successful')"
           python uipc_info.py
         shell: bash
 
