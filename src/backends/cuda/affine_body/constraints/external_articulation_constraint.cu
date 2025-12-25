@@ -38,6 +38,7 @@ class ExternalArticulationConstituion final : public InterAffineBodyConstitution
 
     void do_build(BuildInfo& info) override {}
 
+
     void do_init(FilteredInfo& info) override {}
 
     void do_report_energy_extent(EnergyExtentInfo& info) override
@@ -127,7 +128,9 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
     // G^theta for each joint, intermediate variable for gradient and hessian computation
     muda::DeviceBuffer<Float> joint_id_to_G_theta;
 
-    void do_build(BuildInfo& info) override {}
+    void do_build(BuildInfo& info) override {
+                on_write_scene([this] { write_scene(); });
+    }
 
     U64 get_uid() const noexcept override { return ConstraintUID; }
 
@@ -930,26 +933,84 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
 
     void write_scene()
     {
-        auto geo_slots = world().scene().geometries();
+        auto scene     = world().scene();
+        auto geo_slots = scene.geometries();
 
+        // DEBUG: Verify geo_slots size and animated_inter_geo_info size
+        auto anim_geo_infos = animated_inter_geo_info();
+        spdlog::info("[write_scene] geo_slots.size() = {}", geo_slots.size());
+        spdlog::info("[write_scene] animated_inter_geo_info().size() = {}", anim_geo_infos.size());
+
+        // DEBUG: Print geo_slot IDs
+        spdlog::info("[write_scene] geo_slots IDs:");
+        for(size_t i = 0; i < geo_slots.size(); ++i)
+        {
+            spdlog::info("  geo_slots[{}]->id() = {}", i, geo_slots[i]->id());
+        }
+
+        // DEBUG: Print animated_inter_geo_info content
+        spdlog::info("[write_scene] animated_inter_geo_info content:");
+        for(size_t i = 0; i < anim_geo_infos.size(); ++i)
+        {
+            spdlog::info("  anim_geo_infos[{}].geo_slot_index = {}", i, anim_geo_infos[i].geo_slot_index);
+        }
+
+        // Copy delta_theta from device to host
         joint_id_to_delta_theta.copy_to(h_joint_id_to_delta_theta);
+
+        // DEBUG: Print delta_theta values
+        printf("--- ExternalArticulationConstraint::write_scene ---\n");
+        spdlog::info("[ExternalArticulationConstraint::write_scene] Called!");
+        for(size_t i = 0; i < h_joint_id_to_delta_theta.size(); ++i)
+        {
+            spdlog::info("  joint[{}] delta_theta = {:.6f}", i, h_joint_id_to_delta_theta[i]);
+        }
+
+        spdlog::info("[write_scene] Before for_each loop");
 
         this->for_each(
             geo_slots,
             [&](InterAffineBodyConstitutionManager::ForEachInfo& I_info, geometry::Geometry& geo)
             {
-                auto joint_collection = geo["joint"];
-                auto delta_theta = joint_collection->find<Float>("delta_theta");
+                spdlog::info("[write_scene] Inside for_each - I_info.index() = {}", I_info.index());
 
+                auto joint_collection = geo["joint"];
+                if(!joint_collection)
+                {
+                    spdlog::warn("[write_scene] Articulation {} - 'joint' collection NOT FOUND!", I_info.index());
+                    return;
+                }
+
+                auto delta_theta = joint_collection->find<Float>("delta_theta");
+                spdlog::info("[write_scene] Articulation {} - found joint collection with size {}",
+                             I_info.index(),
+                             joint_collection->size());
                 if(delta_theta)
                 {
                     auto delta_theta_view = view(*delta_theta);
                     auto [offset, count] =
                         h_art_id_to_joint_offsets_counts[I_info.index()];
+
+                    spdlog::info("[write_scene] Articulation {} - writing {} joints (offset={})",
+                                 I_info.index(), count, offset);
+
                     std::ranges::copy(span{h_joint_id_to_delta_theta}.subspan(offset, count),
                                       delta_theta_view.begin());
+
+                    // DEBUG: Verify what was written
+                    for(size_t i = 0; i < count; ++i)
+                    {
+                        spdlog::info("    Written delta_theta[{}] = {:.6f}", i, delta_theta_view[i]);
+                    }
+                }
+                else
+                {
+                    spdlog::warn("[write_scene] Articulation {} - delta_theta attribute NOT FOUND!",
+                                 I_info.index());
                 }
             });
+
+        spdlog::info("[write_scene] After for_each loop");
     }
 
     BufferDump dump_delta_theta;
