@@ -127,7 +127,9 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
     // G^theta for each joint, intermediate variable for gradient and hessian computation
     muda::DeviceBuffer<Float> joint_id_to_G_theta;
 
-    void do_build(BuildInfo& info) override {}
+    void do_build(BuildInfo& info) override {
+        on_write_scene([this] { write_scene(); });
+    }
 
     U64 get_uid() const noexcept override { return ConstraintUID; }
 
@@ -936,7 +938,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
 
         this->for_each(
             geo_slots,
-            [&](InterAffineBodyConstitutionManager::ForEachInfo& I_info, geometry::Geometry& geo)
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I_info, geometry::Geometry& geo)
             {
                 auto joint_collection = geo["joint"];
                 auto delta_theta = joint_collection->find<Float>("delta_theta");
