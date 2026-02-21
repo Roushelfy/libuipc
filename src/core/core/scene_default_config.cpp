@@ -58,7 +58,18 @@ geometry::AttributeCollection default_scene_config() noexcept
 
     config.create("extras/debug/dump_surface", IndexT{0});
     config.create("extras/debug/dump_linear_system", IndexT{0});
+    config.create("extras/debug/dump_solution_x", IndexT{0});
     config.create("extras/debug/dump_linear_pcg", IndexT{0});
+
+    config.create("extras/telemetry/enable", IndexT{0});
+    config.create("extras/telemetry/timer/enable", IndexT{0});
+    config.create("extras/telemetry/timer/report_every_frame", IndexT{0});
+    config.create("extras/telemetry/nvtx/enable", IndexT{0});
+    config.create("extras/telemetry/pcg/enable", IndexT{0});
+    config.create("extras/telemetry/pcg/sample_every_iter", IndexT{10});
+    config.create("extras/telemetry/error_tracker/enable", IndexT{0});
+    config.create("extras/telemetry/error_tracker/mode", std::string{"offline"});
+    config.create("extras/telemetry/error_tracker/reference_dir", std::string{""});
 
     config.create("extras/strict_mode/enable", IndexT{0});
 

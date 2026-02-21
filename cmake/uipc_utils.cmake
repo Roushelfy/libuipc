@@ -60,6 +60,9 @@ function(uipc_show_options)
 
     message(STATUS "Backend Options:")
     message(STATUS "    * UIPC_WITH_CUDA_BACKEND: ${UIPC_WITH_CUDA_BACKEND}")
+    message(STATUS "    * UIPC_WITH_CUDA_MIXED_BACKEND: ${UIPC_WITH_CUDA_MIXED_BACKEND}")
+    message(STATUS "    * UIPC_CUDA_MIXED_PRECISION_LEVEL: ${UIPC_CUDA_MIXED_PRECISION_LEVEL}")
+    message(STATUS "    * UIPC_WITH_NVTX: ${UIPC_WITH_NVTX}")
     message(STATUS "    * UIPC_CUDA_ARCHITECTURES: ${UIPC_CUDA_ARCHITECTURES}")
     
     message(STATUS "Details:")
@@ -124,7 +127,8 @@ function(uipc_config_vcpkg_install)
         "--dev_mode=${UIPC_DEV_MODE}" # pass the UIPC_DEV_MODE as argument
         "--with_usd_support=${UIPC_WITH_USD_SUPPORT}" # pass the UIPC_WITH_USD_SUPPORT as argument
         "--with_vdb_support=${UIPC_WITH_VDB_SUPPORT}" # pass the UIPC_WITH_VDB_SUPPORT as argument
-        "--with_cuda_backend=${UIPC_WITH_CUDA_BACKEND}" # pass the UIPC_WITH_CUDA_BACKEND as argument
+        "--build_benchmarks=${UIPC_BUILD_BENCHMARKS}" # pass the benchmark switch as argument
+        "--with_cuda_backend=${UIPC_WITH_ANY_CUDA_BACKEND}" # pass whether any CUDA backend is enabled
         OUTPUT_VARIABLE VCPKG_JSON_GENERATE_OUTPUT
         RESULT_VARIABLE VCPKG_JSON_GENERATE_RESULT
         ECHO_OUTPUT_VARIABLE # also print output to console

@@ -16,6 +16,11 @@ set_target_properties(metis PROPERTIES FOLDER "external")
 
 if (UIPC_WITH_CUDA_BACKEND)
     uipc_init_submodule(muda)
+    if(UIPC_WITH_NVTX)
+        set(MUDA_WITH_NVTX3 ON CACHE BOOL "" FORCE)
+    else()
+        set(MUDA_WITH_NVTX3 OFF CACHE BOOL "" FORCE)
+    endif()
     # Turn off example builds in muda
     set(MUDA_BUILD_EXAMPLE OFF CACHE BOOL "Build muda example" FORCE)
     if(UIPC_BUILD_PYTHON_WHEEL)

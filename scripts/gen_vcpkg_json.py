@@ -156,6 +156,11 @@ def gen_vcpkg_json(args):
         #     'version>=': '2025.10.9'
         # })
         pass
+    if is_enabled(args.build_benchmarks):
+        deps.append({
+            'name': 'benchmark',
+            'version>=': '1.8.3'
+        })
 
 def print_deps():
     str_names = []
@@ -246,6 +251,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev_mode', type=str, default=False, help='Enable development mode.')
     parser.add_argument('--with_usd_support', type=str, default=False, help='Enable USD support.')
     parser.add_argument('--with_vdb_support', type=str, default=False, help='Enable VDB support.')
+    parser.add_argument('--build_benchmarks', type=str, default=False, help='Enable benchmark dependencies.')
     # backends
     parser.add_argument('--with_cuda_backend', type=str, default=False, help='Enable CUDA backend support.')
     args = parser.parse_args()
