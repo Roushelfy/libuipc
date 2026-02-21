@@ -878,10 +878,20 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
 2. Stage2 heavy 场景已接入并跑通：
    - `wrecking_ball`（性能 + 质量）
    - `fem_ground_contact`（质量哨兵）
+   - `fem_heavy_nocontact`（~57k tet）
+   - `fem_heavy_ground_contact`（~57k tet）
 3. 离线误差链路已打通：
    - `fp64` 先生成 reference
    - `path1` 使用 offline ErrorTracker 对比并输出 JSONL
-4. strict mode 相关默认键已补齐（避免 benchmark 配置键缺失报错）：
+4. Path1 扩展改造已进入大范围落地（Reporter/Manager/Contact helper）：
+   - 已覆盖 FEM/ABD/contact/inter_primitive 的多组 kernel 与耦合子系统
+   - 已接入 `ActivePolicy::AluScalar` + `downcast_*<StoreScalar>` 主路径
+5. benchmark 网格导出链路已打通并收敛为“每帧一个 OBJ”：
+   - 场景配置接线 `extras/debug/dump_surface`
+   - `dump_surface` 从 line-search 中间态移到帧末（单帧单文件）
+   - 导出文件名统一为 `scene_surface{frame}.obj`
+6. FEM heavy 场景实例变换已预烘焙到顶点，消除运行时 non-identity transform 警告
+7. strict mode 相关默认键已补齐（避免 benchmark 配置键缺失报错）：
    - `extras/debug/dump_solution_x`
    - `extras/telemetry/enable`
    - `extras/telemetry/timer/enable`
@@ -893,14 +903,26 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
    - `extras/telemetry/error_tracker/mode`
    - `extras/telemetry/error_tracker/reference_dir`
 
-### Stage2 结果快照（`output/benchmarks/stage2_full_20260221_135322/summary_stage2.json`）
+### Stage2 结果快照（`output/benchmarks/mixed_stage2/summary_stage2.json`）
 
-1. 告警状态：`warnings=[]`（等价 `warning_count=0`）
+1. 告警状态：`warning_count=6`（当前仍为 warning-only，不阻塞）
 2. 误差总览（overall）：
-   - `rel_l2_max = 6.93634e-10`
-   - `abs_linf_max = 1.71654e-12`
+   - `rel_l2_max = 2.04385e+08`
+   - `abs_linf_max = 1.93453e-03`
    - `nan_inf_count = 0`
-   - `record_count = 278`
+   - `record_count = 1347`
+
+### 最新运行产物（本地可复现）
+
+1. Stage1：
+   - `output/benchmarks/mixed_stage1/summary.json`
+   - `output/benchmarks/mixed_stage1/summary.md`
+2. Stage2：
+   - `output/benchmarks/mixed_stage2/summary_stage2.json`
+   - `output/benchmarks/mixed_stage2/summary_stage2.md`
+3. OBJ 导出示例：
+   - `output/benchmarks/mixed_stage2/workspaces/stage2/cuda_mixed/wrecking_ball/Perf/TelemetryOff/fp64_perf/debug/cuda_mixed/engine/sim_engine.cu/scene_surface1.obj`
+   - 单 case 验证中 `80` 帧对应 `80` 个 `scene_surface*.obj`
 
 ---
 
@@ -924,9 +946,9 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
 
 ### 下一轮验收口径
 
-1. Stage2 重测中 `path1` 相对 `fp64` 出现稳定正收益（不再长期持平/回退）
-2. 误差保持在既定阈值内（含 `rel_l2` 与 `abs_linf`）
-3. `nan_inf_count` 维持为 0
+1. 以 `wrecking_ball + fem_heavy_*` 为主场景，逐项收敛 `path1` 数值误差（优先处理 `rel_l2` 异常放大）
+2. 将 Stage2 `warning_count` 从 6 压降至 0（保持 `nan_inf_count = 0`）
+3. 在保持单帧单 OBJ 导出的前提下继续回归性能收益与稳定性
 
 ---
 

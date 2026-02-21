@@ -5,9 +5,11 @@
 #include <uipc/constitution/stable_neo_hookean.h>
 #include <uipc/builtin/constants.h>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
+#include <array>
 #include <string>
 
 namespace uipc::bench::mixed
@@ -117,6 +119,116 @@ void build_wrecking_ball_scene(core::Scene& scene)
     auto ground_obj = scene.objects().create("ground");
     ground_obj->geometries().create(geometry::ground(-1.0));
 }
+
+Vector3 make_grid_position(IndexT i,
+                           IndexT cols,
+                           const Vector3& base,
+                           Float sx,
+                           Float sy,
+                           Float sz)
+{
+    const IndexT row = i / cols;
+    const IndexT col = i % cols;
+    return Vector3{base.x() + sx * static_cast<Float>(col),
+                   base.y() + sy * static_cast<Float>(row),
+                   base.z() + sz * static_cast<Float>(row)};
+}
+
+void build_fem_heavy_scene(core::Scene& scene, bool with_ground_contact)
+{
+    using namespace uipc;
+    using namespace uipc::core;
+    using namespace uipc::geometry;
+    using namespace uipc::constitution;
+
+    const std::string tetmesh_dir{AssetDir::tetmesh_path()};
+    SimplicialComplexIO io;
+
+    auto wheel_axle    = io.read(fmt::format("{}wheel_axle.msh", tetmesh_dir));
+    auto simple_axle   = io.read(fmt::format("{}simple_axle.msh", tetmesh_dir));
+    auto cylinder_hole = io.read(fmt::format("{}cylinder_hole.msh", tetmesh_dir));
+
+    StableNeoHookean snh;
+    auto parm = ElasticModuli::youngs_poisson(120.0_kPa, 0.48);
+
+    auto prepare_mesh = [&](SimplicialComplex& mesh)
+    {
+        label_surface(mesh);
+        label_triangle_orient(mesh);
+        snh.apply_to(mesh, parm, 1e3);
+    };
+
+    prepare_mesh(wheel_axle);
+    prepare_mesh(simple_axle);
+    prepare_mesh(cylinder_hole);
+
+    if(with_ground_contact)
+    {
+        scene.contact_tabular().default_model(0.5, 1.0_GPa);
+        auto default_contact = scene.contact_tabular().default_element();
+        default_contact.apply_to(wheel_axle);
+        default_contact.apply_to(simple_axle);
+        default_contact.apply_to(cylinder_hole);
+    }
+
+    auto append_instances = [&](std::string_view name,
+                                const SimplicialComplex& src,
+                                IndexT count,
+                                IndexT cols,
+                                const Vector3& base,
+                                Float sx,
+                                Float sy,
+                                Float sz)
+    {
+        auto obj = scene.objects().create(std::string{name});
+        for(IndexT i = 0; i < count; ++i)
+        {
+            auto pos = make_grid_position(i, cols, base, sx, sy, sz);
+            SimplicialComplex mesh = src;
+
+            // Bake instance translation into vertex positions to keep transform identity.
+            auto pos_view = view(mesh.positions());
+            std::ranges::transform(pos_view,
+                                   pos_view.begin(),
+                                   [&](const Vector3& v) -> Vector3 { return v + pos; });
+            view(mesh.transforms())[0].setIdentity();
+
+            obj->geometries().create(mesh);
+        }
+    };
+
+    // 6 + 6 + 12 = 24 instances, ~57k tets with selected assets.
+    append_instances("fem_heavy_wheel_axle",
+                     wheel_axle,
+                     6,
+                     3,
+                     Vector3{-14.0, 6.0, -8.0},
+                     4.8,
+                     0.8,
+                     3.4);
+    append_instances("fem_heavy_simple_axle",
+                     simple_axle,
+                     6,
+                     3,
+                     Vector3{-14.0, 6.3, 2.0},
+                     4.5,
+                     0.8,
+                     3.2);
+    append_instances("fem_heavy_cylinder_hole",
+                     cylinder_hole,
+                     12,
+                     4,
+                     Vector3{-14.0, 6.8, 11.5},
+                     3.6,
+                     0.75,
+                     2.9);
+
+    if(with_ground_contact)
+    {
+        auto ground_obj = scene.objects().create("ground");
+        ground_obj->geometries().create(geometry::ground(-1.2));
+    }
+}
 }  // namespace
 
 std::string_view scenario_name(MixedScenario scenario)
@@ -131,6 +243,10 @@ std::string_view scenario_name(MixedScenario scenario)
             return "fem_ground_contact";
         case MixedScenario::WreckingBall:
             return "wrecking_ball";
+        case MixedScenario::FemHeavyNoContact:
+            return "fem_heavy_nocontact";
+        case MixedScenario::FemHeavyGroundContact:
+            return "fem_heavy_ground_contact";
         default:
             return "unknown";
     }
@@ -172,6 +288,16 @@ Json make_mixed_config(MixedScenario scenario, const MixedConfigOptions& options
                 config["contact"]["enable"]             = true;
                 config["contact"]["friction"]["enable"] = false;
                 break;
+            case MixedScenario::FemHeavyNoContact:
+                config["gravity"]           = Vector3{0.0, -9.8, 0.0};
+                config["contact"]["enable"] = false;
+                break;
+            case MixedScenario::FemHeavyGroundContact:
+                config["gravity"]                       = Vector3{0.0, -9.8, 0.0};
+                config["contact"]["enable"]             = true;
+                config["contact"]["friction"]["enable"] = false;
+                config["contact"]["d_hat"]              = 0.01;
+                break;
             default:
                 break;
         }
@@ -192,6 +318,7 @@ Json make_mixed_config(MixedScenario scenario, const MixedConfigOptions& options
     auto& debug = config["extras"]["debug"];
     debug["dump_linear_system"] = options.dump_linear_system ? 1 : 0;
     debug["dump_solution_x"]    = options.dump_solution_x ? 1 : 0;
+    debug["dump_surface"]       = options.dump_surface ? 1 : 0;
 
     return config;
 }
@@ -269,6 +396,12 @@ void populate_mixed_scene(MixedScenario scenario, core::Scene& scene)
             object->geometries().create(ground(-1.2));
             break;
         }
+        case MixedScenario::FemHeavyNoContact:
+            build_fem_heavy_scene(scene, false);
+            break;
+        case MixedScenario::FemHeavyGroundContact:
+            build_fem_heavy_scene(scene, true);
+            break;
         default:
             break;
     }

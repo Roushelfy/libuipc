@@ -178,6 +178,7 @@ MixedRunResult run_mixed_case(const MixedRunSpec& spec)
         options.error_tracker_enabled = spec.error_tracker_enable;
         options.dump_linear_system    = spec.dump_linear_system;
         options.dump_solution_x       = spec.dump_solution_x;
+        options.dump_surface          = spec.dump_surface || env_flag("UIPC_BENCH_DUMP_SURFACE");
 
         if(spec.run_mode == MixedRunMode::QualityReference)
         {

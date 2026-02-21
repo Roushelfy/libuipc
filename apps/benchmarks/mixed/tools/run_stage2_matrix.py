@@ -148,7 +148,7 @@ def main() -> int:
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    source_dir = args.source_dir.resolve() if args.source_dir else script_dir.parents[4]
+    source_dir = args.source_dir.resolve() if args.source_dir else script_dir.parents[3]
     run_root = args.run_root.resolve() if args.run_root else source_dir / "output" / "benchmarks" / "mixed_stage2"
     run_root.mkdir(parents=True, exist_ok=True)
 
@@ -194,7 +194,7 @@ def main() -> int:
 
     run_benchmark(fp64_exe,
                   run_root / "fp64" / "quality_reference" / "gbench.json",
-                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference30F\\..*",
+                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference(20|30)F\\..*",
                   env=fp64_ref_env)
 
     # path1 build and runs
@@ -229,7 +229,7 @@ def main() -> int:
 
     run_benchmark(path1_exe,
                   run_root / "path1" / "quality_compare" / "gbench.json",
-                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Compare30F\\..*",
+                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Compare(20|30)F\\..*",
                   env=path1_cmp_env)
 
     aggregate_script = script_dir / "aggregate_stage2.py"

@@ -10,6 +10,8 @@
 #include <finite_element/finite_element_vertex_reporter.h>
 #include <kernel_cout.h>
 #include <utils/matrix_unpacker.h>
+#include <mixed_precision/policy.h>
+#include <mixed_precision/cast.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -68,6 +70,7 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
     virtual void assemble(GlobalLinearSystem::OffDiagInfo& info) override
     {
         using namespace muda;
+        using Alu = ActivePolicy::AluScalar;
 
         auto count = abd_fem_dytopo_effect_receiver->hessians().triplet_count();
 
@@ -110,9 +113,10 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
                                auto I4 = 4 * I;
 
                                using StoreScalar = GlobalLinearSystem::StoreScalar;
-                               Eigen::Matrix<StoreScalar, 12, 3> H =
-                                   (J.to_mat().transpose() * H3x3)
-                                       .template cast<StoreScalar>();
+                               Eigen::Matrix<Alu, 12, 3> H_alu =
+                                   J.to_mat().transpose().template cast<Alu>()
+                                   * H3x3.template cast<Alu>();
+                               auto H = downcast_hessian<StoreScalar>(H_alu);
 
                                if(body_is_fixed(body_id) || vertex_is_fixed(J_fem_v))
                                    H.setZero();

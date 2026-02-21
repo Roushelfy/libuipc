@@ -12,7 +12,20 @@ UNIT_TO_MS = {
     "s": 1000.0,
 }
 
-KNOWN_SCENARIOS = ("wrecking_ball", "fem_ground_contact", "fem_gravity", "abd_gravity")
+KNOWN_SCENARIOS = (
+    "wrecking_ball",
+    "fem_ground_contact",
+    "fem_heavy_nocontact",
+    "fem_heavy_ground_contact",
+    "fem_gravity",
+    "abd_gravity",
+)
+
+PERF_SCENARIO_THRESHOLDS = {
+    "wrecking_ball": 20.0,
+    "fem_heavy_nocontact": 10.0,
+    "fem_heavy_ground_contact": 15.0,
+}
 
 
 def to_ms(value: float, unit: str) -> float:
@@ -50,23 +63,28 @@ def load_benchmark_file(path: Path) -> Tuple[Dict[str, float], List[dict]]:
 def compare_path1_vs_fp64(fp64: Dict[str, float], path1: Dict[str, float]) -> List[dict]:
     rows: List[dict] = []
     for name, fp64_ms in fp64.items():
-        if not name.startswith("Mixed.Stage2.Perf.Advance100F."):
+        if not name.startswith("Mixed.Stage2.Perf."):
+            continue
+        if ".cuda_mixed" not in name:
             continue
         if name not in path1:
             continue
+        scenario = infer_scenario_from_path(Path(name))
         path1_ms = path1[name]
         delta_pct = None
         if fp64_ms > 0:
             delta_pct = (path1_ms - fp64_ms) / fp64_ms * 100.0
-        warning = bool(delta_pct is not None and delta_pct > 20.0)
+        threshold = PERF_SCENARIO_THRESHOLDS.get(scenario, 20.0)
+        warning = bool(delta_pct is not None and delta_pct > threshold)
         rows.append(
             {
                 "name": name,
+                "scenario": scenario,
                 "fp64_ms": fp64_ms,
                 "path1_ms": path1_ms,
                 "delta_pct": delta_pct,
                 "warning": warning,
-                "threshold_pct": 20.0,
+                "threshold_pct": threshold,
             }
         )
     rows.sort(key=lambda x: x["name"])
@@ -183,14 +201,14 @@ def write_markdown(path: Path, summary: dict) -> None:
     lines: List[str] = []
     lines.append("# Mixed Stage2 Benchmark Summary")
     lines.append("")
-    lines.append("## Performance: Path1 vs FP64 (Advance100F)")
+    lines.append("## Performance: Path1 vs FP64")
     lines.append("")
-    lines.append("| Case | FP64 (ms) | Path1 (ms) | Delta (%) | Warning |")
-    lines.append("|---|---:|---:|---:|---|")
+    lines.append("| Case | FP64 (ms) | Path1 (ms) | Delta (%) | Threshold (%) | Warning |")
+    lines.append("|---|---:|---:|---:|---:|---|")
     for row in summary["comparisons"]["path1_vs_fp64"]:
         delta = "n/a" if row["delta_pct"] is None else f"{row['delta_pct']:.2f}"
         lines.append(
-            f"| {row['name']} | {row['fp64_ms']:.4f} | {row['path1_ms']:.4f} | {delta} | {'YES' if row['warning'] else 'NO'} |"
+            f"| {row['name']} | {row['fp64_ms']:.4f} | {row['path1_ms']:.4f} | {delta} | {row['threshold_pct']:.1f} | {'YES' if row['warning'] else 'NO'} |"
         )
 
     lines.append("")

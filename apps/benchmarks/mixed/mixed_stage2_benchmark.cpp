@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include <array>
 #include <string>
+#include <utility>
 
 namespace uipc::bench::mixed
 {
@@ -39,43 +40,34 @@ static void register_stage2_perf_for_backend(const std::string& backend)
 {
     const auto workspace_tag = env_or_default("UIPC_BENCH_WORKSPACE_TAG", "default");
 
+    const auto register_perf_case = [&](MixedScenario scenario, int frames)
     {
-        MixedRunSpec spec{
-            .backend           = backend,
-            .scenario          = MixedScenario::WreckingBall,
-            .telemetry_enabled = false,
-            .frames            = 100,
-            .init_only         = false,
-            .run_mode          = MixedRunMode::Perf,
-            .suite_name        = "stage2",
-            .workspace_tag     = workspace_tag,
-        };
-        auto name = fmt::format("Mixed.Stage2.Perf.Advance100F.TelemetryOff.{}.{}",
-                                scenario_name(spec.scenario),
-                                backend);
-        benchmark::RegisterBenchmark(name.c_str(),
-                                     [spec](benchmark::State& state)
-                                     { BM_Stage2(state, spec); });
-    }
+        for(bool telemetry_on : {false, true})
+        {
+            MixedRunSpec spec{
+                .backend           = backend,
+                .scenario          = scenario,
+                .telemetry_enabled = telemetry_on,
+                .frames            = frames,
+                .init_only         = false,
+                .run_mode          = MixedRunMode::Perf,
+                .suite_name        = "stage2",
+                .workspace_tag     = workspace_tag,
+            };
+            auto name = fmt::format("Mixed.Stage2.Perf.Advance{}F.{}.{}.{}",
+                                    frames,
+                                    telemetry_on ? "TelemetryOn" : "TelemetryOff",
+                                    scenario_name(spec.scenario),
+                                    backend);
+            benchmark::RegisterBenchmark(name.c_str(),
+                                         [spec](benchmark::State& state)
+                                         { BM_Stage2(state, spec); });
+        }
+    };
 
-    {
-        MixedRunSpec spec{
-            .backend           = backend,
-            .scenario          = MixedScenario::WreckingBall,
-            .telemetry_enabled = true,
-            .frames            = 100,
-            .init_only         = false,
-            .run_mode          = MixedRunMode::Perf,
-            .suite_name        = "stage2",
-            .workspace_tag     = workspace_tag,
-        };
-        auto name = fmt::format("Mixed.Stage2.Perf.Advance100F.TelemetryOn.{}.{}",
-                                scenario_name(spec.scenario),
-                                backend);
-        benchmark::RegisterBenchmark(name.c_str(),
-                                     [spec](benchmark::State& state)
-                                     { BM_Stage2(state, spec); });
-    }
+    register_perf_case(MixedScenario::WreckingBall, 100);
+    register_perf_case(MixedScenario::FemHeavyNoContact, 80);
+    register_perf_case(MixedScenario::FemHeavyGroundContact, 80);
 }
 
 static void register_stage2_quality_for_mixed()
@@ -84,24 +76,28 @@ static void register_stage2_quality_for_mixed()
     const auto reference_root =
         env_or_default("UIPC_BENCH_ERROR_REFERENCE_ROOT", "");
 
-    constexpr std::array scenarios = {MixedScenario::WreckingBall,
-                                      MixedScenario::FemGroundContact};
+    constexpr std::array scenario_frames = {
+        std::pair{MixedScenario::WreckingBall, 30},
+        std::pair{MixedScenario::FemGroundContact, 30},
+        std::pair{MixedScenario::FemHeavyNoContact, 20},
+        std::pair{MixedScenario::FemHeavyGroundContact, 20}};
 
-    for(auto scenario : scenarios)
+    for(const auto& [scenario, frames] : scenario_frames)
     {
         {
             MixedRunSpec spec{
                 .backend           = "cuda_mixed",
                 .scenario          = scenario,
                 .telemetry_enabled = false,
-                .frames            = 30,
+                .frames            = frames,
                 .init_only         = false,
                 .run_mode          = MixedRunMode::QualityReference,
                 .suite_name        = "stage2",
                 .workspace_tag     = workspace_tag,
                 .dump_solution_x   = true,
             };
-            auto name = fmt::format("Mixed.Stage2.Quality.Reference30F.{}.cuda_mixed",
+            auto name = fmt::format("Mixed.Stage2.Quality.Reference{}F.{}.cuda_mixed",
+                                    frames,
                                     scenario_name(scenario));
             benchmark::RegisterBenchmark(name.c_str(),
                                          [spec](benchmark::State& state)
@@ -113,7 +109,7 @@ static void register_stage2_quality_for_mixed()
                 .backend              = "cuda_mixed",
                 .scenario             = scenario,
                 .telemetry_enabled    = true,
-                .frames               = 30,
+                .frames               = frames,
                 .init_only            = false,
                 .run_mode             = MixedRunMode::QualityCompare,
                 .suite_name           = "stage2",
@@ -121,7 +117,8 @@ static void register_stage2_quality_for_mixed()
                 .error_tracker_enable = true,
                 .error_reference_root = reference_root,
             };
-            auto name = fmt::format("Mixed.Stage2.Quality.Compare30F.{}.cuda_mixed",
+            auto name = fmt::format("Mixed.Stage2.Quality.Compare{}F.{}.cuda_mixed",
+                                    frames,
                                     scenario_name(scenario));
             benchmark::RegisterBenchmark(name.c_str(),
                                          [spec](benchmark::State& state)

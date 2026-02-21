@@ -149,7 +149,7 @@ def main() -> int:
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    source_dir = args.source_dir.resolve() if args.source_dir else script_dir.parents[4]
+    source_dir = args.source_dir.resolve() if args.source_dir else script_dir.parents[3]
     run_root = args.run_root.resolve() if args.run_root else source_dir / "output" / "benchmarks" / "mixed_stage1"
     run_root.mkdir(parents=True, exist_ok=True)
 

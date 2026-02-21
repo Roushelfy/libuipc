@@ -26,6 +26,7 @@ struct MixedRunSpec
     std::string   error_reference_root;
     bool          dump_linear_system   = false;
     bool          dump_solution_x      = false;
+    bool          dump_surface         = false;
 };
 
 struct MixedRunResult

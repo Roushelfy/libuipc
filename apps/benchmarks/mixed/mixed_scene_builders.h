@@ -11,7 +11,9 @@ enum class MixedScenario
     AbdGravity,
     FemGravity,
     FemGroundContact,
-    WreckingBall
+    WreckingBall,
+    FemHeavyNoContact,
+    FemHeavyGroundContact
 };
 
 using Stage1Scenario = MixedScenario;
@@ -24,6 +26,7 @@ struct MixedConfigOptions
     std::string error_tracker_reference_dir;
     bool        dump_linear_system           = false;
     bool        dump_solution_x              = false;
+    bool        dump_surface                 = false;
 };
 
 std::string_view scenario_name(MixedScenario scenario);

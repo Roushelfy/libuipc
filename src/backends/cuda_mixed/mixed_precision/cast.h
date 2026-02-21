@@ -41,15 +41,24 @@ MUDA_INLINE MUDA_GENERIC auto downcast_gradient(const FromMatrix& G) noexcept
     else
     {
 #ifndef NDEBUG
-#if !defined(__CUDA_ARCH__)
         assert(G.allFinite() && "downcast_gradient: source contains NaN/Inf");
-#endif
+        if constexpr(std::is_floating_point_v<From> && std::is_floating_point_v<To>
+                     && (sizeof(To) < sizeof(From)))
+        {
+            constexpr double kMaxTo =
+                static_cast<double>(std::numeric_limits<To>::max());
+            for(int i = 0; i < N; ++i)
+            {
+                const double v = static_cast<double>(G(i));
+                assert(::isfinite(v) && "downcast_gradient: element is NaN/Inf");
+                assert(::fabs(v) <= kMaxTo
+                       && "downcast_gradient: narrowing overflow");
+            }
+        }
 #endif
         Eigen::Matrix<To, N, 1> out = G.template cast<To>();
 #ifndef NDEBUG
-#if !defined(__CUDA_ARCH__)
         assert(out.allFinite() && "downcast_gradient: narrowing produced NaN/Inf");
-#endif
 #endif
         return out;
     }
@@ -71,18 +80,29 @@ MUDA_INLINE MUDA_GENERIC auto downcast_hessian(const FromMatrix& H) noexcept
     else
     {
 #ifndef NDEBUG
-#if !defined(__CUDA_ARCH__)
         assert(H.allFinite() && "downcast_hessian: source contains NaN/Inf");
-#endif
+        if constexpr(std::is_floating_point_v<From> && std::is_floating_point_v<To>
+                     && (sizeof(To) < sizeof(From)))
+        {
+            constexpr double kMaxTo =
+                static_cast<double>(std::numeric_limits<To>::max());
+            for(int r = 0; r < R; ++r)
+            {
+                for(int c = 0; c < C; ++c)
+                {
+                    const double v = static_cast<double>(H(r, c));
+                    assert(::isfinite(v) && "downcast_hessian: element is NaN/Inf");
+                    assert(::fabs(v) <= kMaxTo
+                           && "downcast_hessian: narrowing overflow");
+                }
+            }
+        }
 #endif
         Eigen::Matrix<To, R, C> out = H.template cast<To>();
 #ifndef NDEBUG
-#if !defined(__CUDA_ARCH__)
         assert(out.allFinite() && "downcast_hessian: narrowing produced NaN/Inf");
-#endif
 #endif
         return out;
     }
 }
 }  // namespace uipc::backend::cuda_mixed
-

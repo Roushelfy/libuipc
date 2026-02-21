@@ -12,6 +12,8 @@
 #include <uipc/builtin/attribute_name.h>
 #include <uipc/common/flag.h>
 #include <utils/report_extent_check.h>
+#include <mixed_precision/policy.h>
+#include <mixed_precision/cast.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -241,6 +243,7 @@ void FEMLinearSubsystem::Impl::_assemble_kinetic(IndexT& hess_offset,
                                                  GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
 
     IndexT hess_count = info.gradient_only() ? 0 : fem().xs.size();
     IndexT grad_count = fem().xs.size();
@@ -262,8 +265,8 @@ void FEMLinearSubsystem::Impl::_assemble_kinetic(IndexT& hess_offset,
                    auto&& [i, G3] = src(I);
                    if(is_fixed(i))
                        return;
-                   Eigen::Vector<StoreScalar, 3> G3_store =
-                       G3.template cast<StoreScalar>();
+                   Eigen::Matrix<Alu, 3, 1> G3_alu = G3.template cast<Alu>();
+                   auto                     G3_store = downcast_gradient<StoreScalar>(G3_alu);
                    dst.segment<3>(i * 3).atomic_add(G3_store);
                });
 
@@ -274,6 +277,7 @@ void FEMLinearSubsystem::Impl::_assemble_reporters(IndexT& hess_offset,
                                                    GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
     auto grad_count = reporter_gradient_offsets_counts.total_count();
     auto hess_count =
         info.gradient_only() ? 0 : reporter_hessian_offsets_counts.total_count();
@@ -297,8 +301,8 @@ void FEMLinearSubsystem::Impl::_assemble_reporters(IndexT& hess_offset,
                    auto&& [i, G3] = src(I);
                    if(is_fixed(i))
                        return;
-                   Eigen::Vector<StoreScalar, 3> G3_store =
-                       G3.template cast<StoreScalar>();
+                   Eigen::Matrix<Alu, 3, 1> G3_alu = G3.template cast<Alu>();
+                   auto                     G3_store = downcast_gradient<StoreScalar>(G3_alu);
                    dst.segment<3>(i * 3).atomic_add(G3_store);
                });
 
@@ -310,6 +314,7 @@ void FEMLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& hess_offset,
                                                        GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
 
     // No need to add to grad_offset, the grad buffer is not from reporter_gradients
     auto grad_count = dytopo_effect_receiver->gradients().doublet_count();
@@ -332,8 +337,8 @@ void FEMLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& hess_offset,
                        if(is_fixed(i))
                            return;
 
-                       Eigen::Vector<StoreScalar, 3> G3_store =
-                           G3.template cast<StoreScalar>();
+                       Eigen::Matrix<Alu, 3, 1> G3_alu = G3.template cast<Alu>();
+                       auto                     G3_store = downcast_gradient<StoreScalar>(G3_alu);
                        gradients.segment<3>(i * 3).atomic_add(G3_store);
                    });
     }
@@ -363,9 +368,10 @@ void FEMLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& hess_offset,
                        const auto& [g_i, g_j, H3] = dytopo_effect_hessian(I);
                        auto i                     = g_i - vertex_offset;
                        auto j                     = g_j - vertex_offset;
+                       Eigen::Matrix<Alu, 3, 3> H3_alu = H3.template cast<Alu>();
                        hessians(I).write(i,
                                          j,
-                                         H3.template cast<StoreScalar>());
+                                         downcast_hessian<StoreScalar>(H3_alu));
                    });
     }
 

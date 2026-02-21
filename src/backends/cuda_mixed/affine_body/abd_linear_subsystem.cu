@@ -10,17 +10,20 @@
 #include <affine_body/affine_body_kinetic.h>
 #include <affine_body/affine_body_constitution.h>
 #include <utils/report_extent_check.h>
+#include <mixed_precision/policy.h>
+#include <mixed_precision/cast.h>
 
 namespace uipc::backend::cuda_mixed
 {
-UIPC_GENERIC void zero_out_lower(Matrix12x12& H)
+template <typename T>
+UIPC_GENERIC void zero_out_lower(Eigen::Matrix<T, 12, 12>& H)
 {
     // clear lower triangle (3x3 block based)
     for(IndexT jj = 0; jj < 4; ++jj)
     {
         for(IndexT ii = jj + 1; ii < 4; ++ii)
         {
-            H.block<3, 3>(ii * 3, jj * 3).setZero();
+            H.template block<3, 3>(ii * 3, jj * 3).setZero();
         }
     }
 }
@@ -201,6 +204,7 @@ void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
                                                        GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
 
     // Collect Kinetic
     ABDLinearSubsystem::ComputeGradientHessianInfo this_info{
@@ -230,25 +234,24 @@ void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
                 gradients = info.gradients().viewer().name("gradients"),
                 cout      = KernelCout::viewer()] __device__(int i) mutable
                {
-                   Vector12 src;
+                   Eigen::Matrix<Alu, 12, 1> src_alu;
 
                    if(is_fixed(i))
                    {
-                       src.setZero();  // if fixed, set to zero
+                       src_alu.setZero();  // if fixed, set to zero
                    }
                    else
                    {
-                       src = shape_gradient(i);
+                       src_alu = shape_gradient(i).template cast<Alu>();
 
                        // if not external kinetic, add kinetic gradient
                        if(!is_external_kinetic(i)) [[likely]]
                        {
-                           src += kinetic_gradient(i);
+                           src_alu += kinetic_gradient(i).template cast<Alu>();
                        }
                    }
 
-                   gradients.segment<12>(i * 12).as_eigen() =
-                       src.template cast<StoreScalar>();
+                   gradients.segment<12>(i * 12).as_eigen() = downcast_gradient<StoreScalar>(src_alu);
 
                    // cout << "EKG(" << i << "): " << src.transpose().eval() << "\n";
                });
@@ -272,35 +275,35 @@ void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
                 diag_hessian = this->diag_hessian.viewer().name("diag_hessian")] __device__(int I) mutable
                {
                    TripletMatrixUnpacker MA{dst};
-                   Matrix12x12           H12x12;
+                   Eigen::Matrix<Alu, 12, 12> H12x12_alu;
 
                    if(is_fixed(I))
                    {
                        // Fill kinetic hessian to identity to avoid singularity
-                       H12x12.setIdentity();
+                       H12x12_alu.setIdentity();
                    }
                    else
                    {
                        // if not fixed, fill shape hessian
-                       H12x12 = shape_hessian(I);
+                       H12x12_alu = shape_hessian(I).template cast<Alu>();
 
                        // if not external kinetic, add kinetic gradient
                        if(!is_external_kinetic(I)) [[likely]]
                        {
-                           H12x12 += kinetic_hessian(I);
+                           H12x12_alu += kinetic_hessian(I).template cast<Alu>();
                        }
                    }
 
                    // record diagonal hessian for diag-inv preconditioner
-                   diag_hessian(I) = H12x12;
+                   diag_hessian(I) = downcast_hessian<Float>(H12x12_alu);
 
                    // set the lower triangle blocks to zero for robustness
-                   zero_out_lower(H12x12);
+                   zero_out_lower(H12x12_alu);
 
                    MA.block<4, 4>(I * 4 * 4)  // triplet range of [I*4*4, (I+1)*4*4)
                        .write(I * 4,          // begin row
                               I * 4,          // begin col
-                              H12x12);
+                              downcast_hessian<StoreScalar>(H12x12_alu));
                });
 
     hess_offset += H3x3_count;
@@ -310,6 +313,7 @@ void ABDLinearSubsystem::Impl::_assemble_reporters(IndexT& offset,
                                                    GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
 
     // Fill TripletMatrix and DoubletVector
     for(auto& R : reporters.view())
@@ -336,8 +340,9 @@ void ABDLinearSubsystem::Impl::_assemble_reporters(IndexT& offset,
                        }
                        else
                        {
-                           Eigen::Vector<StoreScalar, 12> G12_store =
-                               G12.template cast<StoreScalar>();
+                           Eigen::Matrix<Alu, 12, 1> G12_alu = G12.template cast<Alu>();
+                           auto                       G12_store =
+                               downcast_gradient<StoreScalar>(G12_alu);
                            dst.segment<12>(body_i * 12).atomic_add(G12_store);
                        }
                    });
@@ -358,41 +363,42 @@ void ABDLinearSubsystem::Impl::_assemble_reporters(IndexT& offset,
                         "is_fixed")] __device__(int I) mutable
                    {
                        TripletMatrixUnpacker MU{dst};
-                       Matrix12x12           H12x12;
+                       Eigen::Matrix<Alu, 12, 12> H12x12_alu;
                        auto&& [body_i, body_j, Value] = src(I);
-                       H12x12                         = Value;
+                       H12x12_alu                     = Value.template cast<Alu>();
 
                        bool has_fixed = (is_fixed(body_i) || is_fixed(body_j));
 
                        // Fill diagonal hessian for diag-inv preconditioner
                        if(body_i == body_j && !has_fixed)
                        {
-                           eigen::atomic_add(diag_hessian(body_i), H12x12);
+                           auto H12x12_diag = downcast_hessian<Float>(H12x12_alu);
+                           eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
                        }
 
                        if(has_fixed)
                        {
                            // Zero out hessian for fixed bodies
-                           H12x12.setZero();
+                           H12x12_alu.setZero();
                        }
                        else
                        {
                            if(body_i == body_j)
                            {
                                // Since body_i == body_j, we only fill the upper triangle part
-                               zero_out_lower(H12x12);
+                               zero_out_lower(H12x12_alu);
                            }
                            else if(body_i > body_j)
                            {
                                // If all the reporters only report upper triangle part, this branch should not be hit
-                               H12x12.setZero();
+                               H12x12_alu.setZero();
                            }
                        }
 
                        MU.block<4, 4>(I * 4 * 4)  // triplet range of [I*4*4, (I+1)*4*4)
                            .write(body_i * 4,  // begin row
                                   body_j * 4,  // begin col
-                                  H12x12);
+                                  downcast_hessian<StoreScalar>(H12x12_alu));
                    });
 
         offset += reporter_hessians.triplet_count() * (4 * 4);
@@ -403,6 +409,7 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                                                        GlobalLinearSystem::DiagInfo& info)
 {
     using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
 
     auto  vertex_offset = affine_body_vertex_reporter->vertex_offset();
     SizeT dytopo_effect_gradient_count = 0;
@@ -438,9 +445,10 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        }
                        else
                        {
-                           Vector12 G12 = J_i.T() * G3;
-                           Eigen::Vector<StoreScalar, 12> G12_store =
-                               G12.template cast<StoreScalar>();
+                           Vector12                    G12 = J_i.T() * G3;
+                           Eigen::Matrix<Alu, 12, 1>   G12_alu = G12.template cast<Alu>();
+                           auto                        G12_store =
+                               downcast_gradient<StoreScalar>(G12_alu);
                            gradients.segment<12>(body_i * 12).atomic_add(G12_store);
 
                            // cout << "DG(" << I << "): " << G12.transpose().eval() << "\n";
@@ -485,7 +493,7 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        auto& J_i = Js(i);
                        auto& J_j = Js(j);
 
-                       Matrix12x12 H12x12;
+                       Eigen::Matrix<Alu, 12, 12> H12x12_alu;
 
                        // We know half contact hessian i <= j
                        // but we don't know body_i and body_j order
@@ -500,36 +508,39 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
 
                        if(is_fixed(body_i) || is_fixed(body_j))
                        {
-                           H12x12.setZero();
+                           H12x12_alu.setZero();
                        }
                        else
                        {
                            if(body_i < body_j)
                            {
-                               H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j);
+                               H12x12_alu = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>();
                            }
                            else if(body_i > body_j)
                            {
-                               H12x12 = ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i);
+                               H12x12_alu =
+                                   ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i).template cast<Alu>();
                            }
                            else  // body_i == body_j
                            {
                                // Two vertices from the same body
                                if(i != j)
                                {
-                                   H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j)
-                                            + ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i);
+                                   H12x12_alu =
+                                       ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>()
+                                       + ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i).template cast<Alu>();
                                }
                                else  // i == j
                                {
-                                   H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j);
+                                   H12x12_alu = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>();
                                }
 
                                // Fill diagonal hessian for diag-inv preconditioner
-                               eigen::atomic_add(diag_hessian(body_i), H12x12);
+                               auto H12x12_diag = downcast_hessian<Float>(H12x12_alu);
+                               eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
 
                                // Since body_i == body_j, we only fill the upper triangle part
-                               zero_out_lower(H12x12);
+                               zero_out_lower(H12x12_alu);
                            }
                        }
 
@@ -537,7 +548,7 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        MU.block<4, 4>(I * 4 * 4)  // triplet range of [I*16, (I+1)*16)
                            .write(L * 4,          // begin row
                                   R * 4,          // begin col
-                                  H12x12);
+                                  downcast_hessian<StoreScalar>(H12x12_alu));
                    });
     }
 
