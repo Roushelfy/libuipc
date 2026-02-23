@@ -4,7 +4,7 @@
 
 ## Context
 
-**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供四个编译期精度档位（`fp64 / path1 / path2 / path3`）。以全 FP64（`fp64`）为 Ground Truth 基准，逐步降低 ALU、Hessian 存储、PCG 辅助向量的精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
+**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供四个编译期精度档位（`fp64 / path1 / path2 / path3`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
 
 **重要约束**：
 - 不修改 `src/backends/cuda` 的任何文件
@@ -49,22 +49,74 @@
 3. **Path2/3 实现方式**：在 `cuda_mixed` 现有类内做类型化改造，不新建并行系统树
 4. **验收口径**：分级容差阈值（`fp64≤1e-12 / path1≤1e-6 / path2≤1e-4 / path3≤1e-3`）
 5. **`x`（解向量）**：永远保持 `double`，不受精度档位影响
+6. **路径定义修订（2026-02-23）**：`path2/path3` 的 ALU 域回到 `double`；`path1` 才使用 `float` ALU。`path2/3` 重点改造存储域与 PCG 辅助向量域。
 
 ---
 
-## 精度组件地图（19 项，来自原始分析）
+## 精度组件地图（27 项，扩展版）
 
-| # | 组件 | 当前类型 | 精度档位 | 关键文件（cuda_mixed 内） |
-|---|------|---------|---------|------------------------|
-| 1-3 | 接触 Kernel ALU 局部变量（G, H, 障碍核函数） | `double` 寄存器 | **Path-1** | `contact_system/contact_models/ipc_simplex_normal_contact.cu` |
-| 4-6 | NeoHookean ALU 局部变量（F, G, H） | `double` 寄存器 | **Path-1** | `finite_element/constitutions/stable_neo_hookean_3d.cu` |
-| 7-9 | ABD/FEM Reporter Buffer（Triplet/Doublet） | `DeviceTripletMatrix<Float>` | **Path-2** | `affine_body/abd_linear_subsystem.h`, `finite_element/fem_linear_subsystem.h` |
-| 10 | 全局 Triplet Hessian（组装阶段） | `DeviceTripletMatrix<Float,3>` | **Path-2** | `linear_system/global_linear_system.h` |
-| 11,19 | 全局 BCOO Hessian（SpMV 输入，最高收益） | `DeviceBCOOMatrix<Float,3>` | **Path-2 核心** | `linear_system/global_linear_system.h` |
-| 12 | 全局梯度向量 b | `DeviceDenseVector<Float>` | **Path-2** | `linear_system/global_linear_system.h` |
-| 13-16 | PCG 辅助向量（r, z, p, Ap） | `DeviceDenseVector<Float>` | **Path-3** | `linear_system/linear_pcg.h` |
-| 17 | PCG 解向量 x（**永远 double**） | `DeviceDenseVector<double>` | 不改 | `linear_system/global_linear_system.h` |
-| 18 | PCG 标量（rz, α, β） | `double` | 不改（收敛统计保持精确） | `linear_system/linear_pcg.cu` |
+> 说明：原版 19 项用于路线抽象，本版扩展到 27 项用于实施追踪。  
+> 状态定义：`✅` 已落地，`⚠️` 半落地/存在桥接缺口，`❌` 未落地。
+
+| # | 组件 | 状态 | 关键文件（cuda_mixed 内） | 精度档位 |
+|---|------|------|------------------------|---------|
+| 1 | Contact normal ALU-gradient | ⚠️ | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | Path-1 |
+| 2 | Contact normal ALU-hessian | ⚠️ | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | Path-1 |
+| 3 | Contact friction/half-plane ALU | ⚠️ | `contact_system/contact_models/ipc_simplex_frictional_contact.cu` | Path-1 |
+| 4 | FEM SNH `F` ALU | ⚠️ | `finite_element/constitutions/stable_neo_hookean_3d.cu` | Path-1 |
+| 5 | FEM SNH `G` ALU | ⚠️ | `finite_element/constitutions/stable_neo_hookean_3d.cu` | Path-1 |
+| 6 | FEM SNH `H` ALU | ⚠️ | `finite_element/constitutions/stable_neo_hookean_3d.cu` | Path-1 |
+| 7 | ABD OrthoPotential ALU | ✅ | `affine_body/constitutions/ortho_potential.cu` | Path-1 |
+| 8 | ABD ARAP ALU | ✅ | `affine_body/constitutions/arap.cu` | Path-1 |
+| 9 | ABD RevoluteJoint ALU | ✅ | `affine_body/constitutions/affine_body_revolute_joint.cu` | Path-1 |
+| 10 | ABD PrismaticJoint ALU | ✅ | `affine_body/constitutions/affine_body_prismatic_joint.cu` | Path-1 |
+| 11 | ABD RevoluteJointLimit ALU | ✅ | `affine_body/constitutions/affine_body_revolute_joint_limit.cu` | Path-1 |
+| 12 | ABD PrismaticJointLimit ALU | ✅ | `affine_body/constitutions/affine_body_prismatic_joint_limit.cu` | Path-1 |
+| 13 | ABD BDF1 kinetic ALU | ✅ | `affine_body/bdf/affine_body_bdf1_kinetic.cu` | Path-1 |
+| 14 | ABD SoftTransformConstraint ALU | ✅ | `affine_body/constraints/soft_transform_constraint.cu` | Path-1 |
+| 15 | ABD ExternalArticulationConstraint ALU | ✅ | `affine_body/constraints/external_articulation_constraint.cu` | Path-1 |
+| 16 | ABDJacobi `JT_H_J` ALU 域 | ⚠️（工具层仍为 Float，主路径已绕开） | `affine_body/abd_jacobi_matrix.h`, `affine_body/abd_jacobi_matrix.cu` | Path-1 |
+| 17 | ABDJacobiStack mat-vec/to_mat ALU 域 | ⚠️（类型层待模板化） | `affine_body/details/abd_jacobi_matrix.inl` | Path-1 |
+| 18 | ABD linear subsystem: kinetic+shape 聚合 | ✅ | `affine_body/abd_linear_subsystem.cu` | Path-1 |
+| 19 | ABD linear subsystem: reporter 聚合 | ✅ | `affine_body/abd_linear_subsystem.cu` | Path-1 |
+| 20 | ABD linear subsystem: dytopo 聚合 | ✅ | `affine_body/abd_linear_subsystem.cu` | Path-1 |
+| 21 | ABD-FEM coupling 聚合 | ✅ | `coupling_system/abd_fem_linear_subsystem.cu` | Path-1 |
+| 22 | Reporter/assembler 局部缓冲（ABD/FEM/inter） | ❌ | `affine_body/abd_linear_subsystem.h`, `finite_element/fem_linear_subsystem.h` | Path-2 |
+| 23 | 全局 Triplet Hessian（`A_triplet`） | ❌ | `linear_system/global_linear_system.h` | Path-2 |
+| 24 | 全局 BCOO Hessian（`A_bcoo`） | ❌ | `linear_system/global_linear_system.h` | Path-2 |
+| 25 | 全局梯度向量 `b` | ❌ | `linear_system/global_linear_system.h` | Path-2 |
+| 26 | PCG 辅助向量（`r/z/p/Ap`） | ❌ | `linear_system/linear_pcg.h` | Path-3 |
+| 27 | `x` + 收敛标量 + SpMV 域契约 | ✅（契约冻结） | `linear_system/global_linear_system.h`, `linear_system/spmv.h` | 固定 double + Path-2/3 扩展 |
+
+### 与原 19 项映射关系
+
+1. 原 1-6 映射到新 1-6（Contact/FEM ALU）。
+2. 原 7-9 拆分到新 18-22（聚合层与缓冲层解耦记录）。
+3. 原 10-12 映射到新 23-25（全局 `A/b` 存储层）。
+4. 原 13-16 映射到新 26（PCG 辅助向量层）。
+5. 原 17-19 映射到新 27（解向量与收敛标量契约 + SpMV 扩展域）。
+
+### ABD Path1 补齐结论（代码核实）
+
+#### 已补齐的 7 个关键文件
+
+1. `src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint.cu`
+2. `src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint.cu`
+3. `src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint_limit.cu`
+4. `src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint_limit.cu`
+5. `src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf1_kinetic.cu`
+6. `src/backends/cuda_mixed/affine_body/constraints/soft_transform_constraint.cu`
+7. `src/backends/cuda_mixed/affine_body/constraints/external_articulation_constraint.cu`
+
+#### 残留技术债（需继续追踪）
+
+1. `ABDJacobi::JT_H_J` / `ABDJacobiStack` 工具层仍是 `Float` 域定义，尚未模板化。
+2. `abd_linear_subsystem.cu` 中原 `JT_H_J(...).cast<Alu>()` 后 cast 路径已移除，不再是当前主路径瓶颈。
+
+#### 对 benchmark 解释的影响
+
+当前 Stage2 已能解释 Path1 在 ABD/FEM 主链路下的收益；  
+但由于尚无 articulation 专项场景，joint/constraint 子路径的性能贡献仍需单独量化。
 
 ---
 
@@ -113,13 +165,13 @@ enum class MixedPrecisionLevel { FP64, Path1, Path2, Path3 };
 namespace uipc::backend::cuda_mixed {
 template <MixedPrecisionLevel L>
 struct PrecisionPolicy {
-    // ALU（Path1+开始改为 float）
-    using AluScalar   = std::conditional_t<L == MixedPrecisionLevel::FP64, double, float>;
+    // ALU（仅 Path1 使用 float；Path2/Path3 回到 double）
+    using AluScalar   = std::conditional_t<L == MixedPrecisionLevel::Path1, float, double>;
     using AluMat3x3   = Eigen::Matrix<AluScalar, 3, 3>;
     using AluVec12    = Eigen::Vector<AluScalar, 12>;
     using AluMat12x12 = Eigen::Matrix<AluScalar, 12, 12>;
 
-    // 存储（Path2+开始改为 float）
+    // 存储（Path2/Path3 改为 float）
     using StoreScalar = std::conditional_t<
         L == MixedPrecisionLevel::FP64 || L == MixedPrecisionLevel::Path1,
         double, float>;
@@ -317,6 +369,53 @@ TMA.half_block<4>(I*HalfHessianSize).write(tet, H_store);
 
 ---
 
+### Milestone 1.5：`ABD Path1 Completion`（补全子阶段，已完成主体）
+
+> 状态：Subtask B/C 已完成，Subtask A 剩余工具层模板化，Subtask D 待补 articulation 专项场景。
+
+#### Subtask A：`ABDJacobi` 模板化（剩余）
+
+修改文件：
+1. `src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h`
+2. `src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.cu`
+3. `src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl`
+
+目标：
+1. `ABDJacobi::JT_H_J` 支持模板标量 `T`（不再硬编码 `Float`）。
+2. `ABDJacobiStack` 的 `Vector/Matrix` 接口改为模板标量 `T`。
+3. 说明：`abd_linear_subsystem.cu` 中 `JT_H_J(...).cast<Alu>()` 后 cast 路径已完成清理。
+
+#### Subtask B：4 个 joint constitution 的 Path1 ALU 化（已完成）
+
+修改文件：
+1. `affine_body/constitutions/affine_body_revolute_joint.cu`
+2. `affine_body/constitutions/affine_body_prismatic_joint.cu`
+3. `affine_body/constitutions/affine_body_revolute_joint_limit.cu`
+4. `affine_body/constitutions/affine_body_prismatic_joint_limit.cu`
+
+目标：
+1. 局部 ALU 全部切到 `ActivePolicy::AluScalar`。
+2. 写回前统一 `downcast_gradient/hessian<StoreScalar>`。
+
+#### Subtask C：ABD kinetic + constraints 的 Path1 ALU 化（已完成）
+
+修改文件：
+1. `affine_body/bdf/affine_body_bdf1_kinetic.cu`
+2. `affine_body/constraints/soft_transform_constraint.cu`
+3. `affine_body/constraints/external_articulation_constraint.cu`
+
+目标：
+1. kinetic/constraint 的 G/H 计算域切到 `AluScalar`。
+2. 保持 `x` 与收敛标量域契约不变（double）。
+
+#### Subtask D：新增 ABD articulation benchmark 场景（待执行）
+
+目标：
+1. 增加能覆盖 joint/constraint 路径的 Stage2 场景。
+2. 将其纳入 Path1 vs fp64 的性能与误差验收，避免仅靠 `wrecking_ball` 评估。
+
+---
+
 ### Milestone 2：`path2 + path3`（接口类型化改造）
 
 #### Step 5：线性系统类型化基础（Path-2 前提）
@@ -328,7 +427,7 @@ TMA.half_block<4>(I*HalfHessianSize).write(tet, H_store);
 | `linear_system/global_linear_system.h:33-36` | `TripletMatrixView`, `CBCOOMatrixView`, `DenseVectorView`, `CDenseVectorView` 四个公共类型别名均绑定 `<Float,3>` | 随 `StoreScalar` 参数化；外部子系统通过别名引用，无需感知底层精度 |
 | `linear_system/iterative_solver.h:28` | `void spmv(Float a, CDenseVectorView<Float> x, ...)` | 标量 `a/b` 固定 `double`；向量参数改为 `CDenseVectorView<PcgAuxScalar>` / `DenseVectorView<PcgAuxScalar>`；`x` 保持 `double` |
 | `linear_system/iterative_solver.h:30-32` | `apply_preconditioner(DenseVectorView<Float> z, CDenseVectorView<Float> r)` / `accuracy_statisfied(DenseVectorView<Float> r)` | 接口向量类型统一为 `PcgAuxScalar`（Path3=`float`，其余=`double`）；收敛标量统计保持 `double` |
-| `linear_system/spmv.h:16` | `rbk_sym_spmv(Float, CBCOOMatrixView<Float,3>, ...)` | 新增重载：`rbk_sym_spmv(double, CBCOOMatrixView<float,3>, CDenseVectorView<double>, ...)` |
+| `linear_system/spmv.h:30-44` | 仅 `A<Float>, x<Float>, y<Float>` 主签名 | 新增两组重载：Path2 `A<float>, x<double>, y<double>`；Path3 `A<float>, x<float>, y<float>` |
 | `linear_system/global_linear_system.h:307-312` | `DeviceTripletMatrix<Float,3>` / `DeviceBCOOMatrix<Float,3>` / `DeviceDenseVector<Float> b` | 用 `ActivePolicy::TripletMatrix3` / `ActivePolicy::BCOOMatrix3` / `ActivePolicy::GradientVec` 替换（`x` 保持 `DeviceDenseVector<double>`）|
 
 修改文件清单（Step 5-7）：
@@ -336,12 +435,52 @@ TMA.half_block<4>(I*HalfHessianSize).write(tet, H_store);
 2. `linear_system/iterative_solver.h` + `.cu`
 3. `linear_system/spmv.h` + `.cu`
 4. `linear_system/linear_pcg.h` + `.cu`
-5. `utils/matrix_assembler.h` — `write()` 中加 `downcast_hessian<StoreT>` （插入点 C）
-6. `algorithm/matrix_converter.h` + inl — `ge2sym/convert` 的 `float` 特化
-7. `affine_body/abd_linear_subsystem.h`
-8. `finite_element/fem_linear_subsystem.h`
+5. `linear_system/global_preconditioner.h` + `.cu`（接口复核；通常无需类型改动）
+6. `linear_system/local_preconditioner.h` + `.cu`（接口复核；通常无需类型改动）
+7. `affine_body/abd_diag_preconditioner.cu`、`finite_element/fem_diag_preconditioner.cu`（`PcgAuxScalar` 适配复核）
+8. `utils/matrix_assembler.h` — `write()` 中加 `downcast_hessian<StoreT>` （插入点 C）
+9. `algorithm/matrix_converter.h` + inl — `ge2sym/convert` 的 `float` 特化
+10. `affine_body/abd_linear_subsystem.h`
+11. `finite_element/fem_linear_subsystem.h`
+12. `inter_primitive_effect_system/inter_primitive_constitution_manager.h` + `.cu`
+13. `contact_system/*contact*.h/.cu`（reporter/holder 的 `Doublet/Triplet<Float>` 视图与缓存）
+14. `coupling_system/*dytopo*_receiver.h`（若参与全局 Hessian 汇入）
+
+> 2026-02-23 路径修订说明：Path2/Path3 的 ALU 域保持 `double`。  
+> 因此 Step 5-6 的目标是“**存储域 + SpMV + 接口类型化**”，不是延续 Path1 的 ALU 降精。
+
+#### Step 5.1：Path2 设计完善性补充（2026-02-23 审查）
+
+**已具备（代码层已存在）**
+1. `GlobalLinearSystem` 公共 view alias 已引入 `StoreScalar/PcgAuxScalar/SolveScalar`。
+2. `IterativeSolver` 接口已切到 `double` 标量 + `PcgAuxScalar` 向量。
+3. `Spmv` 已有 Path2/Path3 混合精度重载（`A<float>` + `x/y` 不同精度组合）。
+4. `GlobalLinearSystem::Impl::spmv()` 已按 `store_is_fp32 / pcg_is_fp32` 做编译期 dispatch。
+5. `ApplyPreconditionerInfo` 与 `ABD/FEM` diag preconditioner 已按 `PcgAuxScalar` 做输出适配。
+
+**仍需补全（Path2 真正落地的主要缺口）**
+1. Producer/Reporter 缓冲仍大量硬编码 `Float`（尤其 `contact_system/*contact*.h/.cu`、`inter_primitive_effect_system/*`、`abd/fem_linear_subsystem.h`）。
+2. Path2 文件清单此前低估了 contact / inter / coupling 的 buffer owner 覆盖面。
+3. 需要明确 Path2 验收口径为“存储/SpMV 优化路径”；不要求在所有场景上优于 Path1（因为 Path2/3 ALU 已回 `double`）。
+
+#### Step 5.2：Path2 实施准备（可直接开工）
+
+**实施顺序（建议冻结）**
+1. `Producer/Reporter` 类型化：先改 `abd/fem/contact/inter_primitive` 的 `Doublet/Triplet<Float>` 缓冲与 view 接口为 `StoreScalar`。
+2. `Assembler/Converter` 对齐：确认 `matrix_assembler.h` 的 `downcast_*<StoreT>` 路径覆盖全部写入点；补齐 `MatrixConverter<StoreScalar,3>` 的 `float` 路径回归。
+3. `GlobalLinearSystem` 收口：确保 `triplet_A/bcoo_A/b/debug_A` 与 `converter` 全部使用 `StoreScalar`，`x` 保持 `SolveScalar=double`。
+4. `SpMV + Dispatch` 验证：只保留一条 Path2 运行路径（`A<float>, x<double>, y<double>`）并用编译期分支命中。
+5. `Preconditioner` 回归：检查 `ABD/FEM diag preconditioner` 的 `do_assemble/do_apply` 在 Path2 (`PcgAuxScalar=double`) 下无额外窄化。
+6. `Benchmark + ErrorTracker`：先跑 `Stage2` 的 `fp64/path2`，再补 `path2 vs path1` 对比（性能解释用），误差仍以 `fp64` 为基准。
+
+**Path2 实施前静态检查（建议每轮执行）**
+1. `rg -n \"(Doublet|Triplet)VectorView<Float>|TripletMatrixView<Float>\" src/backends/cuda_mixed/affine_body src/backends/cuda_mixed/finite_element src/backends/cuda_mixed/contact_system src/backends/cuda_mixed/inter_primitive_effect_system src/backends/cuda_mixed/coupling_system`
+2. `rg -n \"Device(TripletMatrix|BCOOMatrix|DenseVector)<Float\" src/backends/cuda_mixed/linear_system src/backends/cuda_mixed/* -g\"*.h\"`
+3. `rg -n \"rbk_sym_spmv\\(double.*CBCOOMatrixView<float, 3>\" src/backends/cuda_mixed/linear_system/spmv.h src/backends/cuda_mixed/linear_system/spmv.cu`
 
 #### Step 6：混合精度 SpMV（Path-2 核心，插入点 G）
+
+> Path2 的主要收益来源是 `A/b` 存储与 SpMV 带宽，不包含 ALU 降精收益（ALU 域保持 `double`）。
 
 ```cpp
 // linear_system/spmv.cu — 新增重载
@@ -368,6 +507,8 @@ void Spmv::rbk_sym_spmv(
 | PCG 迭代次数增加 | `< 20%` |
 
 #### Step 7：PCG 辅助向量降精度（Path-3）
+
+> Path3 在 Path2 基础上仅继续降低 PCG 辅助向量精度；ALU 域仍保持 `double`。
 
 修改文件：
 - `linear_system/linear_pcg.h` — `r, z, p, Ap` 类型改为 `ActivePolicy::PcgAuxScalar`
@@ -858,12 +999,14 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
 **路径 2（中等收益）：** 全局 Hessian 存储改 FP32
 - 对象：组件 #10, #11, #19（triplet_A, bcoo_A）
 - 方法：将 `DeviceTripletMatrix<Float,3>` 改为 `DeviceTripletMatrix<float,3>`
-- SpMV 自动变为 FP32（带宽减半，计算加速 2x）
+- ALU 域保持 FP64（路径修订：不继承 Path1 的 ALU 降精）
+- SpMV 进入混合精度重载（典型 `A<float> * x<double> -> y<double>`）
 - 风险：中等（影响所有写入接口的类型兼容性，需在 Assembler::write() 中插入 cast）
 
 **路径 3（最大收益，最高风险）：** PCG 辅助向量部分改 FP32
-- 对象：组件 #16 (Ap)
-- 方法：Ap 以 FP32 存储，AXPY 时 upcast 到 double 累加
+- 对象：组件 #13-16（`r/z/p/Ap`）
+- 方法：PCG 辅助向量以 FP32 存储/计算，`x += alpha * p` 时 `p` 升精到 double 累加
+- ALU 域保持 FP64（路径修订）
 - 风险：需要评估收敛稳定性
 
 ---
@@ -883,9 +1026,10 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
 3. 离线误差链路已打通：
    - `fp64` 先生成 reference
    - `path1` 使用 offline ErrorTracker 对比并输出 JSONL
-4. Path1 扩展改造已进入大范围落地（Reporter/Manager/Contact helper）：
-   - 已覆盖 FEM/ABD/contact/inter_primitive 的多组 kernel 与耦合子系统
-   - 已接入 `ActivePolicy::AluScalar` + `downcast_*<StoreScalar>` 主路径
+4. Path1 扩展改造已完成主体补齐：
+   - 已覆盖：`ortho_potential`、`arap`、`abd_linear_subsystem`、`abd_fem_linear_subsystem`
+   - 新增覆盖：4 个 joint constitution、`affine_body_bdf1_kinetic`、`soft_transform_constraint`、`external_articulation_constraint`
+   - 剩余项：`ABDJacobi` / `ABDJacobiStack` 工具层模板化与 articulation 专项 benchmark
 5. benchmark 网格导出链路已打通并收敛为“每帧一个 OBJ”：
    - 场景配置接线 `extras/debug/dump_surface`
    - `dump_surface` 从 line-search 中间态移到帧末（单帧单文件）
@@ -903,14 +1047,18 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
    - `extras/telemetry/error_tracker/mode`
    - `extras/telemetry/error_tracker/reference_dir`
 
-### Stage2 结果快照（`output/benchmarks/mixed_stage2/summary_stage2.json`）
+### Stage2 结果快照（`output/benchmarks/stage2_full_20260221_204850/summary_stage2.json`）
 
 1. 告警状态：`warning_count=6`（当前仍为 warning-only，不阻塞）
-2. 误差总览（overall）：
-   - `rel_l2_max = 2.04385e+08`
-   - `abs_linf_max = 1.93453e-03`
+2. 性能总览（Path1 vs fp64，`cuda_mixed`）：
+   - 平均提速：`19.52%`
+   - 最佳案例：`wrecking_ball + TelemetryOn`，`27.06%`
+   - 最慢改进案例：`fem_heavy_ground_contact + TelemetryOff`，`9.57%`
+3. 误差总览（overall）：
+   - `rel_l2_max = 2.04305e+08`
+   - `abs_linf_max = 2.03560e-03`
    - `nan_inf_count = 0`
-   - `record_count = 1347`
+   - `record_count = 476`
 
 ### 最新运行产物（本地可复现）
 
@@ -918,37 +1066,37 @@ alpha = rz / ctx().dot(p.cview(), Ap.cview()); // p^T·Ap
    - `output/benchmarks/mixed_stage1/summary.json`
    - `output/benchmarks/mixed_stage1/summary.md`
 2. Stage2：
-   - `output/benchmarks/mixed_stage2/summary_stage2.json`
-   - `output/benchmarks/mixed_stage2/summary_stage2.md`
+   - `output/benchmarks/stage2_full_20260221_204850/summary_stage2.json`
+   - `output/benchmarks/stage2_full_20260221_204850/summary_stage2.md`
 3. OBJ 导出示例：
    - `output/benchmarks/mixed_stage2/workspaces/stage2/cuda_mixed/wrecking_ball/Perf/TelemetryOff/fp64_perf/debug/cuda_mixed/engine/sim_engine.cu/scene_surface1.obj`
    - 单 case 验证中 `80` 帧对应 `80` 个 `scene_surface*.obj`
 
 ---
 
-## 下一阶段准备：Path1 五核心 Kernel 真落地
+## 下一阶段准备：M1.6 Path1 质量收敛（保性能优先）
 
-### 目标文件（固定 5 个）
+### 优先顺序（冻结）
 
-1. `src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu`
-2. `src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_normal_contact.cu`
-3. `src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_frictional_contact.cu`
-4. `src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu`
-5. `src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu`
+1. 排查 `wrecking_ball` 的离线误差链路（reference 对齐、坐标系/归一化、采样点一致性）。
+2. 增加 articulation 专项 benchmark 场景并纳入 Stage2 同口径验收。
+3. 对 `ABDJacobi` / `ABDJacobiStack` 做模板化，去掉工具层 `Float` 绑定。
+4. 继续推进 Contact/FEM 剩余 Path1 ALU 点位，目标是在维持当前提速下压低 `rel_l2/abs_linf`。
 
-### 实施口径（冻结）
+### 目标文件（本轮关注）
 
-1. Kernel 内 ALU 类型统一改为 `ActivePolicy::AluScalar`
-2. 写回前统一执行：
-   - `downcast_gradient<StoreScalar>(...)`
-   - `downcast_hessian<StoreScalar>(...)`
-3. 保留 `cast.h` 调试态安全检查（finite + range），不得绕过
+1. `src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h`
+2. `src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.cu`
+3. `src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl`
+4. `src/backends/cuda_mixed/linear_system/global_linear_system.cu`（error tracker 输出/对齐）
+5. `apps/benchmarks/mixed/mixed_stage2_benchmark.cpp`（articulation 场景接入）
+6. `apps/benchmarks/mixed/mixed_scene_builders.cpp`（场景构造与 reference/compare 参数）
 
 ### 下一轮验收口径
 
-1. 以 `wrecking_ball + fem_heavy_*` 为主场景，逐项收敛 `path1` 数值误差（优先处理 `rel_l2` 异常放大）
-2. 将 Stage2 `warning_count` 从 6 压降至 0（保持 `nan_inf_count = 0`）
-3. 在保持单帧单 OBJ 导出的前提下继续回归性能收益与稳定性
+1. 稳定性检查：`nan_inf_count = 0`
+2. 性能检查：`wrecking_ball` 与 heavy FEM 维持 Path1 正收益
+3. 误差检查：`rel_l2/abs_linf` 相对当前快照明显下降，warning 数量收敛
 
 ---
 

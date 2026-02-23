@@ -9,7 +9,9 @@ namespace uipc::backend::cuda_mixed
 template <MixedPrecisionLevel L>
 struct PrecisionPolicy
 {
-    using AluScalar = std::conditional_t<L == MixedPrecisionLevel::FP64, double, float>;
+    // Path1: ALU in fp32; Path2/Path3 rollback ALU to fp64 and focus on storage/PCG domains.
+    using AluScalar =
+        std::conditional_t<L == MixedPrecisionLevel::Path1, float, double>;
     using AluMat3x3 = Eigen::Matrix<AluScalar, 3, 3>;
     using AluMat9x9 = Eigen::Matrix<AluScalar, 9, 9>;
     using AluVec12  = Eigen::Matrix<AluScalar, 12, 1>;
@@ -29,7 +31,7 @@ struct PrecisionPolicy
 
     using SolveScalar = double;
 
-    static constexpr bool alu_is_fp32   = (L != MixedPrecisionLevel::FP64);
+    static constexpr bool alu_is_fp32   = (L == MixedPrecisionLevel::Path1);
     static constexpr bool store_is_fp32 = (L == MixedPrecisionLevel::Path2
                                            || L == MixedPrecisionLevel::Path3);
     static constexpr bool pcg_is_fp32   = (L == MixedPrecisionLevel::Path3);
@@ -37,4 +39,3 @@ struct PrecisionPolicy
 
 using ActivePolicy = PrecisionPolicy<kBuildLevel>;
 }  // namespace uipc::backend::cuda_mixed
-

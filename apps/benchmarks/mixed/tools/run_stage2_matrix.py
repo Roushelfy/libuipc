@@ -194,7 +194,7 @@ def main() -> int:
 
     run_benchmark(fp64_exe,
                   run_root / "fp64" / "quality_reference" / "gbench.json",
-                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference(20|30)F\\..*",
+                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference[0-9]+F\\..*",
                   env=fp64_ref_env)
 
     # path1 build and runs
@@ -229,7 +229,7 @@ def main() -> int:
 
     run_benchmark(path1_exe,
                   run_root / "path1" / "quality_compare" / "gbench.json",
-                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Compare(20|30)F\\..*",
+                  benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Compare[0-9]+F\\..*",
                   env=path1_cmp_env)
 
     aggregate_script = script_dir / "aggregate_stage2.py"

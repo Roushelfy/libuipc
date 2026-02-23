@@ -5,9 +5,22 @@
 #include <array>
 #include <string>
 #include <utility>
+#include <cstdlib>
 
 namespace uipc::bench::mixed
 {
+static int env_int_or_default(const char* key, int fallback)
+{
+    const char* v = std::getenv(key);
+    if(!v || *v == '\0')
+        return fallback;
+    char* end = nullptr;
+    const long parsed = std::strtol(v, &end, 10);
+    if(end == v || *end != '\0' || parsed <= 0)
+        return fallback;
+    return static_cast<int>(parsed);
+}
+
 static void BM_Stage2(benchmark::State& state, const MixedRunSpec& spec)
 {
     static const bool kLoggerReady = []()
@@ -39,9 +52,11 @@ static void BM_Stage2(benchmark::State& state, const MixedRunSpec& spec)
 static void register_stage2_perf_for_backend(const std::string& backend)
 {
     const auto workspace_tag = env_or_default("UIPC_BENCH_WORKSPACE_TAG", "default");
+    const int  frame_scale   = env_int_or_default("UIPC_BENCH_STAGE2_FRAME_SCALE", 1);
 
-    const auto register_perf_case = [&](MixedScenario scenario, int frames)
+    const auto register_perf_case = [&](MixedScenario scenario, int base_frames)
     {
+        const int frames = base_frames * frame_scale;
         for(bool telemetry_on : {false, true})
         {
             MixedRunSpec spec{
@@ -75,15 +90,17 @@ static void register_stage2_quality_for_mixed()
     const auto workspace_tag = env_or_default("UIPC_BENCH_WORKSPACE_TAG", "default");
     const auto reference_root =
         env_or_default("UIPC_BENCH_ERROR_REFERENCE_ROOT", "");
+    const int frame_scale = env_int_or_default("UIPC_BENCH_STAGE2_FRAME_SCALE", 1);
 
-    constexpr std::array scenario_frames = {
+    constexpr std::array base_scenario_frames = {
         std::pair{MixedScenario::WreckingBall, 30},
         std::pair{MixedScenario::FemGroundContact, 30},
         std::pair{MixedScenario::FemHeavyNoContact, 20},
         std::pair{MixedScenario::FemHeavyGroundContact, 20}};
 
-    for(const auto& [scenario, frames] : scenario_frames)
+    for(const auto& [scenario, base_frames] : base_scenario_frames)
     {
+        const int frames = base_frames * frame_scale;
         {
             MixedRunSpec spec{
                 .backend           = "cuda_mixed",

@@ -506,34 +506,42 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                            R = body_i;
                        }
 
-                       if(is_fixed(body_i) || is_fixed(body_j))
-                       {
-                           H12x12_alu.setZero();
-                       }
-                       else
-                       {
-                           if(body_i < body_j)
-                           {
-                               H12x12_alu = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>();
-                           }
-                           else if(body_i > body_j)
-                           {
-                               H12x12_alu =
-                                   ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i).template cast<Alu>();
-                           }
-                           else  // body_i == body_j
-                           {
-                               // Two vertices from the same body
-                               if(i != j)
-                               {
-                                   H12x12_alu =
-                                       ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>()
-                                       + ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i).template cast<Alu>();
-                               }
-                               else  // i == j
-                               {
-                                   H12x12_alu = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j).template cast<Alu>();
-                               }
+                        if(is_fixed(body_i) || is_fixed(body_j))
+                        {
+                            H12x12_alu.setZero();
+                        }
+                        else
+                        {
+                            const Eigen::Matrix<Alu, 3, 12> J_i_mat =
+                                J_i.to_mat().template cast<Alu>();
+                            const Eigen::Matrix<Alu, 3, 12> J_j_mat =
+                                J_j.to_mat().template cast<Alu>();
+                            const Eigen::Matrix<Alu, 3, 3> H3x3_alu =
+                                H3x3.template cast<Alu>();
+
+                            if(body_i < body_j)
+                            {
+                                H12x12_alu = (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+                            }
+                            else if(body_i > body_j)
+                            {
+                                H12x12_alu =
+                                    (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat).eval();
+                            }
+                            else  // body_i == body_j
+                            {
+                                // Two vertices from the same body
+                                if(i != j)
+                                {
+                                    H12x12_alu =
+                                        (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval()
+                                        + (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat)
+                                              .eval();
+                                }
+                                else  // i == j
+                                {
+                                    H12x12_alu = (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+                                }
 
                                // Fill diagonal hessian for diag-inv preconditioner
                                auto H12x12_diag = downcast_hessian<Float>(H12x12_alu);
