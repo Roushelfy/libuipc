@@ -113,7 +113,7 @@ class OrthoPotential final : public AffineBodyConstitution
 
                        Eigen::Matrix<Alu, 9, 1> G9_alu;
                        AOP::dEdq(G9_alu, kappa, q_alu);
-                       G.segment<9>(3) = downcast_gradient<Store>(G9_alu * Vdt2);
+                       G.segment<9>(3) = (G9_alu * Vdt2).template cast<Float>();
                        gradients(i)    = G;
 
                        if(gradient_only)
@@ -123,7 +123,7 @@ class OrthoPotential final : public AffineBodyConstitution
                        AOP::ddEddq(H9x9_alu, kappa, q_alu);
                        make_spd(H9x9_alu);
 
-                       H.block<9, 9>(3, 3) = downcast_hessian<Store>(H9x9_alu * Vdt2);
+                       H.block<9, 9>(3, 3) = (H9x9_alu * Vdt2).template cast<Float>();
                        body_hessian(i)     = H;
                    });
     }

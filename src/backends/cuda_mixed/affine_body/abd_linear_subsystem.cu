@@ -445,7 +445,7 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        }
                        else
                        {
-                           Vector12                    G12 = J_i.T() * G3;
+                           Vector12                    G12 = J_i.T() * G3.template cast<Float>();
                            Eigen::Matrix<Alu, 12, 1>   G12_alu = G12.template cast<Alu>();
                            auto                        G12_store =
                                downcast_gradient<StoreScalar>(G12_alu);

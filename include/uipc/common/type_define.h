@@ -16,6 +16,9 @@ using Eigen::Vector;
 using Vector2 = Vector<Float, 2>;
 using Vector3 = Vector<Float, 3>;
 using Vector4 = Vector<Float, 4>;
+using Vector2f = Vector<float, 2>;
+using Vector3f = Vector<float, 3>;
+using Vector4f = Vector<float, 4>;
 
 using Vector2i = Vector<IndexT, 2>;
 using Vector3i = Vector<IndexT, 3>;
@@ -24,6 +27,9 @@ using Vector4i = Vector<IndexT, 4>;
 using Vector6  = Vector<Float, 6>;
 using Vector9  = Vector<Float, 9>;
 using Vector12 = Vector<Float, 12>;
+using Vector6f  = Vector<float, 6>;
+using Vector9f  = Vector<float, 9>;
+using Vector12f = Vector<float, 12>;
 
 using Matrix2x2   = Matrix<Float, 2, 2>;
 using Matrix3x3   = Matrix<Float, 3, 3>;
@@ -31,6 +37,12 @@ using Matrix4x4   = Matrix<Float, 4, 4>;
 using Matrix6x6   = Matrix<Float, 6, 6>;
 using Matrix9x9   = Matrix<Float, 9, 9>;
 using Matrix12x12 = Matrix<Float, 12, 12>;
+using Matrix2x2f   = Matrix<float, 2, 2>;
+using Matrix3x3f   = Matrix<float, 3, 3>;
+using Matrix4x4f   = Matrix<float, 4, 4>;
+using Matrix6x6f   = Matrix<float, 6, 6>;
+using Matrix9x9f   = Matrix<float, 9, 9>;
+using Matrix12x12f = Matrix<float, 12, 12>;
 
 using Transform   = Eigen::Transform<Float, 3, Eigen::Affine>;
 using Translation = Eigen::Translation<Float, 3>;

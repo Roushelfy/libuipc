@@ -181,6 +181,12 @@ Returns:
     DEF_ATTRIBUTE_SLOT(Vector6);
     DEF_ATTRIBUTE_SLOT(Vector9);
     DEF_ATTRIBUTE_SLOT(Vector12);
+    DEF_ATTRIBUTE_SLOT(Vector2f);
+    DEF_ATTRIBUTE_SLOT(Vector3f);
+    DEF_ATTRIBUTE_SLOT(Vector4f);
+    DEF_ATTRIBUTE_SLOT(Vector6f);
+    DEF_ATTRIBUTE_SLOT(Vector9f);
+    DEF_ATTRIBUTE_SLOT(Vector12f);
 
     DEF_ATTRIBUTE_SLOT(Vector2i);
     DEF_ATTRIBUTE_SLOT(Vector3i);
@@ -193,5 +199,11 @@ Returns:
     DEF_ATTRIBUTE_SLOT(Matrix6x6);
     DEF_ATTRIBUTE_SLOT(Matrix9x9);
     DEF_ATTRIBUTE_SLOT(Matrix12x12);
+    DEF_ATTRIBUTE_SLOT(Matrix2x2f);
+    DEF_ATTRIBUTE_SLOT(Matrix3x3f);
+    DEF_ATTRIBUTE_SLOT(Matrix4x4f);
+    DEF_ATTRIBUTE_SLOT(Matrix6x6f);
+    DEF_ATTRIBUTE_SLOT(Matrix9x9f);
+    DEF_ATTRIBUTE_SLOT(Matrix12x12f);
 }
 }  // namespace pyuipc::geometry

@@ -29,9 +29,10 @@ class SoftVertexStitch : public InterPrimitiveConstitution
     vector<Float>    h_kappas;
     vector<Float>    h_rest_lengths;
 
-    muda::CBufferView<Float>              energies;
-    muda::CDoubletVectorView<Float, 3>    gradients;
-    muda::CTripletMatrixView<Float, 3, 3> hessians;
+    using StoreScalar = ActivePolicy::StoreScalar;
+    muda::CBufferView<Float>                    energies;
+    muda::CDoubletVectorView<StoreScalar, 3>    gradients;
+    muda::CTripletMatrixView<StoreScalar, 3, 3> hessians;
 
     void do_init(FilteredInfo& info) override
     {

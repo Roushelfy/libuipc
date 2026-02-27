@@ -36,7 +36,12 @@ MUDA_INLINE MUDA_GENERIC auto downcast_gradient(const FromMatrix& G) noexcept
 
     if constexpr(std::is_same_v<To, From>)
     {
-        return G;
+        // Force evaluation: G may be an Eigen expression template (e.g. from
+        // .cast<T>() when Alu==Store==T).  Returning it as-is makes auto deduce
+        // an expression-template type that template-deduction for write() cannot
+        // match against Eigen::Matrix<U,N,1>.  Constructing a real Matrix here
+        // keeps the return type consistent with the else-branch.
+        return Eigen::Matrix<To, N, 1>(G);
     }
     else
     {
@@ -75,7 +80,8 @@ MUDA_INLINE MUDA_GENERIC auto downcast_hessian(const FromMatrix& H) noexcept
 
     if constexpr(std::is_same_v<To, From>)
     {
-        return H;
+        // Force evaluation for the same reason as downcast_gradient.
+        return Eigen::Matrix<To, R, C>(H);
     }
     else
     {

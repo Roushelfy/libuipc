@@ -39,7 +39,6 @@ class LinearPCG : public IterativeSolver
     void dump_p_Ap(SizeT k);
     void check_rz_nan_inf(SizeT k);
 
-    DeviceDenseVector r0;  // initial residual
     DeviceDenseVector z;   // preconditioned residual
     DeviceDenseVector r;   // residual
     DeviceDenseVector p;   // search direction

@@ -31,6 +31,8 @@ const char* build_level_name()
         return "path2";
     case MixedPrecisionLevel::Path3:
         return "path3";
+    case MixedPrecisionLevel::Path4:
+        return "path4";
     }
     return "unknown";
 }

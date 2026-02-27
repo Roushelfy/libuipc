@@ -36,7 +36,7 @@ set(UIPC_USD_INSTALL_DIR "" CACHE PATH
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
 option(UIPC_WITH_CUDA_MIXED_BACKEND "Build with CUDA mixed backend" OFF)
 set(UIPC_CUDA_MIXED_PRECISION_LEVEL "fp64"
-    CACHE STRING "Mixed precision level for cuda_mixed: fp64|path1|path2|path3")
+    CACHE STRING "Mixed precision level for cuda_mixed: fp64|path1|path2|path3|path4")
 option(UIPC_WITH_NVTX "Enable NVTX profiling markers in cuda_mixed" OFF)
 # if MAC OS, disable CUDA backend
 if(APPLE)
@@ -44,10 +44,10 @@ if(APPLE)
     set(UIPC_WITH_CUDA_BACKEND OFF CACHE BOOL "Build with CUDA backend" FORCE)
 endif()
 
-if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3)$")
+if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3|path4)$")
     message(FATAL_ERROR
         "UIPC_CUDA_MIXED_PRECISION_LEVEL='${UIPC_CUDA_MIXED_PRECISION_LEVEL}' is invalid. "
-        "Valid values: fp64 path1 path2 path3")
+        "Valid values: fp64 path1 path2 path3 path4")
 endif()
 
 set(UIPC_CUDA_ARCHITECTURES "native" CACHE STRING "Setup CUDA architectures (e.g. \"75,89\" or \"native\")")

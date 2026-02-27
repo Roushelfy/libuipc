@@ -154,6 +154,99 @@ Args:
     value: Numpy array (can be scalar, vector of size 2/3/4/6/9/12, or matrix of size 2x2/3x3/4x4/6x6/9x9/12x12).
 Returns:
     AttributeSlot: Created attribute slot.)")
+        // Float32 Array
+        .def(
+            "create",
+            [](AttributeCollection& self, std::string_view name, py::array_t<float> arr) -> S<IAttributeSlot>
+            {
+                bool is_scalar =
+                    arr.ndim() == 0 || (arr.ndim() == 1 && arr.shape(0) == 1)
+                    || (arr.ndim() == 2 && arr.shape(0) == 1 && arr.shape(1) == 1);
+                if(is_scalar)
+                {
+                    // Keep scalar default behavior on Float (double) to avoid broad API changes.
+                    return self.create(name, static_cast<Float>(*arr.data()));
+                }
+
+                bool is_vector = arr.ndim() == 1
+                                 || (arr.ndim() == 2 && arr.shape(1) == 1)
+                                 || (arr.ndim() == 2 && arr.shape(0) == 1);
+
+                if(is_vector)  // Vector Type
+                {
+                    if(arr.shape(0) == 2)
+                    {
+                        return self.create(name, to_matrix<Vector2f>(arr));
+                    }
+                    else if(arr.shape(0) == 3)
+                    {
+                        return self.create(name, to_matrix<Vector3f>(arr));
+                    }
+                    else if(arr.shape(0) == 4)
+                    {
+                        return self.create(name, to_matrix<Vector4f>(arr));
+                    }
+                    else if(arr.shape(0) == 6)
+                    {
+                        return self.create(name, to_matrix<Vector6f>(arr));
+                    }
+                    else if(arr.shape(0) == 9)
+                    {
+                        return self.create(name, to_matrix<Vector9f>(arr));
+                    }
+                    else if(arr.shape(0) == 12)
+                    {
+                        return self.create(name, to_matrix<Vector12f>(arr));
+                    }
+                    else
+                    {
+                        throw std::runtime_error(PYUIPC_MSG("Unsupported vector size"));
+                    }
+                }
+                else if(arr.ndim() == 2)  // Matrix Type or Vector Type
+                {
+                    if(arr.shape(0) == 2 && arr.shape(1) == 2)
+                    {
+                        return self.create(name, to_matrix<Matrix2x2f>(arr));
+                    }
+                    else if(arr.shape(0) == 3 && arr.shape(1) == 3)
+                    {
+                        return self.create(name, to_matrix<Matrix3x3f>(arr));
+                    }
+                    else if(arr.shape(0) == 4 && arr.shape(1) == 4)
+                    {
+                        return self.create(name, to_matrix<Matrix4x4f>(arr));
+                    }
+                    else if(arr.shape(0) == 6 && arr.shape(1) == 6)
+                    {
+                        return self.create(name, to_matrix<Matrix6x6f>(arr));
+                    }
+                    else if(arr.shape(0) == 9 && arr.shape(1) == 9)
+                    {
+                        return self.create(name, to_matrix<Matrix9x9f>(arr));
+                    }
+                    else if(arr.shape(0) == 12 && arr.shape(1) == 12)
+                    {
+                        return self.create(name, to_matrix<Matrix12x12f>(arr));
+                    }
+                    else
+                    {
+                        throw std::runtime_error(PYUIPC_MSG("Unsupported matrix size"));
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error(PYUIPC_MSG("Unsupported shape of float32"));
+                }
+            },
+            py::arg("name"),
+            py::arg("value").noconvert(),
+            R"(Create an attribute from a float32 numpy array (auto-detects type: scalar, vector, or matrix).
+Args:
+    name: Attribute name.
+    value: float32 numpy array (can be scalar, vector of size 2/3/4/6/9/12, or matrix of size 2x2/3x3/4x4/6x6/9x9/12x12).
+Returns:
+    AttributeSlot: Created attribute slot.)")
         // Int Array
         .def(
             "create",

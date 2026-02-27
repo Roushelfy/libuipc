@@ -72,8 +72,6 @@ void LinearPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     r.resize(N);
     Ap.resize(N);
 
-    r0 = r;
-
     auto iter = pcg(x, b, static_cast<SizeT>(max_iter_ratio * static_cast<double>(b.size())));
 
     info.iter_count(iter);

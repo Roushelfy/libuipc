@@ -504,7 +504,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                              Eb1);
                                 auto H_alu = downcast_hessian<Alu>(H);
                                 cuda_mixed::make_spd(H_alu);
-                                H = downcast_hessian<Store>(H_alu);
+                                H = H_alu.template cast<Float>();
                             }
                             DoubletVectorAssembler DVA{Gs};
                             auto G_store = downcast_gradient<Store>(G.template cast<Alu>());

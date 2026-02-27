@@ -14,14 +14,15 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
 {
   public:
     using DiagLinearSubsystem::DiagLinearSubsystem;
+    using StoreScalar = GlobalLinearSystem::StoreScalar;
 
     class ComputeGradientHessianInfo
     {
       public:
-        ComputeGradientHessianInfo(bool                                gradient_only,
-                                   muda::DoubletVectorView<Float, 3>    gradients,
-                                   muda::TripletMatrixView<Float, 3, 3> hessians,
-                                   Float                               dt) noexcept
+        ComputeGradientHessianInfo(bool                                     gradient_only,
+                                   muda::DoubletVectorView<StoreScalar, 3>  gradients,
+                                   muda::TripletMatrixView<StoreScalar, 3, 3> hessians,
+                                   Float                                    dt) noexcept
             : m_gradient_only(gradient_only)
             , m_gradients(gradients)
             , m_hessians(hessians)
@@ -35,10 +36,10 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         auto dt() const noexcept { return m_dt; }
 
       private:
-        bool                                m_gradient_only = false;
-        muda::DoubletVectorView<Float, 3>    m_gradients;
-        muda::TripletMatrixView<Float, 3, 3> m_hessians;
-        Float                                m_dt = 0.0;
+        bool                                     m_gradient_only = false;
+        muda::DoubletVectorView<StoreScalar, 3>  m_gradients;
+        muda::TripletMatrixView<StoreScalar, 3, 3> m_hessians;
+        Float                                    m_dt = 0.0;
     };
 
     class ReportExtentInfo
@@ -80,7 +81,7 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         {
         }
 
-        muda::DoubletVectorView<Float, 3>    gradients() const;
+        muda::DoubletVectorView<StoreScalar, 3> gradients() const;
         GlobalLinearSystem::TripletMatrixView hessians() const;
         Float                                dt() const noexcept;
         bool                                 gradient_only() const noexcept;
@@ -134,10 +135,10 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         OffsetCountCollection<IndexT> reporter_gradient_offsets_counts;
         OffsetCountCollection<IndexT> reporter_hessian_offsets_counts;
 
-        muda::DeviceDoubletVector<Float, 3> kinetic_gradients;
-        muda::DeviceDoubletVector<Float, 3> reporter_gradients;
+        muda::DeviceDoubletVector<StoreScalar, 3> kinetic_gradients;
+        muda::DeviceDoubletVector<StoreScalar, 3> reporter_gradients;
 
-        void loose_resize_entries(muda::DeviceDoubletVector<Float, 3>& v, SizeT size);
+        void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);
     };
 
   private:

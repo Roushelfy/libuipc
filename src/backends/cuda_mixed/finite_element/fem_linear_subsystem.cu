@@ -396,7 +396,7 @@ void FEMLinearSubsystem::Impl::retrieve_solution(GlobalLinearSystem::SolutionInf
                { dxs(i) = -result.segment<3>(i * 3).as_eigen(); });
 }
 
-void FEMLinearSubsystem::Impl::loose_resize_entries(muda::DeviceDoubletVector<Float, 3>& v,
+void FEMLinearSubsystem::Impl::loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v,
                                                     SizeT size)
 {
     if(size > v.doublet_capacity())
@@ -436,7 +436,7 @@ void FEMLinearSubsystem::do_receive_init_dof_info(GlobalLinearSystem::InitDofInf
     m_impl.receive_init_dof_info(world(), info);
 }
 
-muda::DoubletVectorView<Float, 3> FEMLinearSubsystem::AssembleInfo::gradients() const
+muda::DoubletVectorView<FEMLinearSubsystem::StoreScalar, 3> FEMLinearSubsystem::AssembleInfo::gradients() const
 {
     auto [offset, count] = m_impl->reporter_gradient_offsets_counts[m_index];
     return m_impl->reporter_gradients.view().subview(offset, count);

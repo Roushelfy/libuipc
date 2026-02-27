@@ -4,7 +4,7 @@
 
 ## Context
 
-**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供四个编译期精度档位（`fp64 / path1 / path2 / path3`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
+**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供编译期精度档位（当前代码已扩展为 `fp64 / path1 / path2 / path3 / path4`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
 
 **重要约束**：
 - 不修改 `src/backends/cuda` 的任何文件
@@ -44,12 +44,34 @@
 
 ## 冻结决策（来自 V2 审核）
 
-1. **切换方式**：编译期，`UIPC_CUDA_MIXED_PRECISION_LEVEL=fp64|path1|path2|path3`
+1. **切换方式**：编译期，`UIPC_CUDA_MIXED_PRECISION_LEVEL=fp64|path1|path2|path3|path4`
 2. **Telemetry**：首版全量实现，默认全部关闭（通过运行时 JSON config 开启）
-3. **Path2/3 实现方式**：在 `cuda_mixed` 现有类内做类型化改造，不新建并行系统树
-4. **验收口径**：分级容差阈值（`fp64≤1e-12 / path1≤1e-6 / path2≤1e-4 / path3≤1e-3`）
+3. **Path2/3/4 实现方式**：在 `cuda_mixed` 现有类内做类型化改造，不新建并行系统树
+4. **验收口径**：分级容差阈值（`fp64≤1e-12 / path1≤1e-6 / path2≤1e-4 / path3≤1e-3`；`path4` 先按 warning-first 观察）
 5. **`x`（解向量）**：永远保持 `double`，不受精度档位影响
 6. **路径定义修订（2026-02-23）**：`path2/path3` 的 ALU 域回到 `double`；`path1` 才使用 `float` ALU。`path2/3` 重点改造存储域与 PCG 辅助向量域。
+
+### 2026-02-26 审查增补（覆盖旧三路径口径）
+
+> 本节为代码现实口径，若与下文旧段落冲突，以本节为准。
+
+1. 当前代码已支持 **四条 mixed 路径**（外加 `fp64` 基线）：
+   - `path1 = ALU`（`ALU=float, Store=double, PCG=double`）
+   - `path2 = Store`（`ALU=double, Store=float, PCG=double`）
+   - `path3 = ALU + Store`（`ALU=float, Store=float, PCG=double`）
+   - `path4 = Store + PCG`（`ALU=double, Store=float, PCG=float`）
+2. `path1..path4` 的 `cuda_mixed + mixed_stage1 + mixed_stage2` 构建已全部通过（`build_impl_fp64/path1/path2/path3/path4`）。
+3. 全路径 benchmark 审查（`output/benchmarks/all_paths_audit_stage1_stage2/`）已完成：
+   - Stage1 smoke：`fp64/path1/path2/path3/path4` 全通过
+   - Stage2 perf + offline compare：`path1/path2/path3/path4` 全通过，`nan_inf_count == 0`
+4. 本轮性能收敛结论（Stage2, 相对 `fp64`）：
+   - `path3` 当前综合收益最好（平均约 `-15%`）
+   - `path1` 次之（平均约 `-12.5%`）
+   - `path2` 接近持平（平均约 `0%`，体现“仅 Store 优化”路径特征）
+   - `path4` 场景相关性更强（平均约 `-2.6%`，个别场景 `TelemetryOn` 有回退）
+5. ErrorTracker 解释口径提示：
+   - `wrecking_ball` 上 `rel_l2_x` 可能因参考解范数接近 0 而被放大（出现极大值）
+   - `abs_linf_x` 更能反映局部绝对误差，当前仍在 `1e-3` 量级以内（无 NaN/Inf）
 
 ---
 
