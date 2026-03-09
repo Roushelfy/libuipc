@@ -12,8 +12,8 @@ UNIT_TO_MS = {
     "s": 1000.0,
 }
 
-LEVELS = ("fp64", "path1", "path2", "path3", "path4")
-MIXED_COMPARE_LEVELS = ("path1", "path2", "path3", "path4")
+LEVELS = ("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7")
+MIXED_COMPARE_LEVELS = ("path1", "path2", "path3", "path4", "path5", "path6", "path7")
 KNOWN_SCENARIOS = (
     "wrecking_ball",
     "fem_ground_contact",
@@ -223,6 +223,9 @@ def write_markdown(out_path: Path, summary: dict) -> None:
     lines.append("- `path2 = Store (ALU=double, Store=float, PCG=double)`")
     lines.append("- `path3 = ALU + Store (ALU=float, Store=float, PCG=double)`")
     lines.append("- `path4 = Store + PCG (ALU=double, Store=float, PCG=float)`")
+    lines.append("- `path5 = ALU + Store + PCG (ALU=float, Store=float, PCG=float)`")
+    lines.append("- `path6 = ALU + Store + PCG (ALU=float, Store=float, PCG=float) + preconditioner_no_double_intermediate (phase-1)`")
+    lines.append("- `path7 = ALU + Store + PCG + full_pcg_fp32 (ALU=float, Store=float, PCG=float, Solve=float, Iter=float)`")
     lines.append("")
 
     lines.append("## Stage1 Smoke")
@@ -283,7 +286,7 @@ def write_markdown(out_path: Path, summary: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Aggregate Stage2 benchmark results for fp64/path1/path2/path3/path4")
+    parser = argparse.ArgumentParser(description="Aggregate Stage2 benchmark results for fp64/path1/path2/path3/path4/path5/path6/path7")
     parser.add_argument("--run_root", required=True, type=Path, help="benchmark output root (contains stage1/, stage2/, workspaces/)")
     args = parser.parse_args()
 

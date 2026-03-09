@@ -47,6 +47,13 @@ class Spmv
                       double                          b,
                       muda::DenseVectorView<float>    y);
 
+    // mixed precision (path7): A<float> * x<float> -> y<float>, float scalars
+    void rbk_sym_spmv(float                           a,
+                      muda::CBCOOMatrixView<float, 3> A,
+                      muda::CDenseVectorView<float>   x,
+                      float                           b,
+                      muda::DenseVectorView<float>    y);
+
     // debug fallback cpu spmv
     // very slow, only for debug
     void cpu_sym_spmv(Float                           a,

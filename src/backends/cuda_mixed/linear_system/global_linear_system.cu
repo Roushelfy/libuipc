@@ -33,6 +33,12 @@ const char* build_level_name()
         return "path3";
     case MixedPrecisionLevel::Path4:
         return "path4";
+    case MixedPrecisionLevel::Path5:
+        return "path5";
+    case MixedPrecisionLevel::Path6:
+        return "path6";
+    case MixedPrecisionLevel::Path7:
+        return "path7";
     }
     return "unknown";
 }
@@ -561,21 +567,14 @@ void GlobalLinearSystem::Impl::apply_preconditioner(
     }
 }
 
-void GlobalLinearSystem::Impl::spmv(double                                   a,
+void GlobalLinearSystem::Impl::spmv(ActivePolicy::PcgIterScalar             a,
                                     GlobalLinearSystem::CPcgDenseVectorView x,
-                                    double                                   b,
+                                    ActivePolicy::PcgIterScalar             b,
                                     GlobalLinearSystem::PcgDenseVectorView  y)
 {
     if constexpr(ActivePolicy::store_is_fp32)
     {
-        if constexpr(ActivePolicy::pcg_is_fp32)
-        {
-            spmver.rbk_sym_spmv(a, bcoo_A.cview(), x, b, y);
-        }
-        else
-        {
-            spmver.rbk_sym_spmv(a, bcoo_A.cview(), x, b, y);
-        }
+        spmver.rbk_sym_spmv(a, bcoo_A.cview(), x, b, y);
     }
     else
     {

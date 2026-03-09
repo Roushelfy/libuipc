@@ -12,9 +12,9 @@ void IterativeSolver::do_build()
     m_system->add_solver(this);
 }
 
-void IterativeSolver::spmv(double                                       a,
+void IterativeSolver::spmv(ActivePolicy::PcgIterScalar                 a,
                            muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
-                           double                                       b,
+                           ActivePolicy::PcgIterScalar                 b,
                            muda::DenseVectorView<ActivePolicy::PcgAuxScalar>  y)
 {
     m_system->m_impl.spmv(a, x, b, y);
@@ -23,7 +23,8 @@ void IterativeSolver::spmv(double                                       a,
 void IterativeSolver::spmv(muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
                            muda::DenseVectorView<ActivePolicy::PcgAuxScalar> y)
 {
-    spmv(1.0, x, 0.0, y);
+    using IterScalar = ActivePolicy::PcgIterScalar;
+    spmv(IterScalar{1}, x, IterScalar{0}, y);
 }
 
 void IterativeSolver::apply_preconditioner(

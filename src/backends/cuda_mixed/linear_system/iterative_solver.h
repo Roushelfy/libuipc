@@ -26,9 +26,9 @@ class IterativeSolver : public SimSystem
     * Util functions for derived classes
     ***********************************************************************************************/
 
-    void spmv(double                                  a,
+    void spmv(ActivePolicy::PcgIterScalar             a,
               muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
-              double                                  b,
+              ActivePolicy::PcgIterScalar             b,
               muda::DenseVectorView<ActivePolicy::PcgAuxScalar> y);
     void spmv(muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
               muda::DenseVectorView<ActivePolicy::PcgAuxScalar> y);

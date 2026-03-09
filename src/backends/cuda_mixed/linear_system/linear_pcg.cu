@@ -131,9 +131,8 @@ void LinearPCG::dump_p_Ap(SizeT k)
     logger::info("Dumped PCG Ap to {}", output_path_Ap);
 }
 
-void LinearPCG::check_rz_nan_inf(SizeT k)
+void LinearPCG::check_rz_nan_inf(SizeT k, PcgIterScalar rz)
 {
-    double rz = static_cast<double>(ctx().dot(r.cview(), z.cview()));
     if(std::isnan(rz) || !std::isfinite(rz))
     {
         auto norm_r = ctx().norm(r.cview());
@@ -149,7 +148,7 @@ void LinearPCG::check_rz_nan_inf(SizeT k)
     }
 }
 
-void update_xr(double                                       alpha,
+void update_xr(ActivePolicy::PcgIterScalar                 alpha,
                muda::DenseVectorView<ActivePolicy::SolveScalar>  x,
                muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> p,
                muda::DenseVectorView<ActivePolicy::PcgAuxScalar>  r,
@@ -157,6 +156,7 @@ void update_xr(double                                       alpha,
 {
     using namespace muda;
     using PcgScalar = ActivePolicy::PcgAuxScalar;
+    using SolveScalar = ActivePolicy::SolveScalar;
 
     // Fused update of x and r for better performance
     ParallelFor()
@@ -168,14 +168,22 @@ void update_xr(double                                       alpha,
                 r     = r.viewer().name("r"),
                 Ap    = Ap.cviewer().name("Ap")] __device__(int i) mutable
                {
-                   x(i) += alpha * static_cast<double>(p(i));
-                   r(i) -= static_cast<PcgScalar>(alpha * static_cast<double>(Ap(i)));
+                   if constexpr(ActivePolicy::full_pcg_fp32)
+                   {
+                       x(i) += static_cast<SolveScalar>(alpha * p(i));
+                       r(i) -= static_cast<PcgScalar>(alpha * Ap(i));
+                   }
+                   else
+                   {
+                       x(i) += static_cast<SolveScalar>(alpha * static_cast<ActivePolicy::PcgIterScalar>(p(i)));
+                       r(i) -= static_cast<PcgScalar>(alpha * static_cast<ActivePolicy::PcgIterScalar>(Ap(i)));
+                   }
                });
 }
 
 void update_p(muda::DenseVectorView<ActivePolicy::PcgAuxScalar> p,
               muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> z,
-              double beta)
+              ActivePolicy::PcgIterScalar beta)
 {
     using namespace muda;
     using PcgScalar = ActivePolicy::PcgAuxScalar;
@@ -187,7 +195,7 @@ void update_p(muda::DenseVectorView<ActivePolicy::PcgAuxScalar> p,
                [p = p.viewer().name("p"), z = z.cviewer().name("z"), beta = beta] __device__(
                    int i) mutable
                {
-                   p(i) = z(i) + static_cast<PcgScalar>(beta * static_cast<double>(p(i)));
+                   p(i) = z(i) + static_cast<PcgScalar>(beta * static_cast<ActivePolicy::PcgIterScalar>(p(i)));
                });
 }
 
@@ -208,6 +216,7 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
                      muda::CDenseVectorView<StoreScalar> b,
                      SizeT max_iter)
 {
+    using IterScalar = PcgIterScalar;
     SizeT k = 0;
     // r = b - A * x
     {
@@ -218,7 +227,10 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
         //spmv(-1.0, x.as_const(), 1.0, r.view());
     }
 
-    double alpha = 0.0, beta = 0.0, rz = 0.0, abs_rz0 = 0.0;
+    IterScalar alpha = IterScalar{0};
+    IterScalar beta  = IterScalar{0};
+    IterScalar rz    = IterScalar{0};
+    IterScalar abs_rz0 = IterScalar{0};
 
     // z = P * r (apply preconditioner)
     apply_preconditioner(z, r);
@@ -231,12 +243,12 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
 
     // init rz
     // rz = r^T * z
-    rz = static_cast<double>(ctx().dot(r.cview(), z.cview()));
-    check_rz_nan_inf(k);
+    rz = static_cast<IterScalar>(ctx().dot(r.cview(), z.cview()));
+    check_rz_nan_inf(k, rz);
 
     abs_rz0 = std::abs(rz);
 
-    auto maybe_sample = [&](SizeT iter, double alpha_v, double beta_v, double rz_v)
+    auto maybe_sample = [&](SizeT iter, IterScalar alpha_v, IterScalar beta_v, IterScalar rz_v)
     {
         if(!telemetry_pcg_enable)
             return;
@@ -248,21 +260,21 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
         PcgSample sample;
         sample.iter     = iter;
         sample.norm_r   = static_cast<double>(ctx().norm(r.cview()));
-        sample.rz_ratio = (abs_rz0 > 0.0) ?
+        sample.rz_ratio = (abs_rz0 > IterScalar{0}) ?
                               static_cast<double>(std::abs(rz_v) / abs_rz0) :
                               0.0;
-        sample.alpha = alpha_v;
-        sample.beta  = beta_v;
+        sample.alpha = static_cast<double>(alpha_v);
+        sample.beta  = static_cast<double>(beta_v);
         sample.nan_inf_flag =
             !(std::isfinite(sample.norm_r) && std::isfinite(sample.rz_ratio)
               && std::isfinite(sample.alpha) && std::isfinite(sample.beta));
         m_pcg_samples.push_back(sample);
     };
 
-    maybe_sample(k, 0.0, 0.0, rz);
+    maybe_sample(k, IterScalar{0}, IterScalar{0}, rz);
 
     // check convergence
-    if(accuracy_statisfied(r) && abs_rz0 == 0.0)
+    if(accuracy_statisfied(r) && abs_rz0 == IterScalar{0})
         return 0;
 
     for(k = 1; k < max_iter; ++k)
@@ -273,7 +285,7 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
             dump_p_Ap(k);
 
         // alpha = rz / p^T * Ap
-        alpha = rz / static_cast<double>(ctx().dot(p.cview(), Ap.cview()));
+        alpha = rz / static_cast<IterScalar>(ctx().dot(p.cview(), Ap.cview()));
 
         // x = x + alpha * p
         // r = r - alpha * Ap
@@ -286,13 +298,15 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
             dump_r_z(k);
 
         // rz_new = r^T * z
-        double rz_new = static_cast<double>(ctx().dot(r.cview(), z.cview()));
-        check_rz_nan_inf(k);
+        IterScalar rz_new = static_cast<IterScalar>(ctx().dot(r.cview(), z.cview()));
+        check_rz_nan_inf(k, rz_new);
 
         // check convergence
-        if(accuracy_statisfied(r) && std::abs(rz_new) <= global_tol_rate * abs_rz0)
+        if(accuracy_statisfied(r)
+           && std::abs(rz_new)
+                  <= static_cast<IterScalar>(global_tol_rate) * abs_rz0)
         {
-            maybe_sample(k, alpha, 0.0, rz_new);
+            maybe_sample(k, alpha, IterScalar{0}, rz_new);
             break;
         }
 

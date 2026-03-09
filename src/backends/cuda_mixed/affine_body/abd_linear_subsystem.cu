@@ -580,7 +580,8 @@ void ABDLinearSubsystem::Impl::retrieve_solution(GlobalLinearSystem::SolutionInf
                 x = info.solution().viewer().name("x")] __device__(int i) mutable
                {
                    // retrieve solution for each body
-                   dq(i) = -x.segment<12>(i * 12).as_eigen();
+                   dq(i) =
+                       (-x.segment<12>(i * 12).as_eigen()).template cast<Float>();
                });
 }
 }  // namespace uipc::backend::cuda_mixed

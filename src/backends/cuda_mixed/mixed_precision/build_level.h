@@ -8,10 +8,19 @@ enum class MixedPrecisionLevel
     Path1,
     Path2,
     Path3,
-    Path4
+    Path4,
+    Path5,
+    Path6,
+    Path7
 };
 
-#if defined(UIPC_MIXED_LEVEL_PATH4)
+#if defined(UIPC_MIXED_LEVEL_PATH7)
+inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path7;
+#elif defined(UIPC_MIXED_LEVEL_PATH6)
+inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path6;
+#elif defined(UIPC_MIXED_LEVEL_PATH5)
+inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path5;
+#elif defined(UIPC_MIXED_LEVEL_PATH4)
 inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path4;
 #elif defined(UIPC_MIXED_LEVEL_PATH3)
 inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path3;
@@ -23,4 +32,3 @@ inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path1;
 inline constexpr auto kBuildLevel = MixedPrecisionLevel::FP64;
 #endif
 }  // namespace uipc::backend::cuda_mixed
-

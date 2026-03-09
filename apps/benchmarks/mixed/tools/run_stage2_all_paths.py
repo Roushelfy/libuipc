@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
-ALL_LEVELS = ("fp64", "path1", "path2", "path3", "path4")
-COMPARE_LEVELS = ("path1", "path2", "path3", "path4")
+ALL_LEVELS = ("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7")
+COMPARE_LEVELS = ("path1", "path2", "path3", "path4", "path5", "path6", "path7")
 
 
 def run_cmd(cmd, cwd=None, env=None):
@@ -142,7 +142,7 @@ def base_env(workspace_root: Path, frame_scale: int, dump_surface: bool) -> dict
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Stage2 benchmark across fp64/path1/path2/path3/path4.")
+    parser = argparse.ArgumentParser(description="Run Stage2 benchmark across fp64/path1/path2/path3/path4/path5/path6/path7.")
     parser.add_argument("--source_dir", type=Path, default=None, help="repository root")
     parser.add_argument("--build_root", type=Path, default=None, help="deprecated root for build directories")
     parser.add_argument("--build_fp64", type=Path, default=None, help="reused fp64 build dir (default: build_impl_fp64)")
@@ -150,6 +150,9 @@ def main() -> int:
     parser.add_argument("--build_path2", type=Path, default=None, help="reused path2 build dir (default: build_impl_path2)")
     parser.add_argument("--build_path3", type=Path, default=None, help="reused path3 build dir (default: build_impl_path3)")
     parser.add_argument("--build_path4", type=Path, default=None, help="reused path4 build dir (default: build_impl_path4)")
+    parser.add_argument("--build_path5", type=Path, default=None, help="reused path5 build dir (default: build_impl_path5)")
+    parser.add_argument("--build_path6", type=Path, default=None, help="reused path6 build dir (default: build_impl_path6)")
+    parser.add_argument("--build_path7", type=Path, default=None, help="reused path7 build dir (default: build_impl_path7)")
     parser.add_argument("--run_root", type=Path, default=None, help="output directory for benchmark json/report")
     parser.add_argument("--config", type=str, default="Release", help="build config")
     parser.add_argument("--jobs", type=int, default=8, help="parallel build jobs")
@@ -184,6 +187,9 @@ def main() -> int:
             "path2": args.build_path2.resolve() if args.build_path2 else build_root / "mixed_path2",
             "path3": args.build_path3.resolve() if args.build_path3 else build_root / "mixed_path3",
             "path4": args.build_path4.resolve() if args.build_path4 else build_root / "mixed_path4",
+            "path5": args.build_path5.resolve() if args.build_path5 else build_root / "mixed_path5",
+            "path6": args.build_path6.resolve() if args.build_path6 else build_root / "mixed_path6",
+            "path7": args.build_path7.resolve() if args.build_path7 else build_root / "mixed_path7",
         }
     else:
         build_dirs = {
@@ -192,6 +198,9 @@ def main() -> int:
             "path2": args.build_path2.resolve() if args.build_path2 else source_dir / "build_impl_path2",
             "path3": args.build_path3.resolve() if args.build_path3 else source_dir / "build_impl_path3",
             "path4": args.build_path4.resolve() if args.build_path4 else source_dir / "build_impl_path4",
+            "path5": args.build_path5.resolve() if args.build_path5 else source_dir / "build_impl_path5",
+            "path6": args.build_path6.resolve() if args.build_path6 else source_dir / "build_impl_path6",
+            "path7": args.build_path7.resolve() if args.build_path7 else source_dir / "build_impl_path7",
         }
 
     workspace_root = run_root / "workspaces"
@@ -234,7 +243,7 @@ def main() -> int:
                   benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference[0-9]+F\\..*",
                   env=env_fp64_ref)
 
-    # path1..path4 perf + compare
+    # path1..path7 perf + compare
     reference_root = workspace_root / "stage2" / "cuda_mixed"
     for level in COMPARE_LEVELS:
         env_perf = base_env(workspace_root, args.frame_scale, dump_surface)

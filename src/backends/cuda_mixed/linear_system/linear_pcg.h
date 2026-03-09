@@ -28,6 +28,7 @@ class LinearPCG : public IterativeSolver
     using PcgScalar = ActivePolicy::PcgAuxScalar;
     using StoreScalar = ActivePolicy::StoreScalar;
     using SolveScalar = ActivePolicy::SolveScalar;
+    using PcgIterScalar = ActivePolicy::PcgIterScalar;
     using DeviceDenseVector = muda::DeviceDenseVector<PcgScalar>;
     using DeviceBCOOMatrix  = muda::DeviceBCOOMatrix<StoreScalar, 3>;
     using DeviceBSRMatrix   = muda::DeviceBSRMatrix<StoreScalar, 3>;
@@ -37,7 +38,7 @@ class LinearPCG : public IterativeSolver
               SizeT max_iter);
     void dump_r_z(SizeT k);
     void dump_p_Ap(SizeT k);
-    void check_rz_nan_inf(SizeT k);
+    void check_rz_nan_inf(SizeT k, PcgIterScalar rz);
 
     DeviceDenseVector z;   // preconditioned residual
     DeviceDenseVector r;   // residual

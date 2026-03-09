@@ -115,21 +115,21 @@ struct Flags
 namespace detail
 {
 template <typename MatScalar, typename AccScalar>
-void rbk_sym_spmv_impl(double                              a_in,
+void rbk_sym_spmv_impl(AccScalar                           a_in,
                        muda::CBCOOMatrixView<MatScalar, 3> A,
                        muda::CDenseVectorView<AccScalar>   x,
-                       double                              b_in,
+                       AccScalar                           b_in,
                        muda::DenseVectorView<AccScalar>    y)
 {
     using namespace muda;
     constexpr int N = 3;
 
-    if(b_in != 0.0)
+    if(b_in != AccScalar{0})
     {
         ParallelFor()
             .file_line(__FILE__, __LINE__)
             .apply(y.size(),
-                   [b = AccScalar(b_in), y = y.viewer().name("y")] __device__(int i) mutable
+                   [b = b_in, y = y.viewer().name("y")] __device__(int i) mutable
                    { y(i) = b * y(i); });
     }
     else
@@ -144,10 +144,10 @@ void rbk_sym_spmv_impl(double                              a_in,
     ParallelFor(block_count, block_dim)
         .file_line(__FILE__, __LINE__)
         .apply(A.triplet_count(),
-               [a = AccScalar(a_in),
-                A = A.viewer().name("A"),
-                x = x.viewer().name("x"),
-                y = y.viewer().name("y")] __device__(int idx) mutable
+                [a = a_in,
+                 A = A.viewer().name("A"),
+                 x = x.viewer().name("x"),
+                 y = y.viewer().name("y")] __device__(int idx) mutable
                {
                    using WarpReduceInt = cub::WarpReduce<int, warp_size>;
                    using WarpReduceAcc = cub::WarpReduce<AccScalar, warp_size>;
@@ -418,6 +418,15 @@ void Spmv::rbk_sym_spmv(double                          a,
                         muda::CBCOOMatrixView<float, 3> A,
                         muda::CDenseVectorView<float>   x,
                         double                          b,
+                        muda::DenseVectorView<float>    y)
+{
+    detail::rbk_sym_spmv_impl<float, float>(a, A, x, b, y);
+}
+
+void Spmv::rbk_sym_spmv(float                           a,
+                        muda::CBCOOMatrixView<float, 3> A,
+                        muda::CDenseVectorView<float>   x,
+                        float                           b,
                         muda::DenseVectorView<float>    y)
 {
     detail::rbk_sym_spmv_impl<float, float>(a, A, x, b, y);

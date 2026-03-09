@@ -4,7 +4,7 @@
 
 ## Context
 
-**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供编译期精度档位（当前代码已扩展为 `fp64 / path1 / path2 / path3 / path4`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
+**目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供编译期精度档位（当前代码已扩展为 `fp64 / path1 / path2 / path3 / path4 / path5 / path6 / path7`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
 
 **重要约束**：
 - 不修改 `src/backends/cuda` 的任何文件
@@ -44,10 +44,10 @@
 
 ## 冻结决策（来自 V2 审核）
 
-1. **切换方式**：编译期，`UIPC_CUDA_MIXED_PRECISION_LEVEL=fp64|path1|path2|path3|path4`
+1. **切换方式**：编译期，`UIPC_CUDA_MIXED_PRECISION_LEVEL=fp64|path1|path2|path3|path4|path5|path6|path7`
 2. **Telemetry**：首版全量实现，默认全部关闭（通过运行时 JSON config 开启）
 3. **Path2/3/4 实现方式**：在 `cuda_mixed` 现有类内做类型化改造，不新建并行系统树
-4. **验收口径**：分级容差阈值（`fp64≤1e-12 / path1≤1e-6 / path2≤1e-4 / path3≤1e-3`；`path4` 先按 warning-first 观察）
+4. **验收口径**：分级容差阈值（`fp64≤1e-12 / path1≤1e-6 / path2≤1e-4 / path3≤1e-3`；`path4/path5/path6/path7` 先按 warning-first 观察）
 5. **`x`（解向量）**：永远保持 `double`，不受精度档位影响
 6. **路径定义修订（2026-02-23）**：`path2/path3` 的 ALU 域回到 `double`；`path1` 才使用 `float` ALU。`path2/3` 重点改造存储域与 PCG 辅助向量域。
 
@@ -55,15 +55,18 @@
 
 > 本节为代码现实口径，若与下文旧段落冲突，以本节为准。
 
-1. 当前代码已支持 **四条 mixed 路径**（外加 `fp64` 基线）：
+1. 当前代码已支持 **五条 mixed 路径**（外加 `fp64` 基线）：
    - `path1 = ALU`（`ALU=float, Store=double, PCG=double`）
    - `path2 = Store`（`ALU=double, Store=float, PCG=double`）
    - `path3 = ALU + Store`（`ALU=float, Store=float, PCG=double`）
    - `path4 = Store + PCG`（`ALU=double, Store=float, PCG=float`）
-2. `path1..path4` 的 `cuda_mixed + mixed_stage1 + mixed_stage2` 构建已全部通过（`build_impl_fp64/path1/path2/path3/path4`）。
+   - `path5 = ALU + Store + PCG`（`ALU=float, Store=float, PCG=float`）
+   - `path6 = path5 + preconditioner_no_double_intermediate`（阶段 1：仅预条件器去双精中间量）
+   - `path7 = path6 + full_pcg_fp32`（`ALU=float, Store=float, PCG=float, Solve=float, Iter=float`）
+2. `path1..path7` 的 `cuda_mixed + mixed_stage1 + mixed_stage2` 构建作为当前主验证矩阵（`build_impl_fp64/path1/path2/path3/path4/path5/path6/path7`）。
 3. 全路径 benchmark 审查（`output/benchmarks/all_paths_audit_stage1_stage2/`）已完成：
-   - Stage1 smoke：`fp64/path1/path2/path3/path4` 全通过
-   - Stage2 perf + offline compare：`path1/path2/path3/path4` 全通过，`nan_inf_count == 0`
+   - Stage1 smoke：`fp64/path1/path2/path3/path4/path5/path6/path7`（按当前实现矩阵执行）
+   - Stage2 perf + offline compare：`path1/path2/path3/path4/path5/path6/path7`（按当前实现矩阵执行）
 4. 本轮性能收敛结论（Stage2, 相对 `fp64`）：
    - `path3` 当前综合收益最好（平均约 `-15%`）
    - `path1` 次之（平均约 `-12.5%`）
@@ -72,6 +75,7 @@
 5. ErrorTracker 解释口径提示：
    - `wrecking_ball` 上 `rel_l2_x` 可能因参考解范数接近 0 而被放大（出现极大值）
    - `abs_linf_x` 更能反映局部绝对误差，当前仍在 `1e-3` 量级以内（无 NaN/Inf）
+6. `path6` 当前为阶段性实现：仅在 preconditioner 路径去双精中间量；`LinearPCG` 主循环与外层牛顿不在该阶段变更范围。`path7` 在此基础上开启 full-PCG FP32（`x + alpha/beta/rz + convergence`）。
 
 ---
 
@@ -164,9 +168,13 @@ src/backends/cuda_mixed/
 // src/backends/cuda_mixed/mixed_precision/build_level.h
 #pragma once
 namespace uipc::backend::cuda_mixed {
-enum class MixedPrecisionLevel { FP64, Path1, Path2, Path3 };
+enum class MixedPrecisionLevel { FP64, Path1, Path2, Path3, Path4, Path5 };
 
-#if defined(UIPC_MIXED_LEVEL_PATH3)
+#if defined(UIPC_MIXED_LEVEL_PATH5)
+  inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path5;
+#elif defined(UIPC_MIXED_LEVEL_PATH4)
+  inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path4;
+#elif defined(UIPC_MIXED_LEVEL_PATH3)
   inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path3;
 #elif defined(UIPC_MIXED_LEVEL_PATH2)
   inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path2;
@@ -187,8 +195,11 @@ enum class MixedPrecisionLevel { FP64, Path1, Path2, Path3 };
 namespace uipc::backend::cuda_mixed {
 template <MixedPrecisionLevel L>
 struct PrecisionPolicy {
-    // ALU（仅 Path1 使用 float；Path2/Path3 回到 double）
-    using AluScalar   = std::conditional_t<L == MixedPrecisionLevel::Path1, float, double>;
+    // ALU（Path1/Path3/Path5 使用 float；Path2/Path4 回到 double）
+    using AluScalar   = std::conditional_t<
+        L == MixedPrecisionLevel::Path1 || L == MixedPrecisionLevel::Path3 || L == MixedPrecisionLevel::Path5,
+        float,
+        double>;
     using AluMat3x3   = Eigen::Matrix<AluScalar, 3, 3>;
     using AluVec12    = Eigen::Vector<AluScalar, 12>;
     using AluMat12x12 = Eigen::Matrix<AluScalar, 12, 12>;
@@ -198,8 +209,11 @@ struct PrecisionPolicy {
         L == MixedPrecisionLevel::FP64 || L == MixedPrecisionLevel::Path1,
         double, float>;
 
-    // PCG 辅助（Path3+开始改为 float）
-    using PcgAuxScalar = std::conditional_t<L == MixedPrecisionLevel::Path3, float, double>;
+    // PCG 辅助（Path4/Path5 使用 float）
+    using PcgAuxScalar = std::conditional_t<
+        L == MixedPrecisionLevel::Path4 || L == MixedPrecisionLevel::Path5,
+        float,
+        double>;
 
     // 解向量永远 double
     using SolveScalar = double;
@@ -300,12 +314,12 @@ ErrorMetrics compute_error_metrics(
 
 ```cmake
 # CMakeLists.txt 新增
-set(UIPC_CUDA_MIXED_PRECISION_LEVEL "fp64" CACHE STRING "fp64|path1|path2|path3")
+set(UIPC_CUDA_MIXED_PRECISION_LEVEL "fp64" CACHE STRING "fp64|path1|path2|path3|path4|path5|path6|path7")
 # Level 合法性校验（防止拼写错误静默 fallback 到 FP64）
-if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3)$")
+if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3|path4|path5|path6|path7)$")
     message(FATAL_ERROR
         "UIPC_CUDA_MIXED_PRECISION_LEVEL='${UIPC_CUDA_MIXED_PRECISION_LEVEL}' 非法，"
-        "合法值：fp64 path1 path2 path3")
+        "合法值：fp64 path1 path2 path3 path4 path5 path6 path7")
 endif()
 option(UIPC_WITH_NVTX "Enable NVTX markers" OFF)
 
@@ -599,7 +613,7 @@ src/backends/cuda_mixed/
 cmake --preset release \
   -DUIPC_WITH_CUDA_BACKEND=OFF \
   -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
-  -DUIPC_CUDA_MIXED_PRECISION_LEVEL=<fp64|path1|path2|path3> \
+  -DUIPC_CUDA_MIXED_PRECISION_LEVEL=<fp64|path1|path2|path3|path4|path5|path6|path7> \
   -DUIPC_BUILD_TESTS=OFF
 cmake --build --preset release -j8
 

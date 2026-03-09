@@ -328,7 +328,10 @@ class GlobalLinearSystem : public SimSystem
 
         void apply_preconditioner(PcgDenseVectorView z, CPcgDenseVectorView r);
 
-        void spmv(double a, CPcgDenseVectorView x, double b, PcgDenseVectorView y);
+        void spmv(ActivePolicy::PcgIterScalar a,
+                  CPcgDenseVectorView         x,
+                  ActivePolicy::PcgIterScalar b,
+                  PcgDenseVectorView          y);
 
         bool accuracy_statisfied(PcgDenseVectorView r);
 

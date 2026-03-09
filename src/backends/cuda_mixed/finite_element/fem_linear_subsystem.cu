@@ -393,7 +393,10 @@ void FEMLinearSubsystem::Impl::retrieve_solution(GlobalLinearSystem::SolutionInf
         .apply(fem().xs.size(),
                [dxs = dxs.viewer().name("dxs"),
                 result = info.solution().viewer().name("result")] __device__(int i) mutable
-               { dxs(i) = -result.segment<3>(i * 3).as_eigen(); });
+               {
+                   dxs(i) =
+                       (-result.segment<3>(i * 3).as_eigen()).template cast<Float>();
+               });
 }
 
 void FEMLinearSubsystem::Impl::loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v,
