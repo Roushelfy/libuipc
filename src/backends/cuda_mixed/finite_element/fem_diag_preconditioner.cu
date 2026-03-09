@@ -15,12 +15,16 @@ class FEMDiagPreconditioner : public LocalPreconditioner
 {
   public:
     using LocalPreconditioner::LocalPreconditioner;
+    using PrecondScalar =
+        std::conditional_t<ActivePolicy::preconditioner_no_double_intermediate, float, double>;
+    using PrecondMat3x3 = Eigen::Matrix<PrecondScalar, 3, 3>;
+    using PrecondVec3   = Eigen::Matrix<PrecondScalar, 3, 1>;
 
     FiniteElementMethod* finite_element_method = nullptr;
     GlobalLinearSystem*  global_linear_system  = nullptr;
     FEMLinearSubsystem*  fem_linear_subsystem  = nullptr;
 
-    muda::DeviceBuffer<Matrix3x3> diag_inv;
+    muda::DeviceBuffer<PrecondMat3x3> diag_inv;
 
     virtual void do_build(BuildInfo& info) override
     {
@@ -62,7 +66,8 @@ class FEMDiagPreconditioner : public LocalPreconditioner
 
                        if(i == j)
                        {
-                           diag_inv(i) = eigen::inverse(H3x3).template cast<Float>();
+                           PrecondMat3x3 H = H3x3.template cast<PrecondScalar>();
+                           diag_inv(i) = eigen::inverse(H);
                        }
                    });
     }
@@ -78,11 +83,11 @@ class FEMDiagPreconditioner : public LocalPreconditioner
                     z = info.z().viewer().name("z"),
                     diag_inv = diag_inv.viewer().name("diag_inv")] __device__(int i) mutable
                    {
-                       Eigen::Matrix<double, 3, 1> r_d =
-                           r.segment<3>(i * 3).as_eigen().template cast<double>();
-                       auto z_d = diag_inv(i) * r_d;
+                       PrecondVec3 r_p =
+                           r.segment<3>(i * 3).as_eigen().template cast<PrecondScalar>();
+                       auto z_p = diag_inv(i) * r_p;
                        z.segment<3>(i * 3).as_eigen() =
-                           z_d.template cast<ActivePolicy::PcgAuxScalar>();
+                           z_p.template cast<ActivePolicy::PcgAuxScalar>();
                    });
     }
 };

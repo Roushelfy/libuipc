@@ -12,10 +12,14 @@ class ABDDiagPreconditioner final : public LocalPreconditioner
 {
   public:
     using LocalPreconditioner::LocalPreconditioner;
+    using PrecondScalar =
+        std::conditional_t<ActivePolicy::preconditioner_no_double_intermediate, float, double>;
+    using PrecondMat12x12 = Eigen::Matrix<PrecondScalar, 12, 12>;
+    using PrecondVec12    = Eigen::Matrix<PrecondScalar, 12, 1>;
 
     ABDLinearSubsystem* abd_linear_subsystem = nullptr;
 
-    muda::DeviceBuffer<Matrix12x12> diag_inv;
+    muda::DeviceBuffer<PrecondMat12x12> diag_inv;
 
     virtual void do_build(BuildInfo& info) override
     {
@@ -39,7 +43,17 @@ class ABDDiagPreconditioner final : public LocalPreconditioner
             .apply(diag_inv.size(),
                    [diag_hessian = diag_hessian.viewer().name("diag_hessian"),
                     diag_inv = diag_inv.viewer().name("diag_inv")] __device__(int i) mutable
-                   { diag_inv(i) = muda::eigen::inverse(diag_hessian(i)); });
+                   {
+                       if constexpr(ActivePolicy::preconditioner_no_double_intermediate)
+                       {
+                           PrecondMat12x12 H = diag_hessian(i).template cast<PrecondScalar>();
+                           diag_inv(i) = muda::eigen::inverse(H);
+                       }
+                       else
+                       {
+                           diag_inv(i) = muda::eigen::inverse(diag_hessian(i));
+                       }
+                   });
     }
 
     virtual void do_apply(GlobalLinearSystem::ApplyPreconditionerInfo& info) override
@@ -53,11 +67,11 @@ class ABDDiagPreconditioner final : public LocalPreconditioner
                     z = info.z().viewer().name("z"),
                     diag_inv = diag_inv.viewer().name("diag_inv")] __device__(int i) mutable
                    {
-                       Eigen::Matrix<double, 12, 1> r_d =
-                           r.segment<12>(i * 12).as_eigen().template cast<double>();
-                       auto z_d = diag_inv(i) * r_d;
+                       PrecondVec12 r_p =
+                           r.segment<12>(i * 12).as_eigen().template cast<PrecondScalar>();
+                       auto z_p = diag_inv(i) * r_p;
                        z.segment<12>(i * 12).as_eigen() =
-                           z_d.template cast<ActivePolicy::PcgAuxScalar>();
+                           z_p.template cast<ActivePolicy::PcgAuxScalar>();
                    });
     }
 };
