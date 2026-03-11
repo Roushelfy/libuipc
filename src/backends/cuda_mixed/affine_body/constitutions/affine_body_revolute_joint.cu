@@ -232,6 +232,7 @@ Edge             = ({}, {}))",
                  gradient_only] __device__(int I)
                 {
                     using Alu = ActivePolicy::AluScalar;
+                    using Store = InterAffineBodyConstitutionManager::StoreScalar;
                     Vector2i        bids  = body_ids(I);
                     const Vector12& X_bar = rest_positions(I);
 
@@ -259,13 +260,13 @@ Edge             = ({}, {}))",
                         // G = 0.5 * kappa * (J0^T * (x0 - x2) + J1^T * (x1 - x3))
                         Eigen::Matrix<Alu, 12, 1> G_i =
                             (K * (J0.transpose() * D02 + J1.transpose() * D13)).eval();
-                        G12s(2 * I + 0).write(bids(0), downcast_gradient<Float>(G_i));
+                        G12s(2 * I + 0).write(bids(0), downcast_gradient<Store>(G_i));
                     }
                     {
                         // G = 0.5 * kappa * (J2^T * (x2 - x0) + J3^T * (x3 - x1))
                         Eigen::Matrix<Alu, 12, 1> G_j =
                             (K * (J2.transpose() * (-D02) + J3.transpose() * (-D13))).eval();
-                        G12s(2 * I + 1).write(bids(1), downcast_gradient<Float>(G_j));
+                        G12s(2 * I + 1).write(bids(1), downcast_gradient<Store>(G_j));
                     }
 
                     // Fill Body Hessian:
@@ -280,7 +281,7 @@ Edge             = ({}, {}))",
                                           Js[1].x_bar().template cast<Alu>(),
                                           Js[1].x_bar().template cast<Alu>());
                             H12x12s(HalfHessianSize * I + 0)
-                                .write(bids(0), bids(0), downcast_hessian<Float>(H_ii));
+                                .write(bids(0), bids(0), downcast_hessian<Store>(H_ii));
                         }
                         {
                             Eigen::Matrix<Alu, 12, 12> H;
@@ -297,7 +298,7 @@ Edge             = ({}, {}))",
                                 lr = Vector2i{bids(1), bids(0)};
                             }
                             H12x12s(HalfHessianSize * I + 1)
-                                .write(lr(0), lr(1), downcast_hessian<Float>(H));
+                                .write(lr(0), lr(1), downcast_hessian<Store>(H));
                         }
                         {
                             Eigen::Matrix<Alu, 12, 12> H_jj;
@@ -308,7 +309,7 @@ Edge             = ({}, {}))",
                                           Js[3].x_bar().template cast<Alu>(),
                                           Js[3].x_bar().template cast<Alu>());
                             H12x12s(HalfHessianSize * I + 2)
-                                .write(bids(1), bids(1), downcast_hessian<Float>(H_jj));
+                                .write(bids(1), bids(1), downcast_hessian<Store>(H_jj));
                         }
                     }
                 });

@@ -195,9 +195,9 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
         ParallelFor()
             .file_line(__FILE__, __LINE__)
             .apply(body_ids.size(),
-                   [body_ids = body_ids.cviewer().name("body_ids"),
-                    rest_cs  = rest_cs.cviewer().name("rest_cs"),
-                    rest_ts  = rest_ts.cviewer().name("rest_ts"),
+                [body_ids = body_ids.cviewer().name("body_ids"),
+                 rest_cs  = rest_cs.cviewer().name("rest_cs"),
+                 rest_ts  = rest_ts.cviewer().name("rest_ts"),
                     rest_ns  = rest_ns.cviewer().name("rest_ns"),
                     rest_bs  = rest_bs.cviewer().name("rest_bs"),
                     strength_ratio = strength_ratios.cviewer().name("strength_ratio"),
@@ -206,6 +206,7 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                     Es = info.energies().viewer().name("Es")] __device__(int I)
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Store = InterAffineBodyConstitutionManager::StoreScalar;
                        Vector2i bids = body_ids(I);
 
                        Alu kappa = safe_cast<Alu>(
@@ -274,10 +275,11 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                     body_masses = info.body_masses().cviewer().name("body_masses"),
                     qs      = info.qs().viewer().name("qs"),
                     G12s    = info.gradients().viewer().name("G12s"),
-                    H12x12s = info.hessians().viewer().name("H12x12s"),
-                    gradient_only] __device__(int I) mutable
+                 H12x12s = info.hessians().viewer().name("H12x12s"),
+                 gradient_only] __device__(int I) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Store = InterAffineBodyConstitutionManager::StoreScalar;
                        Vector2i bids = body_ids(I);
 
                        Alu kappa = safe_cast<Alu>(
@@ -328,7 +330,7 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
 
                        DoubletVectorAssembler DVA{G12s};
                        Vector2i               indices = {bids(0), bids(1)};
-                       DVA.segment<2>(2 * I).write(indices, downcast_gradient<Float>(G));
+                       DVA.segment<2>(2 * I).write(indices, downcast_gradient<Store>(G));
 
                        if(!gradient_only)
                        {
@@ -362,9 +364,9 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
 
                            TripletMatrixAssembler TMA{H12x12s};
                            TMA.half_block<2>(HalfHessianSize * I)
-                               .write(indices, downcast_hessian<Float>(H));
-                       }
-                   });
+                               .write(indices, downcast_hessian<Store>(H));
+                   }
+               });
     };
 
     U64 get_uid() const noexcept override { return ConstitutionUID; }

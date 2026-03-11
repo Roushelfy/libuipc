@@ -202,6 +202,7 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
                  Es      = info.energies().viewer().name("Es")] __device__(int I)
                 {
                     using Alu = ActivePolicy::AluScalar;
+                    using Store = InterAffineBodyConstitutionManager::StoreScalar;
                     Vector2i bid = body_ids(I);
 
                     Eigen::Matrix<Alu, 6, 1> lb = l_basis(I).template cast<Alu>();
@@ -279,6 +280,7 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
                  gradient_only] __device__(int I) mutable
                 {
                     using Alu = ActivePolicy::AluScalar;
+                    using Store = InterAffineBodyConstitutionManager::StoreScalar;
                     Vector2i bid = body_ids(I);
 
                     Eigen::Matrix<Alu, 6, 1> lb = l_basis(I).template cast<Alu>();
@@ -328,7 +330,7 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
 
                     Eigen::Matrix<Alu, 24, 1> G = dE_dx * dx_dq;
                     DoubletVectorAssembler DVA{G12s};
-                    DVA.segment<2>(2 * I).write(bid, downcast_gradient<Float>(G));
+                    DVA.segment<2>(2 * I).write(bid, downcast_gradient<Store>(G));
 
                     if(gradient_only)
                         return;
@@ -354,7 +356,7 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
 
                     TripletMatrixAssembler TMA{H12x12s};
                     TMA.half_block<2>(HalfHessianSize * I)
-                        .write(bid, downcast_hessian<Float>(H));
+                        .write(bid, downcast_hessian<Store>(H));
                 });
     }
 

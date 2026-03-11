@@ -93,14 +93,14 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                        {
                            G_alu.setZero();
                        }
-                       G = downcast_gradient<Float>(G_alu);
+                       G = downcast_gradient<typename Vector12::Scalar>(G_alu);
 
                        // cout << "KG(" << i << "): " << G.transpose().eval() << "\n";
 
                        if(gradient_only)
                            return;
 
-                       hessians(i) = downcast_hessian<Float>(M_alu);
+                       hessians(i) = downcast_hessian<typename Matrix12x12::Scalar>(M_alu);
                    });
     }
 };

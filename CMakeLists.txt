@@ -42,6 +42,7 @@ option(UIPC_WITH_NVTX "Enable NVTX profiling markers in cuda_mixed" OFF)
 if(APPLE)
     # Force OFF
     set(UIPC_WITH_CUDA_BACKEND OFF CACHE BOOL "Build with CUDA backend" FORCE)
+    set(UIPC_WITH_CUDA_MIXED_BACKEND OFF CACHE BOOL "Build with CUDA mixed backend" FORCE)
 endif()
 
 if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3|path4|path5|path6|path7)$")

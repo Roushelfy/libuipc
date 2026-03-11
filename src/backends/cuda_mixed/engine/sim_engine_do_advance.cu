@@ -118,6 +118,12 @@ void SimEngine::do_advance()
         m_global_vertex_manager->step_forward(alpha);
         m_line_searcher->step_forward(alpha);
 
+        // Dumps surface after step forward
+        if(m_dump_surface->view()[0])
+        {
+            dump_global_surface();
+        }
+
         // Update the collision pairs
         filter_dcd_candidates();
 
@@ -252,10 +258,7 @@ void SimEngine::do_advance()
     *                                  Core Pipeline
     ***************************************************************************************/
 
-    // Abort on exception if the runtime check is enabled for debugging
-    constexpr bool AbortOnException = uipc::RUNTIME_CHECK;
-
-    auto pipeline = [&]() noexcept(AbortOnException)
+    auto pipeline = [&]()
     {
         Timer timer{"Pipeline"};
 
@@ -420,12 +423,6 @@ void SimEngine::do_advance()
             check_newton_iter();
         }
 
-        // Dump final per-frame surface state (single OBJ per frame).
-        if(m_dump_surface->view()[0])
-        {
-            dump_global_surface();
-        }
-
         logger::info("<<< End Frame: {}", m_current_frame);
     };
 
@@ -437,6 +434,10 @@ void SimEngine::do_advance()
     {
         logger::error("Engine Advance Error: {}", e.what());
         status().push_back(core::EngineStatus::error(e.what()));
+    }
+    catch(const std::exception& e)
+    {
+        UIPC_ASSERT(false, "Unexpected Exception: {}", e.what());
     }
 }
 }  // namespace uipc::backend::cuda_mixed

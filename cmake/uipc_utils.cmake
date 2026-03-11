@@ -109,6 +109,11 @@ endfunction()
 # checking. Only check and install the packages first time.
 # -----------------------------------------------------------------------------------------
 function(uipc_config_vcpkg_install)
+    set(UIPC_WITH_ANY_CUDA_BACKEND OFF)
+    if(UIPC_WITH_CUDA_BACKEND OR UIPC_WITH_CUDA_MIXED_BACKEND)
+        set(UIPC_WITH_ANY_CUDA_BACKEND ON)
+    endif()
+
     set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_BINARY_DIR}")
     set(VCPKG_MANIFEST_FILE "${VCPKG_MANIFEST_DIR}/vcpkg.json")
     if ("${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")

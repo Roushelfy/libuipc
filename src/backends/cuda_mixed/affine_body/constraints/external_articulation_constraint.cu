@@ -767,6 +767,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                      ExternalArticulationConstituion::PrismaticJointConstitutionUID] __device__(IndexT jointI) mutable
                 {
                     using Alu = ActivePolicy::AluScalar;
+                    using Store = InterAffineBodyAnimator::StoreScalar;
                     Alu      G_theta  = safe_cast<Alu>(joint_id_to_G_theta(jointI));
                     Vector2i body_ids = joint_id_to_body_ids(jointI);
                     Eigen::Matrix<Alu, 6, 1> basis_k =
@@ -817,7 +818,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     DoubletVectorAssembler DVA{gradients};
 
                     DVA.segment<2>(jointI * 2)
-                        .write(body_ids, downcast_gradient<Float>(G24));
+                        .write(body_ids, downcast_gradient<Store>(G24));
                 });
 
         if(info.gradient_only())
@@ -858,6 +859,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                      ExternalArticulationConstituion::PrismaticJointConstitutionUID] __device__(IndexT joint_joint_I) mutable
                 {
                     using Alu = ActivePolicy::AluScalar;
+                    using Store = InterAffineBodyAnimator::StoreScalar;
                     Alu      m_ij = safe_cast<Alu>(joint_joint_id_to_mass(joint_joint_I));
                     Vector2i ij   = joint_joint_id_to_joint_ij(joint_joint_I);
 
@@ -988,7 +990,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     TMA.half_block<2>(joint_joint_I * HalfHessianSize)
                         .write(body_ids_i,
                                body_ids_j,
-                               downcast_hessian<Float>(H24x24));
+                               downcast_hessian<Store>(H24x24));
                 });
     }
 

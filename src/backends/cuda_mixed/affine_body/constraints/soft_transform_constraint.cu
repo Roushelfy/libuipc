@@ -182,6 +182,7 @@ class SoftTransformConstraint final : public AffineBodyConstraint
                     gradient_only = info.gradient_only()] __device__(int I) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Store = AffineBodyAnimator::StoreScalar;
                        auto i = indices(I);
 
                        Eigen::Matrix<Alu, 12, 1>  G_alu;
@@ -207,12 +208,12 @@ class SoftTransformConstraint final : public AffineBodyConstraint
                            G_alu = (M_alu * dq_alu).eval();
                        }
 
-                       gradients(I).write(i, downcast_gradient<Float>(G_alu));
+                       gradients(I).write(i, downcast_gradient<Store>(G_alu));
 
                        if(gradient_only)
                            return;
 
-                       hessians(I).write(i, i, downcast_hessian<Float>(M_alu));
+                       hessians(I).write(i, i, downcast_hessian<Store>(M_alu));
                    });
     }
 };

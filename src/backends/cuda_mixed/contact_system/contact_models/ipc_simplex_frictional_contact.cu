@@ -146,8 +146,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                            d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
 
                        Float eps_x;
-                       distance::edge_edge_mollifier_threshold(
-                           rest_Ea0, rest_Ea1, rest_Eb0, rest_Eb1, eps_x);
+                       distance::edge_edge_mollifier_threshold(rest_Ea0,
+                                                               rest_Ea1,
+                                                               rest_Eb0,
+                                                               rest_Eb1,
+                                                               static_cast<Float>(1e-3),
+                                                               eps_x);
                        if(distance::need_mollify(prev_Ea0, prev_Ea1, prev_Eb0, prev_Eb1, eps_x))
                        // almost parallel, don't compute energy
                        {
@@ -438,8 +442,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                            d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
 
                        Float eps_x;
-                       distance::edge_edge_mollifier_threshold(
-                           rest_Ea0, rest_Ea1, rest_Eb0, rest_Eb1, eps_x);
+                       distance::edge_edge_mollifier_threshold(rest_Ea0,
+                                                               rest_Ea1,
+                                                               rest_Eb0,
+                                                               rest_Eb1,
+                                                               static_cast<Float>(1e-3),
+                                                               eps_x);
 
                        Vector12 G;
 
@@ -477,14 +485,15 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        }
                        else
                        {
-                           Matrix12x12 H;
+                           Eigen::Matrix<Alu, 12, 12> H_alu;
                            if(mollified)
                            {
                                G.setZero();
-                               H.setZero();
+                               H_alu.setZero();
                            }
                            else
                            {
+                                Matrix12x12 H;
                                 EE_friction_gradient_hessian(G,
                                                              H,
                                                              kt2,
@@ -502,15 +511,14 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                              Ea1,
                                                              Eb0,
                                                              Eb1);
-                                auto H_alu = downcast_hessian<Alu>(H);
+                                H_alu = downcast_hessian<Alu>(H);
                                 cuda_mixed::make_spd(H_alu);
-                                H = H_alu.template cast<Float>();
                             }
                             DoubletVectorAssembler DVA{Gs};
                             auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
                             DVA.segment<4>(i * 4).write(EE, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H.template cast<Alu>());
+                            auto H_store = downcast_hessian<Store>(H_alu);
                             TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
                        }
                    });

@@ -14,7 +14,7 @@ add_subdirectory(METIS)
 set_target_properties(GKlib PROPERTIES FOLDER "external")
 set_target_properties(metis PROPERTIES FOLDER "external")
 
-if (UIPC_WITH_CUDA_BACKEND)
+if (UIPC_WITH_CUDA_BACKEND OR UIPC_WITH_CUDA_MIXED_BACKEND)
     uipc_init_submodule(muda)
     if(UIPC_WITH_NVTX)
         set(MUDA_WITH_NVTX3 ON CACHE BOOL "" FORCE)

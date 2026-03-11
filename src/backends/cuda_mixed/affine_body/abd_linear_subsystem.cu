@@ -295,7 +295,7 @@ void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
                    }
 
                    // record diagonal hessian for diag-inv preconditioner
-                   diag_hessian(I) = downcast_hessian<Float>(H12x12_alu);
+                   diag_hessian(I) = downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
 
                    // set the lower triangle blocks to zero for robustness
                    zero_out_lower(H12x12_alu);
@@ -372,7 +372,8 @@ void ABDLinearSubsystem::Impl::_assemble_reporters(IndexT& offset,
                        // Fill diagonal hessian for diag-inv preconditioner
                        if(body_i == body_j && !has_fixed)
                        {
-                           auto H12x12_diag = downcast_hessian<Float>(H12x12_alu);
+                           auto H12x12_diag =
+                               downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
                            eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
                        }
 
@@ -445,8 +446,9 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        }
                        else
                        {
-                           Vector12                    G12 = J_i.T() * G3.template cast<Float>();
-                           Eigen::Matrix<Alu, 12, 1>   G12_alu = G12.template cast<Alu>();
+                           Eigen::Matrix<Float, 12, 1> G12_float =
+                               (J_i.T() * G3.template cast<Float>()).eval();
+                           Eigen::Matrix<Alu, 12, 1> G12_alu = G12_float.template cast<Alu>();
                            auto                        G12_store =
                                downcast_gradient<StoreScalar>(G12_alu);
                            gradients.segment<12>(body_i * 12).atomic_add(G12_store);
@@ -544,7 +546,8 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                                 }
 
                                // Fill diagonal hessian for diag-inv preconditioner
-                               auto H12x12_diag = downcast_hessian<Float>(H12x12_alu);
+                               auto H12x12_diag =
+                                   downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
                                eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
 
                                // Since body_i == body_j, we only fill the upper triangle part
@@ -642,13 +645,13 @@ ABDLinearSubsystem::AssembleInfo::AssembleInfo(Impl* impl, IndexT index, bool gr
 {
 }
 
-muda::DoubletVectorView<Float, 12> ABDLinearSubsystem::AssembleInfo::gradients() const
+muda::DoubletVectorView<ABDLinearSubsystem::StoreScalar, 12> ABDLinearSubsystem::AssembleInfo::gradients() const
 {
     auto [offset, count] = m_impl->reporter_gradient_offsets_counts[m_index];
     return m_impl->reporter_gradients.view().subview(offset, count);
 }
 
-muda::TripletMatrixView<Float, 12, 12> ABDLinearSubsystem::AssembleInfo::hessians() const
+muda::TripletMatrixView<ABDLinearSubsystem::StoreScalar, 12, 12> ABDLinearSubsystem::AssembleInfo::hessians() const
 {
     auto [offset, count] = m_impl->reporter_hessian_offsets_counts[m_index];
     return m_impl->reporter_hessians.view().subview(offset, count);
