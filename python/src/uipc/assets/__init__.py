@@ -33,7 +33,11 @@ Usage::
 import importlib.util
 import pathlib
 
-from huggingface_hub import HfApi, RepoFolder, snapshot_download
+from huggingface_hub import HfApi, snapshot_download
+try:
+    from huggingface_hub import RepoFolder
+except ImportError:  # huggingface_hub>=0.34 no longer re-exports RepoFolder at top-level
+    from huggingface_hub.hf_api import RepoFolder
 from uipc import Scene, SceneIO, Vector3, view
 from uipc.geometry import SimplicialComplex, SimplicialComplexIO
 

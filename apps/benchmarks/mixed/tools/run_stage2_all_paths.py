@@ -34,6 +34,12 @@ def read_cmake_cache(cache_file: Path) -> Dict[str, str]:
     return values
 
 
+def is_multi_config_generator(cache: Dict[str, str]) -> bool:
+    generator = cache.get("CMAKE_GENERATOR", "")
+    tokens = ("Visual Studio", "Xcode", "Ninja Multi-Config")
+    return any(t in generator for t in tokens)
+
+
 def needs_configure(build_dir: Path, expected: Dict[str, str], force_configure: bool) -> bool:
     if force_configure:
         return True
@@ -42,6 +48,9 @@ def needs_configure(build_dir: Path, expected: Dict[str, str], force_configure: 
         return True
     cache = read_cmake_cache(cache_file)
     for k, v in expected.items():
+        # Multi-config generators do not use CMAKE_BUILD_TYPE.
+        if k == "CMAKE_BUILD_TYPE" and is_multi_config_generator(cache):
+            continue
         if cache.get(k) != v:
             return True
     return False
@@ -62,6 +71,90 @@ def find_benchmark_exe(build_dir: Path, config: str) -> Path:
         return found
 
     raise FileNotFoundError(f"Cannot find benchmark executable {exe_name} under {build_dir}")
+
+
+def require_prebuilt(source_dir: Path,
+                     build_dir: Path,
+                     level: str,
+                     config: str,
+                     jobs: int,
+                     enable_cuda_backend: bool):
+    cache_file = build_dir / "CMakeCache.txt"
+    if not cache_file.exists():
+        configure_hint = [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DUIPC_BUILD_BENCHMARKS=ON",
+            "-DUIPC_BUILD_TESTS=OFF",
+            "-DUIPC_BUILD_EXAMPLES=OFF",
+            "-DUIPC_BUILD_GUI=OFF",
+            f"-DUIPC_WITH_CUDA_BACKEND={'ON' if enable_cuda_backend else 'OFF'}",
+            "-DUIPC_WITH_CUDA_MIXED_BACKEND=ON",
+            f"-DUIPC_CUDA_MIXED_PRECISION_LEVEL={level}",
+        ]
+        build_hint = [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--config",
+            config,
+            "--target",
+            "mixed_stage2",
+            "--parallel",
+            str(jobs),
+        ]
+        raise FileNotFoundError(
+            "Missing CMakeCache for prebuilt benchmark.\n"
+            f"build_dir={build_dir}\n"
+            "Please build first:\n"
+            f"  {' '.join(configure_hint)}\n"
+            f"  {' '.join(build_hint)}"
+        )
+
+    cache = read_cmake_cache(cache_file)
+    required = {
+        "UIPC_BUILD_BENCHMARKS": "ON",
+        "UIPC_WITH_CUDA_MIXED_BACKEND": "ON",
+        "UIPC_CUDA_MIXED_PRECISION_LEVEL": level,
+    }
+    if enable_cuda_backend:
+        required["UIPC_WITH_CUDA_BACKEND"] = "ON"
+
+    mismatch = []
+    for k, v in required.items():
+        got = cache.get(k)
+        if got != v:
+            mismatch.append(f"{k}: expected={v}, got={got}")
+    if mismatch:
+        raise RuntimeError(
+            "Prebuilt build_dir does not match required configuration.\n"
+            f"build_dir={build_dir}\n"
+            + "\n".join(mismatch)
+        )
+
+    try:
+        find_benchmark_exe(build_dir, config)
+    except FileNotFoundError:
+        build_hint = [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--config",
+            config,
+            "--target",
+            "mixed_stage2",
+            "--parallel",
+            str(jobs),
+        ]
+        raise FileNotFoundError(
+            "Prebuilt benchmark executable is missing.\n"
+            f"build_dir={build_dir}\n"
+            "Please build first:\n"
+            f"  {' '.join(build_hint)}"
+        ) from None
 
 
 def configure_and_build(source_dir: Path,
@@ -157,6 +250,9 @@ def main() -> int:
     parser.add_argument("--config", type=str, default="Release", help="build config")
     parser.add_argument("--jobs", type=int, default=8, help="parallel build jobs")
     parser.add_argument("--generator", type=str, default=None, help="optional CMake generator")
+    parser.add_argument("--compile",
+                        action="store_true",
+                        help="configure/build each path before running (default: reuse existing binaries only)")
     parser.add_argument("--force_configure", action="store_true", help="force running cmake configure")
     parser.add_argument("--with_cuda_backend",
                         type=str,
@@ -207,17 +303,29 @@ def main() -> int:
     enable_cuda_backend = str(args.with_cuda_backend).upper() == "ON" or args.enable_cuda_baseline
     dump_surface = str(args.dump_surface).upper() == "ON"
 
-    # Build + locate exe for all levels first.
+    if args.force_configure and not args.compile:
+        parser.error("--force_configure requires --compile")
+
+    # Prepare executable for all levels first.
     exes = {}
     for level in ALL_LEVELS:
-        configure_and_build(source_dir,
-                            build_dirs[level],
-                            level=level,
-                            config=args.config,
-                            jobs=args.jobs,
-                            enable_cuda=enable_cuda_backend,
-                            generator=args.generator,
-                            force_configure=args.force_configure)
+        if args.compile:
+            configure_and_build(source_dir,
+                                build_dirs[level],
+                                level=level,
+                                config=args.config,
+                                jobs=args.jobs,
+                                enable_cuda=enable_cuda_backend,
+                                generator=args.generator,
+                                force_configure=args.force_configure)
+        else:
+            require_prebuilt(source_dir=source_dir,
+                             build_dir=build_dirs[level],
+                             level=level,
+                             config=args.config,
+                             jobs=args.jobs,
+                             enable_cuda_backend=enable_cuda_backend)
+            print(f"[run_stage2_all_paths] reuse prebuilt executable in: {build_dirs[level]}")
         exes[level] = find_benchmark_exe(build_dirs[level], args.config)
 
     # fp64 perf + reference
