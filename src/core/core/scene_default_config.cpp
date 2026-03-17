@@ -32,13 +32,17 @@ geometry::AttributeCollection default_scene_config() noexcept
     //  - linear_pcg (30% slower)
     config.create("linear_system/solver", std::string{"fused_pcg"});
 
-    config.create("linear_system/precond/mas/contact_aware", IndexT{1});
+    config.create("linear_system/precond/mas/contact_aware", IndexT{0});
     config.create("line_search/max_iter", IndexT{8});
     config.create("line_search/report_energy", IndexT{0});
 
     config.create("contact/enable", IndexT{1});
     config.create("contact/friction/enable", IndexT{1});
     config.create("contact/constitution", std::string{"ipc"});
+    // AL-IPC tuning knobs. They are ignored when contact/constitution != "al-ipc".
+    config.create("contact/al-ipc/mu_scale", Float{5e6});
+    config.create("contact/al-ipc/toi_threshold", Float{0.1});
+    config.create("contact/al-ipc/decay_factor", Float{0.3});
     config.create("contact/d_hat", Float{0.01});
     config.create("contact/adaptive/min_kappa", Float{100.0_MPa});
     config.create("contact/adaptive/init_kappa", Float{1.0_GPa});

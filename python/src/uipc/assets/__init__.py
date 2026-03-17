@@ -11,7 +11,7 @@ Usage::
     print(list_assets())
 
     # See what's available (local)
-    print(list_assets(local_dir='path/to/uipc-assets/assets'))
+    print(list_assets(local_repo='path/to/uipc-assets'))
 
     # Get the local path (downloads on first call, cached afterwards)
     path = asset_path("cube_ground")
@@ -27,18 +27,14 @@ Usage::
     show("cube_ground", backend="cuda")  # preload and run simulation
 
     # Work with a local assets directory
-    show(local_dir='path/to/uipc-assets/assets')
+    show(local_repo='path/to/uipc-assets')
 """
 
 import importlib.util
 import pathlib
 
-from huggingface_hub import HfApi, snapshot_download
-try:
-    from huggingface_hub import RepoFolder
-except ImportError:  # huggingface_hub>=0.34 no longer re-exports RepoFolder at top-level
-    from huggingface_hub.hf_api import RepoFolder
-from uipc import Scene, SceneIO, Vector3, view
+from huggingface_hub import HfApi, RepoFolder, snapshot_download
+from uipc import Scene, SceneIO
 from uipc.geometry import SimplicialComplex, SimplicialComplexIO
 
 REPO_ID = 'MuGdxy/uipc-assets'
@@ -84,25 +80,25 @@ def strip_constitutions(scene: Scene) -> None:
 def list_assets(
     *,
     revision: str = 'main',
-    local_dir: str | pathlib.Path | None = None,
+    local_repo: str | pathlib.Path | None = None,
 ) -> list[str]:
     """List all available asset names.
 
-    When *local_dir* is given, scans that directory for sub-directories
+    When *local_repo* is given, scans that directory's ``assets``
+    sub-directory for asset folders
     containing a ``scene.py`` file.  Otherwise queries the HuggingFace
     dataset.
 
     Args:
         revision: Git revision (only used for remote assets).
-        local_dir: Path to a local assets directory (e.g.
-            ``'uipc-assets/assets'``).  Each immediate sub-directory that
-            contains a ``scene.py`` is treated as an asset.
+        local_repo: Path to local asset repo root (e.g. ``'uipc-assets'``).
+            Assets are discovered under ``local_repo / 'assets'``.
 
     Returns:
         Sorted list of asset names (e.g. ``['cube_ground', 'fem_link_drop', ...]``).
     """
-    if local_dir is not None:
-        root = pathlib.Path(local_dir)
+    root = _resolve_local_assets_dir(local_repo=local_repo)
+    if root is not None:
         if not root.is_dir():
             raise FileNotFoundError(f'Local assets directory not found: {root}')
         return sorted(
@@ -147,28 +143,30 @@ def asset_path(
     *,
     revision: str = 'main',
     cache_dir: str | None = None,
-    local_dir: str | pathlib.Path | None = None,
+    local_repo: str | pathlib.Path | None = None,
 ) -> pathlib.Path:
     """Return the local path to an asset directory.
 
-    When *local_dir* is given, returns ``local_dir / name`` directly.
+    When *local_repo* is given, returns ``local_repo / 'assets' / name`` directly.
     Otherwise downloads from HuggingFace (cached by ``huggingface_hub``).
 
     Args:
         name: Asset name (e.g. ``'cube_ground'``).
         revision: Git revision (only used for remote assets).
         cache_dir: Where to cache downloaded files (remote only).
-        local_dir: Path to a local assets directory.  When set, no
-            network access is performed.
+        local_repo: Path to local asset repo root. When set, assets are
+            loaded from ``local_repo / 'assets'`` and no network access is
+            performed.
 
     Returns:
         :class:`~pathlib.Path` to the asset directory.
     """
-    if local_dir is not None:
-        result = pathlib.Path(local_dir) / name
+    local_assets_dir = _resolve_local_assets_dir(local_repo=local_repo)
+    if local_assets_dir is not None:
+        result = local_assets_dir / name
         if not result.is_dir():
             raise FileNotFoundError(
-                f'Asset \'{name}\' not found in local directory {local_dir}.'
+                f"Asset '{name}' not found in local path {local_assets_dir}."
             )
         return result
 
@@ -195,7 +193,7 @@ def load(
     geometry_only: bool = False,
     revision: str = 'main',
     cache_dir: str | None = None,
-    local_dir: str | pathlib.Path | None = None,
+    local_repo: str | pathlib.Path | None = None,
 ) -> None:
     """Download (or locate locally) an asset and apply it to a Scene.
 
@@ -210,11 +208,16 @@ def load(
             contact metadata after building, leaving only raw geometry.
         revision: Git revision (only used for remote assets).
         cache_dir: Where to cache downloaded files (remote only).
-        local_dir: Path to a local assets directory.  When set, no
-            network access is performed.
+        local_repo: Path to local asset repo root. When set, assets are
+            loaded from ``local_repo / 'assets'`` and no network access is
+            performed.
     """
-    path = asset_path(name, revision=revision, cache_dir=cache_dir,
-                      local_dir=local_dir)
+    path = asset_path(
+        name,
+        revision=revision,
+        cache_dir=cache_dir,
+        local_repo=local_repo,
+    )
     scene_file = path / 'scene.py'
     if not scene_file.exists():
         raise FileNotFoundError(
@@ -235,184 +238,6 @@ def load(
         strip_constitutions(scene)
 
 
-def _show_scene_config(imgui, cfg) -> None:
-    """Render all scene config attributes as ImGui controls."""
-
-    def _float(key: str, label: str, fmt: str = '%.6f'):
-        attr = cfg.find(key)
-        if attr is None:
-            return
-        val = float(view(attr)[0])
-        changed, new_val = imgui.InputFloat(label, val, 0.0, 0.0, fmt)
-        if changed:
-            view(attr)[0] = new_val
-
-    def _int(key: str, label: str, step: int = 1, step_fast: int = 10):
-        attr = cfg.find(key)
-        if attr is None:
-            return
-        val = int(view(attr)[0])
-        changed, new_val = imgui.InputInt(label, val, step, step_fast)
-        if changed:
-            view(attr)[0] = new_val
-
-    def _bool(key: str, label: str):
-        attr = cfg.find(key)
-        if attr is None:
-            return
-        val = bool(int(view(attr)[0]))
-        changed, new_val = imgui.Checkbox(label, val)
-        if changed:
-            view(attr)[0] = int(new_val)
-
-    def _vec3(key: str, label: str):
-        attr = cfg.find(key)
-        if attr is None:
-            return
-        g = view(attr)[0]
-        gv = [float(g[0][0]), float(g[1][0]), float(g[2][0])]
-        changed, new_g = imgui.DragFloat3(label, gv, 0.1, -100.0, 100.0, '%.2f')
-        if changed:
-            view(attr)[0] = Vector3.Values(new_g)
-
-    def _str(key: str, label: str):
-        attr = cfg.find(key)
-        if attr is None:
-            return
-        val = str(view(attr)[0])
-        imgui.InputText(label, val, imgui.ImGuiInputTextFlags_ReadOnly)
-
-    # ── Time & Physics ────────────────────────────────────────
-    if imgui.TreeNode('Time & Physics'):
-        _float('dt', 'dt')
-        _vec3('gravity', 'gravity')
-        imgui.TreePop()
-
-    # ── Contact ───────────────────────────────────────────────
-    if imgui.TreeNode('Contact'):
-        _bool('contact/enable', 'enable')
-        _bool('contact/friction/enable', 'friction')
-        _str('contact/constitution', 'constitution')
-        _float('contact/d_hat', 'd_hat', '%.6e')
-        _float('contact/eps_velocity', 'eps_velocity', '%.6e')
-        _float('contact/adaptive/min_kappa', 'min_kappa', '%.6e')
-        _float('contact/adaptive/init_kappa', 'init_kappa', '%.6e')
-        _float('contact/adaptive/max_kappa', 'max_kappa', '%.6e')
-        imgui.TreePop()
-
-    # ── Newton Solver ─────────────────────────────────────────
-    if imgui.TreeNode('Newton Solver'):
-        _int('newton/max_iter', 'max_iter')
-        _int('newton/min_iter', 'min_iter')
-        _bool('newton/use_adaptive_tol', 'adaptive_tol')
-        _float('newton/velocity_tol', 'velocity_tol', '%.6e')
-        _float('newton/ccd_tol', 'ccd_tol', '%.4f')
-        _float('newton/transrate_tol', 'transrate_tol', '%.6e')
-        _bool('newton/semi_implicit/enable', 'semi_implicit')
-        _float('newton/semi_implicit/beta_tol', 'beta_tol', '%.6e')
-        imgui.TreePop()
-
-    # ── Linear System ─────────────────────────────────────────
-    if imgui.TreeNode('Linear System'):
-        _float('linear_system/tol_rate', 'tol_rate', '%.6e')
-        _str('linear_system/solver', 'solver')
-        _bool('linear_system/precond/mas/contact_aware', 'contact_aware')
-        imgui.TreePop()
-
-    # ── Line Search ───────────────────────────────────────────
-    if imgui.TreeNode('Line Search'):
-        _int('line_search/max_iter', 'max_iter')
-        _bool('line_search/report_energy', 'report_energy')
-        imgui.TreePop()
-
-    # ── Misc ──────────────────────────────────────────────────
-    if imgui.TreeNode('Misc'):
-        _str('integrator/type', 'integrator')
-        _bool('cfl/enable', 'CFL')
-        _str('collision_detection/method', 'collision method')
-        _bool('sanity_check/enable', 'sanity_check')
-        _str('sanity_check/mode', 'sanity_mode')
-        _bool('diff_sim/enable', 'diff_sim')
-        _bool('extras/strict_mode/enable', 'strict_mode')
-        _bool('extras/debug/dump_surface', 'dump_surface')
-        _bool('extras/debug/dump_linear_system', 'dump_linear_sys')
-        _bool('extras/debug/dump_linear_pcg', 'dump_linear_pcg')
-        imgui.TreePop()
-
-
-def _show_contact_tabular(imgui, ct) -> None:
-    """Render editable contact tabular as ImGui controls."""
-    n = ct.element_count()
-
-    # Build element name lookup: id → name.
-    de = ct.default_element()
-    elem_names = {de.id(): de.name() or 'default'}
-
-    imgui.TextUnformatted(f'Elements: {n}')
-
-    # Show element list with names.
-    if imgui.TreeNode('Elements'):
-        for i in range(n):
-            name = elem_names.get(i, f'element_{i}')
-            imgui.TextUnformatted(f'  [{i}] {name}')
-        imgui.TreePop()
-
-    # ── Default model (editable) ──────────────────────────────
-    def_name = elem_names.get(de.id(), 'default')
-    if imgui.TreeNode(f'Default model ({def_name})'):
-        dm = ct.default_model()
-        fr = dm.friction_rate()
-        res = dm.resistance()
-        ena = dm.is_enabled()
-
-        ch_f, new_fr = imgui.InputFloat('friction##def', fr, 0.0, 0.0, '%.4f')
-        ch_r, new_res = imgui.InputFloat('resistance##def', res, 0.0, 0.0, '%.2e')
-        ch_e, new_ena = imgui.Checkbox('enabled##def', ena)
-
-        if ch_f or ch_r or ch_e:
-            ct.default_model(
-                new_fr if ch_f else fr,
-                new_res if ch_r else res,
-                new_ena if ch_e else ena,
-            )
-        imgui.TreePop()
-
-    # ── Pairwise models (editable) ────────────────────────────
-    if n > 1 and imgui.TreeNode('Pairwise models'):
-        for i in range(n):
-            for j in range(i, n):
-                m = ct.at(i, j)
-                ni = elem_names.get(i, f'element_{i}')
-                nj = elem_names.get(j, f'element_{j}')
-                tag = f'##{i}_{j}'
-                header = f'{ni} <-> {nj}{tag}'
-                if imgui.TreeNode(header):
-                    fr = m.friction_rate()
-                    res = m.resistance()
-                    ena = m.is_enabled()
-
-                    ch_f, new_fr = imgui.InputFloat(
-                        f'friction{tag}', fr, 0.0, 0.0, '%.4f',
-                    )
-                    ch_r, new_res = imgui.InputFloat(
-                        f'resistance{tag}', res, 0.0, 0.0, '%.2e',
-                    )
-                    ch_e, new_ena = imgui.Checkbox(f'enabled{tag}', ena)
-
-                    if ch_f or ch_r or ch_e:
-                        from uipc.core import ContactElement
-                        L = ContactElement(i, '')
-                        R = ContactElement(j, '')
-                        ct.insert(
-                            L, R,
-                            new_fr if ch_f else fr,
-                            new_res if ch_r else res,
-                            new_ena if ch_e else ena,
-                        )
-                    imgui.TreePop()
-        imgui.TreePop()
-
-
 def show(
     name: str | None = None,
     backend: str = 'none',
@@ -421,15 +246,17 @@ def show(
     workspace: str | None = None,
     revision: str = 'main',
     cache_dir: str | None = None,
-    local_dir: str | pathlib.Path | None = None,
+    local_repo: str | pathlib.Path | None = None,
     distance_factor: float = 2.0,
 ) -> None:
     """Display and optionally simulate a UIPC asset in a Polyscope window.
 
-    Opens an interactive viewer with an **Asset Selector** panel that lists
-    every available asset.  You can pick any scene and hot-load it without
-    restarting.  When *backend* is a real engine (e.g. ``'cuda'``), a
-    **Run / Pause** control is shown as well.
+    Opens an interactive viewer with a collapsable **Asset Selector** panel
+    that lists every available asset. You can pick any scene and hot-load it
+    without restarting. Once loaded, the GUI shows the source directory and
+    ``scene.py`` path for the current scene, and supports exporting the scene
+    snapshot from a native save dialog. When *backend* is a real engine
+    (e.g. ``'cuda'``), a **Run / Pause** control is shown as well.
 
     Supports both remote assets (from HuggingFace) and local asset
     directories for development::
@@ -440,7 +267,7 @@ def show(
         show('cube_ground')                  # preload one scene
         show('cube_ground', backend='cuda')  # preload + live simulation
         show(backend='cuda')                 # browse, simulate what you pick
-        show(local_dir='uipc-assets/assets') # browse local assets
+        show(local_repo='uipc-assets')       # browse local assets
 
     Args:
         name: Optional asset name to preload (e.g. ``'cube_ground'``).
@@ -453,8 +280,8 @@ def show(
             temporary directory.
         revision: Git revision (only used for remote assets).
         cache_dir: Where to cache downloaded files (remote only).
-        local_dir: Path to a local assets directory.  When set, assets
-            are loaded from disk without any network access.
+        local_repo: Path to local asset repo root. Assets are loaded from
+            ``local_repo / 'assets'`` without network access.
         distance_factor: How far the camera sits relative to the bounding-box
             diagonal (default ``2.0``).
     """
@@ -472,8 +299,13 @@ def show(
                 'Headless mode (gui=False) requires a scene name.'
             )
         scene = Scene(Scene.default_config())
-        load(name, scene, revision=revision, cache_dir=cache_dir,
-             local_dir=local_dir)
+        load(
+            name,
+            scene,
+            revision=revision,
+            cache_dir=cache_dir,
+            local_repo=local_repo,
+        )
         ws = workspace or tempfile.mkdtemp(prefix=f'uipc_{name}_')
         engine = Engine(backend, ws)
         world = World(engine)
@@ -505,6 +337,8 @@ def show(
         'selected_idx': 0,
         'asset_names': None,   # None = not yet fetched
         'fetching': False,
+        'source_dir': '',
+        'scene_file': '',
         'status': '',
         'error': '',
     }
@@ -515,8 +349,20 @@ def show(
             ps.remove_all_structures()
 
             scene = Scene(Scene.default_config())
-            load(asset_name, scene, revision=revision, cache_dir=cache_dir,
-                 local_dir=local_dir)
+            source_dir = asset_path(
+                asset_name,
+                revision=revision,
+                cache_dir=cache_dir,
+                local_repo=local_repo,
+            )
+            scene_file = source_dir / 'scene.py'
+            load(
+                asset_name,
+                scene,
+                revision=revision,
+                cache_dir=cache_dir,
+                local_repo=local_repo,
+            )
 
             if is_simulation:
                 ws = workspace or tempfile.mkdtemp(
@@ -540,6 +386,8 @@ def show(
             state['current_name'] = asset_name
             state['running'] = False
             state['frame'] = 0
+            state['source_dir'] = str(source_dir.resolve())
+            state['scene_file'] = str(scene_file.resolve())
             state['status'] = f'Loaded: {asset_name}'
             state['error'] = ''
         except Exception as exc:
@@ -549,7 +397,10 @@ def show(
     # ── helper: fetch asset list in a background thread ───────────
     def _fetch_assets() -> None:
         try:
-            names = list_assets(revision=revision, local_dir=local_dir)
+            names = list_assets(
+                revision=revision,
+                local_repo=local_repo,
+            )
             state['asset_names'] = names
             # Pre-select the currently loaded scene, if any.
             if state['current_name'] and state['current_name'] in names:
@@ -560,12 +411,43 @@ def show(
         finally:
             state['fetching'] = False
 
+    def _pick_save_path(asset_name: str, source_dir: str) -> pathlib.Path | None:
+        """Open a native file-save dialog and return selected path."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception as exc:
+            raise RuntimeError(
+                f'Native file dialog is unavailable: {exc}'
+            ) from exc
+
+        initial_dir = source_dir or str(pathlib.Path.cwd())
+        initial_file = f'{asset_name}.json'
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        try:
+            chosen = filedialog.asksaveasfilename(
+                title='Save Scene',
+                defaultextension='.json',
+                filetypes=[
+                    ('JSON file', '*.json'),
+                    ('BSON file', '*.bson'),
+                    ('All files', '*.*'),
+                ],
+                initialdir=initial_dir,
+                initialfile=initial_file,
+            )
+        finally:
+            root.destroy()
+
+        if not chosen:
+            return None
+        return pathlib.Path(chosen)
+
     # ── ImGui callback ────────────────────────────────────────────
     def _callback() -> None:
-        # ---- Asset Selector section ----
-        imgui.TextUnformatted('Asset Selector')
-        imgui.Separator()
-
         names = state['asset_names']
 
         # Kick off the background fetch once.
@@ -573,29 +455,34 @@ def show(
             state['fetching'] = True
             threading.Thread(target=_fetch_assets, daemon=True).start()
 
-        if state['fetching']:
-            imgui.TextUnformatted('Fetching asset list...')
-        elif names is not None and len(names) > 0:
-            # Scrollable list of assets.
-            line_h = imgui.GetTextLineHeightWithSpacing()
-            list_h = min(len(names), 15) * line_h
-            if imgui.BeginListBox('##assets', (0.0, list_h)):
-                for i, n in enumerate(names):
-                    is_cur = (i == state['selected_idx'])
-                    if imgui.Selectable(n, selected=is_cur):
-                        state['selected_idx'] = i
-                imgui.EndListBox()
+        # ---- Asset Selector section ----
+        if imgui.CollapsingHeader('Asset Selector'):
+            if state['fetching']:
+                imgui.TextUnformatted('Fetching asset list...')
+            elif names is not None and len(names) > 0:
+                # Scrollable list of assets.
+                line_h = imgui.GetTextLineHeightWithSpacing()
+                list_h = min(len(names), 15) * line_h
+                if imgui.BeginListBox('##assets', (0.0, list_h)):
+                    for i, n in enumerate(names):
+                        is_cur = (i == state['selected_idx'])
+                        if imgui.Selectable(n, selected=is_cur):
+                            state['selected_idx'] = i
+                    imgui.EndListBox()
 
-            # Read-only text box showing the selected name (user can copy).
-            sel = names[state['selected_idx']]
-            imgui.InputText('##selected', sel,
-                            imgui.ImGuiInputTextFlags_ReadOnly)
+                # Read-only text box showing the selected name (user can copy).
+                sel = names[state['selected_idx']]
+                imgui.InputText(
+                    '##selected',
+                    sel,
+                    imgui.ImGuiInputTextFlags_ReadOnly,
+                )
 
-            if imgui.Button('Load'):
-                state['status'] = f'Loading {sel}...'
-                _load_scene(sel)
-        elif names is not None:
-            imgui.TextUnformatted('No assets found.')
+                if imgui.Button('Load'):
+                    state['status'] = f'Loading {sel}...'
+                    _load_scene(sel)
+            elif names is not None:
+                imgui.TextUnformatted('No assets found.')
 
         # Status / error feedback.
         if state['status']:
@@ -605,16 +492,30 @@ def show(
 
         # ---- Scene Parameters section ----
         if state['scene'] is not None:
-            imgui.Separator()
-            if imgui.CollapsingHeader('Scene Config'):
-                scene = state['scene']
-                cfg = scene.config()
-                _show_scene_config(imgui, cfg)
+            def _on_save_scene() -> None:
+                try:
+                    save_path = _pick_save_path(
+                        state['current_name'],
+                        state['source_dir'],
+                    )
+                    if save_path is not None:
+                        sio = SceneIO(state['scene'])
+                        sio.save(str(save_path))
+                        state['status'] = f'Saved scene: {save_path}'
+                        state['error'] = ''
+                    else:
+                        state['status'] = 'Save canceled.'
+                except Exception as exc:
+                    state['error'] = f'Failed to save scene: {exc}'
 
-            if imgui.CollapsingHeader('Contact Tabular'):
-                scene = state['scene']
-                ct = scene.contact_tabular()
-                _show_contact_tabular(imgui, ct)
+            imgui.Separator()
+            state['scene_gui'].show(
+                imgui,
+                current_name=state['current_name'],
+                source_dir=state['source_dir'],
+                scene_file=state['scene_file'],
+                on_save_scene=_on_save_scene,
+            )
 
             # Re-init world with updated parameters
             if is_simulation and state['world'] is not None:
@@ -695,3 +596,13 @@ def _auto_camera(scene: Scene, distance_factor: float) -> None:
     ground = dist * np.cos(np.pi / 4) / np.sqrt(2)
     camera_pos = center + np.array([ground, elevation, ground])
     ps.look_at(camera_pos.tolist(), center.tolist())
+
+
+def _resolve_local_assets_dir(
+    *,
+    local_repo: str | pathlib.Path | None,
+) -> pathlib.Path | None:
+    """Resolve local assets root directory from local_repo input."""
+    if local_repo is not None:
+        return pathlib.Path(local_repo) / 'assets'
+    return None
