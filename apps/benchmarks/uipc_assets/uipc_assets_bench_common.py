@@ -168,7 +168,7 @@ def load_asset_scene(name: str, scene: Any, revision: str, cache_dir: Path) -> P
         name,
         scene,
         revision=revision,
-        local_dir=asset_dir.parent,
+        cache_dir=str(cache_dir),
     )
     return asset_dir
 
