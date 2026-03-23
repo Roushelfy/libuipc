@@ -49,12 +49,14 @@
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
-| 1 | Contact 法向 ALU 梯度 | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ⚠️ |
-| 2 | Contact 法向 ALU Hessian | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ⚠️ |
-| 3 | Contact 摩擦/半平面 ALU | `contact_system/contact_models/ipc_simplex_frictional_contact.cu` | ⚠️ |
+| 1 | IPC Contact 法向 ALU 梯度 | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
+| 2 | IPC Contact 法向 ALU Hessian | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
+| 3 | IPC Contact 摩擦/半平面 ALU | `contact_system/contact_models/ipc_simplex_frictional_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu` | ✅ |
+| 3b | AL-IPC Contact / Half-plane ALU | `contact_system/al_simplex_normal_contact.cu`<br>`contact_system/al_simplex_frictional_contact.cu`<br>`contact_system/al_vertex_half_plane_normal_contact.cu`<br>`contact_system/al_vertex_half_plane_frictional_contact.cu` | ✅ |
 | 4 | FEM SNH 变形梯度 F ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
 | 5 | FEM SNH 能量梯度 G ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
 | 6 | FEM SNH Hessian H ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
+| 6b | FEM PlasticDiscreteShellBending ALU | `finite_element/constitutions/plastic_discrete_shell_bending.cu` | ✅ |
 | 7 | ABD OrthoPotential ALU | `affine_body/constitutions/ortho_potential.cu` | ✅ |
 | 8 | ABD ARAP ALU | `affine_body/constitutions/arap.cu` | ✅ |
 | 9 | ABD RevoluteJoint ALU | `affine_body/constitutions/affine_body_revolute_joint.cu` | ✅ |
@@ -62,8 +64,12 @@
 | 11 | ABD RevoluteJointLimit ALU | `affine_body/constitutions/affine_body_revolute_joint_limit.cu` | ✅ |
 | 12 | ABD PrismaticJointLimit ALU | `affine_body/constitutions/affine_body_prismatic_joint_limit.cu` | ✅ |
 | 13 | ABD BDF1 动能 ALU | `affine_body/bdf/affine_body_bdf1_kinetic.cu` | ✅ |
+| 13b | ABD BDF2 动能 ALU | `affine_body/bdf/affine_body_bdf2_kinetic.cu` | ✅ |
 | 14 | ABD SoftTransformConstraint ALU | `affine_body/constraints/soft_transform_constraint.cu` | ✅ |
 | 15 | ABD ExternalArticulationConstraint ALU | `affine_body/constraints/external_articulation_constraint.cu` | ✅ |
+| 15b | ABD FixedJoint ALU | `affine_body/constitutions/affine_body_fixed_joint.cu` | ✅ |
+| 15c | ABD Driving Revolute External Force ALU | `affine_body/affine_body_revolute_joint_external_body_force.cu` | ✅ |
+| 15d | ABD Driving Prismatic External Force ALU | `affine_body/affine_body_prismatic_joint_external_body_force.cu` | ✅ |
 | 16 | ABDJacobi J^T H J ALU domain | `affine_body/abd_jacobi_matrix.h/.cu` | ⚠️ |
 | 17 | ABDJacobiStack mat-vec / to_mat ALU | `affine_body/details/abd_jacobi_matrix.inl` | ⚠️ |
 | 18 | ABD 线性子系统 kinetic+shape | `affine_body/abd_linear_subsystem.cu` | ✅ |
@@ -75,22 +81,34 @@
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
-| 22 | Reporter/Assembler 局部缓冲区 | `affine_body/abd_linear_subsystem.h`<br>`finite_element/fem_linear_subsystem.h` | ❌ |
-| 23 | Global Triplet Hessian A_triplet | `linear_system/global_linear_system.h` | ❌ |
-| 24 | Global BCOO Hessian A_bcoo | `linear_system/global_linear_system.h` | ❌ |
-| 25 | Global 梯度向量 b | `linear_system/global_linear_system.h` | ❌ |
+| 22 | Reporter/Assembler 局部缓冲区 | `affine_body/abd_linear_subsystem.h`<br>`finite_element/fem_linear_subsystem.h` | ✅ |
+| 23 | Global Triplet Hessian A_triplet | `linear_system/global_linear_system.h` | ✅ |
+| 24 | Global BCOO Hessian A_bcoo | `linear_system/global_linear_system.h` | ✅ |
+| 25 | Global 梯度向量 b | `linear_system/global_linear_system.h` | ✅ |
 
 ### PcgAuxScalar 组件（path4 起激活）
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
-| 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h` | ❌ |
+| 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h`<br>`linear_system/linear_fused_pcg.h` | ✅ |
 
-### 固定 double（不受 path 影响）
+### SolveScalar 组件（path7 起激活）
 
 | # | 组件 | 文件 | 说明 |
 |---|------|------|------|
-| 27 | 求解向量 x + 收敛标量 + SpMV 接口 | `linear_system/global_linear_system.h`<br>`linear_system/spmv.h` | 仅 path7 可降为 float（SolveScalar） |
+| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu` | ✅ |
+
+### PcgIterScalar 组件（path7 起激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 28 | PCG 迭代标量 rz/alpha/beta + SpMV 标量接口 | `linear_system/global_linear_system.h/.cu`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu`<br>`linear_system/iterative_solver.h/.cu` | ✅ |
+
+### 保留 Float 的非计算桥接
+
+| # | 组件 | 文件 | 说明 |
+|---|------|------|------|
+| 29 | External force constraint host bridge | `affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu`<br>`affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu` | 保留 `Float`：仅负责 host 侧 attribute 采集/回写与 scene bridge，不参与 kernel 计算 |
 
 ---
 

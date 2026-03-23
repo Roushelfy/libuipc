@@ -202,6 +202,7 @@ SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<SolveScalar>  x,
     Timer pcg_timer{"FusedPCG"};
 
     SizeT k = 0;
+    d_converged = 0;
 
     // r = b - A*x, but x0 = 0 so r = b
     initialize_residual_from_rhs<PcgScalar, StoreScalar>(r.view(), b);
@@ -209,7 +210,7 @@ SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<SolveScalar>  x,
     // z = P^{-1} * r
     {
         Timer timer{"Apply Preconditioner"};
-        apply_preconditioner(z, r);
+        apply_preconditioner(z, r, d_converged.view());
     }
 
     // p = z
@@ -241,7 +242,7 @@ SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<SolveScalar>  x,
         // z = P^{-1} * r
         {
             Timer timer{"Apply Preconditioner"};
-            apply_preconditioner(z, r);
+            apply_preconditioner(z, r, d_converged.view());
         }
 
         // rz_new = r^T * z

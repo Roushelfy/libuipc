@@ -122,6 +122,8 @@ class VertexHalfPlaneTrajectoryFilter : public TrajectoryFilter
 
     muda::CBufferView<Vector2i> PHs() noexcept;
     muda::CBufferView<Vector2i> friction_PHs() noexcept;
+    virtual muda::CBufferView<Vector2i> candidate_PHs() const noexcept = 0;
+    virtual muda::CBufferView<Float>    toi_PHs() const noexcept       = 0;
 
   protected:
     virtual void do_detect(DetectInfo& info)              = 0;
@@ -147,4 +149,3 @@ class VertexHalfPlaneTrajectoryFilter : public TrajectoryFilter
     virtual void do_clear_friction_candidates() override final;
 };
 }  // namespace uipc::backend::cuda_mixed
-

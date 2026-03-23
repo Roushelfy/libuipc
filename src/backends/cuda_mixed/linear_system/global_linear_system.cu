@@ -529,7 +529,8 @@ void GlobalLinearSystem::Impl::distribute_solution()
 
 void GlobalLinearSystem::Impl::apply_preconditioner(
     GlobalLinearSystem::PcgDenseVectorView  z,
-    GlobalLinearSystem::CPcgDenseVectorView r)
+    GlobalLinearSystem::CPcgDenseVectorView r,
+    muda::CVarView<IndexT>                  converged)
 {
     auto diag_dof_counts  = diag_dof_offsets_counts.counts();
     auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
@@ -539,6 +540,7 @@ void GlobalLinearSystem::Impl::apply_preconditioner(
         ApplyPreconditionerInfo info{this};
         info.m_z = z;
         info.m_r = r;
+        info.m_converged = converged;
         global_preconditioner->apply(info);
     }
 
@@ -550,6 +552,7 @@ void GlobalLinearSystem::Impl::apply_preconditioner(
         auto                    count  = diag_dof_counts[index];
         info.m_z                       = z.subview(offset, count);
         info.m_r                       = r.subview(offset, count);
+        info.m_converged               = converged;
         preconditioner->apply(info);
     }
 

@@ -269,7 +269,7 @@ def run_worker_subprocess(
     if reference_dir is not None:
         cmd.extend(["--reference_dir", str(reference_dir)])
     log("$ " + " ".join(cmd))
-    subprocess.run(cmd, check=True, env=env, cwd=str(SCRIPT_DIR.parents[3]))
+    subprocess.run(cmd, check=True, env=env, cwd=str(SCRIPT_DIR.parents[2]))
     return read_json(output_dir / "worker_result.json")
 
 
@@ -279,7 +279,7 @@ def snapshot_manifest(run_root: Path, specs: List[SceneSpec], state: Dict[str, A
 
 
 def default_build_dir_for(level: str) -> Path:
-    return SCRIPT_DIR.parents[3] / f"build_impl_{level}"
+    return SCRIPT_DIR.parents[2] / f"build_impl_{level}"
 
 
 def do_run(args: argparse.Namespace) -> int:
@@ -453,9 +453,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--scenes", nargs="*", default=None, help="optional scene subset")
 
     p_run = sub.choices["run"]
-    p_run.add_argument("--build_fp64", type=Path, default=SCRIPT_DIR.parents[3] / "build_impl_fp64", help="fp64 build dir")
-    p_run.add_argument("--build_path1", type=Path, default=SCRIPT_DIR.parents[3] / "build_impl_path1", help="path1 build dir")
-    p_run.add_argument("--build_root", type=Path, default=SCRIPT_DIR.parents[3], help="root used to resolve build_impl_<level> for compare levels other than path1")
+    p_run.add_argument("--build_fp64", type=Path, default=SCRIPT_DIR.parents[2] / "build_impl_fp64", help="fp64 build dir")
+    p_run.add_argument("--build_path1", type=Path, default=SCRIPT_DIR.parents[2] / "build_impl_path1", help="path1 build dir")
+    p_run.add_argument("--build_root", type=Path, default=SCRIPT_DIR.parents[2], help="root used to resolve build_impl_<level> for compare levels other than path1")
     p_run.add_argument("--compare_levels", nargs="+", default=["path1"], help="compare levels against fp64, e.g. path1 path2 path3")
     p_run.add_argument("--config", type=str, default="RelWithDebInfo", help="build config containing backend dlls")
     p_run.add_argument("--run_root", type=Path, default=None, help="run output root")

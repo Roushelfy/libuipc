@@ -205,12 +205,14 @@ class GlobalLinearSystem : public SimSystem
 
         PcgDenseVectorView  z() { return m_z; }
         CPcgDenseVectorView r() { return m_r; }
+        muda::CVarView<IndexT> converged() { return m_converged; }
 
       private:
         friend class Impl;
         PcgDenseVectorView  m_z;
         CPcgDenseVectorView m_r;
-        Impl*            m_impl = nullptr;
+        muda::CVarView<IndexT> m_converged;
+        Impl*                  m_impl = nullptr;
     };
 
     class AccuracyInfo
@@ -326,7 +328,9 @@ class GlobalLinearSystem : public SimSystem
 
         bool empty_system = true;
 
-        void apply_preconditioner(PcgDenseVectorView z, CPcgDenseVectorView r);
+        void apply_preconditioner(PcgDenseVectorView z,
+                                  CPcgDenseVectorView r,
+                                  muda::CVarView<IndexT> converged);
 
         void spmv(ActivePolicy::PcgIterScalar a,
                   CPcgDenseVectorView         x,

@@ -34,7 +34,8 @@ class IterativeSolver : public SimSystem
               muda::DenseVectorView<ActivePolicy::PcgAuxScalar> y);
     void apply_preconditioner(
         muda::DenseVectorView<ActivePolicy::PcgAuxScalar> z,
-        muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> r);
+        muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> r,
+        muda::CVarView<IndexT>                             converged);
     bool accuracy_statisfied(muda::DenseVectorView<ActivePolicy::PcgAuxScalar> r);
     muda::LinearSystemContext& ctx() const;
 

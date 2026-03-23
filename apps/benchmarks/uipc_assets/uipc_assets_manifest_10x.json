@@ -1,0 +1,46 @@
+[
+  {
+    "name": "fem_link_drop",
+    "enabled": true,
+    "frames_perf": 400,
+    "frames_quality": 200,
+    "quality_enabled": true,
+    "contact_enabled": false,
+    "tags": ["fem", "no_contact", "regression"],
+    "perf_warning_pct": 15.0,
+    "notes": "Use a FEM-only no-contact variant by disabling contact after asset load."
+  },
+  {
+    "name": "cube_ground",
+    "enabled": true,
+    "frames_perf": 400,
+    "frames_quality": 200,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": ["abd", "contact", "regression"],
+    "perf_warning_pct": 15.0,
+    "notes": "Small rigid/contact regression scene."
+  },
+  {
+    "name": "abd_fem_tower",
+    "enabled": true,
+    "frames_perf": 600,
+    "frames_quality": 250,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": ["abd", "fem", "contact", "coupling"],
+    "perf_warning_pct": 20.0,
+    "notes": "Coupled rigid-soft tower with frictional contact."
+  },
+  {
+    "name": "rigid_ipc_wrecking_ball",
+    "enabled": true,
+    "frames_perf": 800,
+    "frames_quality": 200,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": ["rigid", "contact", "heavy"],
+    "perf_warning_pct": 25.0,
+    "notes": "Heavy rigid IPC contact benchmark from the asset dataset."
+  }
+]

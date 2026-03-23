@@ -30,6 +30,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
     {
         using namespace muda;
         using namespace sym::codim_ipc_contact;
+        using Alu = ActivePolicy::AluScalar;
+        using Vec3A = Eigen::Matrix<Alu, 3, 1>;
 
         // Compute Point-Triangle energy
         auto PT_count = info.friction_PTs().size();
@@ -54,9 +56,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(PT[2]),
                                         contact_ids(PT[3])};
 
-                       auto  coeff = PT_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = PT_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const auto& prev_P  = prev_Ps(PT[0]);
                        const auto& prev_T0 = prev_Ps(PT[1]);
@@ -67,31 +69,38 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const auto& T0 = Ps(PT[1]);
                        const auto& T1 = Ps(PT[2]);
                        const auto& T2 = Ps(PT[3]);
+                       Vec3A       prev_P_alu  = prev_P.template cast<Alu>();
+                       Vec3A       prev_T0_alu = prev_T0.template cast<Alu>();
+                       Vec3A       prev_T1_alu = prev_T1.template cast<Alu>();
+                       Vec3A       prev_T2_alu = prev_T2.template cast<Alu>();
+                       Vec3A       P_alu       = P.template cast<Alu>();
+                       Vec3A       T0_alu      = T0.template cast<Alu>();
+                       Vec3A       T1_alu      = T1.template cast<Alu>();
+                       Vec3A       T2_alu      = T2.template cast<Alu>();
 
 
-                       Float thickness = PT_thickness(thicknesses(PT[0]),
-                                                      thicknesses(PT[1]),
-                                                      thicknesses(PT[2]),
-                                                      thicknesses(PT[3]));
-                       Float d_hat     = PT_d_hat(
-                           d_hats(PT[0]), d_hats(PT[1]), d_hats(PT[2]), d_hats(PT[3]));
+                       Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT[0]),
+                                                                   thicknesses(PT[1]),
+                                                                   thicknesses(PT[2]),
+                                                                   thicknesses(PT[3])));
+                       Alu d_hat     = safe_cast<Alu>(PT_d_hat(
+                           d_hats(PT[0]), d_hats(PT[1]), d_hats(PT[2]), d_hats(PT[3])));
 
 
-                       Es(i) = PT_friction_energy(kt2,
-                                                  d_hat,
-                                                  thickness,
-                                                  mu,
-                                                  eps_v * dt,
-                                                  // previous positions
-                                                  prev_P,
-                                                  prev_T0,
-                                                  prev_T1,
-                                                  prev_T2,
-                                                  // current positions
-                                                  P,
-                                                  T0,
-                                                  T1,
-                                                  T2);
+                       Es(i) = safe_cast<Float>(PT_friction_energy(
+                           kt2,
+                           d_hat,
+                           thickness,
+                           mu,
+                           safe_cast<Alu>(eps_v * dt),
+                           prev_P_alu,
+                           prev_T0_alu,
+                           prev_T1_alu,
+                           prev_T2_alu,
+                           P_alu,
+                           T0_alu,
+                           T1_alu,
+                           T2_alu));
                    });
 
         // Compute Edge-Edge energy
@@ -118,9 +127,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(EE[2]),
                                         contact_ids(EE[3])};
 
-                       auto  coeff = EE_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = EE_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& rest_Ea0 = rest_Ps(EE[0]);
                        const Vector3& rest_Ea1 = rest_Ps(EE[1]);
@@ -136,14 +145,22 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& Ea1 = Ps(EE[1]);
                        const Vector3& Eb0 = Ps(EE[2]);
                        const Vector3& Eb1 = Ps(EE[3]);
+                       Vec3A         prev_Ea0_alu = prev_Ea0.template cast<Alu>();
+                       Vec3A         prev_Ea1_alu = prev_Ea1.template cast<Alu>();
+                       Vec3A         prev_Eb0_alu = prev_Eb0.template cast<Alu>();
+                       Vec3A         prev_Eb1_alu = prev_Eb1.template cast<Alu>();
+                       Vec3A         Ea0_alu      = Ea0.template cast<Alu>();
+                       Vec3A         Ea1_alu      = Ea1.template cast<Alu>();
+                       Vec3A         Eb0_alu      = Eb0.template cast<Alu>();
+                       Vec3A         Eb1_alu      = Eb1.template cast<Alu>();
 
-                       Float thickness = EE_thickness(thicknesses(EE[0]),
-                                                      thicknesses(EE[1]),
-                                                      thicknesses(EE[2]),
-                                                      thicknesses(EE[3]));
+                       Alu thickness = safe_cast<Alu>(EE_thickness(thicknesses(EE[0]),
+                                                                   thicknesses(EE[1]),
+                                                                   thicknesses(EE[2]),
+                                                                   thicknesses(EE[3])));
 
-                       Float d_hat = EE_d_hat(
-                           d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
+                       Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                           d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3])));
 
                        Float eps_x;
                        distance::edge_edge_mollifier_threshold(rest_Ea0,
@@ -152,28 +169,31 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                                rest_Eb1,
                                                                static_cast<Float>(1e-3),
                                                                eps_x);
-                       if(distance::need_mollify(prev_Ea0, prev_Ea1, prev_Eb0, prev_Eb1, eps_x))
+                       if(distance::need_mollify(prev_Ea0,
+                                                 prev_Ea1,
+                                                 prev_Eb0,
+                                                 prev_Eb1,
+                                                 eps_x))
                        // almost parallel, don't compute energy
                        {
                            Es(i) = 0;
                        }
                        else
                        {
-                           Es(i) = EE_friction_energy(kt2,
-                                                      d_hat,
-                                                      thickness,
-                                                      mu,
-                                                      eps_v * dt,
-                                                      // previous positions
-                                                      prev_Ea0,
-                                                      prev_Ea1,
-                                                      prev_Eb0,
-                                                      prev_Eb1,
-                                                      // current positions
-                                                      Ea0,
-                                                      Ea1,
-                                                      Eb0,
-                                                      Eb1);
+                           Es(i) = safe_cast<Float>(EE_friction_energy(
+                               kt2,
+                               d_hat,
+                               thickness,
+                               mu,
+                               safe_cast<Alu>(eps_v * dt),
+                               prev_Ea0_alu,
+                               prev_Ea1_alu,
+                               prev_Eb0_alu,
+                               prev_Eb1_alu,
+                               Ea0_alu,
+                               Ea1_alu,
+                               Eb0_alu,
+                               Eb1_alu));
                        }
                    });
 
@@ -199,9 +219,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(PE[1]),
                                         contact_ids(PE[2])};
 
-                       auto  coeff = PE_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = PE_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& prev_P  = prev_Ps(PE[0]);
                        const Vector3& prev_E0 = prev_Ps(PE[1]);
@@ -210,27 +230,32 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& P  = Ps(PE[0]);
                        const Vector3& E0 = Ps(PE[1]);
                        const Vector3& E1 = Ps(PE[2]);
+                       Vec3A         prev_P_alu  = prev_P.template cast<Alu>();
+                       Vec3A         prev_E0_alu = prev_E0.template cast<Alu>();
+                       Vec3A         prev_E1_alu = prev_E1.template cast<Alu>();
+                       Vec3A         P_alu       = P.template cast<Alu>();
+                       Vec3A         E0_alu      = E0.template cast<Alu>();
+                       Vec3A         E1_alu      = E1.template cast<Alu>();
 
-                       Float thickness = PE_thickness(thicknesses(PE[0]),
-                                                      thicknesses(PE[1]),
-                                                      thicknesses(PE[2]));
+                       Alu thickness = safe_cast<Alu>(PE_thickness(thicknesses(PE[0]),
+                                                                   thicknesses(PE[1]),
+                                                                   thicknesses(PE[2])));
 
-                       Float d_hat =
-                           PE_d_hat(d_hats(PE[0]), d_hats(PE[1]), d_hats(PE[2]));
+                       Alu d_hat =
+                           safe_cast<Alu>(PE_d_hat(d_hats(PE[0]), d_hats(PE[1]), d_hats(PE[2])));
 
-                       Es(i) = PE_friction_energy(kt2,
-                                                  d_hat,
-                                                  thickness,
-                                                  mu,
-                                                  eps_v * dt,
-                                                  // previous positions
-                                                  prev_P,
-                                                  prev_E0,
-                                                  prev_E1,
-                                                  // current positions
-                                                  P,
-                                                  E0,
-                                                  E1);
+                       Es(i) = safe_cast<Float>(PE_friction_energy(
+                           kt2,
+                           d_hat,
+                           thickness,
+                           mu,
+                           safe_cast<Alu>(eps_v * dt),
+                           prev_P_alu,
+                           prev_E0_alu,
+                           prev_E1_alu,
+                           P_alu,
+                           E0_alu,
+                           E1_alu));
                    });
 
         // Compute Point-Point energy
@@ -252,32 +277,35 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const auto& PP = PPs(i);
 
                        Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
-                       auto     coeff = PP_contact_coeff(table, cids);
-                       Float    kt2   = coeff.kappa * dt * dt;
-                       Float    mu    = coeff.mu;
+                       auto coeff = PP_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& prev_P0 = prev_Ps(PP[0]);
                        const Vector3& prev_P1 = prev_Ps(PP[1]);
 
                        const Vector3& P0 = Ps(PP[0]);
                        const Vector3& P1 = Ps(PP[1]);
+                       Vec3A         prev_P0_alu = prev_P0.template cast<Alu>();
+                       Vec3A         prev_P1_alu = prev_P1.template cast<Alu>();
+                       Vec3A         P0_alu      = P0.template cast<Alu>();
+                       Vec3A         P1_alu      = P1.template cast<Alu>();
 
-                       Float thickness =
-                           PP_thickness(thicknesses(PP[0]), thicknesses(PP[1]));
+                       Alu thickness =
+                           safe_cast<Alu>(PP_thickness(thicknesses(PP[0]), thicknesses(PP[1])));
 
-                       Float d_hat = PP_d_hat(d_hats(PP[0]), d_hats(PP[1]));
+                       Alu d_hat = safe_cast<Alu>(PP_d_hat(d_hats(PP[0]), d_hats(PP[1])));
 
-                       Es(i) = PP_friction_energy(kt2,
-                                                  d_hat,
-                                                  thickness,
-                                                  mu,
-                                                  eps_v * dt,
-                                                  // previous positions
-                                                  prev_P0,
-                                                  prev_P1,
-                                                  // current positions
-                                                  P0,
-                                                  P1);
+                       Es(i) = safe_cast<Float>(PP_friction_energy(
+                           kt2,
+                           d_hat,
+                           thickness,
+                           mu,
+                           safe_cast<Alu>(eps_v * dt),
+                           prev_P0_alu,
+                           prev_P1_alu,
+                           P0_alu,
+                           P1_alu));
                    });
     }
 
@@ -287,6 +315,13 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
         using namespace sym::codim_ipc_contact;
         using Alu   = ActivePolicy::AluScalar;
         using Store = ActivePolicy::StoreScalar;
+        using Vec3A = Eigen::Matrix<Alu, 3, 1>;
+        using Vec12A = Eigen::Matrix<Alu, 12, 1>;
+        using Mat12A = Eigen::Matrix<Alu, 12, 12>;
+        using Vec9A = Eigen::Matrix<Alu, 9, 1>;
+        using Mat9A = Eigen::Matrix<Alu, 9, 9>;
+        using Vec6A = Eigen::Matrix<Alu, 6, 1>;
+        using Mat6A = Eigen::Matrix<Alu, 6, 6>;
 
         // Compute Point-Triangle Gradient and Hessian
         ParallelFor()
@@ -312,9 +347,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(PT[2]),
                                         contact_ids(PT[3])};
 
-                       auto  coeff = PT_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = PT_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const auto& prev_P  = prev_Ps(PT[0]);
                        const auto& prev_T0 = prev_Ps(PT[1]);
@@ -325,17 +360,25 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const auto& T0 = Ps(PT[1]);
                        const auto& T1 = Ps(PT[2]);
                        const auto& T2 = Ps(PT[3]);
+                       Vec3A       prev_P_alu  = prev_P.template cast<Alu>();
+                       Vec3A       prev_T0_alu = prev_T0.template cast<Alu>();
+                       Vec3A       prev_T1_alu = prev_T1.template cast<Alu>();
+                       Vec3A       prev_T2_alu = prev_T2.template cast<Alu>();
+                       Vec3A       P_alu       = P.template cast<Alu>();
+                       Vec3A       T0_alu      = T0.template cast<Alu>();
+                       Vec3A       T1_alu      = T1.template cast<Alu>();
+                       Vec3A       T2_alu      = T2.template cast<Alu>();
 
 
-                       Float thickness = PT_thickness(thicknesses(PT[0]),
-                                                      thicknesses(PT[1]),
-                                                      thicknesses(PT[2]),
-                                                      thicknesses(PT[3]));
+                       Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT[0]),
+                                                                   thicknesses(PT[1]),
+                                                                   thicknesses(PT[2]),
+                                                                   thicknesses(PT[3])));
 
-                       Float d_hat = PT_d_hat(
-                           d_hats(PT[0]), d_hats(PT[1]), d_hats(PT[2]), d_hats(PT[3]));
+                       Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                           d_hats(PT[0]), d_hats(PT[1]), d_hats(PT[2]), d_hats(PT[3])));
 
-                       Vector12 G;
+                       Vec12A G;
                        if(gradient_only)
                        {
                             PT_friction_gradient(G,
@@ -343,48 +386,43 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                  d_hat,
                                                  thickness,
                                                  mu,
-                                                eps_v * dt,
-                                                // previous positions
-                                                prev_P,
-                                                prev_T0,
-                                                prev_T1,
-                                                prev_T2,
-                                                // current positions
-                                                P,
-                                                T0,
-                                                 T1,
-                                                 T2);
+                                                 safe_cast<Alu>(eps_v * dt),
+                                                 prev_P_alu,
+                                                 prev_T0_alu,
+                                                 prev_T1_alu,
+                                                 prev_T2_alu,
+                                                 P_alu,
+                                                 T0_alu,
+                                                 T1_alu,
+                                                 T2_alu);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(PT, G_store);
                        }
                        else
                        {
-                           Matrix12x12 H;
+                           Mat12A H;
                             PT_friction_gradient_hessian(G,
                                                          H,
                                                          kt2,
                                                          d_hat,
                                                          thickness,
-                                                        mu,
-                                                        eps_v * dt,
-                                                        // previous positions
-                                                        prev_P,
-                                                        prev_T0,
-                                                        prev_T1,
-                                                        prev_T2,
-                                                        // current positions
-                                                         P,
-                                                         T0,
-                                                         T1,
-                                                         T2);
-                            auto H_alu = downcast_hessian<Alu>(H);
-                            cuda_mixed::make_spd(H_alu);
+                                                         mu,
+                                                         safe_cast<Alu>(eps_v * dt),
+                                                         prev_P_alu,
+                                                         prev_T0_alu,
+                                                         prev_T1_alu,
+                                                         prev_T2_alu,
+                                                         P_alu,
+                                                         T0_alu,
+                                                         T1_alu,
+                                                         T2_alu);
+                            cuda_mixed::make_spd(H);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(PT, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H_alu);
+                            auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<4>(i * PTHalfHessianSize).write(PT, H_store);
                        }
                    });
@@ -414,9 +452,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(EE[2]),
                                         contact_ids(EE[3])};
 
-                       auto  coeff = EE_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = EE_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& rest_Ea0 = rest_Ps(EE[0]);
                        const Vector3& rest_Ea1 = rest_Ps(EE[1]);
@@ -432,14 +470,22 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& Ea1 = Ps(EE[1]);
                        const Vector3& Eb0 = Ps(EE[2]);
                        const Vector3& Eb1 = Ps(EE[3]);
+                       Vec3A         prev_Ea0_alu = prev_Ea0.template cast<Alu>();
+                       Vec3A         prev_Ea1_alu = prev_Ea1.template cast<Alu>();
+                       Vec3A         prev_Eb0_alu = prev_Eb0.template cast<Alu>();
+                       Vec3A         prev_Eb1_alu = prev_Eb1.template cast<Alu>();
+                       Vec3A         Ea0_alu      = Ea0.template cast<Alu>();
+                       Vec3A         Ea1_alu      = Ea1.template cast<Alu>();
+                       Vec3A         Eb0_alu      = Eb0.template cast<Alu>();
+                       Vec3A         Eb1_alu      = Eb1.template cast<Alu>();
 
-                       Float thickness = EE_thickness(thicknesses(EE[0]),
-                                                      thicknesses(EE[1]),
-                                                      thicknesses(EE[2]),
-                                                      thicknesses(EE[3]));
+                       Alu thickness = safe_cast<Alu>(EE_thickness(thicknesses(EE[0]),
+                                                                   thicknesses(EE[1]),
+                                                                   thicknesses(EE[2]),
+                                                                   thicknesses(EE[3])));
 
-                       Float d_hat = EE_d_hat(
-                           d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
+                       Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                           d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3])));
 
                        Float eps_x;
                        distance::edge_edge_mollifier_threshold(rest_Ea0,
@@ -449,10 +495,14 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                                static_cast<Float>(1e-3),
                                                                eps_x);
 
-                       Vector12 G;
+                       Vec12A G;
 
                        bool mollified = distance::need_mollify(
-                           prev_Ea0, prev_Ea1, prev_Eb0, prev_Eb1, eps_x);
+                           prev_Ea0,
+                           prev_Ea1,
+                           prev_Eb0,
+                           prev_Eb1,
+                           eps_x);
 
                        if(gradient_only)
                        {
@@ -467,58 +517,52 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                     d_hat,
                                                     thickness,
                                                     mu,
-                                                    eps_v * dt,
-                                                    // previous positions
-                                                    prev_Ea0,
-                                                    prev_Ea1,
-                                                    prev_Eb0,
-                                                    prev_Eb1,
-                                                    // current positions
-                                                    Ea0,
-                                                    Ea1,
-                                                    Eb0,
-                                                    Eb1);
+                                                    safe_cast<Alu>(eps_v * dt),
+                                                    prev_Ea0_alu,
+                                                    prev_Ea1_alu,
+                                                    prev_Eb0_alu,
+                                                    prev_Eb1_alu,
+                                                    Ea0_alu,
+                                                    Ea1_alu,
+                                                    Eb0_alu,
+                                                    Eb1_alu);
                             }
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(EE, G_store);
                        }
                        else
                        {
-                           Eigen::Matrix<Alu, 12, 12> H_alu;
+                           Mat12A H;
                            if(mollified)
                            {
                                G.setZero();
-                               H_alu.setZero();
+                               H.setZero();
                            }
                            else
                            {
-                                Matrix12x12 H;
                                 EE_friction_gradient_hessian(G,
                                                              H,
                                                              kt2,
                                                              d_hat,
-                                                            thickness,
-                                                            mu,
-                                                            eps_v * dt,
-                                                            // previous positions
-                                                            prev_Ea0,
-                                                            prev_Ea1,
-                                                            prev_Eb0,
-                                                            prev_Eb1,
-                                                            // current positions
-                                                            Ea0,
-                                                             Ea1,
-                                                             Eb0,
-                                                             Eb1);
-                                H_alu = downcast_hessian<Alu>(H);
-                                cuda_mixed::make_spd(H_alu);
+                                                             thickness,
+                                                             mu,
+                                                             safe_cast<Alu>(eps_v * dt),
+                                                             prev_Ea0_alu,
+                                                             prev_Ea1_alu,
+                                                             prev_Eb0_alu,
+                                                             prev_Eb1_alu,
+                                                             Ea0_alu,
+                                                             Ea1_alu,
+                                                             Eb0_alu,
+                                                             Eb1_alu);
+                                cuda_mixed::make_spd(H);
                             }
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(EE, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H_alu);
+                            auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
                        }
                    });
@@ -546,9 +590,9 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                         contact_ids(PE[1]),
                                         contact_ids(PE[2])};
 
-                       auto  coeff = PE_contact_coeff(table, cids);
-                       Float kt2   = coeff.kappa * dt * dt;
-                       Float mu    = coeff.mu;
+                       auto coeff = PE_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& prev_P  = prev_Ps(PE[0]);
                        const Vector3& prev_E0 = prev_Ps(PE[1]);
@@ -557,15 +601,21 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& P  = Ps(PE[0]);
                        const Vector3& E0 = Ps(PE[1]);
                        const Vector3& E1 = Ps(PE[2]);
+                       Vec3A         prev_P_alu  = prev_P.template cast<Alu>();
+                       Vec3A         prev_E0_alu = prev_E0.template cast<Alu>();
+                       Vec3A         prev_E1_alu = prev_E1.template cast<Alu>();
+                       Vec3A         P_alu       = P.template cast<Alu>();
+                       Vec3A         E0_alu      = E0.template cast<Alu>();
+                       Vec3A         E1_alu      = E1.template cast<Alu>();
 
-                       Float thickness = PE_thickness(thicknesses(PE[0]),
-                                                      thicknesses(PE[1]),
-                                                      thicknesses(PE[2]));
+                       Alu thickness = safe_cast<Alu>(PE_thickness(thicknesses(PE[0]),
+                                                                   thicknesses(PE[1]),
+                                                                   thicknesses(PE[2])));
 
-                       Float d_hat =
-                           PE_d_hat(d_hats(PE[0]), d_hats(PE[1]), d_hats(PE[2]));
+                       Alu d_hat =
+                           safe_cast<Alu>(PE_d_hat(d_hats(PE[0]), d_hats(PE[1]), d_hats(PE[2])));
 
-                       Vector9 G;
+                       Vec9A G;
                        if(gradient_only)
                        {
                             PE_friction_gradient(G,
@@ -573,44 +623,39 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                  d_hat,
                                                  thickness,
                                                  mu,
-                                                eps_v * dt,
-                                                // previous positions
-                                                prev_P,
-                                                prev_E0,
-                                                prev_E1,
-                                                // current positions
-                                                P,
-                                                 E0,
-                                                 E1);
+                                                 safe_cast<Alu>(eps_v * dt),
+                                                 prev_P_alu,
+                                                 prev_E0_alu,
+                                                 prev_E1_alu,
+                                                 P_alu,
+                                                 E0_alu,
+                                                 E1_alu);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<3>(i * 3).write(PE, G_store);
                        }
                        else
                        {
-                           Matrix9x9 H;
+                           Mat9A H;
                             PE_friction_gradient_hessian(G,
                                                          H,
                                                          kt2,
                                                          d_hat,
                                                          thickness,
-                                                        mu,
-                                                        eps_v * dt,
-                                                        // previous positions
-                                                        prev_P,
-                                                        prev_E0,
-                                                        prev_E1,
-                                                        // current positions
-                                                         P,
-                                                         E0,
-                                                         E1);
-                            auto H_alu = downcast_hessian<Alu>(H);
-                            cuda_mixed::make_spd(H_alu);
+                                                         mu,
+                                                         safe_cast<Alu>(eps_v * dt),
+                                                         prev_P_alu,
+                                                         prev_E0_alu,
+                                                         prev_E1_alu,
+                                                         P_alu,
+                                                         E0_alu,
+                                                         E1_alu);
+                            cuda_mixed::make_spd(H);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<3>(i * 3).write(PE, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H_alu);
+                            auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<3>(i * PEHalfHessianSize).write(PE, H_store);
                        }
                    });
@@ -635,23 +680,26 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const auto& PP = PPs(i);
 
                        Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
-                       auto     coeff = PP_contact_coeff(table, cids);
-                       Float    kt2   = coeff.kappa * dt * dt;
-                       Float    mu    = coeff.mu;
+                       auto coeff = PP_contact_coeff(table, cids);
+                       Alu  kt2   = safe_cast<Alu>(coeff.kappa * dt * dt);
+                       Alu  mu    = safe_cast<Alu>(coeff.mu);
 
                        const Vector3& prev_P0 = prev_Ps(PP[0]);
                        const Vector3& prev_P1 = prev_Ps(PP[1]);
 
                        const Vector3& P0 = Ps(PP[0]);
                        const Vector3& P1 = Ps(PP[1]);
+                       Vec3A         prev_P0_alu = prev_P0.template cast<Alu>();
+                       Vec3A         prev_P1_alu = prev_P1.template cast<Alu>();
+                       Vec3A         P0_alu      = P0.template cast<Alu>();
+                       Vec3A         P1_alu      = P1.template cast<Alu>();
 
-                       Float thickness =
-                           PP_thickness(thicknesses(PP[0]), thicknesses(PP[1]));
+                       Alu thickness =
+                           safe_cast<Alu>(PP_thickness(thicknesses(PP[0]), thicknesses(PP[1])));
 
-                       Float d_hat = PP_d_hat(d_hats(PP[0]), d_hats(PP[1]));
+                       Alu d_hat = safe_cast<Alu>(PP_d_hat(d_hats(PP[0]), d_hats(PP[1])));
 
-
-                       Vector6 G;
+                       Vec6A G;
                        if(gradient_only)
                        {
                             PP_friction_gradient(G,
@@ -659,40 +707,35 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                  d_hat,
                                                  thickness,
                                                  mu,
-                                                eps_v * dt,
-                                                // previous positions
-                                                prev_P0,
-                                                prev_P1,
-                                                // current positions
-                                                 P0,
-                                                 P1);
+                                                 safe_cast<Alu>(eps_v * dt),
+                                                 prev_P0_alu,
+                                                 prev_P1_alu,
+                                                 P0_alu,
+                                                 P1_alu);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<2>(i * 2).write(PP, G_store);
                        }
                        else
                        {
-                           Matrix6x6 H;
+                           Mat6A H;
                             PP_friction_gradient_hessian(G,
                                                          H,
                                                          kt2,
                                                          d_hat,
                                                          thickness,
-                                                        mu,
-                                                        eps_v * dt,
-                                                        // previous positions
-                                                        prev_P0,
-                                                        prev_P1,
-                                                        // current positions
-                                                         P0,
-                                                         P1);
-                            auto H_alu = downcast_hessian<Alu>(H);
-                            cuda_mixed::make_spd(H_alu);
+                                                         mu,
+                                                         safe_cast<Alu>(eps_v * dt),
+                                                         prev_P0_alu,
+                                                         prev_P1_alu,
+                                                         P0_alu,
+                                                         P1_alu);
+                            cuda_mixed::make_spd(H);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<2>(i * 2).write(PP, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H_alu);
+                            auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<2>(i * PPHalfHessianSize).write(PP, H_store);
                         }
                     });

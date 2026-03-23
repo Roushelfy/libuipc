@@ -134,4 +134,3 @@ UIPC_GENERIC void eval_penalty_derivatives(const T& x,
         x, lower, upper, strength, E, dE_dx, d2E_dx2);
 }
 }  // namespace uipc::backend::cuda_mixed::joint_limit
-

@@ -29,9 +29,10 @@ void IterativeSolver::spmv(muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
 
 void IterativeSolver::apply_preconditioner(
     muda::DenseVectorView<ActivePolicy::PcgAuxScalar>  z,
-    muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> r)
+    muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> r,
+    muda::CVarView<IndexT>                             converged)
 {
-    m_system->m_impl.apply_preconditioner(z, r);
+    m_system->m_impl.apply_preconditioner(z, r, converged);
 }
 
 bool IterativeSolver::accuracy_statisfied(

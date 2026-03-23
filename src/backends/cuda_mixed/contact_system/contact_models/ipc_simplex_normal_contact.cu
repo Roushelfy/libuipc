@@ -30,6 +30,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
     {
         using namespace muda;
         using namespace sym::codim_ipc_simplex_contact;
+        using Alu = ActivePolicy::AluScalar;
+        using Vec3A = Eigen::Matrix<Alu, 3, 1>;
 
         // Compute Point-Triangle energy
         auto PT_count = info.PTs().size();
@@ -51,31 +53,34 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                         contact_ids(PT[1]),
                                         contact_ids(PT[2]),
                                         contact_ids(PT[3])};
-                       Float    kt2  = PT_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(PT_kappa(table, cids) * dt * dt);
 
-                       const auto& P  = Ps(PT[0]);
-                       const auto& T0 = Ps(PT[1]);
-                       const auto& T1 = Ps(PT[2]);
-                       const auto& T2 = Ps(PT[3]);
+                       const Vector3& P_f  = Ps(PT[0]);
+                       const Vector3& T0_f = Ps(PT[1]);
+                       const Vector3& T1_f = Ps(PT[2]);
+                       const Vector3& T2_f = Ps(PT[3]);
+                       Vec3A         P     = P_f.template cast<Alu>();
+                       Vec3A         T0    = T0_f.template cast<Alu>();
+                       Vec3A         T1    = T1_f.template cast<Alu>();
+                       Vec3A         T2    = T2_f.template cast<Alu>();
 
+                       Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT(0)),
+                                                                   thicknesses(PT(1)),
+                                                                   thicknesses(PT(2)),
+                                                                   thicknesses(PT(3))));
 
-                       Float thickness = PT_thickness(thicknesses(PT(0)),
-                                                      thicknesses(PT(1)),
-                                                      thicknesses(PT(2)),
-                                                      thicknesses(PT(3)));
+                       Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                           d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3))));
 
-                       Float d_hat = PT_d_hat(
-                           d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3)));
-
-                       Vector4i flag =
-                           distance::point_triangle_distance_flag(P, T0, T1, T2);
+                       Vector4i flag = distance::point_triangle_distance_flag(P_f, T0_f, T1_f, T2_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::point_triangle_distance2(flag, P, T0, T1, T2, D);
+                           distance::point_triangle_distance2(flag, P_f, T0_f, T1_f, T2_f, D);
 
-                           Vector2 range = D_range(thickness, d_hat);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "PT[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -88,7 +93,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = PT_barrier_energy(flag, kt2, d_hat, thickness, P, T0, T1, T2);
+                       Es(i) = safe_cast<Float>(
+                           PT_barrier_energy(flag, kt2, d_hat, thickness, P, T0, T1, T2));
                    });
 
         // Compute Edge-Edge energy
@@ -112,33 +118,42 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                         contact_ids(EE[1]),
                                         contact_ids(EE[2]),
                                         contact_ids(EE[3])};
-                       Float    kt2  = EE_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(EE_kappa(table, cids) * dt * dt);
 
-                       const auto& E0 = Ps(EE[0]);
-                       const auto& E1 = Ps(EE[1]);
-                       const auto& E2 = Ps(EE[2]);
-                       const auto& E3 = Ps(EE[3]);
+                       const Vector3& E0_f = Ps(EE[0]);
+                       const Vector3& E1_f = Ps(EE[1]);
+                       const Vector3& E2_f = Ps(EE[2]);
+                       const Vector3& E3_f = Ps(EE[3]);
+                       Vec3A         E0    = E0_f.template cast<Alu>();
+                       Vec3A         E1    = E1_f.template cast<Alu>();
+                       Vec3A         E2    = E2_f.template cast<Alu>();
+                       Vec3A         E3    = E3_f.template cast<Alu>();
 
-                       const auto& t0_Ea0 = rest_Ps(EE[0]);
-                       const auto& t0_Ea1 = rest_Ps(EE[1]);
-                       const auto& t0_Eb0 = rest_Ps(EE[2]);
-                       const auto& t0_Eb1 = rest_Ps(EE[3]);
+                       const Vector3& t0_Ea0_f = rest_Ps(EE[0]);
+                       const Vector3& t0_Ea1_f = rest_Ps(EE[1]);
+                       const Vector3& t0_Eb0_f = rest_Ps(EE[2]);
+                       const Vector3& t0_Eb1_f = rest_Ps(EE[3]);
+                       Vec3A         t0_Ea0    = t0_Ea0_f.template cast<Alu>();
+                       Vec3A         t0_Ea1    = t0_Ea1_f.template cast<Alu>();
+                       Vec3A         t0_Eb0    = t0_Eb0_f.template cast<Alu>();
+                       Vec3A         t0_Eb1    = t0_Eb1_f.template cast<Alu>();
 
-                       Float thickness = EE_thickness(thicknesses(EE(0)),
-                                                      thicknesses(EE(1)),
-                                                      thicknesses(EE(2)),
-                                                      thicknesses(EE(3)));
+                       Alu thickness = safe_cast<Alu>(EE_thickness(thicknesses(EE(0)),
+                                                                   thicknesses(EE(1)),
+                                                                   thicknesses(EE(2)),
+                                                                   thicknesses(EE(3))));
 
-                       Float d_hat = EE_d_hat(
-                           d_hats(EE(0)), d_hats(EE(1)), d_hats(EE(2)), d_hats(EE(3)));
+                       Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                           d_hats(EE(0)), d_hats(EE(1)), d_hats(EE(2)), d_hats(EE(3))));
 
-                       Vector4i flag = distance::edge_edge_distance_flag(E0, E1, E2, E3);
+                       Vector4i flag = distance::edge_edge_distance_flag(E0_f, E1_f, E2_f, E3_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::edge_edge_distance2(flag, E0, E1, E2, E3, D);
-                           Vector2 range = D_range(thickness, d_hat);
+                           distance::edge_edge_distance2(flag, E0_f, E1_f, E2_f, E3_f, D);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "EE[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f), [%d,%d,%d,%d]",
@@ -156,20 +171,18 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        }
 
 
-                       Es(i) = mollified_EE_barrier_energy(flag,
-                                                           // coefficients
-                                                           kt2,
-                                                           d_hat,
-                                                           thickness,
-                                                           // positions
-                                                           t0_Ea0,
-                                                           t0_Ea1,
-                                                           t0_Eb0,
-                                                           t0_Eb1,
-                                                           E0,
-                                                           E1,
-                                                           E2,
-                                                           E3);
+                       Es(i) = safe_cast<Float>(mollified_EE_barrier_energy(flag,
+                                                                             kt2,
+                                                                             d_hat,
+                                                                             thickness,
+                                                                             t0_Ea0,
+                                                                             t0_Ea1,
+                                                                             t0_Eb0,
+                                                                             t0_Eb1,
+                                                                             E0,
+                                                                             E1,
+                                                                             E2,
+                                                                             E3));
                    });
 
         // Compute Point-Edge energy
@@ -193,27 +206,31 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        Vector3i cids = {contact_ids(PE[0]),
                                         contact_ids(PE[1]),
                                         contact_ids(PE[2])};
-                       Float    kt2  = PE_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(PE_kappa(table, cids) * dt * dt);
 
-                       const auto& P  = Ps(PE[0]);
-                       const auto& E0 = Ps(PE[1]);
-                       const auto& E1 = Ps(PE[2]);
+                       const Vector3& P_f  = Ps(PE[0]);
+                       const Vector3& E0_f = Ps(PE[1]);
+                       const Vector3& E1_f = Ps(PE[2]);
+                       Vec3A         P     = P_f.template cast<Alu>();
+                       Vec3A         E0    = E0_f.template cast<Alu>();
+                       Vec3A         E1    = E1_f.template cast<Alu>();
 
-                       Float thickness = PE_thickness(thicknesses(PE(0)),
-                                                      thicknesses(PE(1)),
-                                                      thicknesses(PE(2)));
+                       Alu thickness = safe_cast<Alu>(PE_thickness(thicknesses(PE(0)),
+                                                                   thicknesses(PE(1)),
+                                                                   thicknesses(PE(2))));
 
-                       Float d_hat =
-                           PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2)));
+                       Alu d_hat = safe_cast<Alu>(
+                           PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2))));
 
-                       Vector3i flag = distance::point_edge_distance_flag(P, E0, E1);
+                       Vector3i flag = distance::point_edge_distance_flag(P_f, E0_f, E1_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::point_edge_distance2(flag, P, E0, E1, D);
+                           distance::point_edge_distance2(flag, P_f, E0_f, E1_f, D);
 
-                           Vector2 range = D_range(thickness, d_hat);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "PE[%d,%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -225,7 +242,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = PE_barrier_energy(flag, kt2, d_hat, thickness, P, E0, E1);
+                       Es(i) = safe_cast<Float>(
+                           PE_barrier_energy(flag, kt2, d_hat, thickness, P, E0, E1));
                    });
 
         // Compute Point-Point energy
@@ -246,24 +264,27 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        Vector2i PP = PPs(i);
 
                        Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
-                       Float    kt2  = PP_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(PP_kappa(table, cids) * dt * dt);
 
-                       const auto& Pa = Ps(PP[0]);
-                       const auto& Pb = Ps(PP[1]);
+                       const Vector3& Pa_f = Ps(PP[0]);
+                       const Vector3& Pb_f = Ps(PP[1]);
+                       Vec3A         Pa    = Pa_f.template cast<Alu>();
+                       Vec3A         Pb    = Pb_f.template cast<Alu>();
 
-                       Float thickness =
-                           PP_thickness(thicknesses(PP(0)), thicknesses(PP(1)));
+                       Alu thickness =
+                           safe_cast<Alu>(PP_thickness(thicknesses(PP(0)), thicknesses(PP(1))));
 
-                       Float d_hat = PP_d_hat(d_hats(PP(0)), d_hats(PP(1)));
+                       Alu d_hat = safe_cast<Alu>(PP_d_hat(d_hats(PP(0)), d_hats(PP(1))));
 
-                       Vector2i flag = distance::point_point_distance_flag(Pa, Pb);
+                       Vector2i flag = distance::point_point_distance_flag(Pa_f, Pb_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::point_point_distance2(flag, Pa, Pb, D);
+                           distance::point_point_distance2(flag, Pa_f, Pb_f, D);
 
-                           Vector2 range = D_range(thickness, d_hat);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "PP[%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -274,7 +295,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = PP_barrier_energy(flag, kt2, d_hat, thickness, Pa, Pb);
+                       Es(i) = safe_cast<Float>(
+                           PP_barrier_energy(flag, kt2, d_hat, thickness, Pa, Pb));
                    });
     }
 
@@ -284,6 +306,13 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
         using namespace sym::codim_ipc_simplex_contact;
         using Alu   = ActivePolicy::AluScalar;
         using Store = ActivePolicy::StoreScalar;
+        using Vec3A = Eigen::Matrix<Alu, 3, 1>;
+        using Vec12A = Eigen::Matrix<Alu, 12, 1>;
+        using Mat12A = Eigen::Matrix<Alu, 12, 12>;
+        using Vec9A = Eigen::Matrix<Alu, 9, 1>;
+        using Mat9A = Eigen::Matrix<Alu, 9, 9>;
+        using Vec6A = Eigen::Matrix<Alu, 6, 1>;
+        using Mat6A = Eigen::Matrix<Alu, 6, 6>;
 
         if(info.PTs().size())
         {
@@ -301,8 +330,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                      Ps  = info.positions().viewer().name("Ps"),
                      thicknesses = info.thicknesses().viewer().name("thicknesses"),
                      d_hats = info.d_hats().viewer().name("d_hats"),
-                     dt     = info.dt(),
-                     cout   = KernelCout::viewer()] __device__(int i) mutable
+                     dt     = info.dt()] __device__(int i) mutable
                     {
                         Vector4i PT = PTs(i);
 
@@ -310,32 +338,34 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                          contact_ids(PT[1]),
                                          contact_ids(PT[2]),
                                          contact_ids(PT[3])};
-                        Float    kt2  = PT_kappa(table, cids) * dt * dt;
+                        Alu      kt2 = safe_cast<Alu>(PT_kappa(table, cids) * dt * dt);
 
+                        const Vector3& P_f  = Ps(PT[0]);
+                        const Vector3& T0_f = Ps(PT[1]);
+                        const Vector3& T1_f = Ps(PT[2]);
+                        const Vector3& T2_f = Ps(PT[3]);
+                        Vec3A         P     = P_f.template cast<Alu>();
+                        Vec3A         T0    = T0_f.template cast<Alu>();
+                        Vec3A         T1    = T1_f.template cast<Alu>();
+                        Vec3A         T2    = T2_f.template cast<Alu>();
 
-                        const auto& P  = Ps(PT[0]);
-                        const auto& T0 = Ps(PT[1]);
-                        const auto& T1 = Ps(PT[2]);
-                        const auto& T2 = Ps(PT[3]);
+                        Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT(0)),
+                                                                    thicknesses(PT(1)),
+                                                                    thicknesses(PT(2)),
+                                                                    thicknesses(PT(3))));
 
+                        Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                            d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3))));
 
-                        Float thickness = PT_thickness(thicknesses(PT(0)),
-                                                       thicknesses(PT(1)),
-                                                       thicknesses(PT(2)),
-                                                       thicknesses(PT(3)));
-
-                        Float d_hat = PT_d_hat(
-                            d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3)));
-
-                        Vector4i flag =
-                            distance::point_triangle_distance_flag(P, T0, T1, T2);
+                        Vector4i flag = distance::point_triangle_distance_flag(P_f, T0_f, T1_f, T2_f);
 
                         if constexpr(RUNTIME_CHECK)
                         {
                             Float D;
-                            distance::point_triangle_distance2(flag, P, T0, T1, T2, D);
+                            distance::point_triangle_distance2(flag, P_f, T0_f, T1_f, T2_f, D);
 
-                            Vector2 range = D_range(thickness, d_hat);
+                            Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                    safe_cast<Float>(d_hat));
 
                             MUDA_ASSERT(is_active_D(range, D),
                                         "PT[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -348,42 +378,25 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                         range(1));
                         }
 
-                        Vector12 G;
+                        Vec12A G;
                         if(gradient_only)
                         {
-                            Float D;
-                            distance::point_triangle_distance2(flag, P, T0, T1, T2, D);
-
-                            Matrix12x12 H;
-                            PT_barrier_gradient_hessian(
-                                G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
-
-                            Vector12 new_G;
-                            PT_barrier_gradient(
-                                new_G, flag, kt2, d_hat, thickness, P, T0, T1, T2);
-
-
-                            // PT_barrier_gradient(G, flag, kt2, d_hat, thickness, P, T0, T1, T2);
+                            PT_barrier_gradient(G, flag, kt2, d_hat, thickness, P, T0, T1, T2);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(PT, G_store);
-
-                            //cout << "G:" << G.transpose().eval() << "\n"
-                            //     << "d:" << sqrt(D) << "\n"
-                            //     << "new_G:" << new_G.transpose().eval() << "\n";
                         }
                         else
                         {
-                            Matrix12x12 H;
+                            Mat12A H;
                             PT_barrier_gradient_hessian(
                                 G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
-                            auto H_alu = downcast_hessian<Alu>(H);
-                            make_spd(H_alu);
+                            make_spd(H);
                             DoubletVectorAssembler DVA{Gs};
-                            auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                            auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(PT, G_store);
                             TripletMatrixAssembler TMA{Hs};
-                            auto H_store = downcast_hessian<Store>(H_alu);
+                            auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<4>(i * PTHalfHessianSize).write(PT, H_store);
                         }
                     });
@@ -413,34 +426,43 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                      contact_ids(EE[1]),
                                      contact_ids(EE[2]),
                                      contact_ids(EE[3])};
-                    Float    kt2  = EE_kappa(table, cids) * dt * dt;
+                    Alu      kt2 = safe_cast<Alu>(EE_kappa(table, cids) * dt * dt);
 
-                    const auto& E0 = Ps(EE[0]);
-                    const auto& E1 = Ps(EE[1]);
-                    const auto& E2 = Ps(EE[2]);
-                    const auto& E3 = Ps(EE[3]);
+                    const Vector3& E0_f = Ps(EE[0]);
+                    const Vector3& E1_f = Ps(EE[1]);
+                    const Vector3& E2_f = Ps(EE[2]);
+                    const Vector3& E3_f = Ps(EE[3]);
+                    Vec3A         E0    = E0_f.template cast<Alu>();
+                    Vec3A         E1    = E1_f.template cast<Alu>();
+                    Vec3A         E2    = E2_f.template cast<Alu>();
+                    Vec3A         E3    = E3_f.template cast<Alu>();
 
-                    const auto& t0_Ea0 = rest_Ps(EE[0]);
-                    const auto& t0_Ea1 = rest_Ps(EE[1]);
-                    const auto& t0_Eb0 = rest_Ps(EE[2]);
-                    const auto& t0_Eb1 = rest_Ps(EE[3]);
+                    const Vector3& t0_Ea0_f = rest_Ps(EE[0]);
+                    const Vector3& t0_Ea1_f = rest_Ps(EE[1]);
+                    const Vector3& t0_Eb0_f = rest_Ps(EE[2]);
+                    const Vector3& t0_Eb1_f = rest_Ps(EE[3]);
+                    Vec3A         t0_Ea0    = t0_Ea0_f.template cast<Alu>();
+                    Vec3A         t0_Ea1    = t0_Ea1_f.template cast<Alu>();
+                    Vec3A         t0_Eb0    = t0_Eb0_f.template cast<Alu>();
+                    Vec3A         t0_Eb1    = t0_Eb1_f.template cast<Alu>();
 
-                    Float thickness = EE_thickness(thicknesses(EE(0)),
-                                                   thicknesses(EE(1)),
-                                                   thicknesses(EE(2)),
-                                                   thicknesses(EE(3)));
+                    Alu thickness = safe_cast<Alu>(EE_thickness(thicknesses(EE(0)),
+                                                                thicknesses(EE(1)),
+                                                                thicknesses(EE(2)),
+                                                                thicknesses(EE(3))));
 
-                    Float d_hat = EE_d_hat(
-                        d_hats(EE(0)), d_hats(EE(1)), d_hats(EE(2)), d_hats(EE(3)));
+                    Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                        d_hats(EE(0)), d_hats(EE(1)), d_hats(EE(2)), d_hats(EE(3))));
 
-                    Vector4i flag = distance::edge_edge_distance_flag(E0, E1, E2, E3);
+                    Vector4i flag = distance::edge_edge_distance_flag(E0_f, E1_f, E2_f, E3_f);
 
                     if constexpr(RUNTIME_CHECK)
                     {
                         Float D;
-                        distance::edge_edge_distance2(flag, E0, E1, E2, E3, D);
+                        distance::edge_edge_distance2(flag, E0_f, E1_f, E2_f, E3_f, D);
 
-                        Vector2 range = D_range(thickness, d_hat);
+                        Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                safe_cast<Float>(d_hat));
 
                         MUDA_ASSERT(is_active_D(range, D),
                                     "EE[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -453,28 +475,27 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                     range(1));
                     }
 
-                    Vector12 G;
+                    Vec12A G;
                     if(gradient_only)
                     {
                         mollified_EE_barrier_gradient(
                             G, flag, kt2, d_hat, thickness, t0_Ea0, t0_Ea1, t0_Eb0, t0_Eb1, E0, E1, E2, E3);
                         DoubletVectorAssembler DVA{Gs};
-                        auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                        auto G_store = downcast_gradient<Store>(G);
                         DVA.segment<4>(i * 4).write(EE, G_store);
                     }
                     else
                     {
-                        Matrix12x12 H;
+                        Mat12A H;
                         mollified_EE_barrier_gradient_hessian(
                             G, H, flag, kt2, d_hat, thickness, t0_Ea0, t0_Ea1, t0_Eb0, t0_Eb1, E0, E1, E2, E3);
 
-                        auto H_alu = downcast_hessian<Alu>(H);
-                        make_spd(H_alu);
+                        make_spd(H);
                         DoubletVectorAssembler DVA{Gs};
-                        auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                        auto G_store = downcast_gradient<Store>(G);
                         DVA.segment<4>(i * 4).write(EE, G_store);
                         TripletMatrixAssembler TMA{Hs};
-                        auto H_store = downcast_hessian<Store>(H_alu);
+                        auto H_store = downcast_hessian<Store>(H);
                         TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
                     }
                 });
@@ -500,27 +521,31 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        Vector3i cids = {contact_ids(PE[0]),
                                         contact_ids(PE[1]),
                                         contact_ids(PE[2])};
-                       Float    kt2  = PE_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(PE_kappa(table, cids) * dt * dt);
 
-                       const auto& P  = Ps(PE[0]);
-                       const auto& E0 = Ps(PE[1]);
-                       const auto& E1 = Ps(PE[2]);
+                       const Vector3& P_f  = Ps(PE[0]);
+                       const Vector3& E0_f = Ps(PE[1]);
+                       const Vector3& E1_f = Ps(PE[2]);
+                       Vec3A         P     = P_f.template cast<Alu>();
+                       Vec3A         E0    = E0_f.template cast<Alu>();
+                       Vec3A         E1    = E1_f.template cast<Alu>();
 
-                       Float thickness = PE_thickness(thicknesses(PE(0)),
-                                                      thicknesses(PE(1)),
-                                                      thicknesses(PE(2)));
+                       Alu thickness = safe_cast<Alu>(PE_thickness(thicknesses(PE(0)),
+                                                                   thicknesses(PE(1)),
+                                                                   thicknesses(PE(2))));
 
-                       Float d_hat =
-                           PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2)));
+                       Alu d_hat = safe_cast<Alu>(
+                           PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2))));
 
-                       Vector3i flag = distance::point_edge_distance_flag(P, E0, E1);
+                       Vector3i flag = distance::point_edge_distance_flag(P_f, E0_f, E1_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::point_edge_distance2(flag, P, E0, E1, D);
+                           distance::point_edge_distance2(flag, P_f, E0_f, E1_f, D);
 
-                           Vector2 range = D_range(thickness, d_hat);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "PE[%d,%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -532,26 +557,25 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Vector9 G;
+                       Vec9A G;
                        if(gradient_only)
                        {
                            PE_barrier_gradient(G, flag, kt2, d_hat, thickness, P, E0, E1);
                            DoubletVectorAssembler DVA{Gs};
-                           auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                           auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<3>(i * 3).write(PE, G_store);
                        }
                        else
                        {
-                           Matrix9x9 H;
+                           Mat9A H;
                            PE_barrier_gradient_hessian(
                                G, H, flag, kt2, d_hat, thickness, P, E0, E1);
-                           auto H_alu = downcast_hessian<Alu>(H);
-                           make_spd(H_alu);
+                           make_spd(H);
                            DoubletVectorAssembler DVA{Gs};
-                           auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                           auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<3>(i * 3).write(PE, G_store);
                            TripletMatrixAssembler TMA{Hs};
-                           auto H_store = downcast_hessian<Store>(H_alu);
+                           auto H_store = downcast_hessian<Store>(H);
                            TMA.half_block<3>(i * PEHalfHessianSize).write(PE, H_store);
                        }
                    });
@@ -574,24 +598,27 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        const auto& PP = PPs(i);
 
                        Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
-                       Float    kt2  = PP_kappa(table, cids) * dt * dt;
+                       Alu      kt2 = safe_cast<Alu>(PP_kappa(table, cids) * dt * dt);
 
-                       const auto& P0 = Ps(PP[0]);
-                       const auto& P1 = Ps(PP[1]);
+                       const Vector3& P0_f = Ps(PP[0]);
+                       const Vector3& P1_f = Ps(PP[1]);
+                       Vec3A         P0    = P0_f.template cast<Alu>();
+                       Vec3A         P1    = P1_f.template cast<Alu>();
 
-                       Float thickness =
-                           PP_thickness(thicknesses(PP(0)), thicknesses(PP(1)));
+                       Alu thickness =
+                           safe_cast<Alu>(PP_thickness(thicknesses(PP(0)), thicknesses(PP(1))));
 
-                       Float d_hat = PP_d_hat(d_hats(PP(0)), d_hats(PP(1)));
+                       Alu d_hat = safe_cast<Alu>(PP_d_hat(d_hats(PP(0)), d_hats(PP(1))));
 
-                       Vector2i flag = distance::point_point_distance_flag(P0, P1);
+                       Vector2i flag = distance::point_point_distance_flag(P0_f, P1_f);
 
                        if constexpr(RUNTIME_CHECK)
                        {
                            Float D;
-                           distance::point_point_distance2(flag, P0, P1, D);
+                           distance::point_point_distance2(flag, P0_f, P1_f, D);
 
-                           Vector2 range = D_range(thickness, d_hat);
+                           Vector2 range = D_range(safe_cast<Float>(thickness),
+                                                   safe_cast<Float>(d_hat));
 
                            MUDA_ASSERT(is_active_D(range, D),
                                        "PP[%d,%d] d^2(%f) out of range, (%f,%f)",
@@ -602,25 +629,24 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Vector6 G;
+                       Vec6A G;
                        if(gradient_only)
                        {
                            PP_barrier_gradient(G, flag, kt2, d_hat, thickness, P0, P1);
                            DoubletVectorAssembler DVA{Gs};
-                           auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                           auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<2>(i * 2).write(PP, G_store);
                        }
                        else
                        {
-                           Matrix6x6 H;
+                           Mat6A H;
                            PP_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P0, P1);
-                           auto H_alu = downcast_hessian<Alu>(H);
-                           make_spd(H_alu);
+                           make_spd(H);
                            DoubletVectorAssembler DVA{Gs};
-                           auto G_store = downcast_gradient<Store>(G.template cast<Alu>());
+                           auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<2>(i * 2).write(PP, G_store);
                            TripletMatrixAssembler TMA{Hs};
-                           auto H_store = downcast_hessian<Store>(H_alu);
+                           auto H_store = downcast_hessian<Store>(H);
                            TMA.half_block<2>(i * PPHalfHessianSize).write(PP, H_store);
                        }
                    });

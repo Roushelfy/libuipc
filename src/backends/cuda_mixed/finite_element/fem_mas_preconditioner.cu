@@ -414,7 +414,8 @@ class FEMMASPreconditioner : public LocalPreconditioner
 #if UIPC_MAS_ENGINE_DISABLED
         info.z().buffer_view().copy_from(info.r().buffer_view());
 #else
-        engine.apply(info.r(), info.z());
+        auto converged = info.converged();
+        engine.apply(info.r(), info.z(), converged);
 #endif
 
         // Diagonal fallback for unpartitioned vertices

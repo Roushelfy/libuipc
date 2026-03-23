@@ -71,6 +71,7 @@ void LinearPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     p.resize(N);
     r.resize(N);
     Ap.resize(N);
+    d_converged_false = 0;
 
     auto iter = pcg(x, b, static_cast<SizeT>(max_iter_ratio * static_cast<double>(b.size())));
 
@@ -233,7 +234,7 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
     IterScalar abs_rz0 = IterScalar{0};
 
     // z = P * r (apply preconditioner)
-    apply_preconditioner(z, r);
+    apply_preconditioner(z, r, d_converged_false.view());
 
     if(need_debug_dump) [[unlikely]]
         dump_r_z(k);
@@ -292,7 +293,7 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
         update_xr(alpha, x, p.cview(), r.view(), Ap.cview());
 
         // z = P * r (apply preconditioner)
-        apply_preconditioner(z, r);
+        apply_preconditioner(z, r, d_converged_false.view());
 
         if(need_debug_dump) [[unlikely]]
             dump_r_z(k);
