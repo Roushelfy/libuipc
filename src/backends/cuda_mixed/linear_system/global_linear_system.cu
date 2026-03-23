@@ -5,45 +5,13 @@
 #include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
-#include <fstream>
 #include <sim_engine.h>
 #include <backends/common/backend_path_tool.h>
 #include <Eigen/Sparse>
 #include <utils/matrix_market.h>
-#include <telemetry/nvtx_scope.h>
-#include <telemetry/error_tracker.h>
-#include <mixed_precision/build_level.h>
-#include <filesystem>
 
 namespace uipc::backend::cuda_mixed
 {
-namespace
-{
-const char* build_level_name()
-{
-    switch(kBuildLevel)
-    {
-    case MixedPrecisionLevel::FP64:
-        return "fp64";
-    case MixedPrecisionLevel::Path1:
-        return "path1";
-    case MixedPrecisionLevel::Path2:
-        return "path2";
-    case MixedPrecisionLevel::Path3:
-        return "path3";
-    case MixedPrecisionLevel::Path4:
-        return "path4";
-    case MixedPrecisionLevel::Path5:
-        return "path5";
-    case MixedPrecisionLevel::Path6:
-        return "path6";
-    case MixedPrecisionLevel::Path7:
-        return "path7";
-    }
-    return "unknown";
-}
-}  // namespace
-
 REGISTER_SIM_SYSTEM(GlobalLinearSystem);
 
 SizeT GlobalLinearSystem::dof_count() const
@@ -64,24 +32,6 @@ void GlobalLinearSystem::do_build()
         dump_linear_system_attr ? dump_linear_system_attr->view()[0] : false;
     m_impl.need_solution_x_dump =
         dump_solution_x_attr ? dump_solution_x_attr->view()[0] : false;
-
-    auto telemetry_enable_attr = config.find<IndexT>("extras/telemetry/enable");
-    auto error_enable_attr = config.find<IndexT>("extras/telemetry/error_tracker/enable");
-    auto error_mode_attr = config.find<std::string>("extras/telemetry/error_tracker/mode");
-    auto error_ref_dir_attr =
-        config.find<std::string>("extras/telemetry/error_tracker/reference_dir");
-
-    m_impl.telemetry_enable = telemetry_enable_attr && telemetry_enable_attr->view()[0] != 0;
-    m_impl.telemetry_error_tracker_enable = m_impl.telemetry_enable && error_enable_attr
-                                            && error_enable_attr->view()[0] != 0;
-    if(error_mode_attr && error_mode_attr->view().size() > 0)
-    {
-        m_impl.telemetry_error_tracker_mode = error_mode_attr->view()[0];
-    }
-    if(error_ref_dir_attr && error_ref_dir_attr->view().size() > 0)
-    {
-        m_impl.telemetry_reference_dir = error_ref_dir_attr->view()[0];
-    }
 }
 
 void GlobalLinearSystem::_dump_A_b()
@@ -130,46 +80,6 @@ void GlobalLinearSystem::solve()
         _dump_A_b();
 
     m_impl.solve_linear_system();
-
-    if(m_impl.telemetry_error_tracker_enable
-       && m_impl.telemetry_error_tracker_mode == "offline")
-    {
-        namespace fs = std::filesystem;
-        if(!m_impl.telemetry_reference_dir.empty())
-        {
-            auto ref_file = fs::path(m_impl.telemetry_reference_dir)
-                            / fmt::format("x.{}.{}.mtx", engine().frame(), engine().newton_iter());
-
-            if(fs::exists(ref_file))
-            {
-                muda::DeviceDenseVector<double> ref_x;
-                if(import_vector_market(ref_x, ref_file.string()))
-                {
-                    auto metrics = compute_error_metrics(m_impl.x.cview(), ref_x.cview());
-                    auto path_tool = BackendPathTool(workspace());
-                    auto out_dir =
-                        path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug/telemetry");
-                    fs::create_directories(out_dir);
-
-                    auto out_path = out_dir / "error.jsonl";
-                    std::ofstream out(out_path, std::ios::app);
-                    out << "{\"frame\":" << engine().frame()
-                        << ",\"newton_iter\":" << engine().newton_iter()
-                        << ",\"backend\":\"cuda_mixed\""
-                        << ",\"precision_level\":\"" << build_level_name() << "\""
-                        << ",\"rel_l2_x\":" << metrics.rel_l2
-                        << ",\"abs_linf_x\":" << metrics.abs_linf
-                        << ",\"nan_inf_flag\":"
-                        << (metrics.nan_inf_flag ? "true" : "false") << "}\n";
-                }
-                else
-                {
-                    logger::warn("ErrorTracker: failed to import reference vector {}",
-                                 ref_file.string());
-                }
-            }
-        }
-    }
 
     if(m_impl.need_debug_dump || m_impl.need_solution_x_dump) [[unlikely]]
         _dump_x();
@@ -287,7 +197,6 @@ void GlobalLinearSystem::Impl::init()
 
 void GlobalLinearSystem::Impl::build_linear_system()
 {
-    UIPC_NVTX_RANGE("build_linear_system");
     Timer timer{"Build Linear System"};
     empty_system = !_update_subsystem_extent();
 
@@ -397,7 +306,6 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent()
 
 void GlobalLinearSystem::Impl::_assemble_linear_system()
 {
-    UIPC_NVTX_RANGE("assemble_linear_system");
     auto HA = triplet_A.view();
 
     // Clear and invalidate previous values
@@ -484,7 +392,6 @@ void GlobalLinearSystem::Impl::_assemble_linear_system()
 
 void GlobalLinearSystem::Impl::_assemble_preconditioner()
 {
-    UIPC_NVTX_RANGE("assemble_preconditioner");
     if(global_preconditioner)
     {
         GlobalPreconditionerAssemblyInfo info{this};
@@ -500,7 +407,6 @@ void GlobalLinearSystem::Impl::_assemble_preconditioner()
 
 void GlobalLinearSystem::Impl::solve_linear_system()
 {
-    UIPC_NVTX_RANGE("solve_linear_system");
     Timer timer{"Solve Linear System"};
     if(iterative_solver)
     {

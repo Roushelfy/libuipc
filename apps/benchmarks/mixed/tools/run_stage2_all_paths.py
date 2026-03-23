@@ -344,15 +344,12 @@ def main() -> int:
     env_fp64_ref = base_env(workspace_root, args.frame_scale, dump_surface)
     env_fp64_ref["UIPC_BENCH_WORKSPACE_TAG"] = "fp64_ref"
     env_fp64_ref.pop("UIPC_BENCH_ENABLE_CUDA_BASELINE", None)
-    env_fp64_ref.pop("UIPC_BENCH_ERROR_REFERENCE_ROOT", None)
-
     run_benchmark(exes["fp64"],
                   run_root / "stage2" / "fp64" / "quality_reference" / "gbench.json",
                   benchmark_filter="^Mixed\\.Stage2\\.Quality\\.Reference[0-9]+F\\..*",
                   env=env_fp64_ref)
 
     # path1..path7 perf + compare
-    reference_root = workspace_root / "stage2" / "cuda_mixed"
     for level in COMPARE_LEVELS:
         env_perf = base_env(workspace_root, args.frame_scale, dump_surface)
         env_perf["UIPC_BENCH_WORKSPACE_TAG"] = f"{level}_perf"
@@ -360,8 +357,6 @@ def main() -> int:
             env_perf["UIPC_BENCH_ENABLE_CUDA_BASELINE"] = "1"
         else:
             env_perf.pop("UIPC_BENCH_ENABLE_CUDA_BASELINE", None)
-        env_perf.pop("UIPC_BENCH_ERROR_REFERENCE_ROOT", None)
-
         run_benchmark(exes[level],
                       run_root / "stage2" / level / "perf" / "gbench.json",
                       benchmark_filter="^Mixed\\.Stage2\\.Perf\\..*",
@@ -369,7 +364,6 @@ def main() -> int:
 
         env_cmp = base_env(workspace_root, args.frame_scale, dump_surface)
         env_cmp["UIPC_BENCH_WORKSPACE_TAG"] = f"{level}_cmp"
-        env_cmp["UIPC_BENCH_ERROR_REFERENCE_ROOT"] = str(reference_root)
         env_cmp.pop("UIPC_BENCH_ENABLE_CUDA_BASELINE", None)
 
         run_benchmark(exes[level],

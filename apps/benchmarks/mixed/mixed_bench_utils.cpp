@@ -84,38 +84,6 @@ std::string make_workspace(const MixedRunSpec& spec)
     fs::create_directories(workspace);
     return (workspace / "").string();
 }
-
-std::string resolve_reference_dir(const std::string& reference_root, MixedScenario scenario)
-{
-    namespace fs = std::filesystem;
-    if(reference_root.empty())
-        return {};
-
-    fs::path root = fs::path{reference_root};
-    if(!fs::exists(root))
-        return {};
-
-    const auto scenario_token = std::string{scenario_name(scenario)};
-    for(const auto& entry : fs::recursive_directory_iterator(root))
-    {
-        if(!entry.is_regular_file())
-            continue;
-        const auto filename = entry.path().filename().string();
-        if(filename.rfind("x.", 0) != 0
-           || filename.substr(filename.size() >= 4 ? filename.size() - 4 : 0) != ".mtx")
-            continue;
-
-        const auto parent_str = entry.path().parent_path().string();
-        if(parent_str.find(scenario_token) != std::string::npos)
-            return (entry.path().parent_path() / "").string();
-    }
-
-    auto direct_probe = find_recursive_first(root, "x.", ".mtx");
-    if(!direct_probe.empty())
-        return (direct_probe.parent_path() / "").string();
-
-    return {};
-}
 }  // namespace
 
 std::string env_or_default(const char* key, std::string_view fallback)
@@ -174,33 +142,13 @@ MixedRunResult run_mixed_case(const MixedRunSpec& spec)
         result.workspace = make_workspace(spec);
 
         MixedConfigOptions options;
-        options.telemetry_enabled     = spec.telemetry_enabled;
-        options.error_tracker_enabled = spec.error_tracker_enable;
-        options.dump_linear_system    = spec.dump_linear_system;
-        options.dump_solution_x       = spec.dump_solution_x;
-        options.dump_surface          = spec.dump_surface || env_flag("UIPC_BENCH_DUMP_SURFACE");
+        options.dump_linear_system = spec.dump_linear_system;
+        options.dump_solution_x    = spec.dump_solution_x;
+        options.dump_surface       = spec.dump_surface || env_flag("UIPC_BENCH_DUMP_SURFACE");
 
-        if(spec.run_mode == MixedRunMode::QualityReference)
-        {
+        if(spec.run_mode == MixedRunMode::QualityReference
+           || spec.run_mode == MixedRunMode::QualityCompare)
             options.dump_solution_x = true;
-        }
-        else if(spec.run_mode == MixedRunMode::QualityCompare)
-        {
-            options.telemetry_enabled     = true;  // backend currently gates error tracker with telemetry.enable
-            options.error_tracker_enabled = true;
-            options.error_tracker_mode    = "offline";
-            auto reference_dir            = resolve_reference_dir(spec.error_reference_root,
-                                                       spec.scenario);
-            if(reference_dir.empty())
-            {
-                result.ok = false;
-                result.error =
-                    fmt::format("missing reference dump dir for compare mode: {}",
-                                spec.error_reference_root);
-                return result;
-            }
-            options.error_tracker_reference_dir = reference_dir;
-        }
 
         auto config = make_mixed_config(spec.scenario, options);
 
@@ -251,38 +199,18 @@ MixedRunResult run_mixed_case(const MixedRunSpec& spec)
             }
         }
 
-        if(spec.run_mode == MixedRunMode::QualityReference)
+        if(spec.run_mode == MixedRunMode::QualityReference
+           || spec.run_mode == MixedRunMode::QualityCompare)
         {
             auto x_dump = find_recursive_first(result.workspace, "x.", ".mtx");
             if(x_dump.empty())
             {
                 result.ok = false;
-                result.error = fmt::format("reference dump x.*.mtx not found in workspace: {}",
+                result.error = fmt::format("solution dump x.*.mtx not found in workspace: {}",
                                            result.workspace);
                 return result;
             }
-            result.reference_dump_dir = (x_dump.parent_path() / "").string();
-        }
-        else if(spec.run_mode == MixedRunMode::QualityCompare)
-        {
-            auto error_jsonl = find_recursive_exact(result.workspace, "error.jsonl");
-            if(error_jsonl.empty())
-            {
-                result.ok = false;
-                result.error = fmt::format("error.jsonl not found in workspace: {}",
-                                           result.workspace);
-                return result;
-            }
-            result.error_jsonl = error_jsonl.string();
-            result.error_jsonl_non_empty =
-                fs::exists(error_jsonl) && fs::is_regular_file(error_jsonl)
-                && fs::file_size(error_jsonl) > 0;
-            if(!result.error_jsonl_non_empty)
-            {
-                result.ok = false;
-                result.error = fmt::format("error.jsonl is empty: {}", error_jsonl.string());
-                return result;
-            }
+            result.solution_dump_dir = (x_dump.parent_path() / "").string();
         }
     }
     catch(const std::exception& e)
@@ -318,7 +246,6 @@ Stage1RunResult run_stage1_case(const Stage1RunSpec& spec)
     result.timer_report_non_empty = mixed_result.timer_report_non_empty;
     result.error                  = mixed_result.error;
     result.workspace              = mixed_result.workspace;
-    result.error_jsonl            = mixed_result.error_jsonl;
     return result;
 }
 }  // namespace uipc::bench::mixed

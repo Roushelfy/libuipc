@@ -39,7 +39,7 @@ static void BM_Stage2(benchmark::State& state, const MixedRunSpec& spec)
             break;
         }
         benchmark::DoNotOptimize(result.timer_report_non_empty);
-        benchmark::DoNotOptimize(result.error_jsonl_non_empty);
+        benchmark::DoNotOptimize(!result.solution_dump_dir.empty());
     }
 
     state.counters["frames"]    = spec.init_only ? 0 : spec.frames;
@@ -88,8 +88,6 @@ static void register_stage2_perf_for_backend(const std::string& backend)
 static void register_stage2_quality_for_mixed()
 {
     const auto workspace_tag = env_or_default("UIPC_BENCH_WORKSPACE_TAG", "default");
-    const auto reference_root =
-        env_or_default("UIPC_BENCH_ERROR_REFERENCE_ROOT", "");
     const int frame_scale = env_int_or_default("UIPC_BENCH_STAGE2_FRAME_SCALE", 1);
 
     constexpr std::array base_scenario_frames = {
@@ -125,14 +123,13 @@ static void register_stage2_quality_for_mixed()
             MixedRunSpec spec{
                 .backend              = "cuda_mixed",
                 .scenario             = scenario,
-                .telemetry_enabled    = true,
+                .telemetry_enabled    = false,
                 .frames               = frames,
                 .init_only            = false,
                 .run_mode             = MixedRunMode::QualityCompare,
                 .suite_name           = "stage2",
                 .workspace_tag        = workspace_tag,
-                .error_tracker_enable = true,
-                .error_reference_root = reference_root,
+                .dump_solution_x      = true,
             };
             auto name = fmt::format("Mixed.Stage2.Quality.Compare{}F.{}.cuda_mixed",
                                     frames,

@@ -4,7 +4,6 @@
 #include <cuda_device/builtin.h>
 #include <utils/matrix_market.h>
 #include <backends/common/backend_path_tool.h>
-#include <algorithm>
 #include <cmath>
 namespace uipc::backend::cuda_mixed
 {
@@ -12,7 +11,7 @@ REGISTER_SIM_SYSTEM(LinearPCG);
 
 void LinearPCG::do_build(BuildInfo& info)
 {
-    auto& global_linear_system = require<GlobalLinearSystem>();
+    require<GlobalLinearSystem>();
 
     // TODO: get info from the scene, now we just use the default value
     max_iter_ratio = 2;
@@ -26,22 +25,6 @@ void LinearPCG::do_build(BuildInfo& info)
     auto dump_attr  = config.find<IndexT>("extras/debug/dump_linear_pcg");
     need_debug_dump = dump_attr ? dump_attr->view()[0] : false;
 
-    auto telemetry_enable_attr = config.find<IndexT>("extras/telemetry/enable");
-    auto telemetry_pcg_attr    = config.find<IndexT>("extras/telemetry/pcg/enable");
-    auto sample_every_attr = config.find<IndexT>("extras/telemetry/pcg/sample_every_iter");
-
-    const bool telemetry_enable =
-        telemetry_enable_attr && (telemetry_enable_attr->view()[0] != 0);
-    telemetry_pcg_enable =
-        telemetry_enable && telemetry_pcg_attr && (telemetry_pcg_attr->view()[0] != 0);
-
-    if(sample_every_attr)
-    {
-        const auto sample_every = sample_every_attr->view()[0];
-        telemetry_sample_every_iter =
-            sample_every > 0 ? static_cast<SizeT>(sample_every) : SizeT{1};
-    }
-
     logger::info("LinearPCG: max_iter_ratio = {}, tol_rate = {}, debug_dump = {}",
                  max_iter_ratio,
                  global_tol_rate,
@@ -54,8 +37,6 @@ void LinearPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     auto b = info.b();
 
     x.buffer_view().fill(0);
-    if(telemetry_pcg_enable)
-        m_pcg_samples.clear();
 
     auto N = x.size();
     if(z.capacity() < N)
@@ -76,7 +57,6 @@ void LinearPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     auto iter = pcg(x, b, static_cast<SizeT>(max_iter_ratio * static_cast<double>(b.size())));
 
     info.iter_count(iter);
-    m_iter_history.push_back(info.iter_count());
 }
 
 void LinearPCG::dump_r_z(SizeT k)
@@ -249,31 +229,6 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
 
     abs_rz0 = std::abs(rz);
 
-    auto maybe_sample = [&](SizeT iter, IterScalar alpha_v, IterScalar beta_v, IterScalar rz_v)
-    {
-        if(!telemetry_pcg_enable)
-            return;
-        if(telemetry_sample_every_iter == 0)
-            return;
-        if(iter % telemetry_sample_every_iter != 0)
-            return;
-
-        PcgSample sample;
-        sample.iter     = iter;
-        sample.norm_r   = static_cast<double>(ctx().norm(r.cview()));
-        sample.rz_ratio = (abs_rz0 > IterScalar{0}) ?
-                              static_cast<double>(std::abs(rz_v) / abs_rz0) :
-                              0.0;
-        sample.alpha = static_cast<double>(alpha_v);
-        sample.beta  = static_cast<double>(beta_v);
-        sample.nan_inf_flag =
-            !(std::isfinite(sample.norm_r) && std::isfinite(sample.rz_ratio)
-              && std::isfinite(sample.alpha) && std::isfinite(sample.beta));
-        m_pcg_samples.push_back(sample);
-    };
-
-    maybe_sample(k, IterScalar{0}, IterScalar{0}, rz);
-
     // check convergence
     if(accuracy_statisfied(r) && abs_rz0 == IterScalar{0})
         return 0;
@@ -307,7 +262,6 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
            && std::abs(rz_new)
                   <= static_cast<IterScalar>(global_tol_rate) * abs_rz0)
         {
-            maybe_sample(k, alpha, IterScalar{0}, rz_new);
             break;
         }
 
@@ -316,8 +270,6 @@ SizeT LinearPCG::pcg(muda::DenseVectorView<SolveScalar> x,
 
         // p = z + beta * p
         update_p(p.view(), z.cview(), beta);
-
-        maybe_sample(k, alpha, beta, rz_new);
 
         rz = rz_new;
     }

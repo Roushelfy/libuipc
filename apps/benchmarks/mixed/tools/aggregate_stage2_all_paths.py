@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+COMMON_DIR = SCRIPT_DIR.parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from solution_metrics import collect_solution_dir_metrics
 
 
 UNIT_TO_MS = {
@@ -69,6 +77,33 @@ def infer_scenario(name_or_path: str) -> str:
     return "unknown"
 
 
+def _collect_solution_dirs_by_tag(workspace_root: Path,
+                                  run_mode: str,
+                                  workspace_tag: str) -> Tuple[Dict[str, Path], List[str]]:
+    dirs: Dict[str, Path] = {}
+    issues: List[str] = []
+
+    for sol_file in workspace_root.rglob("x.*.mtx"):
+        tag_dir = next((parent for parent in sol_file.parents if parent.name == workspace_tag), None)
+        if tag_dir is None:
+            continue
+        if tag_dir.parent.name.lower() != "telemetryoff":
+            continue
+        if tag_dir.parent.parent.name.lower() != run_mode.lower():
+            continue
+
+        scenario = infer_scenario(str(tag_dir))
+        prev = dirs.get(scenario)
+        if prev is not None and prev != tag_dir:
+            issues.append(
+                f"duplicate solution dump dirs for scenario={scenario}, mode={run_mode}, tag={workspace_tag}: {prev} vs {tag_dir}"
+            )
+            continue
+        dirs[scenario] = tag_dir
+
+    return dirs, issues
+
+
 def compare_perf(level: str, fp64_perf: Dict[str, float], level_perf: Dict[str, float]) -> List[dict]:
     rows: List[dict] = []
     for name, fp64_ms in fp64_perf.items():
@@ -117,67 +152,68 @@ def telemetry_overhead(level: str, perf_entries: Dict[str, float]) -> List[dict]
     return rows
 
 
-def collect_quality(workspace_root: Path) -> dict:
+def collect_quality(workspace_root: Path) -> Tuple[dict, List[str]]:
     result = {
         "overall_by_level": {},
         "by_level": {},
         "raw_records": [],
     }
+    issues: List[str] = []
     if not workspace_root.exists():
-        return result
+        return result, issues
 
     by_level: Dict[str, Dict[str, dict]] = {}
     raw: List[dict] = []
 
-    for error_file in workspace_root.rglob("error.jsonl"):
-        path_str = str(error_file)
-        level = "unknown"
-        for lv in MIXED_COMPARE_LEVELS:
-            token = f"{lv}_cmp"
-            if token in path_str:
-                level = lv
-                break
+    reference_dirs, ref_issues = _collect_solution_dirs_by_tag(workspace_root,
+                                                               "QualityReference",
+                                                               "fp64_ref")
+    issues.extend(ref_issues)
 
-        scenario = infer_scenario(path_str)
-        level_stats = by_level.setdefault(level, {})
-        stat = level_stats.setdefault(
-            scenario,
-            {
-                "rel_l2_max": 0.0,
-                "abs_linf_max": 0.0,
-                "nan_inf_count": 0,
-                "record_count": 0,
-                "files": [],
-            },
-        )
-        stat["files"].append(path_str)
-
-        for line in error_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+    for level in MIXED_COMPARE_LEVELS:
+        compare_dirs, cmp_issues = _collect_solution_dirs_by_tag(workspace_root,
+                                                                 "QualityCompare",
+                                                                 f"{level}_cmp")
+        issues.extend(cmp_issues)
+        scenario_stats: Dict[str, dict] = {}
+        scenarios = sorted(set(reference_dirs) | set(compare_dirs))
+        for scenario in scenarios:
+            ref_dir = reference_dirs.get(scenario)
+            cmp_dir = compare_dirs.get(scenario)
+            if ref_dir is None or cmp_dir is None:
+                issues.append(
+                    f"missing solution dump dir for level={level}, scenario={scenario}: reference={ref_dir} compare={cmp_dir}"
+                )
                 continue
-            obj = json.loads(line)
-            rel_l2 = float(obj.get("rel_l2_x", 0.0))
-            abs_linf = float(obj.get("abs_linf_x", 0.0))
-            nan_inf = bool(obj.get("nan_inf_flag", False))
 
-            stat["rel_l2_max"] = max(stat["rel_l2_max"], rel_l2)
-            stat["abs_linf_max"] = max(stat["abs_linf_max"], abs_linf)
-            stat["nan_inf_count"] += 1 if nan_inf else 0
-            stat["record_count"] += 1
+            try:
+                metrics = collect_solution_dir_metrics(ref_dir, cmp_dir)
+            except Exception as exc:
+                issues.append(
+                    f"failed to compare solution dumps for level={level}, scenario={scenario}: {exc}"
+                )
+                continue
 
-            raw.append(
-                {
-                    "level": level,
-                    "scenario": scenario,
-                    "file": path_str,
-                    "frame": obj.get("frame"),
-                    "newton_iter": obj.get("newton_iter"),
-                    "rel_l2_x": rel_l2,
-                    "abs_linf_x": abs_linf,
-                    "nan_inf_flag": nan_inf,
-                }
-            )
+            scenario_stats[scenario] = {
+                "rel_l2_max": metrics["rel_l2_max"],
+                "abs_linf_max": metrics["abs_linf_max"],
+                "nan_inf_count": metrics["nan_inf_count"],
+                "record_count": metrics["record_count"],
+                "missing_in_compare_count": metrics.get("missing_in_compare_count", 0),
+                "missing_in_reference_count": metrics.get("missing_in_reference_count", 0),
+                "reference_dir": metrics["reference_dir"],
+                "compare_dir": metrics["compare_dir"],
+            }
+            if metrics.get("missing_in_compare_count", 0) or metrics.get("missing_in_reference_count", 0):
+                issues.append(
+                    f"solution dump mismatch for level={level}, scenario={scenario}: missing_in_compare={metrics.get('missing_in_compare_count', 0)} missing_in_reference={metrics.get('missing_in_reference_count', 0)}"
+                )
+
+            for record in metrics["records"]:
+                raw.append({"level": level, "scenario": scenario, **record})
+
+        if scenario_stats:
+            by_level[level] = scenario_stats
 
     overall_by_level: Dict[str, dict] = {}
     for level, scenarios in by_level.items():
@@ -193,7 +229,7 @@ def collect_quality(workspace_root: Path) -> dict:
     result["by_level"] = by_level
     result["overall_by_level"] = overall_by_level
     result["raw_records"] = raw
-    return result
+    return result, issues
 
 
 def summarize_stage1(stage1_root: Path) -> dict:
@@ -263,7 +299,7 @@ def write_markdown(out_path: Path, summary: dict) -> None:
             )
     lines.append("")
 
-    lines.append("## Stage2 Quality (Offline ErrorTracker)")
+    lines.append("## Stage2 Quality (Solution Dump Comparison)")
     lines.append("")
     lines.append("| Level | Scenario | rel_l2.max | abs_linf.max | nan_inf_count | records |")
     lines.append("|---|---|---:|---:|---:|---:|")
@@ -325,7 +361,7 @@ def main() -> int:
         for level, entries in perf_entries.items():
             tele_overhead[level] = telemetry_overhead(level, entries)
 
-    quality = collect_quality(workspace_root)
+    quality, quality_issues = collect_quality(workspace_root)
     stage1_summary = summarize_stage1(stage1_root)
 
     warnings: List[str] = []
@@ -374,6 +410,7 @@ def main() -> int:
                 warnings.append(
                     f"{level} {scenario}: rel_l2 likely inflated by near-zero reference norm (rel_l2={stat['rel_l2_max']:.3e}, abs_linf={stat['abs_linf_max']:.3e})"
                 )
+    warnings.extend(quality_issues)
 
     summary = {
         "run_root": str(run_root),

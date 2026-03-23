@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
+COMMON_DIR = Path(__file__).resolve().parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from solution_metrics import collect_solution_dir_metrics
+
+
 REPO_ID = "MuGdxy/uipc-assets"
 DEFAULT_QUALITY_REL_L2_THRESHOLD = 1e-5
 DEFAULT_QUALITY_ABS_LINF_THRESHOLD = 5e-4
@@ -270,6 +277,10 @@ def collect_error_metrics(error_jsonl: Path) -> Dict[str, Any]:
     }
 
 
+def collect_solution_metrics(reference_dir: Path, compare_dir: Path) -> Dict[str, Any]:
+    return collect_solution_dir_metrics(reference_dir, compare_dir)
+
+
 def load_benchmark_meta(result_path: Path) -> Dict[str, Any]:
     benchmark_json = result_path
     if result_path.is_dir():
@@ -358,4 +369,10 @@ def warning_for_quality(metrics: Dict[str, Any]) -> List[str]:
         )
     if metrics["nan_inf_count"] > 0:
         warnings.append(f"nan_inf_count={metrics['nan_inf_count']}")
+    missing_in_compare = int(metrics.get("missing_in_compare_count", 0))
+    missing_in_reference = int(metrics.get("missing_in_reference_count", 0))
+    if missing_in_compare > 0 or missing_in_reference > 0:
+        warnings.append(
+            f"solution_dump_mismatch missing_in_compare={missing_in_compare} missing_in_reference={missing_in_reference}"
+        )
     return warnings

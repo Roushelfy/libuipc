@@ -303,18 +303,6 @@ Json make_mixed_config(MixedScenario scenario, const MixedConfigOptions& options
         }
     }
 
-    const bool telemetry_enabled = options.telemetry_enabled || options.error_tracker_enabled;
-    auto& telemetry              = config["extras"]["telemetry"];
-    telemetry["enable"]          = telemetry_enabled ? 1 : 0;
-    telemetry["timer"]["enable"] = options.telemetry_enabled ? 1 : 0;
-    telemetry["timer"]["report_every_frame"]       = 0;
-    telemetry["nvtx"]["enable"]                    = 0;
-    telemetry["pcg"]["enable"]                     = options.telemetry_enabled ? 1 : 0;
-    telemetry["pcg"]["sample_every_iter"]          = 10;
-    telemetry["error_tracker"]["enable"]           = options.error_tracker_enabled ? 1 : 0;
-    telemetry["error_tracker"]["mode"]             = options.error_tracker_mode;
-    telemetry["error_tracker"]["reference_dir"]    = options.error_tracker_reference_dir;
-
     auto& debug = config["extras"]["debug"];
     debug["dump_linear_system"] = options.dump_linear_system ? 1 : 0;
     debug["dump_solution_x"]    = options.dump_solution_x ? 1 : 0;

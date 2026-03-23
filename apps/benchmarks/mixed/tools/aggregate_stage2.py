@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+COMMON_DIR = SCRIPT_DIR.parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from solution_metrics import collect_solution_dir_metrics
 
 
 UNIT_TO_MS = {
@@ -128,9 +136,37 @@ def infer_scenario_from_path(path: Path) -> str:
     return "unknown"
 
 
-def collect_quality_metrics(workspace_root: Path) -> Tuple[dict, List[dict]]:
+def _collect_solution_dirs_by_tag(workspace_root: Path,
+                                  run_mode: str,
+                                  workspace_tag: str) -> Tuple[Dict[str, Path], List[str]]:
+    dirs: Dict[str, Path] = {}
+    issues: List[str] = []
+
+    for sol_file in workspace_root.rglob("x.*.mtx"):
+        tag_dir = next((parent for parent in sol_file.parents if parent.name == workspace_tag), None)
+        if tag_dir is None:
+            continue
+        if tag_dir.parent.name.lower() != "telemetryoff":
+            continue
+        if tag_dir.parent.parent.name.lower() != run_mode.lower():
+            continue
+
+        scenario = infer_scenario_from_path(tag_dir)
+        prev = dirs.get(scenario)
+        if prev is not None and prev != tag_dir:
+            issues.append(
+                f"duplicate solution dump dirs for scenario={scenario}, mode={run_mode}, tag={workspace_tag}: {prev} vs {tag_dir}"
+            )
+            continue
+        dirs[scenario] = tag_dir
+
+    return dirs, issues
+
+
+def collect_quality_metrics(workspace_root: Path) -> Tuple[dict, List[dict], List[str]]:
     by_scenario: Dict[str, dict] = {}
     records: List[dict] = []
+    issues: List[str] = []
 
     if not workspace_root.exists():
         return {
@@ -141,46 +177,51 @@ def collect_quality_metrics(workspace_root: Path) -> Tuple[dict, List[dict]]:
                 "record_count": 0,
             },
             "by_scenario": {},
-        }, records
+        }, records, issues
 
-    for error_file in workspace_root.rglob("error.jsonl"):
-        scenario = infer_scenario_from_path(error_file)
-        scenario_stat = by_scenario.setdefault(
-            scenario,
-            {
-                "rel_l2_max": 0.0,
-                "abs_linf_max": 0.0,
-                "nan_inf_count": 0,
-                "record_count": 0,
-                "files": [],
-            },
-        )
-        scenario_stat["files"].append(str(error_file))
+    reference_dirs, ref_issues = _collect_solution_dirs_by_tag(workspace_root,
+                                                               "QualityReference",
+                                                               "fp64_ref")
+    compare_dirs, cmp_issues = _collect_solution_dirs_by_tag(workspace_root,
+                                                             "QualityCompare",
+                                                             "path1_cmp")
+    issues.extend(ref_issues)
+    issues.extend(cmp_issues)
 
-        for line in error_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            rel_l2 = float(obj.get("rel_l2_x", 0.0))
-            abs_linf = float(obj.get("abs_linf_x", 0.0))
-            nan_inf = bool(obj.get("nan_inf_flag", False))
-
-            scenario_stat["rel_l2_max"] = max(scenario_stat["rel_l2_max"], rel_l2)
-            scenario_stat["abs_linf_max"] = max(scenario_stat["abs_linf_max"], abs_linf)
-            scenario_stat["nan_inf_count"] += 1 if nan_inf else 0
-            scenario_stat["record_count"] += 1
-            records.append(
-                {
-                    "scenario": scenario,
-                    "file": str(error_file),
-                    "rel_l2_x": rel_l2,
-                    "abs_linf_x": abs_linf,
-                    "nan_inf_flag": nan_inf,
-                    "frame": obj.get("frame"),
-                    "newton_iter": obj.get("newton_iter"),
-                }
+    scenarios = sorted(set(reference_dirs) | set(compare_dirs))
+    for scenario in scenarios:
+        ref_dir = reference_dirs.get(scenario)
+        cmp_dir = compare_dirs.get(scenario)
+        if ref_dir is None or cmp_dir is None:
+            issues.append(
+                f"missing solution dump dir for scenario={scenario}: reference={ref_dir} compare={cmp_dir}"
             )
+            continue
+
+        try:
+            metrics = collect_solution_dir_metrics(ref_dir, cmp_dir)
+        except Exception as exc:
+            issues.append(
+                f"failed to compare solution dumps for scenario={scenario}: {exc}"
+            )
+            continue
+
+        by_scenario[scenario] = {
+            "rel_l2_max": metrics["rel_l2_max"],
+            "abs_linf_max": metrics["abs_linf_max"],
+            "nan_inf_count": metrics["nan_inf_count"],
+            "record_count": metrics["record_count"],
+            "missing_in_compare_count": metrics.get("missing_in_compare_count", 0),
+            "missing_in_reference_count": metrics.get("missing_in_reference_count", 0),
+            "reference_dir": metrics["reference_dir"],
+            "compare_dir": metrics["compare_dir"],
+        }
+        if metrics.get("missing_in_compare_count", 0) or metrics.get("missing_in_reference_count", 0):
+            issues.append(
+                f"solution dump mismatch for scenario={scenario}: missing_in_compare={metrics.get('missing_in_compare_count', 0)} missing_in_reference={metrics.get('missing_in_reference_count', 0)}"
+            )
+        for record in metrics["records"]:
+            records.append({"scenario": scenario, **record})
 
     overall = {
         "rel_l2_max": None,
@@ -194,7 +235,7 @@ def collect_quality_metrics(workspace_root: Path) -> Tuple[dict, List[dict]]:
         overall["nan_inf_count"] = sum(v["nan_inf_count"] for v in by_scenario.values())
         overall["record_count"] = sum(v["record_count"] for v in by_scenario.values())
 
-    return {"overall": overall, "by_scenario": by_scenario}, records
+    return {"overall": overall, "by_scenario": by_scenario}, records, issues
 
 
 def write_markdown(path: Path, summary: dict) -> None:
@@ -223,7 +264,7 @@ def write_markdown(path: Path, summary: dict) -> None:
         )
 
     lines.append("")
-    lines.append("## Quality (Offline Error Tracker)")
+    lines.append("## Quality (Solution Dump Comparison)")
     lines.append("")
     lines.append("| Scenario | rel_l2.max | abs_linf.max | nan_inf_count | records | Warning |")
     lines.append("|---|---:|---:|---:|---:|---|")
@@ -255,7 +296,7 @@ def main() -> int:
     parser.add_argument("--path1_perf", required=True, type=Path, help="path1 perf benchmark json")
     parser.add_argument("--fp64_quality_reference", required=True, type=Path, help="fp64 quality reference benchmark json")
     parser.add_argument("--path1_quality_compare", required=True, type=Path, help="path1 quality compare benchmark json")
-    parser.add_argument("--workspace_root", required=True, type=Path, help="workspace root for error.jsonl files")
+    parser.add_argument("--workspace_root", required=True, type=Path, help="workspace root for solution dump files")
     parser.add_argument("--out_dir", required=True, type=Path, help="output directory")
     args = parser.parse_args()
 
@@ -270,7 +311,7 @@ def main() -> int:
     tele_cmp = compare_telemetry_overhead("fp64", fp64_perf_entries)
     tele_cmp.extend(compare_telemetry_overhead("path1", path1_perf_entries))
 
-    quality, raw_quality_records = collect_quality_metrics(args.workspace_root)
+    quality, raw_quality_records, quality_issues = collect_quality_metrics(args.workspace_root)
 
     warnings: List[str] = []
     for row in path_cmp:
@@ -295,6 +336,7 @@ def main() -> int:
             )
         if stat["nan_inf_count"] > 0:
             warnings.append(f"quality nan_inf_count={stat['nan_inf_count']} in {scenario}")
+    warnings.extend(quality_issues)
 
     for fail in fp64_perf_failures:
         warnings.append(f"fp64 perf benchmark failed: {fail['name']} -> {fail['error']}")

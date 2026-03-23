@@ -344,11 +344,6 @@ class GlobalLinearSystem : public SimSystem
         bool        need_debug_dump = false;
         bool        need_solution_x_dump = false;
         std::string debug_dump_path;
-
-        bool        telemetry_enable               = false;
-        bool        telemetry_error_tracker_enable = false;
-        std::string telemetry_error_tracker_mode   = "offline";
-        std::string telemetry_reference_dir;
     };
 
     SizeT dof_count() const;

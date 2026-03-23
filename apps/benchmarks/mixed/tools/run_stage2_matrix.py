@@ -224,7 +224,6 @@ def main() -> int:
     path1_cmp_env = os.environ.copy()
     path1_cmp_env["UIPC_BENCH_WORKSPACE_ROOT"] = str(workspace_root)
     path1_cmp_env["UIPC_BENCH_WORKSPACE_TAG"] = "path1_cmp"
-    path1_cmp_env["UIPC_BENCH_ERROR_REFERENCE_ROOT"] = str(workspace_root / "stage2" / "cuda_mixed")
     path1_cmp_env.pop("UIPC_BENCH_ENABLE_CUDA_BASELINE", None)
 
     run_benchmark(path1_exe,

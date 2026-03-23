@@ -176,15 +176,11 @@ def run_profile_worker(
 
     worker_set_scene_config(scene, "extras/debug/dump_surface", dump_surface)
 
-    if mode == "quality_reference":
+    if mode in ("quality_reference", "quality_compare"):
         worker_set_scene_config(scene, "extras/debug/dump_solution_x", 1)
-    elif mode == "quality_compare":
+    if mode == "quality_compare":
         if reference_dir is None:
             raise RuntimeError("quality_compare requires --reference_dir")
-        worker_set_scene_config(scene, "extras/telemetry/enable", 1)
-        worker_set_scene_config(scene, "extras/telemetry/error_tracker/enable", 1)
-        worker_set_scene_config(scene, "extras/telemetry/error_tracker/mode", "offline")
-        worker_set_scene_config(scene, "extras/telemetry/error_tracker/reference_dir", str(reference_dir))
 
     frames = spec.frames_perf if mode == "perf" else spec.frames_quality
     result = profile_run(
@@ -208,20 +204,17 @@ def run_profile_worker(
         "frames": frames,
         "benchmark_json": str(benchmark_json) if benchmark_json is not None else None,
         "timer_frames_json": str(timer_frames_json) if timer_frames_json is not None else None,
+        "solution_dump_dir": None,
         "reference_dir": None,
-        "error_jsonl": None,
     }
 
-    if mode == "quality_reference":
+    if mode in ("quality_reference", "quality_compare"):
         x_dump = find_recursive_first(workspace, "x.", ".mtx")
         if x_dump is None:
-            raise FileNotFoundError(f"Reference x dump not found under {workspace}")
-        worker_result["reference_dir"] = str(x_dump.parent)
-    elif mode == "quality_compare":
-        error_file = find_recursive_exact(workspace, "error.jsonl")
-        if error_file is None or error_file.stat().st_size == 0:
-            raise FileNotFoundError(f"error.jsonl not found or empty under {workspace}")
-        worker_result["error_jsonl"] = str(error_file)
+            raise FileNotFoundError(f"Solution x dump not found under {workspace}")
+        worker_result["solution_dump_dir"] = str(x_dump.parent)
+        if mode == "quality_reference":
+            worker_result["reference_dir"] = str(x_dump.parent)
 
     write_json(output_dir / "worker_result.json", worker_result)
     return worker_result

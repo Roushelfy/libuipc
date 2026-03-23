@@ -15,6 +15,7 @@ from uipc_assets_bench_common import (
     REPO_ID,
     avg_ms_per_frame,
     collect_error_metrics,
+    collect_solution_metrics,
     default_manifest_path,
     enabled_scenes,
     load_benchmark_meta,
@@ -90,12 +91,20 @@ def aggregate_run(run_root: Path, manifest_path: Path, out_dir: Path) -> Dict[st
 
             if spec.quality_enabled:
                 ref_dir = _mode_dir(run_root, "fp64", spec.name, "quality_reference")
-                scene_summary["levels"]["fp64"]["quality_reference"] = _load_worker_result(ref_dir)
+                ref_worker = _load_worker_result(ref_dir)
+                scene_summary["levels"]["fp64"]["quality_reference"] = ref_worker
                 for level in compare_levels:
                     cmp_dir = _mode_dir(run_root, level, spec.name, "quality_compare")
                     cmp_worker = _load_worker_result(cmp_dir)
-                    error_file = Path(cmp_worker["error_jsonl"])
-                    quality = collect_error_metrics(error_file)
+                    ref_solution_dir = Path(
+                        ref_worker.get("solution_dump_dir") or ref_worker.get("reference_dir")
+                    )
+                    cmp_solution_dir = cmp_worker.get("solution_dump_dir")
+                    if cmp_solution_dir:
+                        quality = collect_solution_metrics(ref_solution_dir, Path(cmp_solution_dir))
+                    else:
+                        error_file = Path(cmp_worker["error_jsonl"])
+                        quality = collect_error_metrics(error_file)
                     scene_summary["levels"][level]["quality_compare"] = cmp_worker
                     scene_summary["comparison"].setdefault(level, {})
                     scene_summary["comparison"][level]["quality"] = {
@@ -103,7 +112,11 @@ def aggregate_run(run_root: Path, manifest_path: Path, out_dir: Path) -> Dict[st
                         "abs_linf_max": quality["abs_linf_max"],
                         "nan_inf_count": quality["nan_inf_count"],
                         "record_count": quality["record_count"],
-                        "error_jsonl": str(error_file),
+                        "missing_in_compare_count": quality.get("missing_in_compare_count", 0),
+                        "missing_in_reference_count": quality.get("missing_in_reference_count", 0),
+                        "reference_dir": quality.get("reference_dir"),
+                        "compare_dir": quality.get("compare_dir"),
+                        "error_jsonl": None if cmp_solution_dir else str(error_file),
                     }
                     for warning in warning_for_quality(quality):
                         scene_summary["warnings"].append(f"{level}: {warning}")

@@ -22,8 +22,6 @@ struct MixedRunSpec
     MixedRunMode  run_mode             = MixedRunMode::Perf;
     std::string   suite_name           = "stage1";
     std::string   workspace_tag        = "default";
-    bool          error_tracker_enable = false;
-    std::string   error_reference_root;
     bool          dump_linear_system   = false;
     bool          dump_solution_x      = false;
     bool          dump_surface         = false;
@@ -33,11 +31,9 @@ struct MixedRunResult
 {
     bool        ok                     = true;
     bool        timer_report_non_empty = false;
-    bool        error_jsonl_non_empty  = false;
     std::string error;
     std::string workspace;
-    std::string error_jsonl;
-    std::string reference_dump_dir;
+    std::string solution_dump_dir;
 };
 
 std::string      telemetry_mode_name(bool telemetry_enabled);
@@ -59,7 +55,6 @@ struct Stage1RunResult
     bool        timer_report_non_empty = false;
     std::string error;
     std::string workspace;
-    std::string error_jsonl;
 };
 
 std::string     env_or_default(const char* key, std::string_view fallback);

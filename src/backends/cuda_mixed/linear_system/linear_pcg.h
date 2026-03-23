@@ -1,7 +1,6 @@
 #pragma once
 #include <linear_system/iterative_solver.h>
 #include <muda/buffer/device_var.h>
-#include <vector>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -16,16 +15,6 @@ class LinearPCG : public IterativeSolver
     virtual void do_solve(GlobalLinearSystem::SolvingInfo& info) override;
 
   private:
-    struct PcgSample
-    {
-        SizeT  iter         = 0;
-        double norm_r       = 0.0;
-        double rz_ratio     = 0.0;
-        double alpha        = 0.0;
-        double beta         = 0.0;
-        bool   nan_inf_flag = false;
-    };
-
     using PcgScalar = ActivePolicy::PcgAuxScalar;
     using StoreScalar = ActivePolicy::StoreScalar;
     using SolveScalar = ActivePolicy::SolveScalar;
@@ -53,10 +42,5 @@ class LinearPCG : public IterativeSolver
 
     bool        need_debug_dump = false;
     std::string debug_dump_path;
-
-    bool  telemetry_pcg_enable      = false;
-    SizeT telemetry_sample_every_iter = 10;
-    std::vector<PcgSample> m_pcg_samples;
-    std::vector<SizeT>     m_iter_history;
 };
 }  // namespace uipc::backend::cuda_mixed

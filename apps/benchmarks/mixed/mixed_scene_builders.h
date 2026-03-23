@@ -20,10 +20,6 @@ using Stage1Scenario = MixedScenario;
 
 struct MixedConfigOptions
 {
-    bool        telemetry_enabled            = false;
-    bool        error_tracker_enabled        = false;
-    std::string error_tracker_mode           = "offline";
-    std::string error_tracker_reference_dir;
     bool        dump_linear_system           = false;
     bool        dump_solution_x              = false;
     bool        dump_surface                 = false;
@@ -36,8 +32,8 @@ void             populate_mixed_scene(MixedScenario scenario, core::Scene& scene
 
 inline Json make_stage1_config(Stage1Scenario scenario, bool telemetry_enabled)
 {
+    (void)telemetry_enabled;
     MixedConfigOptions options;
-    options.telemetry_enabled = telemetry_enabled;
     return make_mixed_config(scenario, options);
 }
 
