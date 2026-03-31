@@ -18,9 +18,8 @@ constexpr bool PrintKernelZeroDistance = false;
 
 REGISTER_SIM_SYSTEM(InfoStacklessBVHSimplexTrajectoryFilter);
 
-void InfoStacklessBVHSimplexTrajectoryFilter::do_build(BuildInfo& info)
+void InfoStacklessBVHSimplexTrajectoryFilter::do_build(BuildInfo&)
 {
-    (void)info;
     auto& config = world().scene().config();
     auto  method = config.find<std::string>("collision_detection/method");
     if(method->view()[0] != "info_stackless_bvh")
@@ -286,14 +285,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                 point_bids,
                 point_cids,
                 cmts,
-                [query_bids = point_bids.viewer().name("query_bids"),
-                 query_cids = point_cids.viewer().name("query_cids"),
-                 body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
+                [body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
                  cmts = cmts.viewer().name("cmts")] __device__(InfoStacklessBVH::NodePredInfo info)
                 {
                     constexpr IndexT invalid = static_cast<IndexT>(-1);
-                    auto qbid = query_bids(info.query_id);
-                    auto qcid = query_cids(info.query_id);
+                    auto qbid = info.query_bid;
+                    auto qcid = info.query_cid;
                     bool bid_cull = info.node_bid != invalid && qbid != invalid
                                     && qbid == info.node_bid
                                     && !body_self_collision(qbid);
@@ -312,11 +309,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                  contact_mask_tabular = info.contact_mask_tabular().viewer().name("contact_mask_tabular"),
                  subscene_element_ids = info.subscene_element_ids().viewer().name("subscene_element_ids"),
                  subscene_mask_tabular = info.subscene_mask_tabular().viewer().name("subscene_mask_tabular"),
-                 v2b = info.v2b().viewer().name("v2b"),
                  body_self_collision = info.body_self_collision().viewer().name("body_self_collision"),
                  d_hats = info.d_hats().viewer().name("d_hats"),
-                 alpha  = alpha] __device__(IndexT i, IndexT j)
+                 alpha  = alpha] __device__(InfoStacklessBVH::LeafPredInfo info)
                 {
+                    auto i = info.i;
+                    auto j = info.j;
                     const auto& V      = Vs(i);
                     const auto& codimV = codimVs(j);
 
@@ -333,9 +331,8 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                     if(V_is_codim && V >= codimV)
                         return false;
 
-                    auto body_i = v2b(V);
-                    auto body_j = v2b(codimV);
-                    if(body_i == body_j && !body_self_collision(body_i))
+                    if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
+                       && !body_self_collision(info.bid_i))
                         return false;
 
                     Vector3 P0  = Ps(V);
@@ -365,14 +362,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                 codim_point_bids,
                 codim_point_cids,
                 cmts,
-                [query_bids = codim_point_bids.viewer().name("query_bids"),
-                 query_cids = codim_point_cids.viewer().name("query_cids"),
-                 body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
+                [body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
                  cmts = cmts.viewer().name("cmts")] __device__(InfoStacklessBVH::NodePredInfo info)
                 {
                     constexpr IndexT invalid = static_cast<IndexT>(-1);
-                    auto qbid = query_bids(info.query_id);
-                    auto qcid = query_cids(info.query_id);
+                    auto qbid = info.query_bid;
+                    auto qcid = info.query_cid;
                     bool bid_cull = info.node_bid != invalid && qbid != invalid
                                     && qbid == info.node_bid
                                     && !body_self_collision(qbid);
@@ -389,11 +384,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                  contact_mask_tabular = info.contact_mask_tabular().viewer().name("contact_mask_tabular"),
                  subscene_element_ids = info.subscene_element_ids().viewer().name("subscene_element_ids"),
                  subscene_mask_tabular = info.subscene_mask_tabular().viewer().name("subscene_mask_tabular"),
-                 v2b = info.v2b().viewer().name("v2b"),
                  body_self_collision = info.body_self_collision().viewer().name("body_self_collision"),
                  d_hats = info.d_hats().viewer().name("d_hats"),
-                 alpha  = alpha] __device__(IndexT i, IndexT j)
+                 alpha  = alpha] __device__(InfoStacklessBVH::LeafPredInfo info)
                 {
+                    auto i = info.i;
+                    auto j = info.j;
                     const auto& codimV = codimVs(i);
                     const auto& E      = Es(j);
 
@@ -413,9 +409,8 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                     if(E[0] == codimV || E[1] == codimV)
                         return false;
 
-                    auto body_i = v2b(codimV);
-                    auto body_j = v2b(E[0]);
-                    if(body_i == body_j && !body_self_collision(body_i))
+                    if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
+                       && !body_self_collision(info.bid_i))
                         return false;
 
                     Vector3 E0  = Ps(E[0]);
@@ -448,14 +443,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
         muda::KernelLabel label{__FUNCTION__, __FILE__, __LINE__};
         lbvh_E.detect(
             cmts,
-            [query_bids = edge_bids.viewer().name("query_bids"),
-             query_cids = edge_cids.viewer().name("query_cids"),
-             body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
+            [body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
              cmts = cmts.viewer().name("cmts")] __device__(InfoStacklessBVH::NodePredInfo info)
             {
                 constexpr IndexT invalid = static_cast<IndexT>(-1);
-                auto qbid = query_bids(info.query_id);
-                auto qcid = query_cids(info.query_id);
+                auto qbid = info.query_bid;
+                auto qcid = info.query_cid;
                 bool bid_cull = info.node_bid != invalid && qbid != invalid
                                 && qbid == info.node_bid
                                 && !body_self_collision(qbid);
@@ -471,11 +464,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
              contact_mask_tabular = info.contact_mask_tabular().viewer().name("contact_mask_tabular"),
              subscene_element_ids = info.subscene_element_ids().viewer().name("subscene_element_ids"),
              subscene_mask_tabular = info.subscene_mask_tabular().viewer().name("subscene_mask_tabular"),
-             v2b = info.v2b().viewer().name("v2b"),
              body_self_collision = info.body_self_collision().viewer().name("body_self_collision"),
              d_hats = info.d_hats().viewer().name("d_hats"),
-             alpha  = alpha] __device__(IndexT i, IndexT j)
+             alpha  = alpha] __device__(InfoStacklessBVH::LeafPredInfo info)
             {
+                auto i = info.i;
+                auto j = info.j;
                 const auto& E0 = Es(i);
                 const auto& E1 = Es(j);
 
@@ -497,9 +491,8 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                 if(E0[0] == E1[0] || E0[0] == E1[1] || E0[1] == E1[0] || E0[1] == E1[1])
                     return false;
 
-                auto body_i = v2b(E0[0]);
-                auto body_j = v2b(E1[0]);
-                if(body_i == body_j && !body_self_collision(body_i))
+                if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
+                   && !body_self_collision(info.bid_i))
                     return false;
 
                 Vector3 E0_0  = Ps(E0[0]);
@@ -540,14 +533,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
             point_bids,
             point_cids,
             cmts,
-            [query_bids = point_bids.viewer().name("query_bids"),
-             query_cids = point_cids.viewer().name("query_cids"),
-             body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
+            [body_self_collision = body_self_collisions.viewer().name("body_self_collision"),
              cmts = cmts.viewer().name("cmts")] __device__(InfoStacklessBVH::NodePredInfo info)
             {
                 constexpr IndexT invalid = static_cast<IndexT>(-1);
-                auto qbid = query_bids(info.query_id);
-                auto qcid = query_cids(info.query_id);
+                auto qbid = info.query_bid;
+                auto qcid = info.query_cid;
                 bool bid_cull = info.node_bid != invalid && qbid != invalid
                                 && qbid == info.node_bid
                                 && !body_self_collision(qbid);
@@ -564,11 +555,12 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
              contact_mask_tabular = info.contact_mask_tabular().viewer().name("contact_mask_tabular"),
              subscene_element_ids = info.subscene_element_ids().viewer().name("subscene_element_ids"),
              subscene_mask_tabular = info.subscene_mask_tabular().viewer().name("subscene_mask_tabular"),
-             v2b = info.v2b().viewer().name("v2b"),
              body_self_collision = info.body_self_collision().viewer().name("body_self_collision"),
              d_hats = info.d_hats().viewer().name("d_hats"),
-             alpha  = alpha] __device__(IndexT i, IndexT j)
+             alpha  = alpha] __device__(InfoStacklessBVH::LeafPredInfo info)
             {
+                auto i = info.i;
+                auto j = info.j;
                 auto V = Vs(i);
                 auto F = Fs(j);
 
@@ -590,9 +582,8 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                 if(F[0] == V || F[1] == V || F[2] == V)
                     return false;
 
-                auto body_i = v2b(V);
-                auto body_j = v2b(F[0]);
-                if(body_i == body_j && !body_self_collision(body_i))
+                if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
+                   && !body_self_collision(info.bid_i))
                     return false;
 
                 Vector3 P  = Ps(V);
