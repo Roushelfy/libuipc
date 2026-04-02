@@ -117,6 +117,7 @@ See [Contact Details](scene_configs/contact.md) for IPC vs AL-IPC pipeline selec
 |-----|------|---------|--------|-------------|
 | `extras/debug/dump_surface` | Int | `0` | | Dump surface meshes during Newton solve |
 | `extras/debug/dump_linear_system` | Int | `0` | | Dump linear system (matrix + RHS) |
+| `extras/debug/dump_solution_x` | Int | `0` | | Dump the current solve vector `x` as MatrixMarket output; used by mixed-precision quality comparisons |
 | `extras/debug/dump_linear_pcg` | Int | `0` | | Dump per-PCG-iteration data (only for `linear_pcg` solver) |
 | `extras/debug/dump_mas_matrices` | Int | `0` | | Dump MAS preconditioner matrices |
 | `extras/strict_mode/enable` | Int | `0` | | Promote line-search / Newton max-iter warnings to exceptions |

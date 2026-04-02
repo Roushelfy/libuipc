@@ -31,11 +31,24 @@ cmake --build . --config Release -j8
 - `UIPC_BUILD_TESTS` - Build test suite (ON by default)
 - `UIPC_BUILD_EXAMPLES` - Build examples (ON by default)
 - `UIPC_WITH_CUDA_BACKEND` - Enable CUDA backend (auto, disabled on macOS)
+- `UIPC_WITH_CUDA_MIXED_BACKEND` - Enable the separate `cuda_mixed` backend
+- `UIPC_CUDA_MIXED_PRECISION_LEVEL` - Mixed precision build level for `cuda_mixed` (`fp64|path1|path2|path3|path4|path5|path6|path7`)
+- `UIPC_WITH_NVTX` - Enable optional NVTX markers in `cuda_mixed`
 
 ### Run Tests
 Tests are Catch2 executables built to `build/Release/bin/`:
 ```bash
 ./build/Release/bin/uipc_test_<name>
+```
+
+### Build Documentation
+
+The docs site uses MkDocs with `docs/nav.md` as the navigation source via `literate-nav`.
+
+If MkDocs is not installed in the active environment, prefer an ephemeral `uv` run instead of changing repo files:
+
+```bash
+uv run --with mkdocs-material --with mkdocs-video --with mkdocs-literate-nav mkdocs build -f mkdocs.yaml
 ```
 
 ### Install Python Package
@@ -61,6 +74,7 @@ The codebase uses Data-Oriented Programming with an ECS-inspired RMR pattern for
 - `src/constitution/` - Material models (AffineBody, NeoHookean, springs, constraints)
 - `src/backends/` - Backend implementations loaded as dynamic modules
   - `cuda/` - GPU backend with CUDA kernels
+  - `cuda_mixed/` - Separate experimental mixed-precision CUDA backend
   - `none/` - CPU reference implementation
 - `src/pybind/` - Python bindings via pybind11
 - `src/io/` - File I/O (obj, gltf, serialization)
@@ -72,6 +86,23 @@ The codebase uses Data-Oriented Programming with an ECS-inspired RMR pattern for
 
 ### Backend Architecture
 Backends are MODULE libraries dynamically loaded at runtime. They implement a visitor pattern for scene traversal and provide device-specific optimizations.
+
+## Documentation Conventions
+
+- The published docs live under `docs/`.
+- Update `docs/nav.md` whenever adding a new page that should appear in the site nav.
+- The existing docs are primarily English; keep new docs in English unless the task explicitly asks otherwise.
+- Prefer documenting stable interfaces and workflows over hard-coding transient benchmark numbers.
+- For mixed-precision docs, treat code under `src/backends/cuda_mixed/` as the source of truth. Use `claude_plan.md` only for rationale or history when it still matches code.
+
+## Mixed Precision Notes
+
+- `cuda_mixed` is a separate backend loaded with `Engine("cuda_mixed")`; it is not a runtime mode inside `cuda`.
+- Mixed precision is compile-time only in the current implementation. Do not describe runtime precision switching or auto-fallback unless code actually supports it.
+- The main mixed-precision docs live under `docs/development/backend_cuda/mixed_precision/`.
+- `src/backends/cuda_mixed/mixed_precision/PRECISION_SCOPE.md` is an implementation-side reference, but the site docs should be written in normal docs style rather than copied verbatim.
+- Mixed-precision validation entrypoints are under `apps/benchmarks/mixed/` and `apps/benchmarks/uipc_assets/`.
+- `extras/debug/dump_solution_x` is part of the default scene config and is used for mixed-precision quality comparison workflows.
 
 ## Testing Structure
 

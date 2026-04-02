@@ -73,6 +73,33 @@ cmake --build . -j8
 !!!NOTE
     Use multi-thread to speed up the build process as possible, becasue the NVCC compiler will take a lot of time.
 
+### Build `cuda_mixed` with CMake
+
+Use the `cuda_mixed` backend when you want a compile-time mixed-precision build.
+
+```shell
+cd libuipc; mkdir build_mixed; cd build_mixed
+cmake -S .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
+  -DUIPC_CUDA_MIXED_PRECISION_LEVEL=path3 \
+  -DUIPC_WITH_NVTX=OFF
+cmake --build . -j8
+```
+
+Valid precision levels are `fp64`, `path1`, `path2`, `path3`, `path4`, `path5`, `path6`, and `path7`.
+
+If you also want optional side-by-side benchmark comparisons against the main CUDA backend, add `-DUIPC_WITH_CUDA_BACKEND=ON` during configure.
+
+At runtime, load the mixed backend explicitly:
+
+```cpp
+Engine engine{"cuda_mixed"};
+World  world{engine};
+```
+
+Precision selection is compile-time only in the current implementation.
+
 ## Build Libuipc with XMake
 
 If you prefer XMake over CMake, use the following commands.

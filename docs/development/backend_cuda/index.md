@@ -4,6 +4,16 @@ This document describes the implementation of the CUDA backend for the `libuipc`
 
 In this document, we assume that the reader has a basic understanding of the CUDA programming model, and won't describe the basic concepts of CUDA. You can refer to the [CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html) for more information. We also require the reader to have a basic understanding of parallel computing and programming, especially the parallel primitives.
 
+## Mixed Precision
+
+In addition to the main `cuda` backend, this repository also contains a separate `cuda_mixed` backend for compile-time mixed-precision experiments. It is loaded with `Engine("cuda_mixed")` and keeps the production `cuda` backend unchanged.
+
+The mixed-precision documentation is developer-focused and follows current code in `src/backends/cuda_mixed/` rather than historical planning notes:
+
+- [Mixed Precision Overview](mixed_precision/index.md)
+- [Mixed Precision Scope](mixed_precision/precision_scope.md)
+- [Mixed Precision Validation](mixed_precision/validation.md)
+
 ## From Local to Global
 
 The cuda backend is almost relying on the [prefix sum](https://en.wikipedia.org/wiki/Prefix_sum) to handle the data aggregation from the local level to the global level.

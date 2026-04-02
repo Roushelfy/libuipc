@@ -41,4 +41,7 @@
 - [Development](development/index.md)
     - [Backend](development/backend.md)
     - [Backend Cuda](development/backend_cuda/index.md)
+        - [Mixed Precision Overview](development/backend_cuda/mixed_precision/index.md)
+        - [Mixed Precision Scope](development/backend_cuda/mixed_precision/precision_scope.md)
+        - [Mixed Precision Validation](development/backend_cuda/mixed_precision/validation.md)
 - [Misc](misc/)
