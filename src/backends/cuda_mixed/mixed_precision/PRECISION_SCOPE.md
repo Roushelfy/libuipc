@@ -56,7 +56,8 @@
 | 4 | FEM SNH 变形梯度 F ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
 | 5 | FEM SNH 能量梯度 G ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
 | 6 | FEM SNH Hessian H ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
-| 6b | FEM PlasticDiscreteShellBending ALU | `finite_element/constitutions/plastic_discrete_shell_bending.cu` | ✅ |
+| 6b | FEM PlasticDiscreteShellBending ALU (strain, UID=31) | `finite_element/constitutions/plastic_discrete_shell_bending.cu` | ✅ |
+| 6c | FEM StressPlasticDiscreteShellBending ALU (stress, UID=32) | `finite_element/constitutions/stress_plastic_discrete_shell_bending.cu` | ✅ |
 | 7 | ABD OrthoPotential ALU | `affine_body/constitutions/ortho_potential.cu` | ✅ |
 | 8 | ABD ARAP ALU | `affine_body/constitutions/arap.cu` | ✅ |
 | 9 | ABD RevoluteJoint ALU | `affine_body/constitutions/affine_body_revolute_joint.cu` | ✅ |
@@ -68,6 +69,7 @@
 | 14 | ABD SoftTransformConstraint ALU | `affine_body/constraints/soft_transform_constraint.cu` | ✅ |
 | 15 | ABD ExternalArticulationConstraint ALU | `affine_body/constraints/external_articulation_constraint.cu` | ✅ |
 | 15b | ABD FixedJoint ALU | `affine_body/constitutions/affine_body_fixed_joint.cu` | ✅ |
+| 15e | ABD SphericalJoint ALU | `affine_body/constitutions/affine_body_spherical_joint.cu` | ✅ |
 | 15c | ABD Driving Revolute External Force ALU | `affine_body/affine_body_revolute_joint_external_body_force.cu` | ✅ |
 | 15d | ABD Driving Prismatic External Force ALU | `affine_body/affine_body_prismatic_joint_external_body_force.cu` | ✅ |
 | 16 | ABDJacobi J^T H J ALU domain | `affine_body/abd_jacobi_matrix.h/.cu` | ⚠️ |
