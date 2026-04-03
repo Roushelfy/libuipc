@@ -23,6 +23,7 @@ option(UIPC_BUILD_PYTHON_WHEEL "Wheel build mode for Python post-build helper" O
 option(UIPC_BUILD_EXAMPLES "Build examples" ON)
 option(UIPC_BUILD_TESTS "Build tests" ON)
 option(UIPC_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(UIPC_BUILD_TENSOR_CORE_LAB "Build independent tensor core experiment targets" OFF)
 option(UIPC_DEV_MODE "Enable developer mode" OFF)
 option(UIPC_WITH_USD_SUPPORT "Build with Universal Scene Description (USD) support" OFF)
 option(UIPC_WITH_VDB_SUPPORT "Build with Volumetric DataBase (VDB) support" OFF)
@@ -106,6 +107,10 @@ add_subdirectory(src)
 
 # apps
 add_subdirectory(apps)
+
+if(UIPC_BUILD_TENSOR_CORE_LAB)
+    add_subdirectory(experiments/tensor_core_lab)
+endif()
 
 # install headers (libuipc/include)
 uipc_install_headers()

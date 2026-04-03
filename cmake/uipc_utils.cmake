@@ -114,6 +114,11 @@ function(uipc_config_vcpkg_install)
         set(UIPC_WITH_ANY_CUDA_BACKEND ON)
     endif()
 
+    set(UIPC_WITH_ANY_BENCHMARK_TARGET OFF)
+    if(UIPC_BUILD_BENCHMARKS OR UIPC_BUILD_TENSOR_CORE_LAB)
+        set(UIPC_WITH_ANY_BENCHMARK_TARGET ON)
+    endif()
+
     set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_BINARY_DIR}")
     set(VCPKG_MANIFEST_FILE "${VCPKG_MANIFEST_DIR}/vcpkg.json")
     if ("${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
@@ -132,7 +137,7 @@ function(uipc_config_vcpkg_install)
         "--dev_mode=${UIPC_DEV_MODE}" # pass the UIPC_DEV_MODE as argument
         "--with_usd_support=${UIPC_WITH_USD_SUPPORT}" # pass the UIPC_WITH_USD_SUPPORT as argument
         "--with_vdb_support=${UIPC_WITH_VDB_SUPPORT}" # pass the UIPC_WITH_VDB_SUPPORT as argument
-        "--build_benchmarks=${UIPC_BUILD_BENCHMARKS}" # pass the benchmark switch as argument
+        "--build_benchmarks=${UIPC_WITH_ANY_BENCHMARK_TARGET}" # pass whether any benchmark target is enabled
         "--with_cuda_backend=${UIPC_WITH_ANY_CUDA_BACKEND}" # pass whether any CUDA backend is enabled
         OUTPUT_VARIABLE VCPKG_JSON_GENERATE_OUTPUT
         RESULT_VARIABLE VCPKG_JSON_GENERATE_RESULT
