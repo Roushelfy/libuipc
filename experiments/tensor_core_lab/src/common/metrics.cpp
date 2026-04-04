@@ -125,6 +125,23 @@ MatrixMetrics compare_square_batches(std::span<const double> reference,
                                batch_count);
 }
 
+MatrixMetrics compare_matrix_batches(std::span<const double> reference,
+                                     std::span<const double> candidate,
+                                     int                     logical_rows,
+                                     int                     logical_cols,
+                                     int                     physical_rows,
+                                     int                     physical_cols,
+                                     int                     batch_count)
+{
+    return compare_square_like(reference,
+                               candidate,
+                               logical_rows,
+                               logical_cols,
+                               physical_rows,
+                               physical_cols,
+                               batch_count);
+}
+
 MatrixMetrics compare_vector_batches(std::span<const double> reference,
                                      std::span<const double> candidate,
                                      int                     logical_dim,

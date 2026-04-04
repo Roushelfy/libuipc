@@ -9,6 +9,9 @@ Current repo state is **mostly aligned** with this plan.
 Tensor Core implementation strategy is defined separately in
 `experiments/doc/tensor_core_lab_tensor_core_upgrade_plan.md`.
 
+Pure batched GEMM experiments are defined separately in
+`experiments/doc/tensor_core_gemm_experiment_plan.md`.
+
 Known gaps in the current scaffold:
 
 - `tests/` and `bench/` use a few small host wrapper `.cpp` files on Windows so Catch2 and Google Benchmark registration remain reliable with CUDA translation units
@@ -18,6 +21,10 @@ Known gaps in the current scaffold:
 
 This file defines the **decision-complete target layout and build contract** that the implementation must converge to.
 
+`tensor_core_lab` is the structured-operator experiment target.
+
+`tensor_core_gemm` is a separate batched 2D GEMM experiment target.
+
 ## Target Directory Layout
 
 ```text
@@ -25,6 +32,7 @@ experiments/
   doc/
     tensor_core_lab_layout_and_build.md
     tensor_core_lab_tensor_core_upgrade_plan.md
+    tensor_core_gemm_experiment_plan.md
   tensor_core_lab/
     CMakeLists.txt
     README.md
@@ -89,6 +97,31 @@ experiments/
       aggregate.py
       emit_markdown.py
       profile_tensor_core.py
+  tensor_core_gemm/
+    CMakeLists.txt
+    README.md
+    include/tcg/
+      gemm_case.h
+      registry.h
+      runner.h
+    src/
+      cli/
+        bench_main.cpp
+        test_main.cpp
+      generators/
+        gemm_cases.cpp
+      registry/
+        shape_registry.cpp
+      runner.cu
+    tests/
+      gemm_cases.cu
+    bench/
+      gemm_bench.cu
+    tools/
+      run_gemm_matrix.py
+      aggregate_gemm.py
+      emit_gemm_markdown.py
+      profile_gemm_tensor_core.py
 ```
 
 ## Directory Responsibilities
@@ -192,6 +225,12 @@ Root `CMakeLists.txt` must define:
 option(UIPC_BUILD_TENSOR_CORE_LAB "Build independent tensor core lab" OFF)
 ```
 
+The pure GEMM experiment is gated separately by:
+
+```cmake
+option(UIPC_BUILD_TENSOR_CORE_GEMM "Build independent batched GEMM experiment targets" OFF)
+```
+
 After `add_subdirectory(apps)` it must add:
 
 ```cmake
@@ -257,6 +296,7 @@ That means the manifest-generation logic must treat:
 
 - `UIPC_BUILD_BENCHMARKS`
 - `UIPC_BUILD_TENSOR_CORE_LAB`
+- `UIPC_BUILD_TENSOR_CORE_GEMM`
 
 as separate frontends that both require the `benchmark` dependency.
 
