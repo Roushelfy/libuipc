@@ -33,10 +33,9 @@ TEST_CASE("tensor_core_lab_abd12_solve", "[tensor_core_lab][abd12]")
     else
     {
         REQUIRE(tc32.status == RunStatus::Ok);
-        CHECK(tc32.trace.impl_path == ImplPath::Baseline);
+        CHECK(tc32.trace.impl_path == ImplPath::TcWmma);
         CHECK(tc32.trace.tensor_core_requested);
-        CHECK(tc32.trace.tensor_core_verified
-              == TensorCoreVerification::BlockedByPermissions);
+        CHECK(tc32.trace.tensor_core_verified == TensorCoreVerification::Yes);
         CHECK(tc32.metrics.rel_fro < 1.0e-2);
         CHECK(tc32.metrics.nan_inf_count == 0);
     }

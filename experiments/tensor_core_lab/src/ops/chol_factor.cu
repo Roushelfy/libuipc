@@ -2,6 +2,8 @@
 
 #include <tcl/runner.h>
 
+#include <mma.h>
+
 #include <string>
 #include <vector>
 
@@ -12,6 +14,8 @@ namespace uipc::tensor_core_lab
 {
 namespace
 {
+using namespace nvcuda;
+
 template <typename T>
 __global__ void copy_buffer_kernel(T* dst, const T* src, size_t count)
 {
@@ -129,15 +133,193 @@ void copy_device_buffer(T* dst, const T* src, size_t count)
     TCL_CUDA_CHECK(cudaGetLastError());
 }
 
-void check_factor_status(const DeviceBuffer<int>& device_status)
+std::vector<int> download_factor_status(const DeviceBuffer<int>& device_status)
 {
     std::vector<int> host(device_status.size());
     device_status.copy_to_host(std::span<int>(host.data(), host.size()));
+    return host;
+}
+
+void check_factor_status(const DeviceBuffer<int>& device_status)
+{
+    const auto host = download_factor_status(device_status);
     for(const int s : host)
     {
         if(s != 0)
             throw std::runtime_error("SPD factorization failed: matrix is not numerically SPD");
     }
+}
+
+__global__ void chol16_wmma_kernel(const float* source_matrix,
+                                   float*       factor_matrix,
+                                   int          batch_count,
+                                   int*         status)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    const int batch = blockIdx.x;
+    if(batch >= batch_count)
+        return;
+
+    constexpr int dim        = 16;
+    constexpr int half       = 8;
+    constexpr int tile_size  = dim * dim;
+    const int     tid        = threadIdx.x;
+
+    __shared__ float s_a[tile_size];
+    __shared__ float s_l10_a[dim * half];
+    __shared__ float s_l10_t[half * dim];
+    __shared__ float s_update[tile_size];
+
+    const float* src = source_matrix + static_cast<size_t>(batch) * tile_size;
+
+    for(int i = tid; i < tile_size; i += blockDim.x)
+    {
+        s_a[i]      = src[i];
+        s_update[i] = 0.0f;
+    }
+    __syncthreads();
+
+    if(tid == 0)
+    {
+        for(int j = 0; j < half; ++j)
+        {
+            float diag = s_a[static_cast<size_t>(j) * dim + j];
+            for(int k = 0; k < j; ++k)
+            {
+                const float l = s_a[static_cast<size_t>(k) * dim + j];
+                diag -= l * l;
+            }
+
+            if(diag <= 0.0f)
+            {
+                status[batch] = 1;
+                return;
+            }
+
+            const float ljj = sqrtf(diag);
+            s_a[static_cast<size_t>(j) * dim + j] = ljj;
+
+            for(int i = j + 1; i < half; ++i)
+            {
+                float value = s_a[static_cast<size_t>(j) * dim + i];
+                for(int k = 0; k < j; ++k)
+                {
+                    value -= s_a[static_cast<size_t>(k) * dim + i]
+                             * s_a[static_cast<size_t>(k) * dim + j];
+                }
+                s_a[static_cast<size_t>(j) * dim + i] = value / ljj;
+            }
+        }
+
+        for(int col = 0; col < half; ++col)
+        {
+            const float diag = s_a[static_cast<size_t>(col) * dim + col];
+            for(int row = 0; row < half; ++row)
+            {
+                float value = s_a[static_cast<size_t>(col) * dim + (half + row)];
+                for(int k = 0; k < col; ++k)
+                {
+                    value -= s_a[static_cast<size_t>(k) * dim + (half + row)]
+                             * s_a[static_cast<size_t>(k) * dim + col];
+                }
+                s_a[static_cast<size_t>(col) * dim + (half + row)] = value / diag;
+            }
+        }
+    }
+    __syncthreads();
+
+    for(int i = tid; i < dim * half; i += blockDim.x)
+        s_l10_a[i] = 0.0f;
+    for(int i = tid; i < half * dim; i += blockDim.x)
+        s_l10_t[i] = 0.0f;
+    __syncthreads();
+
+    for(int col = tid; col < half; col += blockDim.x)
+    {
+        for(int row = 0; row < half; ++row)
+        {
+            const float value = wmma::__float_to_tf32(
+                s_a[static_cast<size_t>(col) * dim + (half + row)]);
+            s_l10_a[static_cast<size_t>(col) * dim + (half + row)] = value;
+            s_l10_t[static_cast<size_t>(col) * dim + (half + row)] = value;
+        }
+    }
+    __syncthreads();
+
+    wmma::fragment<wmma::matrix_a, dim, dim, half, wmma::precision::tf32, wmma::col_major>
+        a_frag;
+    wmma::fragment<wmma::matrix_b, dim, dim, half, wmma::precision::tf32, wmma::row_major>
+        b_frag;
+    wmma::fragment<wmma::accumulator, dim, dim, half, float> acc;
+    wmma::fill_fragment(acc, 0.0f);
+    wmma::load_matrix_sync(a_frag, s_l10_a, dim);
+    wmma::load_matrix_sync(b_frag, s_l10_t, dim);
+    wmma::mma_sync(acc, a_frag, b_frag, acc);
+    wmma::store_matrix_sync(s_update, acc, dim, wmma::mem_col_major);
+    __syncthreads();
+
+    if(tid == 0)
+    {
+        for(int col = 0; col < half; ++col)
+        {
+            for(int row = col; row < half; ++row)
+            {
+                s_a[static_cast<size_t>(half + col) * dim + (half + row)] -=
+                    s_update[static_cast<size_t>(half + col) * dim + (half + row)];
+            }
+        }
+
+        for(int j = 0; j < half; ++j)
+        {
+            float diag = s_a[static_cast<size_t>(half + j) * dim + (half + j)];
+            for(int k = 0; k < j; ++k)
+            {
+                const float l =
+                    s_a[static_cast<size_t>(half + k) * dim + (half + j)];
+                diag -= l * l;
+            }
+
+            if(diag <= 0.0f)
+            {
+                status[batch] = 1;
+                return;
+            }
+
+            const float ljj = sqrtf(diag);
+            s_a[static_cast<size_t>(half + j) * dim + (half + j)] = ljj;
+
+            for(int i = j + 1; i < half; ++i)
+            {
+                float value = s_a[static_cast<size_t>(half + j) * dim + (half + i)];
+                for(int k = 0; k < j; ++k)
+                {
+                    value -= s_a[static_cast<size_t>(half + k) * dim + (half + i)]
+                             * s_a[static_cast<size_t>(half + k) * dim + (half + j)];
+                }
+                s_a[static_cast<size_t>(half + j) * dim + (half + i)] = value / ljj;
+            }
+        }
+
+        for(int col = 0; col < dim; ++col)
+        {
+            for(int row = 0; row < dim; ++row)
+            {
+                if(row < col)
+                    s_a[static_cast<size_t>(col) * dim + row] = 0.0f;
+            }
+        }
+    }
+    __syncthreads();
+
+    float* dst = factor_matrix + static_cast<size_t>(batch) * tile_size;
+    for(int i = tid; i < tile_size; i += blockDim.x)
+        dst[i] = s_a[i];
+#else
+    (void)source_matrix;
+    (void)factor_matrix;
+    (void)batch_count;
+    (void)status;
+#endif
 }
 
 template <typename T>
@@ -234,6 +416,25 @@ void factorize_spd_baseline_impl(BackendContext& context,
     TCL_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+bool factorize_spd_tc_wmma_16_impl(int          batch_count,
+                                   const float* source_matrix,
+                                   float*       factor_matrix)
+{
+    DeviceBuffer<int> status(static_cast<size_t>(batch_count));
+    TCL_CUDA_CHECK(cudaMemset(status.data(), 0, status.size() * sizeof(int)));
+    chol16_wmma_kernel<<<batch_count, 32>>>(
+        source_matrix, factor_matrix, batch_count, status.data());
+    TCL_CUDA_CHECK(cudaGetLastError());
+    TCL_CUDA_CHECK(cudaDeviceSynchronize());
+    const auto host = download_factor_status(status);
+    for(const int s : host)
+    {
+        if(s != 0)
+            return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int spd_block_size(int physical_dim) noexcept
@@ -247,6 +448,16 @@ void factorize_spd(BackendContext& context,
                    const float*    source_matrix,
                    float*          factor_matrix)
 {
+    if(context.mode() == Mode::Tc32Tf32 && physical_dim == 16)
+    {
+        if(factorize_spd_tc_wmma_16_impl(batch_count, source_matrix, factor_matrix))
+        {
+            context.reset_trace();
+            context.set_trace(ImplPath::TcWmma, true, TensorCoreVerification::Yes);
+            return;
+        }
+    }
+
     if(context.mode() == Mode::Tc32Tf32)
     {
         context.reset_trace();

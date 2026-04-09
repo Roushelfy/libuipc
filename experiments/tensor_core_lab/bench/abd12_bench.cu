@@ -203,12 +203,12 @@ void BM_Abd12SolveTc32(benchmark::State& state)
 }
 }  // namespace
 
-BENCHMARK(BM_Abd12FactorFp64)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12FactorFp32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12FactorTc32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12InverseFp64)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12InverseFp32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12InverseTc32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12SolveFp64)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12SolveFp32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
-BENCHMARK(BM_Abd12SolveTc32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12FactorFp64)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12FactorFp32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12FactorTc32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12InverseFp64)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12InverseFp32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12InverseTc32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12SolveFp64)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12SolveFp32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Abd12SolveTc32)->Args({4096, 1})->Args({4096, 2})->Args({32768, 4})->UseManualTime();
