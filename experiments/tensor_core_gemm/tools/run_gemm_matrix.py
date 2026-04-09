@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def main() -> None:
 
     aggregate = Path(__file__).resolve().parent / "aggregate_gemm.py"
     aggregate_cmd = [
-        "python",
+        sys.executable,
         str(aggregate),
         "--bench_json",
         str(out_json),

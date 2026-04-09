@@ -15,6 +15,7 @@ MODE_MAP = {
 }
 
 PATTERNS = (
+    (re.compile(r"^BM_Abd12Assemble(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "abd12_assemble"),
     (re.compile(r"^BM_Fem12(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "fem12_local"),
     (re.compile(r"^BM_Joint24(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "joint24_local"),
     (re.compile(r"^BM_Abd12(?P<op>Factor|Inverse|Solve)(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "abd12"),

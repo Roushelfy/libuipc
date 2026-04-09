@@ -10,6 +10,7 @@ Current coverage:
   - `fp32_no_tc`
   - `tc32_tf32`
 - four operator families:
+  - `abd12_assemble`
   - `fem12_local`
   - `joint24_local`
   - `abd12_factorize` / `abd12_inverse` / `abd12_solve`

@@ -8,6 +8,7 @@ enum class OpKind
     Mas48Factorize,
     Mas48Inverse,
     Mas48Solve,
+    Abd12Assemble,
     Abd12Factorize,
     Abd12Inverse,
     Abd12Solve,
@@ -25,6 +26,8 @@ inline constexpr std::string_view to_string(OpKind kind) noexcept
             return "mas48_inverse";
         case OpKind::Mas48Solve:
             return "mas48_solve";
+        case OpKind::Abd12Assemble:
+            return "abd12_assemble";
         case OpKind::Abd12Factorize:
             return "abd12_factorize";
         case OpKind::Abd12Inverse:

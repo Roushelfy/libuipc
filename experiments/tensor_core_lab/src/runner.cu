@@ -35,11 +35,14 @@ PreparedCaseF32 prepare_f32_case(const ContractionCaseData& data)
     out.left.copy_from_host(cast_copy<float>(data.left));
     out.middle.copy_from_host(cast_copy<float>(data.middle));
 
-    if(out.has_secondary)
+    if(!data.right.empty())
     {
         out.right.resize(matrix_elements);
-        out.aux.resize(matrix_elements);
         out.right.copy_from_host(cast_copy<float>(data.right));
+    }
+    if(!data.aux.empty())
+    {
+        out.aux.resize(matrix_elements);
         out.aux.copy_from_host(cast_copy<float>(data.aux));
     }
 
@@ -66,12 +69,15 @@ PreparedCaseF64 prepare_f64_case(const ContractionCaseData& data)
     out.middle.copy_from_host(
         std::span<const double>(data.middle.data(), data.middle.size()));
 
-    if(out.has_secondary)
+    if(!data.right.empty())
     {
         out.right.resize(matrix_elements);
-        out.aux.resize(matrix_elements);
         out.right.copy_from_host(
             std::span<const double>(data.right.data(), data.right.size()));
+    }
+    if(!data.aux.empty())
+    {
+        out.aux.resize(matrix_elements);
         out.aux.copy_from_host(
             std::span<const double>(data.aux.data(), data.aux.size()));
     }
@@ -251,6 +257,47 @@ RunOutcome run_joint24_case(Mode mode,
         {
             auto prepared = prepare_f32_case(data);
             out           = execute_joint24_case(context, prepared, measure_time);
+            if(out.status == RunStatus::Ok)
+                out.metrics = compare_square_batches(data.reference,
+                                                     download_output(prepared),
+                                                     data.spec.shape.logical_rows,
+                                                     data.spec.shape.physical_rows,
+                                                     data.spec.batch_count);
+        }
+        return out;
+    }
+    catch(const std::exception& e)
+    {
+        return {RunStatus::Failure, 0.0, {}, e.what()};
+    }
+}
+
+RunOutcome run_abd12_assemble_case(Mode mode,
+                                   const ContractionCaseData& data,
+                                   bool                       measure_time)
+{
+    try
+    {
+        BackendContext context(mode);
+        if(!context.is_supported())
+            return {RunStatus::Unsupported, 0.0, {}, context.unsupported_reason()};
+
+        RunOutcome out;
+        if(mode == Mode::Fp64RefNoTc)
+        {
+            auto prepared = prepare_f64_case(data);
+            out           = execute_abd12_assemble_case(context, prepared, measure_time);
+            if(out.status == RunStatus::Ok)
+                out.metrics = compare_square_batches(data.reference,
+                                                     download_output(prepared),
+                                                     data.spec.shape.logical_rows,
+                                                     data.spec.shape.physical_rows,
+                                                     data.spec.batch_count);
+        }
+        else
+        {
+            auto prepared = prepare_f32_case(data);
+            out           = execute_abd12_assemble_case(context, prepared, measure_time);
             if(out.status == RunStatus::Ok)
                 out.metrics = compare_square_batches(data.reference,
                                                      download_output(prepared),

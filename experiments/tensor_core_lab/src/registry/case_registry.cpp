@@ -14,6 +14,8 @@ std::vector<int> smoke_batches(OpKind kind)
         case OpKind::Abd12Inverse:
         case OpKind::Abd12Solve:
             return {128};
+        case OpKind::Abd12Assemble:
+            return {256};
         case OpKind::Fem12Assemble:
             return {256};
         case OpKind::Joint24Assemble:
@@ -34,6 +36,8 @@ std::vector<int> full_batches(OpKind kind)
         case OpKind::Abd12Inverse:
         case OpKind::Abd12Solve:
             return {4096, 32768, 131072};
+        case OpKind::Abd12Assemble:
+            return {8192, 65536, 262144};
         case OpKind::Fem12Assemble:
             return {8192, 65536, 262144};
         case OpKind::Joint24Assemble:

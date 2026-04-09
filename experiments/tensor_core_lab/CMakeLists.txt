@@ -29,6 +29,7 @@ set(TCL_CORE_SOURCES
     src/backends/fp64_ref.cu
     src/backends/fp32_simt.cu
     src/backends/tc32_tf32.cu
+    src/generators/abd12_assemble_cases.cpp
     src/generators/abd12_cases.cpp
     src/generators/fem12_local_cases.cpp
     src/generators/joint24_local_cases.cpp
@@ -36,6 +37,7 @@ set(TCL_CORE_SOURCES
     src/registry/case_registry.cpp
     src/registry/op_registry.cpp
     src/runner.cu
+    src/ops/abd12_assemble.cu
     src/ops/chol_factor.cu
     src/ops/fem12_assemble.cu
     src/ops/inverse_from_factor.cu
@@ -88,6 +90,7 @@ add_executable(tensor_core_lab_test
     src/cli/test_main.cpp
     ${TCL_HOST_ONLY_TEST_SOURCES}
     tests/smoke_device.cu
+    tests/abd12_assemble.cu
     tests/fem12_assemble.cu
     tests/joint24_assemble.cu
     tests/unsupported_arch.cu
@@ -110,6 +113,7 @@ set_property(TARGET tensor_core_lab_test PROPERTY FOLDER "experiments/tensor_cor
 add_executable(tensor_core_lab_bench
     ${TCL_HOST_ONLY_BENCH_SOURCES}
     src/cli/bench_main.cpp
+    bench/abd12_assemble_bench.cu
     bench/fem12_local_bench.cu
     bench/joint24_local_bench.cu
 )

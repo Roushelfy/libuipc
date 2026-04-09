@@ -45,6 +45,11 @@ ContractionCaseData make_joint24_case(const std::string& name,
                                       int                seed,
                                       double             condition_scale);
 
+ContractionCaseData make_abd12_assemble_case(const std::string& name,
+                                             int                batch_count,
+                                             int                seed,
+                                             double             condition_scale);
+
 SpdCaseData make_mas48_case(const std::string& name,
                             int                batch_count,
                             int                seed,

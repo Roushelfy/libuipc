@@ -8,6 +8,7 @@ std::vector<OpKind> supported_ops()
         OpKind::Mas48Factorize,
         OpKind::Mas48Inverse,
         OpKind::Mas48Solve,
+        OpKind::Abd12Assemble,
         OpKind::Abd12Factorize,
         OpKind::Abd12Inverse,
         OpKind::Abd12Solve,

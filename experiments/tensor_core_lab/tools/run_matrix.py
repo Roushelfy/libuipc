@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -103,7 +104,10 @@ def main() -> None:
         json.dump(meta, f, indent=2)
 
     aggregate = Path(__file__).resolve().parent / "aggregate.py"
-    subprocess.run(["python", str(aggregate), "--bench_json", str(out_json), "--run_root", str(root)], check=True)
+    subprocess.run(
+        [sys.executable, str(aggregate), "--bench_json", str(out_json), "--run_root", str(root)],
+        check=True,
+    )
 
 
 if __name__ == "__main__":
