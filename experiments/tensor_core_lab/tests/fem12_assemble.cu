@@ -42,4 +42,21 @@ TEST_CASE("tensor_core_lab_fem12_assemble", "[tensor_core_lab][fem12]")
         CHECK(tc32.metrics.nan_inf_count == 0);
         CHECK(tc32.metrics.symmetry_error < 1.0e-3);
     }
+
+    const auto tc32_blas = run_fem12_case_blas(Mode::Tc32Tf32, data);
+    if(tc32_blas.status == RunStatus::Unsupported)
+    {
+        SUCCEED("tc32_tf32 is unsupported on this GPU");
+    }
+    else
+    {
+        REQUIRE(tc32_blas.status == RunStatus::Ok);
+        CHECK(tc32_blas.trace.impl_path == ImplPath::TcBlas);
+        CHECK(tc32_blas.trace.tensor_core_requested);
+        CHECK(tc32_blas.trace.tensor_core_verified
+              == TensorCoreVerification::BlockedByPermissions);
+        CHECK(tc32_blas.metrics.rel_fro < 5.0e-4);
+        CHECK(tc32_blas.metrics.nan_inf_count == 0);
+        CHECK(tc32_blas.metrics.symmetry_error < 1.0e-3);
+    }
 }

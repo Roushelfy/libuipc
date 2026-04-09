@@ -114,6 +114,96 @@ RunOutcome execute_baseline_impl(BackendContext& context, PreparedCaseT& data, b
     return out;
 }
 
+RunOutcome execute_tc_blas_impl(BackendContext& context,
+                                PreparedCaseF32& data,
+                                bool             measure_time)
+{
+    RunOutcome out;
+
+    const int dim = data.spec.shape.physical_rows;
+    if(dim != data.spec.shape.physical_cols)
+        return {RunStatus::InvalidArgument, 0.0, {}, "fem12 expects square padded matrices"};
+
+    const long long stride =
+        static_cast<long long>(dim) * static_cast<long long>(dim);
+    const float alpha = 1.0f;
+    const float beta0 = 0.0f;
+
+    context.reset_trace();
+    context.set_trace(ImplPath::TcBlas, true, TensorCoreVerification::BlockedByPermissions);
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop  = nullptr;
+
+    if(measure_time)
+    {
+        TCL_CUDA_CHECK(cudaEventCreate(&start));
+        TCL_CUDA_CHECK(cudaEventCreate(&stop));
+        TCL_CUDA_CHECK(cudaEventRecord(start));
+    }
+
+    TCL_CUBLAS_CHECK(context.tc_blas_matmul_strided_batched(CUBLAS_OP_N,
+                                                            CUBLAS_OP_N,
+                                                            dim,
+                                                            dim,
+                                                            dim,
+                                                            &alpha,
+                                                            data.middle.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.left.data(),
+                                                            dim,
+                                                            stride,
+                                                            &beta0,
+                                                            data.temp0.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.temp0.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.spec.batch_count));
+
+    TCL_CUBLAS_CHECK(context.tc_blas_matmul_strided_batched(CUBLAS_OP_T,
+                                                            CUBLAS_OP_N,
+                                                            dim,
+                                                            dim,
+                                                            dim,
+                                                            &alpha,
+                                                            data.left.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.temp0.data(),
+                                                            dim,
+                                                            stride,
+                                                            &beta0,
+                                                            data.output.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.output.data(),
+                                                            dim,
+                                                            stride,
+                                                            data.spec.batch_count));
+
+    symmetrize_square_kernel<<<data.spec.batch_count, 1>>>(
+        data.output.data(), dim, data.spec.batch_count);
+    TCL_CUDA_CHECK(cudaGetLastError());
+
+    if(measure_time)
+    {
+        TCL_CUDA_CHECK(cudaEventRecord(stop));
+        TCL_CUDA_CHECK(cudaEventSynchronize(stop));
+        float elapsed_ms = 0.0f;
+        TCL_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+        out.elapsed_ms = static_cast<double>(elapsed_ms);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    out.status = RunStatus::Ok;
+    out.trace  = context.trace();
+    return out;
+}
+
 __global__ void fem12_wmma_kernel(const float* left,
                                   const float* middle,
                                   float*       output,
@@ -257,6 +347,22 @@ RunOutcome execute_fem12_case(BackendContext& context,
 RunOutcome execute_fem12_case(BackendContext& context,
                               PreparedCaseF64& data,
                               bool             measure_time)
+{
+    return execute_baseline_impl<double>(context, data, measure_time);
+}
+
+RunOutcome execute_fem12_case_blas(BackendContext& context,
+                                   PreparedCaseF32& data,
+                                   bool             measure_time)
+{
+    if(context.mode() == Mode::Tc32Tf32)
+        return execute_tc_blas_impl(context, data, measure_time);
+    return execute_baseline_impl<float>(context, data, measure_time);
+}
+
+RunOutcome execute_fem12_case_blas(BackendContext& context,
+                                   PreparedCaseF64& data,
+                                   bool             measure_time)
 {
     return execute_baseline_impl<double>(context, data, measure_time);
 }

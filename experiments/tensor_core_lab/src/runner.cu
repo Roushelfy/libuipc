@@ -231,6 +231,47 @@ RunOutcome run_fem12_case(Mode mode,
     }
 }
 
+RunOutcome run_fem12_case_blas(Mode mode,
+                               const ContractionCaseData& data,
+                               bool                       measure_time)
+{
+    try
+    {
+        BackendContext context(mode);
+        if(!context.is_supported())
+            return {RunStatus::Unsupported, 0.0, {}, context.unsupported_reason()};
+
+        RunOutcome out;
+        if(mode == Mode::Fp64RefNoTc)
+        {
+            auto prepared = prepare_f64_case(data);
+            out           = execute_fem12_case_blas(context, prepared, measure_time);
+            if(out.status == RunStatus::Ok)
+                out.metrics = compare_square_batches(data.reference,
+                                                     download_output(prepared),
+                                                     data.spec.shape.logical_rows,
+                                                     data.spec.shape.physical_rows,
+                                                     data.spec.batch_count);
+        }
+        else
+        {
+            auto prepared = prepare_f32_case(data);
+            out           = execute_fem12_case_blas(context, prepared, measure_time);
+            if(out.status == RunStatus::Ok)
+                out.metrics = compare_square_batches(data.reference,
+                                                     download_output(prepared),
+                                                     data.spec.shape.logical_rows,
+                                                     data.spec.shape.physical_rows,
+                                                     data.spec.batch_count);
+        }
+        return out;
+    }
+    catch(const std::exception& e)
+    {
+        return {RunStatus::Failure, 0.0, {}, e.what()};
+    }
+}
+
 RunOutcome run_joint24_case(Mode mode,
                             const ContractionCaseData& data,
                             bool                       measure_time)

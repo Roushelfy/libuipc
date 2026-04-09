@@ -96,6 +96,12 @@ RunOutcome execute_fem12_case(BackendContext& context,
 RunOutcome execute_fem12_case(BackendContext& context,
                               PreparedCaseF64& data,
                               bool             measure_time);
+RunOutcome execute_fem12_case_blas(BackendContext& context,
+                                   PreparedCaseF32& data,
+                                   bool             measure_time);
+RunOutcome execute_fem12_case_blas(BackendContext& context,
+                                   PreparedCaseF64& data,
+                                   bool             measure_time);
 
 RunOutcome execute_joint24_case(BackendContext& context,
                                 PreparedCaseF32& data,
@@ -135,6 +141,9 @@ RunOutcome execute_spd_solve_case(BackendContext&   context,
 RunOutcome run_fem12_case(Mode mode,
                           const ContractionCaseData& data,
                           bool                       measure_time = false);
+RunOutcome run_fem12_case_blas(Mode mode,
+                               const ContractionCaseData& data,
+                               bool                       measure_time = false);
 RunOutcome run_joint24_case(Mode mode,
                             const ContractionCaseData& data,
                             bool                       measure_time = false);

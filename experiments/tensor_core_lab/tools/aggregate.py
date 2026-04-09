@@ -16,6 +16,7 @@ MODE_MAP = {
 
 PATTERNS = (
     (re.compile(r"^BM_Abd12Assemble(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "abd12_assemble"),
+    (re.compile(r"^BM_Fem12Tc32Blas/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "fem12_local_blas"),
     (re.compile(r"^BM_Fem12(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "fem12_local"),
     (re.compile(r"^BM_Joint24(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "joint24_local"),
     (re.compile(r"^BM_Abd12(?P<op>Factor|Inverse|Solve)(?P<mode>Fp64|Fp32|Tc32)/(?P<batch>\d+)/(?P<cond_exp>\d+)/manual_time$"), "abd12"),
@@ -71,9 +72,10 @@ def parse_name(name: str) -> dict[str, object]:
         op = groups.get("op")
         op_family = family if op is None else f"{family}_{OP_MAP[op]}"
         cond_exp = int(groups["cond_exp"])
+        mode = MODE_MAP[groups["mode"]] if groups.get("mode") is not None else "tc32_tf32"
         return {
             "op_family": op_family,
-            "mode": MODE_MAP[groups["mode"]],
+            "mode": mode,
             "batch": int(groups["batch"]),
             "condition_exp": cond_exp,
             "condition_scale": 10.0**cond_exp,

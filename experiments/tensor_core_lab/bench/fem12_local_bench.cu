@@ -53,7 +53,10 @@ void run_bench(benchmark::State& state,
     }
 }
 
-void bench_fem12(benchmark::State& state, Mode mode)
+using ExecF32 = RunOutcome (*)(BackendContext&, PreparedCaseF32&, bool);
+using ExecF64 = RunOutcome (*)(BackendContext&, PreparedCaseF64&, bool);
+
+void bench_fem12(benchmark::State& state, Mode mode, ExecF32 exec_f32, ExecF64 exec_f64)
 {
     const int    batch    = static_cast<int>(state.range(0));
     const int    cond_exp = static_cast<int>(state.range(1));
@@ -70,20 +73,46 @@ void bench_fem12(benchmark::State& state, Mode mode)
     if(mode == Mode::Fp64RefNoTc)
     {
         auto prepared = prepare_f64_case(data);
-        run_bench(state, data, prepared, context, execute_fem12_case);
+        run_bench(state, data, prepared, context, exec_f64);
     }
     else
     {
         auto prepared = prepare_f32_case(data);
-        run_bench(state, data, prepared, context, execute_fem12_case);
+        run_bench(state, data, prepared, context, exec_f32);
     }
 }
 
-void BM_Fem12Fp64(benchmark::State& state) { bench_fem12(state, Mode::Fp64RefNoTc); }
-void BM_Fem12Fp32(benchmark::State& state) { bench_fem12(state, Mode::Fp32NoTc); }
-void BM_Fem12Tc32(benchmark::State& state) { bench_fem12(state, Mode::Tc32Tf32); }
+void BM_Fem12Fp64(benchmark::State& state)
+{
+    bench_fem12(state,
+                Mode::Fp64RefNoTc,
+                static_cast<ExecF32>(execute_fem12_case),
+                static_cast<ExecF64>(execute_fem12_case));
+}
+void BM_Fem12Fp32(benchmark::State& state)
+{
+    bench_fem12(state,
+                Mode::Fp32NoTc,
+                static_cast<ExecF32>(execute_fem12_case),
+                static_cast<ExecF64>(execute_fem12_case));
+}
+void BM_Fem12Tc32(benchmark::State& state)
+{
+    bench_fem12(state,
+                Mode::Tc32Tf32,
+                static_cast<ExecF32>(execute_fem12_case),
+                static_cast<ExecF64>(execute_fem12_case));
+}
+void BM_Fem12Tc32Blas(benchmark::State& state)
+{
+    bench_fem12(state,
+                Mode::Tc32Tf32,
+                static_cast<ExecF32>(execute_fem12_case_blas),
+                static_cast<ExecF64>(execute_fem12_case_blas));
+}
 }  // namespace
 
 BENCHMARK(BM_Fem12Fp64)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
 BENCHMARK(BM_Fem12Fp32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
 BENCHMARK(BM_Fem12Tc32)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
+BENCHMARK(BM_Fem12Tc32Blas)->Args({4096, 2})->Args({32768, 4})->UseManualTime();
