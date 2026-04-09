@@ -1,3 +1,6 @@
+#include <numbers>
+#include <utils/make_spd.h>
+#include <utils/matrix_assembler.h>
 #include <affine_body/inter_affine_body_constitution.h>
 #include <uipc/builtin/attribute_name.h>
 #include <affine_body/inter_affine_body_constraint.h>
@@ -14,6 +17,7 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
   public:
     using InterAffineBodyConstitution::InterAffineBodyConstitution;
     static constexpr SizeT HalfHessianSize = 2 * (2 + 1) / 2;
+    static constexpr SizeT StencilSize     = 2;
 
     SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
 
@@ -180,27 +184,17 @@ Edge             = ({}, {}))",
                        Eigen::Matrix<Alu, 12, 1> q_i = qs(bids(0)).template cast<Alu>();
                        Eigen::Matrix<Alu, 12, 1> q_j = qs(bids(1)).template cast<Alu>();
 
-                       ABDJacobi Js[4] = {ABDJacobi{X_bar.segment<3>(0)},
-                                          ABDJacobi{X_bar.segment<3>(3)},
-                                          ABDJacobi{X_bar.segment<3>(6)},
-                                          ABDJacobi{X_bar.segment<3>(9)}};
+                       Eigen::Matrix<Alu, 3, 1> qi0_bar = X_bar.segment<3>(0).template cast<Alu>();
+                       Eigen::Matrix<Alu, 3, 1> qi1_bar = X_bar.segment<3>(3).template cast<Alu>();
+                       Eigen::Matrix<Alu, 3, 1> qj0_bar = X_bar.segment<3>(6).template cast<Alu>();
+                       Eigen::Matrix<Alu, 3, 1> qj1_bar = X_bar.segment<3>(9).template cast<Alu>();
 
-                       Eigen::Matrix<Alu, 3, 12> J0 = Js[0].to_mat().template cast<Alu>();
-                       Eigen::Matrix<Alu, 3, 12> J1 = Js[1].to_mat().template cast<Alu>();
-                       Eigen::Matrix<Alu, 3, 12> J2 = Js[2].to_mat().template cast<Alu>();
-                       Eigen::Matrix<Alu, 3, 12> J3 = Js[3].to_mat().template cast<Alu>();
+                       Eigen::Matrix<Alu, 6, 1> F;
+                       RJ::Faxis<Alu>(F, qi0_bar, qi1_bar, q_i, qj0_bar, qj1_bar, q_j);
 
-                       Eigen::Matrix<Alu, 3, 1> x0 = (J0 * q_i).eval();
-                       Eigen::Matrix<Alu, 3, 1> x1 = (J1 * q_i).eval();
-                       Eigen::Matrix<Alu, 3, 1> x2 = (J2 * q_j).eval();
-                       Eigen::Matrix<Alu, 3, 1> x3 = (J3 * q_j).eval();
-
-                       Alu E0 = (x0 - x2).squaredNorm();
-                       Alu E1 = (x1 - x3).squaredNorm();
-
-                       // energy = 1/2 * kappa * (||x0 - x2||^2 + ||x1 - x3||^2)
-
-                       Es(I) = safe_cast<Float>(kappa * safe_cast<Alu>(0.5) * (E0 + E1));
+                       Alu E;
+                       RJ::Eaxis<Alu>(E, kappa, F);
+                       Es(I) = safe_cast<Float>(E);
                    });
     }
 
@@ -216,7 +210,11 @@ Edge             = ({}, {}))",
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
         using namespace muda;
-        namespace RJ = sym::affine_body_revolute_joint;
+        using Vector24    = Vector<Float, 24>;
+        using Matrix24x24 = Matrix<Float, 24, 24>;
+        using Matrix6x6   = Matrix<Float, 6, 6>;
+
+        namespace RJ       = sym::affine_body_revolute_joint;
         auto gradient_only = info.gradient_only();
         ParallelFor()
             .file_line(__FILE__, __LINE__)
@@ -228,10 +226,10 @@ Edge             = ({}, {}))",
                  body_masses = info.body_masses().viewer().name("body_masses"),
                  qs          = info.qs().viewer().name("qs"),
                  G12s        = info.gradients().viewer().name("G12s"),
-                 H12x12s = info.hessians().viewer().name("H12x12s"),
+                 H12x12s     = info.hessians().viewer().name("H12x12s"),
                  gradient_only] __device__(int I)
                 {
-                    using Alu = ActivePolicy::AluScalar;
+                    using Alu   = ActivePolicy::AluScalar;
                     using Store = InterAffineBodyConstitutionManager::StoreScalar;
                     Vector2i        bids  = body_ids(I);
                     const Vector12& X_bar = rest_positions(I);
@@ -239,79 +237,46 @@ Edge             = ({}, {}))",
                     Eigen::Matrix<Alu, 12, 1> q_i = qs(bids(0)).template cast<Alu>();
                     Eigen::Matrix<Alu, 12, 1> q_j = qs(bids(1)).template cast<Alu>();
 
-                    ABDJacobi Js[4] = {ABDJacobi{X_bar.segment<3>(0)},
-                                       ABDJacobi{X_bar.segment<3>(3)},
-                                       ABDJacobi{X_bar.segment<3>(6)},
-                                       ABDJacobi{X_bar.segment<3>(9)}};
+                    Eigen::Matrix<Alu, 3, 1> qi0_bar = X_bar.segment<3>(0).template cast<Alu>();
+                    Eigen::Matrix<Alu, 3, 1> qi1_bar = X_bar.segment<3>(3).template cast<Alu>();
+                    Eigen::Matrix<Alu, 3, 1> qj0_bar = X_bar.segment<3>(6).template cast<Alu>();
+                    Eigen::Matrix<Alu, 3, 1> qj1_bar = X_bar.segment<3>(9).template cast<Alu>();
 
-                    Eigen::Matrix<Alu, 3, 12> J0 = Js[0].to_mat().template cast<Alu>();
-                    Eigen::Matrix<Alu, 3, 12> J1 = Js[1].to_mat().template cast<Alu>();
-                    Eigen::Matrix<Alu, 3, 12> J2 = Js[2].to_mat().template cast<Alu>();
-                    Eigen::Matrix<Alu, 3, 12> J3 = Js[3].to_mat().template cast<Alu>();
-
-                    Eigen::Matrix<Alu, 3, 1> D02 = (J0 * q_i - J2 * q_j).eval();
-                    Eigen::Matrix<Alu, 3, 1> D13 = (J1 * q_i - J3 * q_j).eval();
                     Alu K = safe_cast<Alu>(
                         strength_ratio(I)
                         * (body_masses(bids(0)).mass() + body_masses(bids(1)).mass()));
 
-                    // Fill Body Gradient:
-                    {
-                        // G = 0.5 * kappa * (J0^T * (x0 - x2) + J1^T * (x1 - x3))
-                        Eigen::Matrix<Alu, 12, 1> G_i =
-                            (K * (J0.transpose() * D02 + J1.transpose() * D13)).eval();
-                        G12s(2 * I + 0).write(bids(0), downcast_gradient<Store>(G_i));
-                    }
-                    {
-                        // G = 0.5 * kappa * (J2^T * (x2 - x0) + J3^T * (x3 - x1))
-                        Eigen::Matrix<Alu, 12, 1> G_j =
-                            (K * (J2.transpose() * (-D02) + J3.transpose() * (-D13))).eval();
-                        G12s(2 * I + 1).write(bids(1), downcast_gradient<Store>(G_j));
-                    }
+                    // Compute constraint violation in F-space
+                    Eigen::Matrix<Alu, 6, 1> F;
+                    RJ::Faxis<Alu>(F, qi0_bar, qi1_bar, q_i, qj0_bar, qj1_bar, q_j);
 
-                    // Fill Body Hessian:
-                    if(!gradient_only)
-                    {
-                        {
-                            Eigen::Matrix<Alu, 12, 12> H_ii;
-                            RJ::Hess<Alu>(H_ii,
-                                          K,
-                                          Js[0].x_bar().template cast<Alu>(),
-                                          Js[0].x_bar().template cast<Alu>(),
-                                          Js[1].x_bar().template cast<Alu>(),
-                                          Js[1].x_bar().template cast<Alu>());
-                            H12x12s(HalfHessianSize * I + 0)
-                                .write(bids(0), bids(0), downcast_hessian<Store>(H_ii));
-                        }
-                        {
-                            Eigen::Matrix<Alu, 12, 12> H;
-                            Vector2i    lr = bids;
-                            RJ::Hess<Alu>(H,
-                                          -K,
-                                          Js[0].x_bar().template cast<Alu>(),
-                                          Js[2].x_bar().template cast<Alu>(),
-                                          Js[1].x_bar().template cast<Alu>(),
-                                          Js[3].x_bar().template cast<Alu>());
-                            if(bids(0) > bids(1))
-                            {
-                                H.transposeInPlace();
-                                lr = Vector2i{bids(1), bids(0)};
-                            }
-                            H12x12s(HalfHessianSize * I + 1)
-                                .write(lr(0), lr(1), downcast_hessian<Store>(H));
-                        }
-                        {
-                            Eigen::Matrix<Alu, 12, 12> H_jj;
-                            RJ::Hess<Alu>(H_jj,
-                                          K,
-                                          Js[2].x_bar().template cast<Alu>(),
-                                          Js[2].x_bar().template cast<Alu>(),
-                                          Js[3].x_bar().template cast<Alu>(),
-                                          Js[3].x_bar().template cast<Alu>());
-                            H12x12s(HalfHessianSize * I + 2)
-                                .write(bids(1), bids(1), downcast_hessian<Store>(H_jj));
-                        }
-                    }
+                    // Compute gradient in F-space
+                    Eigen::Matrix<Alu, 6, 1> dEdF;
+                    RJ::dEaxisdFaxis<Alu>(dEdF, K, F);
+
+                    // Map gradient back to ABD space: G24 = J^T * dEdF
+                    Eigen::Matrix<Alu, 24, 1> G24;
+                    RJ::JaxisT_Gaxis<Alu>(G24, dEdF, qi0_bar, qi1_bar, qj0_bar, qj1_bar);
+
+                    // Fill Body Gradient
+                    DoubletVectorAssembler DVA{G12s};
+                    DVA.segment<StencilSize>(StencilSize * I)
+                        .write(bids, downcast_gradient<Store>(G24));
+
+                    if(gradient_only)
+                        return;
+
+                    // Fill Body Hessian
+                    Eigen::Matrix<Alu, 6, 6> ddEddF;
+                    RJ::ddEaxisddFaxis<Alu>(ddEddF, K, F);
+
+                    // Map Hessian back to ABD space: H24 = J^T * ddEddF * J
+                    Eigen::Matrix<Alu, 24, 24> H24;
+                    RJ::JaxisT_Haxis_Jaxis<Alu>(H24, ddEddF, qi0_bar, qi1_bar, qj0_bar, qj1_bar);
+
+                    TripletMatrixAssembler TMA{H12x12s};
+                    TMA.half_block<StencilSize>(HalfHessianSize * I)
+                        .write(bids, downcast_hessian<Store>(H24));
                 });
     }
 
