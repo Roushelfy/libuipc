@@ -1,0 +1,46 @@
+[
+  {
+    "name": "rigid_ipc_arch_101",
+    "enabled": true,
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": ["rigid", "contact", "heavy"],
+    "perf_warning_pct": 25.0,
+    "notes": "101 arch blocks with heavy frictional contact."
+  },
+  {
+    "name": "rigid_ipc_cone_pile",
+    "enabled": true,
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": ["rigid", "contact"],
+    "perf_warning_pct": 25.0,
+    "notes": "Pile of cones falling with contact."
+  },
+  {
+    "name": "rigid_ipc_gear_chain",
+    "enabled": true,
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": ["rigid", "contact"],
+    "perf_warning_pct": 25.0,
+    "notes": "Gear chain with complex persistent contact."
+  },
+  {
+    "name": "rigid_ipc_fracture_wall",
+    "enabled": true,
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": ["rigid", "contact", "heavy"],
+    "perf_warning_pct": 25.0,
+    "notes": "Fracture wall with many fragments and contact."
+  }
+]
