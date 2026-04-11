@@ -1,0 +1,39 @@
+[
+  {
+    "name": "fem_bouncing_cubes",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "fem_basic",
+    "frames_perf": 60,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contact",
+      "fem_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "FEM bouncing cubes scene.",
+    "config_overrides": {}
+  },
+  {
+    "name": "fem_link_drop",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "fem_basic",
+    "frames_perf": 40,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": false,
+    "tags": [
+      "fem",
+      "no_contact",
+      "regression",
+      "fem_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "FEM-only link-drop regression scene.",
+    "config_overrides": {}
+  }
+]

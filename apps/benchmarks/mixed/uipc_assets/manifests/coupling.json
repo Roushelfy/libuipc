@@ -1,0 +1,22 @@
+[
+  {
+    "name": "abd_fem_tower",
+    "enabled": true,
+    "scenario": "coupling",
+    "scenario_family": "coupling",
+    "frames_perf": 60,
+    "frames_quality": 25,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "coupling",
+      "abd",
+      "fem",
+      "contact",
+      "regression"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Coupled ABD/FEM tower with frictional contact.",
+    "config_overrides": {}
+  }
+]

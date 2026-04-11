@@ -1,0 +1,40 @@
+[
+  {
+    "name": "abd_external_force",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "abd_basic",
+    "frames_perf": 60,
+    "frames_quality": 25,
+    "quality_enabled": true,
+    "contact_enabled": false,
+    "tags": [
+      "abd",
+      "no_contact",
+      "regression",
+      "abd_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Affine-body external-force regression scene.",
+    "config_overrides": {}
+  },
+  {
+    "name": "cube_ground",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "abd_basic",
+    "frames_perf": 40,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contact",
+      "regression",
+      "abd_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Small ABD/contact regression scene.",
+    "config_overrides": {}
+  }
+]

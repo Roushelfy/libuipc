@@ -1,0 +1,79 @@
+[
+  {
+    "name": "fem_link_drop",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "fem_basic",
+    "frames_perf": 40,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": false,
+    "tags": [
+      "fem",
+      "no_contact",
+      "regression",
+      "fem_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "FEM-only link-drop regression scene.",
+    "config_overrides": {}
+  },
+  {
+    "name": "cube_ground",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "abd_basic",
+    "frames_perf": 40,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contact",
+      "regression",
+      "abd_basic"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Small ABD/contact regression scene.",
+    "config_overrides": {}
+  },
+  {
+    "name": "abd_fem_tower",
+    "enabled": true,
+    "scenario": "coupling",
+    "scenario_family": "coupling",
+    "frames_perf": 60,
+    "frames_quality": 25,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "coupling",
+      "abd",
+      "fem",
+      "contact",
+      "regression"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Coupled ABD/FEM tower with frictional contact.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_wrecking_ball",
+    "enabled": true,
+    "scenario": "rigid",
+    "scenario_family": "contact_basic",
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "rigid",
+      "contact_basic",
+      "contact",
+      "heavy"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC scene in the contact_basic family.",
+    "config_overrides": {}
+  }
+]
