@@ -27,7 +27,7 @@ Mixed precision is selected at configure time.
 | CMake option | Meaning |
 |---|---|
 | `UIPC_WITH_CUDA_MIXED_BACKEND` | Builds the `cuda_mixed` backend |
-| `UIPC_CUDA_MIXED_PRECISION_LEVEL` | Selects `fp64`, `path1`, `path2`, `path3`, `path4`, `path5`, `path6`, or `path7` |
+| `UIPC_CUDA_MIXED_PRECISION_LEVEL` | Selects `fp64`, `path1`, `path2`, `path3`, `path4`, `path5`, `path6`, `path7`, or `path8` |
 | `UIPC_WITH_NVTX` | Enables optional NVTX markers inside `cuda_mixed` |
 
 Invalid values for `UIPC_CUDA_MIXED_PRECISION_LEVEL` fail at CMake configure time.
@@ -35,12 +35,12 @@ Invalid values for `UIPC_CUDA_MIXED_PRECISION_LEVEL` fail at CMake configure tim
 Example:
 
 ```shell
-cmake -S . -B build_impl_path3 \
+cmake -S . -B build/build_impl_path3 \
   -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
   -DUIPC_CUDA_MIXED_PRECISION_LEVEL=path3 \
   -DUIPC_WITH_NVTX=OFF
 
-cmake --build build_impl_path3 --config Release
+cmake --build build/build_impl_path3 --config Release
 ```
 
 Important constraints:
@@ -74,18 +74,20 @@ Current path matrix:
 | `path5` | `float` | `float` | `float` | `double` | `double` |
 | `path6` | `float` | `float` | `float` | `double` | `double` |
 | `path7` | `float` | `float` | `float` | `float` | `float` |
+| `path8` | `float` | `float` | `float` | `float` | `double` |
 
 Additional compile-time policy flags:
 
 | Flag | Meaning |
 |---|---|
-| `preconditioner_no_double_intermediate` | Enabled in `path6` and `path7` |
+| `preconditioner_no_double_intermediate` | Enabled in `path6`, `path7`, and `path8` |
 | `full_pcg_fp32` | Enabled only in `path7` |
 
 In practice:
 
 - `path6` keeps the same headline type matrix as `path5`, but removes double intermediates inside supported preconditioners.
 - `path7` extends fp32 all the way into the solve vector and PCG iteration scalars.
+- `path8` is a diagnostic split path: it keeps `SolveScalar=float` like `path7`, but restores `PcgIterScalar=double` to isolate iteration-scalar sensitivity.
 
 ## Core Files
 

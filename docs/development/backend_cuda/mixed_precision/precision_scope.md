@@ -22,6 +22,7 @@ The paths are cumulative, but not all changes are just "more fp32". Two late-sta
 | `path5` | `AluScalar = float`, `StoreScalar = float`, `PcgAuxScalar = float` |
 | `path6` | `path5` plus `preconditioner_no_double_intermediate` |
 | `path7` | `path6` plus full-PCG fp32 for `SolveScalar` and `PcgIterScalar` |
+| `path8` | `path6` plus `SolveScalar = float` while keeping `PcgIterScalar = double` |
 
 ## ALU Domain
 
@@ -77,15 +78,16 @@ The solve domain is intentionally conservative until `path7`.
 
 | Component | Representative files | Status | Notes |
 |---|---|---|---|
-| Solve vector `x` | `linear_system/global_linear_system.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` for `fp64` through `path6`; `float` only in `path7` |
-| Iteration scalars `rz`, `alpha`, `beta` | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.h`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` until `path7`, then `float` |
+| Solve vector `x` | `linear_system/global_linear_system.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` for `fp64` through `path6`; `float` in `path7` and `path8` |
+| Iteration scalars `rz`, `alpha`, `beta` | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.h`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` through `path6`, `float` in `path7`, restored to `double` in diagnostic `path8` |
 | Solution export for quality checks | `linear_system/global_linear_system.cu` | Implemented | `extras/debug/dump_solution_x` dumps the current `x` for offline comparison |
 
 ## Important Caveats
 
 - `path6` is not just a label change from `path5`. It activates `preconditioner_no_double_intermediate` in supported preconditioners.
 - `path7` is the first level that moves both the solve vector and PCG iteration scalars to fp32.
-- The FEM MAS preconditioner is disabled when `StoreScalar = float`, which currently means `path2` through `path7`.
+- `path8` is a diagnostic split path for `path7`: solve-vector storage stays fp32 while iteration scalars return to fp64.
+- The FEM MAS preconditioner is disabled when `StoreScalar = float`, which currently means `path2` through `path8`.
 - `ABDJacobi` is still partially typed and should be treated as transitional code.
 - Mixed precision remains compile-time only. There is no runtime precision switch and no auto-fallback path.
 
@@ -123,4 +125,4 @@ Recommended follow-up checks:
 
 1. Re-run the mixed Stage1 smoke benchmark.
 2. Re-run Stage2 perf / quality for affected paths.
-3. Re-run `uipc_assets` comparison if the change touches solution quality or contact-heavy workloads.
+3. Re-run `python apps/benchmarks/mixed/uipc_assets/cli.py run ...` if the change touches solution quality or contact-heavy workloads.

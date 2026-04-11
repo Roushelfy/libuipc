@@ -5,6 +5,7 @@
 #include <muda/ext/eigen/log_proxy.h>
 #include <affine_body/abd_line_search_subreporter.h>
 #include <affine_body/affine_body_kinetic.h>
+#include <uipc/common/timer.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -60,6 +61,7 @@ void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
 
     // Compute kinetic energy
     {
+        Timer timer{"ABD Energy: Kinetic"};
         body_id_to_kinetic_energy.resize(body_count);
 
         ABDLineSearchReporter::ComputeEnergyInfo this_info;
@@ -94,6 +96,7 @@ void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
 
     // Compute shape energy
     {
+        Timer timer{"ABD Energy: Shape"};
         body_id_to_shape_energy.resize(body_count);
 
         // Distribute the computation of shape energy to each constitution
@@ -115,6 +118,7 @@ void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
 
     // Collect the energy from other reporters
     {
+        Timer timer{"ABD Energy: Subreporters"};
         auto         reporter_view = reporters.view();
         span<IndexT> counts        = reporter_energy_offsets_counts.counts();
         for(auto&& [i, R] : enumerate(reporter_view))
@@ -179,4 +183,3 @@ void ABDLineSearchReporter::add_reporter(ABDLineSearchSubreporter* reporter)
     m_impl.reporters.register_sim_system(*reporter);
 }
 }  // namespace uipc::backend::cuda_mixed
-

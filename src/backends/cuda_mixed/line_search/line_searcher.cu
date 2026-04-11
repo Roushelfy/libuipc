@@ -2,10 +2,27 @@
 #include <uipc/common/enumerate.h>
 #include <uipc/common/zip.h>
 #include <line_search/line_search_reporter.h>
+#include <affine_body/abd_line_search_reporter.h>
+#include <finite_element/fem_line_search_reporter.h>
+#include <dytopo_effect_system/dytopo_effect_line_search_reporter.h>
 #include <uipc/common/timer.h>
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+const char* line_search_reporter_timer_name(const LineSearchReporter& reporter)
+{
+    if(dynamic_cast<const ABDLineSearchReporter*>(&reporter))
+        return "Energy Reporter: ABD";
+    if(dynamic_cast<const FEMLineSearchReporter*>(&reporter))
+        return "Energy Reporter: FEM";
+    if(dynamic_cast<const DyTopoEffectLineSearchReporter*>(&reporter))
+        return "Energy Reporter: Contact";
+    return "Energy Reporter: Other";
+}
+}  // namespace
+
 REGISTER_SIM_SYSTEM(LineSearcher);
 
 void LineSearcher::do_build() {}
@@ -63,7 +80,10 @@ Float LineSearcher::compute_energy(bool is_initial)
     {
         ComputeEnergyInfo info{this};
         info.m_is_initial = is_initial;
-        R->compute_energy(info);
+        {
+            Timer timer{line_search_reporter_timer_name(*R)};
+            R->compute_energy(info);
+        }
         UIPC_ASSERT(info.m_energy.has_value(),
                     "Energy[{}] not set by reporter, did you forget to call energy()?",
                     R->name());
@@ -129,4 +149,3 @@ SizeT LineSearcher::max_iter() const noexcept
     return m_max_iter;
 }
 }  // namespace uipc::backend::cuda_mixed
-

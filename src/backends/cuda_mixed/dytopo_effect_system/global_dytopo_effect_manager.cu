@@ -2,6 +2,8 @@
 #include <dytopo_effect_system/global_dytopo_effect_manager.h>
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
 #include <dytopo_effect_system/dytopo_effect_receiver.h>
+#include <contact_system/contact_reporter.h>
+#include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
 #include <kernel_cout.h>
 #include <uipc/common/unit.h>
@@ -33,6 +35,16 @@ class SimSystemCreator<cuda_mixed::GlobalDyTopoEffectManager>
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+const char* dytopo_assemble_timer_name(const DyTopoEffectReporter& reporter)
+{
+    if(dynamic_cast<const ContactReporter*>(&reporter))
+        return "Assemble Contact";
+    return "Assemble Other";
+}
+}  // namespace
+
 REGISTER_SIM_SYSTEM(GlobalDyTopoEffectManager);
 
 muda::CBCOOVectorView<GlobalDyTopoEffectManager::StoreScalar, 3>
@@ -150,7 +162,10 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
             collected_dytopo_effect_gradient.view().subview(g_offset, g_count);
         info.m_hessians = collected_dytopo_effect_hessian.view().subview(h_offset, h_count);
 
-        reporter->assemble(info);
+        {
+            Timer timer{dytopo_assemble_timer_name(*reporter)};
+            reporter->assemble(info);
+        }
     }
 }
 

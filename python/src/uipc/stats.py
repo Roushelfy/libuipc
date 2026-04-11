@@ -965,6 +965,15 @@ class SimulationStats:
         include_other: bool = True,
     ) -> bool:
         """Draw a hierarchical sunburst chart onto *ax*."""
+        def sanitize_sizes(values: list[float], eps: float = 1e-12) -> list[float]:
+            sanitized = []
+            for value in values:
+                value = 0.0 if value is None else float(value)
+                if value < 0.0 and abs(value) <= eps:
+                    value = 0.0
+                sanitized.append(max(0.0, value))
+            return sanitized
+
         if not timer_data.get('children'):
             return False
         level_data = {}
@@ -1029,9 +1038,11 @@ class SimulationStats:
             inner_radius = 0.25 + (max_depth_seen - depth) * ring_width
             if depth == 1:
                 sorted_items = list(nodes.values())
-                sizes = [item['duration'] for item in sorted_items]
-                for item in sorted_items:
-                    item['percentage'] = (item['duration'] / total_duration) * 100
+                sizes = sanitize_sizes([item['duration'] for item in sorted_items])
+                if sum(sizes) <= 0.0:
+                    continue
+                for item, size in zip(sorted_items, sizes):
+                    item['percentage'] = (size / total_duration) * 100
                 wedges, _ = ax.pie(
                     sizes, labels=nodes, radius=inner_radius + ring_width,
                     startangle=90, counterclock=True, autopct=None,
@@ -1064,9 +1075,11 @@ class SimulationStats:
                 for parent, group_children in parent_groups.items():
                     if parent not in level_data.get(depth - 1, {}):
                         continue
-                    for item in group_children:
-                        item['percentage'] = (item['duration'] / total_duration) * 100
-                    child_sizes = [item['duration'] for item in group_children]
+                    child_sizes = sanitize_sizes([item['duration'] for item in group_children])
+                    if sum(child_sizes) <= 0.0:
+                        continue
+                    for item, size in zip(group_children, child_sizes):
+                        item['percentage'] = (size / total_duration) * 100
                     if parent in node_angles.get(depth - 1, {}):
                         p_start, p_end = node_angles[depth - 1][parent]
                         p_angle = p_end - p_start

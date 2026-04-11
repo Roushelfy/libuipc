@@ -27,7 +27,14 @@ class LinearFusedPCG : public IterativeSolver
 
     SizeT fused_pcg(muda::DenseVectorView<SolveScalar>  x,
                     muda::CDenseVectorView<StoreScalar> b,
-                    SizeT                         max_iter);
+                    SizeT                               max_iter);
+    void check_init_rz_nan_inf(IterScalar rz);
+    void check_iter_rz_nan_inf(IterScalar rz_new,
+                               SizeT      k,
+                               IterScalar rz,
+                               IterScalar pAp,
+                               IterScalar alpha,
+                               IterScalar beta);
 
     DeviceDenseVector r;
     DeviceDenseVector z;
@@ -45,4 +52,3 @@ class LinearFusedPCG : public IterativeSolver
     SizeT check_interval  = 5;
 };
 }  // namespace uipc::backend::cuda_mixed
-

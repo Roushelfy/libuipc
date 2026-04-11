@@ -6,6 +6,7 @@
 #include <muda/cub/device/device_reduce.h>
 #include <kernel_cout.h>
 #include <muda/ext/eigen/log_proxy.h>
+#include <uipc/common/timer.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -63,6 +64,7 @@ void FEMLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
 
     // Compute Kinetic (special)
     {
+        Timer timer{"FEM Energy: Kinetic"};
         auto vertex_count = fem().xs.size();
         kinetic_energies.resize(vertex_count);
         auto kinetic_info = ComputeEnergyInfo{kinetic_energies.view(), info.dt()};
@@ -75,6 +77,7 @@ void FEMLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
 
     // Collect the energy from all reporters
     {
+        Timer timer{"FEM Energy: Subreporters"};
         auto         reporter_view = reporters.view();
         span<IndexT> counts        = reporter_energy_offsets_counts.counts();
         for(auto&& [i, R] : enumerate(reporter_view))
@@ -134,4 +137,3 @@ void FEMLineSearchReporter::add_kinetic(FiniteElementKinetic* kinetic)
     m_impl.finite_element_kinetic.register_sim_system(*kinetic);
 }
 }  // namespace uipc::backend::cuda_mixed
-

@@ -18,7 +18,8 @@ using PcgAuxScalar = GlobalLinearSystem::PcgAuxScalar;
 using DiagInvMat3x3 = Eigen::Matrix<PcgAuxScalar, 3, 3>;
 #if defined(UIPC_MIXED_LEVEL_PATH2) || defined(UIPC_MIXED_LEVEL_PATH3) \
     || defined(UIPC_MIXED_LEVEL_PATH4) || defined(UIPC_MIXED_LEVEL_PATH5) \
-    || defined(UIPC_MIXED_LEVEL_PATH6) || defined(UIPC_MIXED_LEVEL_PATH7)
+    || defined(UIPC_MIXED_LEVEL_PATH6) || defined(UIPC_MIXED_LEVEL_PATH7) \
+    || defined(UIPC_MIXED_LEVEL_PATH8)
 static constexpr bool kMasEngineCompatible = false;
 #define UIPC_MAS_ENGINE_DISABLED 1
 #else
@@ -430,4 +431,3 @@ class FEMMASPreconditioner : public LocalPreconditioner
 
 REGISTER_SIM_SYSTEM(FEMMASPreconditioner);
 }  // namespace uipc::backend::cuda_mixed
-

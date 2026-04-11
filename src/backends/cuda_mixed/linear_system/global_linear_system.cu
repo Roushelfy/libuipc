@@ -5,13 +5,54 @@
 #include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
+#include <affine_body/abd_linear_subsystem.h>
+#include <finite_element/fem_linear_subsystem.h>
 #include <sim_engine.h>
 #include <backends/common/backend_path_tool.h>
+#include <uipc/common/timer.h>
 #include <Eigen/Sparse>
 #include <utils/matrix_market.h>
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+enum class SubsystemTimerClass
+{
+    Abd,
+    Fem,
+    Other,
+};
+
+const char* assemble_timer_name(SubsystemTimerClass cls)
+{
+    switch(cls)
+    {
+        case SubsystemTimerClass::Abd:
+            return "Assemble ABD";
+        case SubsystemTimerClass::Fem:
+            return "Assemble FEM";
+        case SubsystemTimerClass::Other:
+        default:
+            return "Assemble Other";
+    }
+}
+
+SubsystemTimerClass classify_subsystem(const DiagLinearSubsystem& subsystem)
+{
+    if(dynamic_cast<const ABDLinearSubsystem*>(&subsystem))
+        return SubsystemTimerClass::Abd;
+    if(dynamic_cast<const FEMLinearSubsystem*>(&subsystem))
+        return SubsystemTimerClass::Fem;
+    return SubsystemTimerClass::Other;
+}
+
+SubsystemTimerClass classify_subsystem(const OffDiagLinearSubsystem&)
+{
+    return SubsystemTimerClass::Other;
+}
+}  // namespace
+
 REGISTER_SIM_SYSTEM(GlobalLinearSystem);
 
 SizeT GlobalLinearSystem::dof_count() const
@@ -206,12 +247,21 @@ void GlobalLinearSystem::Impl::build_linear_system()
         return;
     }
 
-    _assemble_linear_system();
+    {
+        Timer timer{"Assemble Linear System"};
+        _assemble_linear_system();
+    }
 
-    converter.ge2sym(triplet_A);
-    converter.convert(triplet_A, bcoo_A);
+    {
+        Timer timer{"Convert Matrix"};
+        converter.ge2sym(triplet_A);
+        converter.convert(triplet_A, bcoo_A);
+    }
 
-    _assemble_preconditioner();
+    {
+        Timer timer{"Assemble Preconditioner"};
+        _assemble_preconditioner();
+    }
 
     logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
                  b.size(),
@@ -348,7 +398,10 @@ void GlobalLinearSystem::Impl::_assemble_linear_system()
                                          subsystem_triplet_counts[triplet_i])
                                   .submatrix(ij_offset, ij_count);
 
-            diag_subsystem->assemble(info);
+            {
+                Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
+                diag_subsystem->assemble(info);
+            }
         }
         else
         {
@@ -385,7 +438,10 @@ void GlobalLinearSystem::Impl::_assemble_linear_system()
 
             // logger::info("rl_offset: {}, lr_offset: {}", rl_triplet_offset, lr_triplet_offset);
 
-            off_diag_subsystem->assemble(info);
+            {
+                Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
+                off_diag_subsystem->assemble(info);
+            }
         }
     }
 }

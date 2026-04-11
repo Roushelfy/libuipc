@@ -12,10 +12,10 @@ namespace sym::affine_body_revolute_joint
         return (E0 + E1) / 2;
     }
 
-#include "sym/affine_body_revolute_joint.inl"
+#include "../../../cuda/affine_body/constitutions/sym/affine_body_revolute_joint.inl"
 }  // namespace sym::affine_body_revolute_joint
 namespace sym::affine_body_driving_revolute_joint
 {
-#include "sym/affine_body_driving_revolute_joint.inl"
+#include "../../../cuda/affine_body/constitutions/sym/affine_body_driving_revolute_joint.inl"
 }
 }  // namespace uipc::backend::cuda_mixed

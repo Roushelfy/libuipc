@@ -9,6 +9,7 @@
 #include <utils/simplex_contact_mask_utils.h>
 #include <uipc/common/zip.h>
 #include <utils/primitive_d_hat.h>
+#include <uipc/common/timer.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -84,23 +85,57 @@ void LBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
     triangle_aabbs.resize(Fs.size());
     edge_aabbs.resize(Es.size());
 
-    // build AABBs for codim vertices
-    if(codimVs.size() > 0)
     {
-        codim_point_aabbs.resize(codimVs.size());
+        Timer timer{"Build AABBs"};
 
+        // build AABBs for codim vertices
+        if(codimVs.size() > 0)
+        {
+            codim_point_aabbs.resize(codimVs.size());
+
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(codimVs.size(),
+                       [codimVs = codimVs.viewer().name("codimVs"),
+                        Ps      = Ps.viewer().name("Ps"),
+                        dxs     = dxs.viewer().name("dxs"),
+                        aabbs   = codim_point_aabbs.viewer().name("aabbs"),
+                        thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                        d_hats = info.d_hats().viewer().name("d_hats"),
+                        alpha  = alpha] __device__(int i) mutable
+                       {
+                           auto vI = codimVs(i);
+
+                           Float thickness       = thicknesses(vI);
+                           Float d_hat_expansion = point_dcd_expansion(d_hats(vI));
+
+                           const auto& pos   = Ps(vI);
+                           Vector3     pos_t = pos + dxs(vI) * alpha;
+
+                           AABB aabb;
+                           aabb.extend(pos.cast<float>()).extend(pos_t.cast<float>());
+
+                           float expand = d_hat_expansion + thickness;
+
+                           aabb.min().array() -= expand;
+                           aabb.max().array() += expand;
+                           aabbs(i) = aabb;
+                       });
+        }
+
+        // build AABBs for surf vertices (including codim vertices)
         ParallelFor()
             .file_line(__FILE__, __LINE__)
-            .apply(codimVs.size(),
-                   [codimVs = codimVs.viewer().name("codimVs"),
-                    Ps      = Ps.viewer().name("Ps"),
-                    dxs     = dxs.viewer().name("dxs"),
-                    aabbs   = codim_point_aabbs.viewer().name("aabbs"),
+            .apply(Vs.size(),
+                   [Vs          = Vs.viewer().name("V"),
+                    dxs         = dxs.viewer().name("dx"),
+                    Ps          = Ps.viewer().name("Ps"),
+                    aabbs       = point_aabbs.viewer().name("aabbs"),
                     thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                    d_hats = info.d_hats().viewer().name("d_hats"),
-                    alpha  = alpha] __device__(int i) mutable
+                    d_hats      = info.d_hats().viewer().name("d_hats"),
+                    alpha       = alpha] __device__(int i) mutable
                    {
-                       auto vI = codimVs(i);
+                       auto vI = Vs(i);
 
                        Float thickness       = thicknesses(vI);
                        Float d_hat_expansion = point_dcd_expansion(d_hats(vI));
@@ -117,131 +152,105 @@ void LBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
                        aabb.max().array() += expand;
                        aabbs(i) = aabb;
                    });
+
+        // build AABBs for edges
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(Es.size(),
+                   [Es          = Es.viewer().name("E"),
+                    Ps          = Ps.viewer().name("Ps"),
+                    aabbs       = edge_aabbs.viewer().name("aabbs"),
+                    dxs         = dxs.viewer().name("dx"),
+                    thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                    d_hats      = info.d_hats().viewer().name("d_hats"),
+                    alpha       = alpha] __device__(int i) mutable
+                   {
+                       auto eI = Es(i);
+
+                       Float thickness =
+                           edge_thickness(thicknesses(eI[0]), thicknesses(eI[1]));
+                       Float d_hat_expansion =
+                           edge_dcd_expansion(d_hats(eI[0]), d_hats(eI[1]));
+
+                       const auto& pos0   = Ps(eI[0]);
+                       const auto& pos1   = Ps(eI[1]);
+                       Vector3     pos0_t = pos0 + dxs(eI[0]) * alpha;
+                       Vector3     pos1_t = pos1 + dxs(eI[1]) * alpha;
+
+                       AABB aabb;
+
+                       aabb.extend(pos0.cast<float>())
+                           .extend(pos1.cast<float>())
+                           .extend(pos0_t.cast<float>())
+                           .extend(pos1_t.cast<float>());
+
+                       float expand = d_hat_expansion + thickness;
+
+                       aabb.min().array() -= expand;
+                       aabb.max().array() += expand;
+                       aabbs(i) = aabb;
+                   });
+
+        // build AABBs for triangles
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(Fs.size(),
+                   [Fs          = Fs.viewer().name("F"),
+                    Ps          = Ps.viewer().name("Ps"),
+                    aabbs       = triangle_aabbs.viewer().name("aabbs"),
+                    dxs         = dxs.viewer().name("dx"),
+                    thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                    d_hats      = info.d_hats().viewer().name("d_hats"),
+                    alpha       = alpha] __device__(int i) mutable
+                   {
+                       auto fI = Fs(i);
+
+                       Float thickness = triangle_thickness(thicknesses(fI[0]),
+                                                            thicknesses(fI[1]),
+                                                            thicknesses(fI[2]));
+                       Float d_hat_expansion = triangle_dcd_expansion(
+                           d_hats(fI[0]), d_hats(fI[1]), d_hats(fI[2]));
+
+                       const auto& pos0   = Ps(fI[0]);
+                       const auto& pos1   = Ps(fI[1]);
+                       const auto& pos2   = Ps(fI[2]);
+                       Vector3     pos0_t = pos0 + dxs(fI[0]) * alpha;
+                       Vector3     pos1_t = pos1 + dxs(fI[1]) * alpha;
+                       Vector3     pos2_t = pos2 + dxs(fI[2]) * alpha;
+
+                       AABB aabb;
+
+                       aabb.extend(pos0.cast<float>())
+                           .extend(pos1.cast<float>())
+                           .extend(pos2.cast<float>())
+                           .extend(pos0_t.cast<float>())
+                           .extend(pos1_t.cast<float>())
+                           .extend(pos2_t.cast<float>());
+
+                       float expand = d_hat_expansion + thickness;
+
+                       aabb.min().array() -= expand;
+                       aabb.max().array() += expand;
+                       aabbs(i) = aabb;
+                   });
     }
 
-    // build AABBs for surf vertices (including codim vertices)
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(Vs.size(),
-               [Vs          = Vs.viewer().name("V"),
-                dxs         = dxs.viewer().name("dx"),
-                Ps          = Ps.viewer().name("Ps"),
-                aabbs       = point_aabbs.viewer().name("aabbs"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                d_hats      = info.d_hats().viewer().name("d_hats"),
-                alpha       = alpha] __device__(int i) mutable
-               {
-                   auto vI = Vs(i);
-
-                   Float thickness       = thicknesses(vI);
-                   Float d_hat_expansion = point_dcd_expansion(d_hats(vI));
-
-                   const auto& pos   = Ps(vI);
-                   Vector3     pos_t = pos + dxs(vI) * alpha;
-
-                   AABB aabb;
-                   aabb.extend(pos.cast<float>()).extend(pos_t.cast<float>());
-
-                   float expand = d_hat_expansion + thickness;
-
-                   aabb.min().array() -= expand;
-                   aabb.max().array() += expand;
-                   aabbs(i) = aabb;
-               });
-
-    // build AABBs for edges
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(Es.size(),
-               [Es          = Es.viewer().name("E"),
-                Ps          = Ps.viewer().name("Ps"),
-                aabbs       = edge_aabbs.viewer().name("aabbs"),
-                dxs         = dxs.viewer().name("dx"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                d_hats      = info.d_hats().viewer().name("d_hats"),
-                alpha       = alpha] __device__(int i) mutable
-               {
-                   auto eI = Es(i);
-
-                   Float thickness =
-                       edge_thickness(thicknesses(eI[0]), thicknesses(eI[1]));
-                   Float d_hat_expansion =
-                       edge_dcd_expansion(d_hats(eI[0]), d_hats(eI[1]));
-
-                   const auto& pos0   = Ps(eI[0]);
-                   const auto& pos1   = Ps(eI[1]);
-                   Vector3     pos0_t = pos0 + dxs(eI[0]) * alpha;
-                   Vector3     pos1_t = pos1 + dxs(eI[1]) * alpha;
-
-                   Vector3 max = pos0_t;
-                   Vector3 min = pos0_t;
-
-                   AABB aabb;
-
-                   aabb.extend(pos0.cast<float>())
-                       .extend(pos1.cast<float>())
-                       .extend(pos0_t.cast<float>())
-                       .extend(pos1_t.cast<float>());
-
-                   float expand = d_hat_expansion + thickness;
-
-                   aabb.min().array() -= expand;
-                   aabb.max().array() += expand;
-                   aabbs(i) = aabb;
-               });
-
-    // build AABBs for triangles
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(Fs.size(),
-               [Fs          = Fs.viewer().name("F"),
-                Ps          = Ps.viewer().name("Ps"),
-                aabbs       = triangle_aabbs.viewer().name("aabbs"),
-                dxs         = dxs.viewer().name("dx"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                d_hats      = info.d_hats().viewer().name("d_hats"),
-                alpha       = alpha] __device__(int i) mutable
-               {
-                   auto fI = Fs(i);
-
-                   Float thickness = triangle_thickness(thicknesses(fI[0]),
-                                                        thicknesses(fI[1]),
-                                                        thicknesses(fI[2]));
-                   Float d_hat_expansion = triangle_dcd_expansion(
-                       d_hats(fI[0]), d_hats(fI[1]), d_hats(fI[2]));
-
-                   const auto& pos0   = Ps(fI[0]);
-                   const auto& pos1   = Ps(fI[1]);
-                   const auto& pos2   = Ps(fI[2]);
-                   Vector3     pos0_t = pos0 + dxs(fI[0]) * alpha;
-                   Vector3     pos1_t = pos1 + dxs(fI[1]) * alpha;
-                   Vector3     pos2_t = pos2 + dxs(fI[2]) * alpha;
-
-                   AABB aabb;
-
-                   aabb.extend(pos0.cast<float>())
-                       .extend(pos1.cast<float>())
-                       .extend(pos2.cast<float>())
-                       .extend(pos0_t.cast<float>())
-                       .extend(pos1_t.cast<float>())
-                       .extend(pos2_t.cast<float>());
-
-                   float expand = d_hat_expansion + thickness;
-
-                   aabb.min().array() -= expand;
-                   aabb.max().array() += expand;
-                   aabbs(i) = aabb;
-               });
-
-    lbvh_E.build(edge_aabbs);
-    lbvh_T.build(triangle_aabbs);
+    {
+        Timer timer{"Build BVH"};
+        lbvh_E.build(edge_aabbs);
+        lbvh_T.build(triangle_aabbs);
+    }
 
     if(codimVs.size() > 0)
     {
         // Use AllP to query CodimP
         {
+            Timer timer{"Build BVH"};
             lbvh_CodimP.build(codim_point_aabbs);
+        }
 
+        {
+            Timer timer{"BVH Query"};
             muda::KernelLabel label{__FUNCTION__, __FILE__, __LINE__};
             lbvh_CodimP.query(
                 point_aabbs,                                  // AllP
@@ -307,6 +316,7 @@ void LBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
         // Use CodimP to query AllE
         if(codimVs.size())
         {
+            Timer timer{"BVH Query"};
             muda::KernelLabel label{__FUNCTION__, __FILE__, __LINE__};
             lbvh_E.query(
                 codim_point_aabbs,
@@ -377,6 +387,7 @@ void LBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
 
     // Use AllE to query AllE
     {
+        Timer timer{"BVH Query"};
         muda::KernelLabel label{__FUNCTION__, __FILE__, __LINE__};
         lbvh_E.detect(
             [Es          = Es.viewer().name("Es"),
@@ -452,6 +463,7 @@ void LBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
 
     // Use AllP to query AllT
     {
+        Timer timer{"BVH Query"};
         muda::KernelLabel label{__FUNCTION__, __FILE__, __LINE__};
         lbvh_T.query(
             point_aabbs,
@@ -987,6 +999,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
 void LBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& info)
 {
     using namespace muda;
+    Timer timer{"Narrow Phase"};
 
     auto toi_size =
         candidate_AllP_CodimP_pairs.size() + candidate_CodimP_AllE_pairs.size()
