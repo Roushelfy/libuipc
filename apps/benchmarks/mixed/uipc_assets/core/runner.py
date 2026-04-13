@@ -17,6 +17,12 @@ from .quality import collect_solution_metrics
 from .selection import REPO_ID
 from .timers import summarize_iteration_counters, summarize_timer_frames
 
+SEARCH_DIRECTION_INVALID_PREFIX = "search_direction_invalid:"
+BENCHMARK_LINE_SEARCH_FAIL_CONFIG_PATH = (
+    "extras/benchmark/fail_after_consecutive_line_search_max_newton_iters"
+)
+BENCHMARK_LINE_SEARCH_FAIL_THRESHOLD = 10
+
 
 def ensure_runtime_dependencies(require_uipc: bool = True) -> None:
     missing: List[str] = []
@@ -172,6 +178,49 @@ def copy_visual_exports(workspace: Path, visual_dir: Path, frames: set[int] | No
     return manifest
 
 
+def extract_search_direction_message(text: str) -> str | None:
+    for line in text.splitlines():
+        idx = line.find(SEARCH_DIRECTION_INVALID_PREFIX)
+        if idx != -1:
+            return line[idx:].strip()
+    return None
+
+
+def _assert_worker_world_valid(world: Any, *, stage: str, frame_hint: int) -> None:
+    if world.is_valid():
+        return
+    raise RuntimeError(f"worker simulation became invalid during {stage} at frame {frame_hint}")
+
+
+def _save_worker_profile_result(
+    *,
+    asset_name: str,
+    profile_dir: Path,
+    workspace: Path,
+    stats: Any,
+    wall_time: float,
+) -> Dict[str, Any]:
+    import uipc.profile as uipc_profile
+
+    num_frames = getattr(stats, "num_frames", len(getattr(stats, "_frames", [])))
+    result = {
+        "name": asset_name,
+        "num_frames": num_frames,
+        "wall_time": wall_time,
+        "stats": stats,
+        "timer_frames": list(getattr(stats, "_frames", [])),
+        "summary": (
+            f"Scene: {asset_name}  |  Frames: {num_frames}  |  "
+            f"Wall time: {wall_time:.3f}s  |  "
+            f"Avg: {wall_time / max(num_frames, 1) * 1000:.1f}ms/frame"
+        ),
+        "workspace": str(workspace.resolve()),
+        "steps": [("profile", num_frames)],
+    }
+    uipc_profile._save_result(result, str(profile_dir))
+    return result
+
+
 def run_profile_worker(
     *,
     asset_spec: AssetSpec,
@@ -186,12 +235,13 @@ def run_profile_worker(
     visual_frames: set[int] | None,
 ) -> Dict[str, Any]:
     import uipc
-    from uipc import Scene
-    from uipc.profile import run as profile_run
+    from uipc import Engine, Logger, Scene, World
+    from uipc.stats import SimulationStats
 
     cfg = uipc.default_config()
     cfg["module_dir"] = str(module_dir)
     uipc.init(cfg)
+    Logger.set_level(Logger.Level.Warn)
 
     scene = Scene(Scene.default_config())
     load_asset_scene(asset_spec.name, scene, revision=revision, cache_dir=cache_dir)
@@ -201,12 +251,43 @@ def run_profile_worker(
     for key, value in (asset_spec.config_overrides or {}).items():
         worker_set_scene_config(scene, key, value)
     worker_set_scene_config(scene, "extras/debug/dump_surface", dump_surface)
+    worker_set_scene_config(
+        scene,
+        BENCHMARK_LINE_SEARCH_FAIL_CONFIG_PATH,
+        BENCHMARK_LINE_SEARCH_FAIL_THRESHOLD,
+    )
     if mode == "quality":
         worker_set_scene_config(scene, "extras/debug/dump_solution_x", 1)
 
     num_frames = asset_spec.frames_perf if mode == "perf" else asset_spec.frames_quality
-    result = profile_run(scene, num_frames=num_frames, name=asset_spec.name, output_dir=str(output_dir), backend="cuda_mixed")
+    workspace = output_dir / f"workspace_{asset_spec.name}"
     profile_dir = output_dir / asset_spec.name
+    workspace.mkdir(parents=True, exist_ok=True)
+    engine = Engine("cuda_mixed", str(workspace))
+    world = World(engine)
+    stats = SimulationStats()
+    start = time.perf_counter()
+    pending_error: Exception | None = None
+    try:
+        world.init(scene)
+        _assert_worker_world_valid(world, stage="init", frame_hint=0)
+        for frame_index in range(num_frames):
+            frame_hint = frame_index + 1
+            world.advance()
+            _assert_worker_world_valid(world, stage="advance", frame_hint=frame_hint)
+            world.retrieve()
+            _assert_worker_world_valid(world, stage="retrieve", frame_hint=frame_hint)
+            stats.collect()
+    except Exception as exc:
+        pending_error = exc
+
+    result = _save_worker_profile_result(
+        asset_name=asset_spec.name,
+        profile_dir=profile_dir,
+        workspace=workspace,
+        stats=stats,
+        wall_time=time.perf_counter() - start,
+    )
     benchmark_json = profile_dir / "benchmark.json"
     timer_frames_json = profile_dir / "timer_frames.json"
     if benchmark_json.exists():
@@ -220,6 +301,8 @@ def run_profile_worker(
     iteration_summary = summarize_iteration_counters(timer_frames)
     write_json(output_dir / "stage_summary.json", stage_summary)
     write_json(output_dir / "iteration_summary.json", iteration_summary)
+    if pending_error is not None:
+        raise pending_error
 
     worker_result = {
         "asset": asset_spec.name,
@@ -327,6 +410,11 @@ def run_worker_subprocess(
     stdout_log.write_text(completed.stdout or "", encoding="utf-8")
     stderr_log.write_text(completed.stderr or "", encoding="utf-8")
     if completed.returncode != 0:
+        search_direction_message = extract_search_direction_message(
+            (completed.stderr or "") + "\n" + (completed.stdout or "")
+        )
+        if search_direction_message is not None:
+            raise RuntimeError(search_direction_message)
         raise RuntimeError(
             f"worker failed for asset={asset_spec.name} mode={mode} level={level} "
             f"(exit={completed.returncode}); logs: stdout={stdout_log}, stderr={stderr_log}"

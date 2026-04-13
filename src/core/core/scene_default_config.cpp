@@ -78,6 +78,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("extras/debug/dump_solution_x", IndexT{0});
     config.create("extras/debug/dump_linear_pcg", IndexT{0});
     config.create("extras/debug/dump_mas_matrices", IndexT{0});
+    config.create("extras/benchmark/fail_after_consecutive_line_search_max_newton_iters",
+                  IndexT{0});
     config.create("extras/strict_mode/enable", IndexT{0});
 
     return config;

@@ -216,9 +216,9 @@ void SimEngine::advance()
         }
     };
 
-    auto check_line_search_iter = [this]
+    auto check_line_search_iter = [this](SizeT line_search_iter_after_loop)
     {
-        if(m_line_search_iter >= m_line_searcher->max_iter())
+        if(line_search_iter_after_loop >= m_line_searcher->max_iter())
         {
             logger::warn("Line Search Exits with Max Iteration: {} (Frame={}, Newton={})",
                          m_line_searcher->max_iter(),
@@ -319,6 +319,7 @@ void SimEngine::advance()
             auto   newton_max_iter = m_newton_max_iter->view()[0];
             auto   newton_min_iter = m_newton_min_iter->view()[0];
             beta                   = 1.0;
+            IndexT consecutive_line_search_max_hits = 0;
             for(IndexT newton_iter = 0; newton_iter < newton_max_iter; ++newton_iter)
             {
                 Timer timer{"Newton Iteration"};
@@ -375,7 +376,8 @@ void SimEngine::advance()
 
                     // Line Search Iteration
                     bool converged = convergence_check(newton_iter);
-                    for(SizeT line_search_iter = 0;
+                    SizeT line_search_iter = 0;
+                    for(;
                         line_search_iter < m_line_searcher->max_iter();
                         ++line_search_iter)
                     {
@@ -408,7 +410,33 @@ void SimEngine::advance()
                     }
 
                     // Check Line Search Iteration: report warnings or throw exceptions if needed
-                    check_line_search_iter();
+                    bool line_search_hit_max = line_search_iter >= m_line_searcher->max_iter();
+                    check_line_search_iter(line_search_iter);
+                    if(line_search_hit_max)
+                    {
+                        consecutive_line_search_max_hits++;
+                        if(m_fail_after_consecutive_line_search_max_newton_iters > 0
+                           && consecutive_line_search_max_hits
+                                  >= m_fail_after_consecutive_line_search_max_newton_iters)
+                        {
+                            auto msg =
+                                fmt::format("search_direction_invalid: frame={} newton={} "
+                                            "consecutive_hits={} threshold={} "
+                                            "line_search_max_iter={}",
+                                            m_current_frame,
+                                            m_newton_iter,
+                                            consecutive_line_search_max_hits,
+                                            m_fail_after_consecutive_line_search_max_newton_iters,
+                                            m_line_searcher->max_iter());
+                            logger::error("{}", msg);
+                            status().push_back(core::EngineStatus::error(msg));
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        consecutive_line_search_max_hits = 0;
+                    }
 
                     bool terminated = converged && (newton_iter >= newton_min_iter);
                     if(terminated)

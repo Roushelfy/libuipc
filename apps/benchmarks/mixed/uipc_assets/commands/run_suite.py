@@ -8,16 +8,20 @@ from ..core.artifacts import default_output_root, make_run_id, write_json
 from ..core.builds import resolve_builds
 from ..core.manifest import AssetSpec, ordered_levels, save_manifest
 from ..core.report_schema import build_summary_payload, collect_report_data, write_report_files
-from ..core.runner import parse_visual_frames, run_worker_subprocess, sync_assets
+from ..core.runner import SEARCH_DIRECTION_INVALID_PREFIX, parse_visual_frames, run_worker_subprocess, sync_assets
 from ..core.selection import resolve_asset_specs, selection_payload
 
 
 def _detect_failure_stage(output_dir: Path) -> str:
-    stderr_log = output_dir / "worker_stderr.log"
-    if not stderr_log.exists():
+    log_texts: list[str] = []
+    for log_path in (output_dir / "worker_stderr.log", output_dir / "worker_stdout.log"):
+        if log_path.exists():
+            log_texts.append(log_path.read_text(encoding="utf-8", errors="replace"))
+    if not log_texts:
         return "unknown"
-    text = stderr_log.read_text(encoding="utf-8", errors="replace")
+    text = "\n".join(log_texts)
     checks = [
+        (SEARCH_DIRECTION_INVALID_PREFIX, "search direction"),
         ("FusedPCG", "FusedPCG"),
         ("Line Search", "Line Search"),
         ("quality_metrics", "quality compare"),

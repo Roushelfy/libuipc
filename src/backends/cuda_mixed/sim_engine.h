@@ -111,6 +111,7 @@ class SimEngine final : public backend::SimEngine
     SizeT m_current_frame    = 0;
     SizeT m_newton_iter      = 0;
     SizeT m_line_search_iter = 0;
+    IndexT m_fail_after_consecutive_line_search_max_newton_iters = 0;
 
     bool  m_semi_implicit_enabled  = true;
     Float m_semi_implicit_beta_tol = 1e-3;

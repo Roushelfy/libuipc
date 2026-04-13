@@ -72,6 +72,10 @@ void SimEngine::init_scene()
         info.find<IndexT>("newton/semi_implicit/enable")->view()[0];
     m_semi_implicit_beta_tol =
         info.find<Float>("newton/semi_implicit/beta_tol")->view()[0];
+    m_fail_after_consecutive_line_search_max_newton_iters =
+        info.find<IndexT>(
+                "extras/benchmark/fail_after_consecutive_line_search_max_newton_iters")
+            ->view()[0];
 
     m_strict_mode = info.find<IndexT>("extras/strict_mode/enable");
 
