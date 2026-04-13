@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -83,6 +84,27 @@ def _match_scenario_families(spec: AssetSpec, required_families: Sequence[str]) 
     return spec.scenario_family in set(required_families)
 
 
+def _load_manifest_specs_with_catalog_overrides(
+    manifest_path: Path,
+    catalog: Dict[str, AssetSpec],
+) -> List[AssetSpec]:
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"Manifest must be a list: {manifest_path}")
+
+    specs: List[AssetSpec] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"Manifest entries must be objects: {manifest_path}")
+        name = str(item["name"])
+        if name not in catalog:
+            raise RuntimeError(f"Manifest asset is missing from assets catalog: {name}")
+        merged = catalog[name].to_json()
+        merged.update(item)
+        specs.append(AssetSpec.from_json(merged))
+    return specs
+
+
 def resolve_asset_specs(
     *,
     manifest_paths: Sequence[Path],
@@ -109,13 +131,9 @@ def resolve_asset_specs(
     else:
         manifest_specs: List[AssetSpec] = []
         for path in manifest_paths:
-            manifest_specs.extend(enabled_specs(load_manifest(path)))
+            manifest_specs.extend(enabled_specs(_load_manifest_specs_with_catalog_overrides(path, catalog)))
         merged = merge_manifest_specs(manifest_specs, [])
-        candidates = []
-        for spec in enabled_specs(merged.values()):
-            if spec.name not in catalog:
-                raise RuntimeError(f"Manifest asset is missing from assets catalog: {spec.name}")
-            candidates.append(catalog[spec.name])
+        candidates = list(enabled_specs(merged.values()))
 
     if scene_names:
         names = set(scene_names)

@@ -89,6 +89,7 @@ def run(args) -> int:
         "run_root": str(run_root),
         "levels": levels,
         "config": args.config,
+        "resume": bool(getattr(args, "resume", False)),
         "cache_dir": str(cache_dir),
         "dataset_state": dataset_state,
         "modes": {
@@ -137,6 +138,7 @@ def run(args) -> int:
                     dump_surface=args.visual_export,
                     reference_dir=None,
                     visual_frames=frames,
+                    resume=args.resume,
                 )
                 fp64_perf_ok = True
             except Exception as exc:
@@ -158,6 +160,7 @@ def run(args) -> int:
                     dump_surface=False,
                     reference_dir=None,
                     visual_frames=None,
+                    resume=args.resume,
                 )
                 reference_dir = Path(fp64_quality["solution_dump_dir"])
                 fp64_quality_ok = True
@@ -185,6 +188,7 @@ def run(args) -> int:
                         dump_surface=args.visual_export,
                         reference_dir=None,
                         visual_frames=frames,
+                        resume=args.resume,
                     )
                 except Exception as exc:
                     _record_failure(failures, asset=spec.name, level=level, mode="perf", output_dir=perf_dir, error=exc)
@@ -205,6 +209,7 @@ def run(args) -> int:
                         dump_surface=False,
                         reference_dir=reference_dir,
                         visual_frames=None,
+                        resume=args.resume,
                     )
                 except Exception as exc:
                     _record_failure(failures, asset=spec.name, level=level, mode="quality", output_dir=quality_dir, error=exc)

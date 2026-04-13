@@ -24,39 +24,32 @@ The repository convention is one build directory per level:
 - `build/build_impl_path7`
 - `build/build_impl_path8`
 
-Example baseline build:
+On Windows, the recommended entrypoint is the provisioning script:
+
+```powershell
+powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
+```
+
+It provisions `build/build_impl_fp64` through `build/build_impl_path8`, configures them with `RelWithDebInfo`, enables `UIPC_BUILD_PYBIND=ON`, and schedules the levels serially while each `cmake --build` uses `--parallel`.
+
+The script keeps the default worker count conservative: it uses a default cap of 8 workers and can be overridden with `-Parallel` when the machine has enough memory headroom.
+
+Manual single-level equivalent:
 
 ```shell
 cmake -S . -B build/build_impl_fp64 \
-  -DCMAKE_BUILD_TYPE=Release \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DUIPC_BUILD_BENCHMARKS=ON \
   -DUIPC_BUILD_TESTS=OFF \
   -DUIPC_BUILD_EXAMPLES=OFF \
   -DUIPC_BUILD_GUI=OFF \
+  -DUIPC_BUILD_PYBIND=ON \
   -DUIPC_WITH_CUDA_BACKEND=OFF \
   -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
   -DUIPC_CUDA_MIXED_PRECISION_LEVEL=fp64
 
-cmake --build build/build_impl_fp64 --config Release --parallel 8
-```
-
-Example compare-path builds in PowerShell:
-
-```powershell
-$levels = "path1","path2","path3","path4","path5","path6","path7","path8"
-foreach ($level in $levels) {
-    cmake -S . -B "build/build_impl_$level" `
-      -DCMAKE_BUILD_TYPE=Release `
-      -DUIPC_BUILD_BENCHMARKS=ON `
-      -DUIPC_BUILD_TESTS=OFF `
-      -DUIPC_BUILD_EXAMPLES=OFF `
-      -DUIPC_BUILD_GUI=OFF `
-      -DUIPC_WITH_CUDA_BACKEND=OFF `
-      -DUIPC_WITH_CUDA_MIXED_BACKEND=ON `
-      "-DUIPC_CUDA_MIXED_PRECISION_LEVEL=$level"
-
-    cmake --build "build/build_impl_$level" --config Release --parallel 8
-}
+cmake --build build/build_impl_fp64 --config RelWithDebInfo --parallel 8
 ```
 
 Turn `-DUIPC_WITH_CUDA_BACKEND=ON` on only when you also want optional `cuda` baseline entries in the same benchmark flow.
@@ -68,6 +61,8 @@ Primary entrypoint:
 - `apps/benchmarks/mixed/uipc_assets/cli.py`
 
 This flow is now the primary mixed-precision validation entrypoint. It runs selected `uipc-assets` scenes under `cuda_mixed`, records pipeline timer trees, compares each path against an `fp64` reference, and can optionally export OBJ sequences for visual inspection.
+
+`uipc_assets` expects each build root to contain `python/src`, so the per-level builds used here must be configured with `UIPC_BUILD_PYBIND=ON`.
 
 Example:
 
@@ -136,7 +131,7 @@ NVTX is a profiling aid only. It is not part of the mixed-precision correctness 
 
 ## Recommended Validation Sequence
 
-1. Build `fp64` and the target compare paths with `UIPC_WITH_CUDA_MIXED_BACKEND=ON`.
+1. Provision `fp64` and the target compare paths with `scripts/setup_mixed_uipc_assets_builds.ps1`, or manually build them with `UIPC_WITH_CUDA_MIXED_BACKEND=ON` and `UIPC_BUILD_PYBIND=ON`.
 2. Use `resolve` or `run --dry-run` to verify the final asset selection and build mapping.
 3. Run `uipc_assets` perf / quality comparisons for the affected paths.
 4. Inspect `summary.md`, `perf_by_stage.csv`, and `quality.csv`.

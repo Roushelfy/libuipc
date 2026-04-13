@@ -275,13 +275,21 @@ def run_worker_subprocess(
     dump_surface: bool,
     reference_dir: Path | None,
     visual_frames: set[int] | None,
+    resume: bool = False,
 ) -> Dict[str, Any]:
     env = prepend_library_path(os.environ.copy(), module_dir)
     env = prepend_pythonpath(env, pyuipc_src_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     spec_path = output_dir / "asset_spec.json"
+    result_path = output_dir / "worker_result.json"
+    failure_path = output_dir / "failure.json"
     stdout_log = output_dir / "worker_stdout.log"
     stderr_log = output_dir / "worker_stderr.log"
+    if resume and result_path.exists():
+        if failure_path.exists():
+            failure_path.unlink()
+        print(f"[resume] skip asset={asset_spec.name} mode={mode} level={level} -> {result_path}")
+        return read_json(result_path)
     write_json(spec_path, asset_spec.to_json())
     cmd = [
         python_exe,
@@ -323,7 +331,9 @@ def run_worker_subprocess(
             f"worker failed for asset={asset_spec.name} mode={mode} level={level} "
             f"(exit={completed.returncode}); logs: stdout={stdout_log}, stderr={stderr_log}"
         )
-    return read_json(output_dir / "worker_result.json")
+    if failure_path.exists():
+        failure_path.unlink()
+    return read_json(result_path)
 
 
 def parse_visual_frames(value: str | None, frame_range: str | None) -> set[int] | None:

@@ -6,6 +6,28 @@
 python apps/benchmarks/mixed/uipc_assets/cli.py <subcommand> ...
 ```
 
+先准备 mixed benchmark 默认依赖的 build 目录：
+
+```powershell
+powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
+```
+
+它会串行准备：
+
+- `build/build_impl_fp64`
+- `build/build_impl_path1`
+- `build/build_impl_path2`
+- `build/build_impl_path3`
+- `build/build_impl_path4`
+- `build/build_impl_path5`
+- `build/build_impl_path6`
+- `build/build_impl_path7`
+- `build/build_impl_path8`
+
+单个 level 内部使用 `cmake --build --parallel` 并行编译。默认配置为 `RelWithDebInfo`，并且每个 level 都会带上 `UIPC_BUILD_PYBIND=ON`，这样 `uipc_assets` 才能直接使用对应的 `python/src` 绑定目录。
+
+`-Parallel` 默认不是直接吃满逻辑核数：脚本默认限制为 8 个 worker。需要更激进时再手工传 `-Parallel`。
+
 常用子命令：
 
 - `sync`: 预拉 `MuGdxy/uipc-assets` 的全部资产到本地 cache
@@ -63,6 +85,8 @@ apps/benchmarks/mixed/uipc_assets/.venv
 ```text
 build/build_impl_<level>/python/src
 ```
+
+也就是说，只要使用 `scripts/setup_mixed_uipc_assets_builds.ps1` 的默认输出目录，`run` 和 `export` 都不需要额外传 `--build`。
 
 CLI 会在 worker 子进程里按当前 level 自动注入对应的 `PYTHONPATH`，用户不需要手工切换。
 

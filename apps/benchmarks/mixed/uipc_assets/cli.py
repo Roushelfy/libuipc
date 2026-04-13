@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--run_root", type=Path, default=None)
     p_run.add_argument("--cache_dir", type=Path, default=None)
     p_run.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p_run.add_argument("--resume", action="store_true", help="skip tasks with existing worker_result.json and continue the same run_root")
     p_run.add_argument("--perf", action="store_true", default=True)
     p_run.add_argument("--quality", action="store_true", default=True)
     p_run.add_argument("--timers", action="store_true", default=True)
