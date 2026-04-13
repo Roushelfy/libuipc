@@ -43,12 +43,14 @@ powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
 ```bash
 python apps/benchmarks/mixed/uipc_assets/cli.py sync
 
-python apps/benchmarks/mixed/uipc_assets/cli.py list --scenario rigid
+python apps/benchmarks/mixed/uipc_assets/cli.py list --scenario abd
 
-python apps/benchmarks/mixed/uipc_assets/cli.py resolve --scenario rigid --scenario_family gear
+python apps/benchmarks/mixed/uipc_assets/cli.py resolve \
+  --tag source_rigid_ipc \
+  --scenario_family rigid_ipc_mechanisms_gears
 
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
-  --scenario rigid \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc.json \
   --levels fp64 path1 path7 path8
 
 python apps/benchmarks/mixed/uipc_assets/cli.py export \
@@ -60,8 +62,30 @@ python apps/benchmarks/mixed/uipc_assets/cli.py export \
 
 正式分类使用两层：
 
-- `scenario`: `rigid`, `fem`, `abd`, `coupling`, `particle`, `tutorial`
-- `scenario_family`: 例如 `contact_basic`, `stacking`, `fracture`, `gear`, `turntable`, `tunnel`, `pendulum`, `erleben`, `kinematic`, `coupling`, `fem_basic`, `abd_basic`, `particle`, `example`
+- `scenario`: `abd`, `fem`, `coupling`, `particle`
+- `scenario_family`: 由 `scene.py` 顶部 `Source:` 归一化生成，例如 `libuipc_test`, `libuipc_example`, `ipc_tutorial`, `rigid_ipc_chain`, `rigid_ipc_friction_turntable`, `rigid_ipc_mechanisms_gears`, `rigid_ipc_unit_tests_rotation`
+
+`scenario` 现在表示代码中的实际物理类型，而不是旧的主题桶：
+
+- `abd`: `scene.py` 只含 `AffineBodyConstitution` / `AffineBodyShell`
+- `fem`: `scene.py` 只含 `StableNeoHookean`
+- `coupling`: `scene.py` 同时含多类 constitution
+- `particle`: `scene.py` 使用 `Particle`
+
+原来的 `rigid` 主题集合已经迁移到 source-based manifests / tags：
+
+- `--tag source_rigid_ipc`
+- `--tag source_ipc_tutorial`
+- `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc.json`
+- `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc_fracture.json`
+- `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc_gear.json`
+
+需要按 `scene.py` 重新生成 manifests 时，使用：
+
+```powershell
+python scripts/rebuild_mixed_uipc_assets_manifests.py `
+  --assets-root output/benchmarks/mixed/uipc_assets/hf_cache/datasets--MuGdxy--uipc-assets/snapshots/<sha>/assets
+```
 
 筛选规则：
 

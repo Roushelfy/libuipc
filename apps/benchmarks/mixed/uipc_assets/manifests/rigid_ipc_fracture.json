@@ -2,38 +2,41 @@
   {
     "name": "rigid_ipc_fracture_cube",
     "enabled": true,
-    "scenario": "rigid",
-    "scenario_family": "fracture",
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_fracture",
     "frames_perf": 120,
     "frames_quality": 30,
     "quality_enabled": false,
     "contact_enabled": true,
     "tags": [
-      "rigid",
-      "fracture",
-      "contact"
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_fracture"
     ],
     "perf_warning_pct": 25.0,
-    "notes": "Rigid IPC scene in the fracture family.",
+    "notes": "Rigid IPC Cube: auto-converted from rigid-ipc fixture.",
     "config_overrides": {}
   },
   {
     "name": "rigid_ipc_fracture_wall",
     "enabled": true,
-    "scenario": "rigid",
-    "scenario_family": "fracture",
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_fracture",
     "frames_perf": 200,
     "frames_quality": 50,
     "quality_enabled": false,
     "contact_enabled": true,
     "tags": [
-      "rigid",
-      "fracture",
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
       "contact",
-      "heavy"
+      "rigid_ipc_fracture"
     ],
     "perf_warning_pct": 25.0,
-    "notes": "Rigid IPC scene in the fracture family.",
+    "notes": "Rigid IPC Wall: auto-converted from rigid-ipc fixture.",
     "config_overrides": {}
   }
 ]

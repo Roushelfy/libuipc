@@ -1,0 +1,86 @@
+[
+  {
+    "name": "rigid_ipc_gear_chain",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Chain: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_gear_chain_kinematic",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Chain Kinematic: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_gear_single",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Single: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_gear_single_kinematic",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Single Kinematic: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  }
+]

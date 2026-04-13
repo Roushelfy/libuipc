@@ -3,37 +3,160 @@
     "name": "fem_bouncing_cubes",
     "enabled": true,
     "scenario": "fem",
-    "scenario_family": "fem_basic",
+    "scenario_family": "libuipc_test",
     "frames_perf": 60,
     "frames_quality": 20,
     "quality_enabled": true,
     "contact_enabled": true,
     "tags": [
       "fem",
+      "contains_fem",
+      "source_libuipc_test",
       "contact",
-      "fem_basic"
+      "libuipc_test"
     ],
     "perf_warning_pct": 15.0,
-    "notes": "FEM bouncing cubes scene.",
+    "notes": "FEM Bouncing Cubes: soft elastic cubes stacked and falling onto a ground plane.",
     "config_overrides": {}
   },
   {
     "name": "fem_link_drop",
     "enabled": true,
     "scenario": "fem",
-    "scenario_family": "fem_basic",
+    "scenario_family": "libuipc_test",
     "frames_perf": 40,
     "frames_quality": 20,
     "quality_enabled": true,
-    "contact_enabled": false,
+    "contact_enabled": true,
     "tags": [
       "fem",
-      "no_contact",
-      "regression",
-      "fem_basic"
+      "contains_fem",
+      "source_libuipc_test",
+      "contact",
+      "libuipc_test"
     ],
     "perf_warning_pct": 15.0,
-    "notes": "FEM-only link-drop regression scene.",
+    "notes": "FEM Link Drop: a chain link (tet mesh) dropped onto a ground plane.",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall: two cubes falling onto a ground plane with self-friction.",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_full",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (full parameters): two cubes falling with explicit material params.",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_heavy_top",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (heavy top): heavy stiff cube on top of a softer lighter cube.",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_larger_dt",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (larger dt): two cubes falling with a large time step (dt=1).",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_smaller_dt",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (smaller dt): two cubes falling with a small time step (dt=0.005).",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_stiffer",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (stiffer): two cubes falling with higher Young's modulus (E=1e6).",
     "config_overrides": {}
   }
 ]

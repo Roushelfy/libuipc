@@ -1,23 +1,22 @@
 [
   {
-    "name": "abd_fem_tower",
+    "name": "particle_rain",
     "enabled": true,
-    "scenario": "coupling",
+    "scenario": "particle",
     "scenario_family": "libuipc_test",
-    "frames_perf": 60,
-    "frames_quality": 25,
+    "frames_perf": 80,
+    "frames_quality": 20,
     "quality_enabled": true,
     "contact_enabled": true,
     "tags": [
-      "coupling",
-      "contains_abd",
-      "contains_fem",
+      "particle",
+      "contains_particle",
       "source_libuipc_test",
       "contact",
       "libuipc_test"
     ],
     "perf_warning_pct": 20.0,
-    "notes": "ABD-FEM Tower: alternating rigid (AffineBody) and soft (FEM) cubes in a tower.",
+    "notes": "Particle Rain: particles falling onto a ground plane.",
     "config_overrides": {}
   }
 ]
