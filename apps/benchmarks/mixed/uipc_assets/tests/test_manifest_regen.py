@@ -23,6 +23,7 @@ def _seed_manifest_dir(manifest_dir: Path, specs: list[AssetSpec]) -> None:
     save_manifest(manifest_dir / "default.json", specs[:3])
     save_manifest(manifest_dir / "core.json", specs[1:4])
     save_manifest(manifest_dir / "smoke.json", specs[:2])
+    save_manifest(manifest_dir / "representative.json", specs[::2])
     save_manifest(manifest_dir / "abd.json", [])
     save_manifest(manifest_dir / "fem.json", [])
     save_manifest(manifest_dir / "coupling.json", [])
@@ -244,6 +245,11 @@ def build_scene(scene):
     assert [spec.name for spec in payloads["smoke.json"]] == [
         "abd_external_force",
         "rigid_ipc_fracture_cube",
+    ]
+    assert [spec.name for spec in payloads["representative.json"]] == [
+        "abd_external_force",
+        "rigid_ipc_gear_chain",
+        "ipc_2cubes_fall_larger_dt",
     ]
 
     assert not (manifest_dir / "rigid.json").exists()

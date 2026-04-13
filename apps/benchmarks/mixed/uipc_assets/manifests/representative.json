@@ -1,0 +1,414 @@
+[
+  {
+    "name": "abd_external_force",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 60,
+    "frames_quality": 25,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_libuipc_test",
+      "contact",
+      "animated",
+      "libuipc_test"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "ABD External Force: a rigid cube with an applied external body force.",
+    "config_overrides": {}
+  },
+  {
+    "name": "abd_fem_tower",
+    "enabled": true,
+    "scenario": "coupling",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 60,
+    "frames_quality": 25,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "coupling",
+      "contains_abd",
+      "contains_fem",
+      "source_libuipc_test",
+      "contact",
+      "libuipc_test"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "ABD-FEM Tower: alternating rigid (AffineBody) and soft (FEM) cubes in a tower.",
+    "config_overrides": {}
+  },
+  {
+    "name": "fem_bouncing_cubes",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 60,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_libuipc_test",
+      "contact",
+      "libuipc_test"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "FEM Bouncing Cubes: soft elastic cubes stacked and falling onto a ground plane.",
+    "config_overrides": {}
+  },
+  {
+    "name": "ipc_2cubes_fall_larger_dt",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "ipc_tutorial",
+    "frames_perf": 50,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_ipc_tutorial",
+      "contact",
+      "ipc_tutorial"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "IPC 2 Cubes Fall (larger dt): two cubes falling with a large time step (dt=1).",
+    "config_overrides": {}
+  },
+  {
+    "name": "particle_rain",
+    "enabled": true,
+    "scenario": "particle",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "particle",
+      "contains_particle",
+      "source_libuipc_test",
+      "contact",
+      "libuipc_test"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Particle Rain: particles falling onto a ground plane.",
+    "config_overrides": {}
+  },
+  {
+    "name": "hello_affine_body",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "libuipc_example",
+    "frames_perf": 40,
+    "frames_quality": 15,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_libuipc_example",
+      "contact",
+      "libuipc_example"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Hello Affine Body: two rigid tetrahedra, one fixed and one falling.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_bat",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_unit_tests",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_unit_tests"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Bat: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_anchor",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_chain",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_chain"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Anchor: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_card_house_2",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_friction_card_house",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_friction_card_house"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Card House 2 Levels: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_gear_chain",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Chain: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_fracture_cube",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_fracture",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_fracture"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Cube: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_edge_edge",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_unit_tests",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_unit_tests"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Edge Edge: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_cube_on_edge",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_unit_tests",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_unit_tests"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Cube Falling on Edge: two rotated cubes falling onto a ground plane.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_double_pendulum",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_pendulum",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_pendulum"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Double Pendulum: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_gear_single_kinematic",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_gears",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_mechanisms_gears"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Single Kinematic: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_kinematically_scripted",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_examples",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_examples"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Kinematically Scripted: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_cone_bunnies",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_piles",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_piles"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Cone Bunnies Lowpoly: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_turntable_mu10",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_friction_turntable",
+    "frames_perf": 80,
+    "frames_quality": 20,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "animated",
+      "rotating_motor",
+      "rigid_ipc_friction_turntable"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Rigid IPC Turntable Mu=1.0: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_punching_press_loose",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_mechanisms_507_movements",
+    "frames_perf": 120,
+    "frames_quality": 30,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_mechanisms_507_movements"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC 140 Punching Press Loose: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_minsep_packing",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_minimum_separation",
+    "frames_perf": 200,
+    "frames_quality": 50,
+    "quality_enabled": false,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "rigid_ipc_minimum_separation"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Rigid IPC Packing: auto-converted from rigid-ipc fixture.",
+    "config_overrides": {}
+  }
+]

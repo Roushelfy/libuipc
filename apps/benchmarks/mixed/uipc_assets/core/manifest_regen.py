@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 
 from .manifest import AssetSpec, load_manifest, save_manifest
 
-CURATED_MANIFESTS = ("default.json", "core.json", "smoke.json")
+CURATED_MANIFESTS = ("default.json", "core.json", "smoke.json", "representative.json")
 RENAMED_SOURCE_MANIFESTS = {
     "rigid_ipc.json": "source_rigid_ipc",
     "rigid_ipc_fracture.json": "rigid_ipc_fracture",
@@ -297,4 +297,3 @@ def regenerate_manifest_dir(manifest_dir: Path, assets_root: Path) -> Dict[str, 
     payloads = build_manifest_payloads(manifest_dir=manifest_dir, assets_root=assets_root)
     write_manifest_payloads(manifest_dir, payloads)
     return payloads
-

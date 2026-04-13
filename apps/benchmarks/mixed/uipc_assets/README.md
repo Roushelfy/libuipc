@@ -50,7 +50,7 @@ python apps/benchmarks/mixed/uipc_assets/cli.py resolve \
   --scenario_family rigid_ipc_mechanisms_gears
 
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
-  --manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc.json \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/representative.json \
   --levels fp64 path1 path7 path8
 
 python apps/benchmarks/mixed/uipc_assets/cli.py export \
@@ -76,6 +76,7 @@ python apps/benchmarks/mixed/uipc_assets/cli.py export \
 
 - `--tag source_rigid_ipc`
 - `--tag source_ipc_tutorial`
+- `--manifest apps/benchmarks/mixed/uipc_assets/manifests/representative.json`
 - `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc.json`
 - `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc_fracture.json`
 - `--manifest apps/benchmarks/mixed/uipc_assets/manifests/rigid_ipc_gear.json`
