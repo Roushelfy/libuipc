@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import math
+import shutil
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -24,7 +25,6 @@ from uipc_assets.core.report_schema import build_summary_payload, collect_report
 TAG_SLICES = ("animated", "rotating_motor", "contains_fem", "contains_particle")
 SCENARIO_ORDER = ("abd", "fem", "coupling", "particle")
 BUCKET_ORDER = ("low", "mid", "high")
-HARD_FAILURE_BUCKET_ORDER = ("search direction", "worker")
 ADVISORY_BUCKET_ORDER = ("Line Search",)
 ITERATION_COUNTER_ORDER = (
     "newton_iteration_count",
@@ -138,6 +138,16 @@ def _fmt_pct(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value * 100.0:.1f}%"
+
+
+def _unique_join(values: Iterable[Any]) -> str:
+    ordered: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in ordered:
+            continue
+        ordered.append(text)
+    return ";".join(ordered)
 
 
 def _ordered_levels(levels: Iterable[str]) -> List[str]:
@@ -336,14 +346,21 @@ def _load_asset_metadata(run_root: Path, full_catalog: Dict[str, Dict[str, Any]]
     return merged
 
 
-def _failure_bucket(stage: str | None, error: str | None = None) -> str:
+def _failure_bucket(
+    stage: str | None, error: str | None = None, reason_code: str | None = None
+) -> str:
     stage_l = (stage or "").strip().lower()
     error_l = (error or "").strip().lower()
+    reason_l = (reason_code or "").strip().lower()
     if "search direction" in stage_l or "search_direction_invalid" in error_l:
         return "search direction"
     if "line search" in stage_l:
         return "Line Search"
-    return "worker"
+    if reason_l:
+        return f"worker:{_sanitize_token(reason_l).strip('_') or 'unknown'}"
+    if stage_l:
+        return f"worker:{_sanitize_token(stage_l).strip('_') or 'unknown'}"
+    return "worker:unknown"
 
 
 def _scan_run_status(
@@ -362,7 +379,7 @@ def _scan_run_status(
                 if failure:
                     failure = dict(failure)
                     failure["failure_bucket"] = _failure_bucket(
-                        failure.get("stage"), failure.get("error")
+                        failure.get("stage"), failure.get("error"), failure.get("reason_code")
                     )
                     failures.append(failure)
                 status[(asset, level, mode)] = {
@@ -546,44 +563,101 @@ def _line_search_is_advisory(run_data: Dict[str, Any]) -> bool:
     return run_data.get("line_search_policy", "advisory") == "advisory"
 
 
+def _build_outcome(
+    status: str,
+    bucket: str | None,
+    details: Dict[str, Any] | None,
+    *,
+    stage: str = "",
+    reason_code: str = "",
+    reason: str = "",
+    exit_code: int | None = None,
+) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "bucket": bucket,
+        "details": details,
+        "stage": stage,
+        "reason_code": reason_code,
+        "reason": reason,
+        "exit_code": exit_code,
+    }
+
+
+def _outcome_from_failure(status: str, failure: Dict[str, Any]) -> Dict[str, Any]:
+    return _build_outcome(
+        status,
+        failure.get("failure_bucket") or "worker:unknown",
+        failure,
+        stage=str(failure.get("stage", "")),
+        reason_code=str(failure.get("reason_code", "")),
+        reason=str(failure.get("reason", "")),
+        exit_code=_safe_int(failure.get("exit_code")),
+    )
+
+
 def _mode_outcome(run_data: Dict[str, Any], asset: str, level: str, mode: str) -> Dict[str, Any]:
     payload = run_data["status"][(asset, level, mode)]
     worker_result = payload.get("worker_result")
     failure = payload.get("failure")
     if worker_result is not None:
-        return {"status": "ok", "bucket": None, "details": worker_result}
+        return _build_outcome("ok", None, worker_result)
     if failure is not None:
-        bucket = failure.get("failure_bucket") or "worker"
+        bucket = failure.get("failure_bucket") or "worker:unknown"
         if bucket == "Line Search" and _line_search_is_advisory(run_data):
-            return {"status": "advisory", "bucket": bucket, "details": failure}
-        return {"status": "failed", "bucket": bucket, "details": failure}
-    return {"status": "missing", "bucket": "worker", "details": None}
+            return _outcome_from_failure("advisory", failure)
+        return _outcome_from_failure("failed", failure)
+    return _build_outcome(
+        "missing",
+        "worker:missing_result",
+        None,
+        stage="worker",
+        reason_code="missing_result",
+        reason=f"{mode} worker result missing",
+    )
 
 
 def _quality_outcome(run_data: Dict[str, Any], asset: str, level: str) -> Dict[str, Any]:
     meta = run_data["asset_meta"][asset]
     if not meta.get("quality_enabled", True):
-        return {"status": "not_required", "bucket": None, "details": None}
+        return _build_outcome("not_required", None, None)
     outcome = _mode_outcome(run_data, asset, level, "quality")
     if level != "fp64" and outcome["status"] == "missing":
         fp64_quality = _mode_outcome(run_data, asset, "fp64", "quality")
         if fp64_quality["status"] != "ok":
-            return {
-                "status": "blocked",
-                "bucket": "baseline quality",
-                "details": fp64_quality,
-            }
+            return _build_outcome(
+                "blocked",
+                "baseline quality",
+                fp64_quality,
+                stage="baseline quality",
+                reason_code="baseline_quality_blocked",
+                reason="fp64 quality did not complete successfully",
+            )
     if outcome["status"] != "ok":
         return outcome
     if level == "fp64":
         return outcome
     metrics = run_data["quality_index"].get((asset, level))
     if metrics is None:
-        return {"status": "failed", "bucket": "worker", "details": None}
+        return _build_outcome(
+            "failed",
+            "worker:missing_quality_metrics",
+            None,
+            stage="worker",
+            reason_code="missing_quality_metrics",
+            reason="quality metrics missing",
+        )
     nan_inf_count = _safe_int(metrics.get("nan_inf_count")) or 0
     if nan_inf_count > 0:
-        return {"status": "failed", "bucket": "worker", "details": metrics}
-    return {"status": "ok", "bucket": None, "details": metrics}
+        return _build_outcome(
+            "failed",
+            "worker:quality_metrics_nan_inf",
+            metrics,
+            stage="worker",
+            reason_code="quality_metrics_nan_inf",
+            reason="quality metrics contain NaN or Inf",
+        )
+    return _build_outcome("ok", None, metrics)
 
 
 def _asset_level_status(run_data: Dict[str, Any], asset: str, level: str) -> Dict[str, Any]:
@@ -597,14 +671,28 @@ def _asset_level_status(run_data: Dict[str, Any], asset: str, level: str) -> Dic
     hard_failure_buckets: List[str] = []
     advisory_buckets: List[str] = []
     blocked_buckets: List[str] = []
-    for outcome in (perf, quality):
+    hard_failures: List[Dict[str, Any]] = []
+    advisories: List[Dict[str, Any]] = []
+    blocked: List[Dict[str, Any]] = []
+    for mode, outcome in (("perf", perf), ("quality", quality)):
+        event = {
+            "mode": mode,
+            "bucket": outcome["bucket"],
+            "stage": outcome.get("stage", ""),
+            "reason_code": outcome.get("reason_code", ""),
+            "reason": outcome.get("reason", ""),
+            "exit_code": outcome.get("exit_code"),
+        }
         status = outcome["status"]
         if status == "advisory":
             advisory_buckets.append(outcome["bucket"] or "Line Search")
+            advisories.append(event)
         elif status == "blocked":
             blocked_buckets.append(outcome["bucket"] or "baseline quality")
+            blocked.append(event)
         elif status not in ("ok", "not_required"):
-            hard_failure_buckets.append(outcome["bucket"] or "worker")
+            hard_failure_buckets.append(outcome["bucket"] or "worker:unknown")
+            hard_failures.append(event)
 
     result = {
         "perf": perf,
@@ -613,6 +701,9 @@ def _asset_level_status(run_data: Dict[str, Any], asset: str, level: str) -> Dic
         "advisory_buckets": list(dict.fromkeys(advisory_buckets)),
         "blocked_buckets": list(dict.fromkeys(blocked_buckets)),
         "hard_failure_buckets": list(dict.fromkeys(hard_failure_buckets)),
+        "advisories": advisories,
+        "blocked": blocked,
+        "hard_failures": hard_failures,
         "has_advisory": bool(advisory_buckets),
         "has_blocked": bool(blocked_buckets),
         "has_hard_failure": bool(hard_failure_buckets),
@@ -626,19 +717,46 @@ def _strict_stable(run_data: Dict[str, Any], asset: str, level: str) -> bool:
     return bool(_asset_level_status(run_data, asset, level)["strict_stable"])
 
 
-def _hard_failures(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _collect_mode_outcomes(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    cache = run_data.setdefault("mode_outcomes_cache", [])
+    if cache:
+        return cache
     rows: List[Dict[str, Any]] = []
-    for failure in run_data["failures"]:
-        if failure.get("failure_bucket") == "Line Search" and _line_search_is_advisory(run_data):
-            continue
-        rows.append(failure)
+    for asset in sorted(run_data["asset_meta"]):
+        for level in run_data["levels"]:
+            for mode, outcome in (
+                ("perf", _mode_outcome(run_data, asset, level, "perf")),
+                ("quality", _quality_outcome(run_data, asset, level)),
+            ):
+                rows.append(
+                    {
+                        "asset": asset,
+                        "level": level,
+                        "mode": mode,
+                        "status": outcome["status"],
+                        "failure_bucket": outcome["bucket"],
+                        "stage": outcome.get("stage", ""),
+                        "reason_code": outcome.get("reason_code", ""),
+                        "reason": outcome.get("reason", ""),
+                        "exit_code": outcome.get("exit_code"),
+                    }
+                )
+    run_data["mode_outcomes_cache"] = rows
     return rows
+
+
+def _hard_failures(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        row
+        for row in _collect_mode_outcomes(run_data)
+        if row["status"] not in ("ok", "not_required", "blocked", "advisory")
+    ]
 
 
 def _advisory_failures(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not _line_search_is_advisory(run_data):
         return []
-    return [failure for failure in run_data["failures"] if failure.get("failure_bucket") == "Line Search"]
+    return [row for row in _collect_mode_outcomes(run_data) if row["status"] == "advisory"]
 
 
 def _total_speedup(run_data: Dict[str, Any], asset: str, level: str) -> float | None:
@@ -1190,6 +1308,57 @@ def _build_line_search_advisories(run_data: Dict[str, Any]) -> List[Dict[str, An
     return rows
 
 
+def _build_failure_reason_breakdown(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, str, str, str, str], Dict[str, Any]] = {}
+    for row in _hard_failures(run_data):
+        key = (
+            row["level"],
+            row["failure_bucket"] or "worker:unknown",
+            row.get("stage", ""),
+            row.get("reason_code", ""),
+            row.get("reason", ""),
+        )
+        payload = grouped.setdefault(
+            key,
+            {
+                "level": row["level"],
+                "failure_bucket": row["failure_bucket"] or "worker:unknown",
+                "failure_stage": row.get("stage", ""),
+                "reason_code": row.get("reason_code", ""),
+                "reason": row.get("reason", ""),
+                "count": 0,
+                "modes": [],
+                "sample_assets": [],
+                "sample_exit_codes": [],
+            },
+        )
+        payload["count"] += 1
+        if row["mode"] not in payload["modes"]:
+            payload["modes"].append(row["mode"])
+        if row["asset"] not in payload["sample_assets"] and len(payload["sample_assets"]) < 6:
+            payload["sample_assets"].append(row["asset"])
+        exit_code = row.get("exit_code")
+        if exit_code is not None and exit_code not in payload["sample_exit_codes"] and len(payload["sample_exit_codes"]) < 6:
+            payload["sample_exit_codes"].append(exit_code)
+    rows = []
+    for payload in grouped.values():
+        rows.append(
+            {
+                "level": payload["level"],
+                "failure_bucket": payload["failure_bucket"],
+                "failure_stage": payload["failure_stage"],
+                "reason_code": payload["reason_code"],
+                "reason": payload["reason"],
+                "count": payload["count"],
+                "modes": ",".join(payload["modes"]),
+                "sample_assets": ",".join(payload["sample_assets"]),
+                "sample_exit_codes": ",".join(str(code) for code in payload["sample_exit_codes"]),
+            }
+        )
+    rows.sort(key=lambda row: (row["level"], -int(row["count"]), row["failure_bucket"], row["reason_code"]))
+    return rows
+
+
 def _build_asset_stability_matrix(
     run_data: Dict[str, Any],
     fp64_cost_bucket: Dict[str, str],
@@ -1217,6 +1386,7 @@ def _build_asset_stability_matrix(
                 and level_line_search_mean is not None
             ):
                 line_search_per_newton = level_line_search_mean / level_newton_mean
+            hard_failures = status["hard_failures"]
             rows.append(
                 {
                     "asset": asset,
@@ -1228,10 +1398,14 @@ def _build_asset_stability_matrix(
                     "perf_status": status["perf"]["status"],
                     "quality_status": status["quality"]["status"],
                     "strict_stable": status["strict_stable"],
-                    "hard_failure_bucket": ";".join(status["hard_failure_buckets"]),
-                    "advisory_bucket": ";".join(status["advisory_buckets"]),
-                    "blocked_bucket": ";".join(status["blocked_buckets"]),
-                    "failure_stage": ";".join(status["hard_failure_buckets"]),
+                    "failure_bucket": _unique_join(entry["bucket"] for entry in hard_failures),
+                    "hard_failure_bucket": _unique_join(entry["bucket"] for entry in hard_failures),
+                    "advisory_bucket": _unique_join(status["advisory_buckets"]),
+                    "blocked_bucket": _unique_join(status["blocked_buckets"]),
+                    "failure_stage": _unique_join(entry["stage"] for entry in hard_failures),
+                    "reason_code": _unique_join(entry["reason_code"] for entry in hard_failures),
+                    "reason": _unique_join(entry["reason"] for entry in hard_failures),
+                    "exit_code": _unique_join(entry["exit_code"] for entry in hard_failures),
                     "total_speedup": _total_speedup(run_data, asset, level) if level != "fp64" else None,
                     "pipeline_ms": _safe_float(
                         ((run_data["summary"].get("assets") or {}).get(asset, {}).get("levels") or {})
@@ -1528,31 +1702,186 @@ def _save_stage_saved_chart(
 def _save_failure_breakdown_chart(
     chart_path: Path, failures: Sequence[Dict[str, Any]], levels: Sequence[str], plt: Any
 ) -> None:
-    counts = {level: {bucket: 0 for bucket in HARD_FAILURE_BUCKET_ORDER} for level in levels}
+    total_by_bucket: Dict[str, int] = defaultdict(int)
+    for failure in failures:
+        bucket = failure.get("failure_bucket") or "worker:unknown"
+        total_by_bucket[bucket] += 1
+    if not total_by_bucket:
+        return
+    ordered_buckets: List[str] = []
+    if "search direction" in total_by_bucket:
+        ordered_buckets.append("search direction")
+    worker_buckets = [
+        bucket for bucket in total_by_bucket if bucket != "search direction"
+    ]
+    worker_buckets.sort(key=lambda bucket: (-total_by_bucket[bucket], bucket))
+    keep_buckets = ordered_buckets + worker_buckets[:5]
+    if len(total_by_bucket) > len(keep_buckets):
+        keep_buckets.append("other")
+
+    counts = {level: {bucket: 0 for bucket in keep_buckets} for level in levels}
     for failure in failures:
         level = failure.get("level")
         if level not in counts:
             continue
-        bucket = failure["failure_bucket"]
-        if bucket not in HARD_FAILURE_BUCKET_ORDER:
-            continue
+        bucket = failure.get("failure_bucket") or "worker:unknown"
+        if bucket not in keep_buckets:
+            bucket = "other"
         counts[level][bucket] += 1
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
     bottoms = [0] * len(levels)
-    colors = {
-        "search direction": "#b2182b",
-        "worker": "#67a9cf",
-    }
-    for bucket in HARD_FAILURE_BUCKET_ORDER:
+    palette = [
+        "#b2182b",
+        "#2166ac",
+        "#4d9221",
+        "#984ea3",
+        "#ff7f00",
+        "#a6761d",
+        "#666666",
+    ]
+    colors = {bucket: palette[idx % len(palette)] for idx, bucket in enumerate(keep_buckets)}
+    for bucket in keep_buckets:
         heights = [counts[level][bucket] for level in levels]
         ax.bar(levels, heights, bottom=bottoms, label=bucket, color=colors[bucket])
         bottoms = [base + height for base, height in zip(bottoms, heights)]
     ax.set_ylabel("Failure count")
-    ax.set_title("Hard Failure Breakdown by Path")
+    ax.set_title("Detailed Hard Failure Breakdown by Path")
     ax.legend(loc="upper right")
     fig.tight_layout()
     fig.savefig(chart_path, format="svg")
     plt.close(fig)
+
+
+def _pipeline_total_ms(run_data: Dict[str, Any], asset: str, level: str) -> float | None:
+    return _safe_float(run_data["stage_summary_index"].get((asset, level, "Pipeline"), {}).get("total_ms"))
+
+
+def _asset_total_speedup_stats(run_data: Dict[str, Any], asset: str) -> tuple[float | None, float | None]:
+    values = [
+        _total_speedup(run_data, asset, level)
+        for level in run_data["compare_levels"]
+        if _strict_stable(run_data, asset, level)
+    ]
+    values = [value for value in values if value is not None]
+    return _median(values), _mean(values)
+
+
+def _asset_ratio_delta(
+    run_data: Dict[str, Any], asset: str, counter: str
+) -> float | None:
+    values: List[float] = []
+    for level in run_data["compare_levels"]:
+        if not _strict_stable(run_data, asset, level):
+            continue
+        _fp64_mean, _level_mean, fp64_total, level_total = _iteration_count_values(
+            run_data, asset, level, counter
+        )
+        ratio = _metric_ratio(level_total, fp64_total)
+        if ratio is not None:
+            values.append(abs(1.0 - ratio))
+    return max(values) if values else None
+
+
+def _select_standard_report_assets(
+    run_data: Dict[str, Any], asset_stability_rows: Sequence[Dict[str, Any]]
+) -> List[str]:
+    compare_levels = run_data["compare_levels"]
+    stable_count_by_asset: Dict[str, int] = defaultdict(int)
+    for row in asset_stability_rows:
+        if row["level"] == "fp64":
+            continue
+        if row["strict_stable"]:
+            stable_count_by_asset[row["asset"]] += 1
+    strict_assets = sorted(
+        asset for asset, count in stable_count_by_asset.items() if count == len(compare_levels)
+    )
+    selected: List[str] = []
+
+    def add_asset(asset: str | None) -> None:
+        if asset and asset not in selected:
+            selected.append(asset)
+
+    scenarios = {asset: run_data["asset_meta"][asset].get("scenario", "") for asset in strict_assets}
+    for scenario in SCENARIO_ORDER:
+        scenario_assets = [asset for asset in strict_assets if scenarios.get(asset) == scenario]
+        if not scenario_assets:
+            continue
+        add_asset(
+            max(
+                scenario_assets,
+                key=lambda asset: (_pipeline_total_ms(run_data, asset, "fp64") or -math.inf, asset),
+            )
+        )
+
+    speedup_rank = sorted(
+        (
+            (asset, _asset_total_speedup_stats(run_data, asset)[0])
+            for asset in strict_assets
+        ),
+        key=lambda item: (item[1] if item[1] is not None else -math.inf, item[0]),
+    )
+    if speedup_rank:
+        add_asset(speedup_rank[-1][0])
+        add_asset(speedup_rank[0][0])
+
+    for counter in ("newton_iteration_count", "pcg_iteration_count"):
+        ranked = sorted(
+            (
+                (asset, _asset_ratio_delta(run_data, asset, counter))
+                for asset in strict_assets
+            ),
+            key=lambda item: (item[1] if item[1] is not None else -math.inf, item[0]),
+        )
+        if ranked and ranked[-1][1] is not None:
+            add_asset(ranked[-1][0])
+
+    search_direction = next(
+        (failure.get("asset") for failure in _hard_failures(run_data) if failure.get("failure_bucket") == "search direction"),
+        None,
+    )
+    add_asset(search_direction)
+
+    worker_failure = next(
+        (
+            failure.get("asset")
+            for failure in _hard_failures(run_data)
+            if str(failure.get("failure_bucket", "")).startswith("worker:")
+        ),
+        None,
+    )
+    add_asset(worker_failure)
+    return selected[:8]
+
+
+def _copy_standard_report_charts(
+    out_dir: Path,
+    run_data: Dict[str, Any],
+    chart_entries: List[Dict[str, Any]],
+    asset_stability_rows: Sequence[Dict[str, Any]],
+) -> None:
+    source_dir = run_data["run_root"] / "reports" / "charts"
+    if not source_dir.exists():
+        return
+    target_dir = out_dir / "charts" / "standard_report"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    scenario_files = sorted(source_dir.glob("scenario_*.svg"))
+    asset_names = _select_standard_report_assets(run_data, asset_stability_rows)
+    asset_files = [source_dir / f"asset_{asset}.svg" for asset in asset_names]
+    for source in scenario_files + asset_files:
+        if not source.exists():
+            continue
+        relative_name = f"standard_report/{source.name}"
+        target = out_dir / "charts" / relative_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        chart_entries.append(
+            {
+                "filename": relative_name,
+                "title": source.stem.replace("_", " "),
+                "chart_type": "standard_report",
+                "source_run": "primary",
+            }
+        )
 
 
 def _save_dominance_matrix(
@@ -1597,6 +1926,7 @@ def _build_chart_artifacts(
     stage_per_newton_rows: List[Dict[str, Any]],
     solver_stage_per_pcg_rows: List[Dict[str, Any]],
     dominance_rows: List[Dict[str, Any]],
+    asset_stability_rows: List[Dict[str, Any]],
     supplemental_rows: List[Dict[str, Any]] | None,
 ) -> List[Dict[str, Any]]:
     plt, LinearSegmentedColormap, TwoSlopeNorm = _init_matplotlib()
@@ -1607,7 +1937,9 @@ def _build_chart_artifacts(
 
     def register(filename: str, title: str, chart_type: str, **extra: Any) -> Path:
         chart_entries.append({"filename": filename, "title": title, "chart_type": chart_type, **extra})
-        return charts_dir / filename
+        path = charts_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     overall_rows = [
         row
@@ -2037,8 +2369,8 @@ def _build_chart_artifacts(
             )
 
     failure_breakdown_path = register(
-        "path_failure_breakdown.svg",
-        "Path Failure Breakdown",
+        "path_failure_breakdown_detailed.svg",
+        "Detailed Path Failure Breakdown",
         "stacked_bar",
         slice_type="overall",
         source_run="primary",
@@ -2085,6 +2417,8 @@ def _build_chart_artifacts(
                 LinearSegmentedColormap,
                 TwoSlopeNorm,
             )
+
+    _copy_standard_report_charts(out_dir, run_data, chart_entries, asset_stability_rows)
 
     return [entry for entry in chart_entries if (charts_dir / entry["filename"]).exists()]
 
@@ -2148,6 +2482,7 @@ def _build_analysis_markdown(
     stage_leaderboard_rows: List[Dict[str, Any]],
     dominance_rows: List[Dict[str, Any]],
     asset_stability_rows: List[Dict[str, Any]],
+    failure_reason_rows: List[Dict[str, Any]],
     advisory_rows: List[Dict[str, Any]],
     chart_entries: List[Dict[str, Any]],
     supplemental_rows: List[Dict[str, Any]] | None,
@@ -2271,6 +2606,11 @@ def _build_analysis_markdown(
             f"- `{counter}`: lowest ratio is `{best['level']}` at {_fmt_float(best['median_count_ratio'], 3)}x; "
             f"highest is `{worst['level']}` at {_fmt_float(worst['median_count_ratio'], 3)}x."
         )
+    top_failure_reason_lines = [
+        f"- `{row['level']}` `{row['failure_bucket']}`: count={row['count']}, "
+        f"stage=`{row['failure_stage'] or '-'}`, sample_assets=`{row['sample_assets'] or '-'}`"
+        for row in failure_reason_rows[:12]
+    ]
 
     stage_leaderboard_lines: List[str] = []
     for metric_name in ("total_speedup", "per_newton_speedup", "per_pcg_speedup"):
@@ -2361,12 +2701,19 @@ def _build_analysis_markdown(
     )
     lines.append(f"- Complete stable assets: `{len(complete_stable_assets)}`")
     lines.append(f"- Near-stable assets: `{len(near_stable_assets)}`")
-    lines.append(
-        "- Hard failure buckets: "
-        + ", ".join(
-            f"`{bucket}`={failure_counts.get(bucket, 0)}" for bucket in HARD_FAILURE_BUCKET_ORDER
+    if failure_counts:
+        lines.append(
+            "- Hard failure buckets: "
+            + ", ".join(
+                f"`{bucket}`={count}"
+                for bucket, count in sorted(
+                    failure_counts.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )[:8]
+            )
         )
-    )
+    else:
+        lines.append("- Hard failure buckets: none")
     if advisory_rows:
         lines.append(
             "- Advisory buckets: "
@@ -2535,7 +2882,11 @@ def _build_analysis_markdown(
 
     lines.append("## 7. Failure And Advisory Profile")
     lines.append("")
-    lines.append(image("path_failure_breakdown.svg", "Path Failure Breakdown"))
+    lines.append(image("path_failure_breakdown_detailed.svg", "Detailed Path Failure Breakdown"))
+    lines.append("")
+    lines.append("Top detailed hard-failure reasons:")
+    lines.append("")
+    lines.extend(top_failure_reason_lines or ["- None"])
     lines.append("")
     lines.extend(failure_asset_lines)
     lines.append("")
@@ -2571,14 +2922,29 @@ def _build_analysis_markdown(
             )
         lines.append("")
 
-    lines.append("## 8. Supplemental Appendix")
+    lines.append("## 8. Representative Standard Charts")
     lines.append("")
-    lines.append(
-        "The supplemental 98-asset run is used only as trend reference for under-covered families. "
-        "It does not participate in primary recommendations, best-path claims, or strict dominance."
-    )
+    standard_chart_filenames = [
+        entry["filename"]
+        for entry in chart_entries
+        if entry.get("chart_type") == "standard_report"
+    ]
+    if standard_chart_filenames:
+        for filename in standard_chart_filenames:
+            lines.append(image(filename, filename))
+            lines.append("")
+    else:
+        lines.append("No standard report charts were copied into this analysis directory.")
+        lines.append("")
+
+    lines.append("## 9. Supplemental Appendix")
     lines.append("")
     if supplemental_rows:
+        lines.append(
+            "The supplemental 98-asset run is used only as trend reference for under-covered families. "
+            "It does not participate in primary recommendations, best-path claims, or strict dominance."
+        )
+        lines.append("")
         lines.append(
             image(
                 "supplemental_family_total_speedup_heatmap.svg",
@@ -2602,7 +2968,7 @@ def _build_analysis_markdown(
                 f"{row['support_count']} | {_fmt_pct(row['failure_rate'])} |"
             )
     else:
-        lines.append("No supplemental family slice met the appendix criteria.")
+        lines.append("No supplemental run was provided for this analysis.")
     lines.append("")
     return "\n".join(lines)
 
@@ -2636,6 +3002,25 @@ def _supplemental_family_rows(
             continue
         filtered.append(row)
     return filtered
+
+
+def _assert_pcg_counts_present(run_data: Dict[str, Any]) -> None:
+    has_pcg = False
+    for asset in run_data["asset_meta"]:
+        for level in run_data["levels"]:
+            row = run_data["iteration_summary_index"].get((asset, level, "pcg_iteration_count"))
+            if not row:
+                continue
+            if (_safe_float(row.get("total_count")) or 0.0) > 0.0:
+                has_pcg = True
+                break
+        if has_pcg:
+            break
+    if not has_pcg:
+        raise RuntimeError(
+            "No non-zero pcg_iteration_count totals were found in this run. "
+            "The build roots likely do not include the latest stable PCG counter export."
+        )
 
 
 def _assert_basic_counts(
@@ -2703,6 +3088,7 @@ def main() -> None:
     asset_stability_rows = _build_asset_stability_matrix(
         primary_run, fp64_cost_bucket, fp64_newton_bucket
     )
+    failure_reason_rows = _build_failure_reason_breakdown(primary_run)
     advisory_rows = _build_line_search_advisories(primary_run)
     dominance_rows = _build_path_dominance(
         primary_run, membership, path_totals_rows, args.min_support_for_claim
@@ -2710,6 +3096,7 @@ def main() -> None:
     supplemental_rows = _supplemental_family_rows(
         path_totals_rows, supplemental_run, args.min_support_for_claim
     )
+    _assert_pcg_counts_present(primary_run)
 
     _write_csv(out_dir / "path_totals_by_slice.csv", path_totals_rows)
     _write_csv(out_dir / "stage_speedups_by_slice.csv", stage_speedup_rows)
@@ -2718,6 +3105,7 @@ def main() -> None:
     _write_csv(out_dir / "stage_per_newton_by_slice.csv", stage_per_newton_rows)
     _write_csv(out_dir / "solver_stage_per_pcg_by_slice.csv", solver_stage_per_pcg_rows)
     _write_csv(out_dir / "stage_leaderboard_by_slice.csv", stage_leaderboard_rows)
+    _write_csv(out_dir / "failure_reason_breakdown.csv", failure_reason_rows)
     _write_csv(out_dir / "line_search_advisories.csv", advisory_rows)
     _write_csv(out_dir / "path_dominance.csv", dominance_rows)
     _write_csv(out_dir / "asset_stability_matrix.csv", asset_stability_rows)
@@ -2732,6 +3120,7 @@ def main() -> None:
         stage_per_newton_rows,
         solver_stage_per_pcg_rows,
         dominance_rows,
+        asset_stability_rows,
         supplemental_rows,
     )
     write_json(out_dir / "charts_manifest.json", chart_entries)
@@ -2747,6 +3136,7 @@ def main() -> None:
         stage_leaderboard_rows,
         dominance_rows,
         asset_stability_rows,
+        failure_reason_rows,
         advisory_rows,
         chart_entries,
         supplemental_rows,

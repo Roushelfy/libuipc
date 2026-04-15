@@ -112,19 +112,6 @@ def _install_fake_uipc(monkeypatch, tmp_path: Path) -> dict[str, int]:
         def set_level(_level):
             return None
 
-    def fake_save_result(result: dict, output_dir: str) -> None:
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        benchmark = {
-            "name": result["name"],
-            "num_frames": result["num_frames"],
-            "wall_time": result["wall_time"],
-            "summary": result["summary"],
-            "workspace": result.get("workspace"),
-        }
-        (out / "benchmark.json").write_text(json.dumps(benchmark, indent=2), encoding="utf-8")
-        (out / "timer_frames.json").write_text(json.dumps(result["timer_frames"], indent=2), encoding="utf-8")
-
     uipc_module = types.ModuleType("uipc")
     uipc_module.default_config = lambda: {}
     uipc_module.init = lambda _cfg: None
@@ -137,12 +124,8 @@ def _install_fake_uipc(monkeypatch, tmp_path: Path) -> dict[str, int]:
     uipc_stats = types.ModuleType("uipc.stats")
     uipc_stats.SimulationStats = FakeSimulationStats
 
-    uipc_profile = types.ModuleType("uipc.profile")
-    uipc_profile._save_result = fake_save_result
-
     monkeypatch.setitem(sys.modules, "uipc", uipc_module)
     monkeypatch.setitem(sys.modules, "uipc.stats", uipc_stats)
-    monkeypatch.setitem(sys.modules, "uipc.profile", uipc_profile)
     monkeypatch.setattr(runner, "load_asset_scene", lambda *args, **kwargs: tmp_path / "asset")
     monkeypatch.setattr(runner, "collect_solution_metrics", lambda *args, **kwargs: {})
     return recorder
@@ -177,6 +160,7 @@ def test_run_profile_worker_perf_warmup_collects_profile_only(tmp_path: Path, mo
     assert benchmark["warmup_frames"] == 2
     assert benchmark["warmup_wall_time_s"] >= 0.0
     assert benchmark["end_to_end_wall_time_s"] >= benchmark["wall_time"]
+    assert (output_dir / "warm_scene" / "summary.txt").exists()
 
     timer_frames = json.loads((output_dir / "timer_frames.json").read_text(encoding="utf-8"))
     assert len(timer_frames) == 3

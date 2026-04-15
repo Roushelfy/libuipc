@@ -239,23 +239,15 @@ def _save_worker_profile_result(
     warmup_wall_time_s: float,
     end_to_end_wall_time_s: float,
 ) -> Dict[str, Any]:
-    # Benchmark workers should always render reports headlessly.
-    os.environ["MPLBACKEND"] = BENCHMARK_MPLBACKEND
-    try:
-        import matplotlib
-
-        matplotlib.use(BENCHMARK_MPLBACKEND, force=True)
-    except Exception:
-        pass
-    import uipc.profile as uipc_profile
-
     num_frames = getattr(stats, "num_frames", len(getattr(stats, "_frames", [])))
+    timer_frames = list(getattr(stats, "_frames", []))
+    profile_dir.mkdir(parents=True, exist_ok=True)
     result = {
         "name": asset_name,
         "num_frames": num_frames,
         "wall_time": wall_time,
         "stats": stats,
-        "timer_frames": list(getattr(stats, "_frames", [])),
+        "timer_frames": timer_frames,
         "summary": (
             f"Scene: {asset_name}  |  Frames: {num_frames}  |  "
             f"Wall time: {wall_time:.3f}s  |  "
@@ -264,13 +256,19 @@ def _save_worker_profile_result(
         "workspace": str(workspace.resolve()),
         "steps": ([("warmup", warmup_frames)] if warmup_frames > 0 else []) + [("profile", num_frames)],
     }
-    uipc_profile._save_result(result, str(profile_dir))
-    _update_benchmark_metadata(
-        profile_dir / "benchmark.json",
-        warmup_frames=warmup_frames,
-        warmup_wall_time_s=warmup_wall_time_s,
-        end_to_end_wall_time_s=end_to_end_wall_time_s,
-    )
+    benchmark_payload = {
+        "name": asset_name,
+        "num_frames": num_frames,
+        "wall_time": wall_time,
+        "summary": result["summary"],
+        "workspace": result["workspace"],
+        "warmup_frames": warmup_frames,
+        "warmup_wall_time_s": warmup_wall_time_s,
+        "end_to_end_wall_time_s": end_to_end_wall_time_s,
+    }
+    write_json(profile_dir / "benchmark.json", benchmark_payload)
+    write_json(profile_dir / "timer_frames.json", timer_frames)
+    (profile_dir / "summary.txt").write_text(result["summary"] + "\n", encoding="utf-8")
     result["warmup_frames"] = warmup_frames
     result["warmup_wall_time_s"] = warmup_wall_time_s
     result["end_to_end_wall_time_s"] = end_to_end_wall_time_s
