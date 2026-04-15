@@ -12,6 +12,7 @@ class FEMLineSearchReporter final : public LineSearchReporter
 {
   public:
     using LineSearchReporter::LineSearchReporter;
+    using EnergyScalar = LineSearcher::EnergyScalar;
 
     class ReportExtentInfo
     {
@@ -26,19 +27,19 @@ class FEMLineSearchReporter final : public LineSearchReporter
     class ComputeEnergyInfo
     {
       public:
-        ComputeEnergyInfo(muda::BufferView<Float> energies, Float dt)
+        ComputeEnergyInfo(muda::BufferView<EnergyScalar> energies, Float dt)
             : m_energies(energies)
             , m_dt(dt)
         {
         }
 
-        muda::BufferView<Float> energies() const { return m_energies; }
-        Float                   dt() const noexcept { return m_dt; }
+        muda::BufferView<EnergyScalar> energies() const { return m_energies; }
+        Float                          dt() const noexcept { return m_dt; }
 
       private:
         friend class FEMLineSearchReporter;
-        muda::BufferView<Float> m_energies;
-        Float                   m_dt = 0.0;
+        muda::BufferView<EnergyScalar> m_energies;
+        Float                          m_dt = 0.0;
     };
 
     class Impl
@@ -52,13 +53,13 @@ class FEMLineSearchReporter final : public LineSearchReporter
         SimSystemSlot<FiniteElementMethod> finite_element_method;
 
         SimSystemSlot<FiniteElementKinetic> finite_element_kinetic;
-        muda::DeviceBuffer<Float>           kinetic_energies;
-        muda::DeviceVar<Float>              total_kinetic_energy;
+        muda::DeviceBuffer<EnergyScalar>    kinetic_energies;
+        muda::DeviceVar<EnergyScalar>       total_kinetic_energy;
 
         SimSystemSlotCollection<FEMLineSearchSubreporter> reporters;
         OffsetCountCollection<IndexT> reporter_energy_offsets_counts;
-        muda::DeviceBuffer<Float>     reporter_energies;
-        muda::DeviceVar<Float>        total_reporter_energy;
+        muda::DeviceBuffer<EnergyScalar> reporter_energies;
+        muda::DeviceVar<EnergyScalar>    total_reporter_energy;
 
         FiniteElementMethod::Impl& fem()
         {

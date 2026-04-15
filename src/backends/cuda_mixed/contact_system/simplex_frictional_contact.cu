@@ -179,7 +179,7 @@ muda::CBufferView<Vector4i> SimplexFrictionalContact::PTs() const
     return m_impl.simplex_trajectory_filter->friction_PTs();
 }
 
-muda::CBufferView<Float> SimplexFrictionalContact::PT_energies() const
+muda::CBufferView<SimplexFrictionalContact::EnergyScalar> SimplexFrictionalContact::PT_energies() const
 {
     return m_impl.PT_energies;
 }
@@ -199,7 +199,7 @@ muda::CBufferView<Vector4i> SimplexFrictionalContact::EEs() const
     return m_impl.simplex_trajectory_filter->friction_EEs();
 }
 
-muda::CBufferView<Float> SimplexFrictionalContact::EE_energies() const
+muda::CBufferView<SimplexFrictionalContact::EnergyScalar> SimplexFrictionalContact::EE_energies() const
 {
     return m_impl.EE_energies;
 }
@@ -219,7 +219,7 @@ muda::CBufferView<Vector3i> SimplexFrictionalContact::PEs() const
     return m_impl.simplex_trajectory_filter->friction_PEs();
 }
 
-muda::CBufferView<Float> SimplexFrictionalContact::PE_energies() const
+muda::CBufferView<SimplexFrictionalContact::EnergyScalar> SimplexFrictionalContact::PE_energies() const
 {
     return m_impl.PE_energies;
 }
@@ -239,7 +239,7 @@ muda::CBufferView<Vector2i> SimplexFrictionalContact::PPs() const
     return m_impl.simplex_trajectory_filter->friction_PPs();
 }
 
-muda::CBufferView<Float> SimplexFrictionalContact::PP_energies() const
+muda::CBufferView<SimplexFrictionalContact::EnergyScalar> SimplexFrictionalContact::PP_energies() const
 {
     return m_impl.PP_energies;
 }

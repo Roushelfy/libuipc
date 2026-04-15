@@ -1,5 +1,6 @@
 #pragma once
 #include <type_define.h>
+#include <mixed_precision/policy.h>
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/device_var.h>
 #include <muda/ext/linear_system.h>
@@ -23,21 +24,22 @@ class MASPreconditionerEngine
     static constexpr int DEFAULT_BLOCKSIZE = 256;
     static constexpr int DEFAULT_WARPNUM   = 16;
     static constexpr int MAX_LEVELS        = 6;
+    using StoreScalar = ActivePolicy::StoreScalar;
+    using PcgAuxScalar = ActivePolicy::PcgAuxScalar;
+    using StoreMat3 = Eigen::Matrix<StoreScalar, 3, 3>;
+    using PcgVec3 = Eigen::Matrix<PcgAuxScalar, 3, 1>;
 
     // Symmetric upper-triangle block count: BANKSIZE*(BANKSIZE+1)/2
     static constexpr int SYM_BLOCK_COUNT = BANKSIZE * (BANKSIZE + 1) / 2;
 
-    // A single cluster's symmetric matrix in double (for assembly)
-    struct alignas(16) ClusterMatrixSym
+    template <typename Scalar>
+    struct alignas(16) ClusterMatrixSymT
     {
-        Eigen::Matrix3d M[SYM_BLOCK_COUNT];
+        Eigen::Matrix<Scalar, 3, 3> M[SYM_BLOCK_COUNT];
     };
 
-    // A single cluster's symmetric matrix in float (the inverted preconditioner)
-    struct alignas(16) ClusterMatrixSymF
-    {
-        Eigen::Matrix3f M[SYM_BLOCK_COUNT];
-    };
+    using ClusterMatrixSym  = ClusterMatrixSymT<StoreScalar>;
+    using ClusterMatrixSymF = ClusterMatrixSymT<PcgAuxScalar>;
 
     // Level traversal table per node
     struct LevelTable
@@ -72,7 +74,7 @@ class MASPreconditionerEngine
 
     // ---- Phase 2: Assemble preconditioner (per Newton iteration) ----
 
-    void set_preconditioner(const Eigen::Matrix3d* d_triplet_values,
+    void set_preconditioner(const StoreMat3*       d_triplet_values,
                             const int*             d_row_ids,
                             const int*             d_col_ids,
                             const uint32_t*        d_indices,
@@ -82,8 +84,8 @@ class MASPreconditionerEngine
 
     // ---- Phase 3: Apply preconditioning z = M^{-1} r (per PCG iteration) ----
 
-    void apply(muda::CDenseVectorView<Float> r,
-               muda::DenseVectorView<Float>  z,
+    void apply(muda::CDenseVectorView<PcgAuxScalar> r,
+               muda::DenseVectorView<PcgAuxScalar>  z,
                muda::CVarView<IndexT>        converged);
 
     bool is_initialized() const { return m_initialized; }
@@ -118,7 +120,7 @@ class MASPreconditionerEngine
                               int        dof_offset);
 
     // Hessian assembly + inversion
-    void scatter_hessian_to_clusters(const Eigen::Matrix3d* d_triplet_values,
+    void scatter_hessian_to_clusters(const StoreMat3*       d_triplet_values,
                                      const int*             d_row_ids,
                                      const int*             d_col_ids,
                                      const uint32_t*        d_indices,
@@ -127,10 +129,10 @@ class MASPreconditionerEngine
     void invert_cluster_matrices();
 
     // Preconditioning steps
-    void build_multi_level_R(const double3* R,
+    void build_multi_level_R(const PcgVec3* R,
                              muda::CVarView<IndexT> converged);
     void schwarz_local_solve(muda::CVarView<IndexT> converged);
-    void collect_final_Z(double3* Z,
+    void collect_final_Z(PcgVec3* Z,
                          muda::CVarView<IndexT> converged);
 
   private:
@@ -168,12 +170,12 @@ class MASPreconditionerEngine
     muda::DeviceBuffer<int> real_to_part;   // real vertex index -> partition-ordered index
 
     // ---- GPU buffers: cluster matrices ----
-    muda::DeviceBuffer<ClusterMatrixSym>  cluster_hessians;   // assembled Hessian blocks (double)
-    muda::DeviceBuffer<ClusterMatrixSymF> cluster_inverses;   // inverted preconditioner (float)
+    muda::DeviceBuffer<ClusterMatrixSym>  cluster_hessians;
+    muda::DeviceBuffer<ClusterMatrixSymF> cluster_inverses;
 
     // ---- GPU buffers: multi-level residual / solution ----
-    muda::DeviceBuffer<Eigen::Vector3f> multi_level_R;
-    muda::DeviceBuffer<float3>          multi_level_Z;
+    muda::DeviceBuffer<PcgVec3> multi_level_R;
+    muda::DeviceBuffer<PcgVec3> multi_level_Z;
 
     // ---- BCOO coupling data (for contact-aware MAS) ----
     const int* m_bcoo_row_ids    = nullptr;  // device pointer, owned by caller

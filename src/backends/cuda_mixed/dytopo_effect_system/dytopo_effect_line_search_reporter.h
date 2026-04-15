@@ -9,6 +9,7 @@ class DyTopoEffectLineSearchReporter final : public LineSearchReporter
 {
   public:
     using LineSearchReporter::LineSearchReporter;
+    using EnergyScalar = LineSearcher::EnergyScalar;
 
     class Impl;
 
@@ -20,9 +21,9 @@ class DyTopoEffectLineSearchReporter final : public LineSearchReporter
 
         SimSystemSlot<GlobalDyTopoEffectManager> global_dytopo_effect_manager;
 
-        muda::DeviceVar<Float>    energy;
-        muda::DeviceBuffer<Float> energies;
-        Float                     reserve_ratio = 1.5;
+        muda::DeviceVar<EnergyScalar>    energy;
+        muda::DeviceBuffer<EnergyScalar> energies;
+        Float                           reserve_ratio = 1.5;
 
         template <typename T>
         void loose_resize(muda::DeviceBuffer<T>& buffer, SizeT size)

@@ -244,7 +244,7 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                                     rest_b.segment<3>(3).template cast<Alu>(),  // bj_bar
                                     qj);                                         // qj
 
-                       Es(I) = safe_cast<Float>(E01 + E23);
+                       Es(I) = safe_cast<ActivePolicy::EnergyScalar>(E01 + E23);
                    });
     }
 

@@ -8,6 +8,7 @@ class Codim1DConstitution : public FiniteElementConstitution
   public:
     using FiniteElementConstitution::FiniteElementConstitution;
     using StoreScalar = FiniteElementElastics::StoreScalar;
+    using EnergyScalar = FiniteElementElastics::EnergyScalar;
 
     class BuildInfo
     {
@@ -45,7 +46,7 @@ class Codim1DConstitution : public FiniteElementConstitution
         ComputeEnergyInfo(Codim1DConstitution*    impl,
                           SizeT                   index_in_dim,
                           Float                   dt,
-                          muda::BufferView<Float> energies)
+                          muda::BufferView<EnergyScalar> energies)
             : BaseInfo(impl, index_in_dim, dt)
             , m_energies(energies)
         {
@@ -54,7 +55,7 @@ class Codim1DConstitution : public FiniteElementConstitution
         auto energies() const noexcept { return m_energies; }
 
       private:
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class ComputeGradientHessianInfo : public BaseInfo

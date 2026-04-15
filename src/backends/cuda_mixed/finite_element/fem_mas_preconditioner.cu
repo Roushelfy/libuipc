@@ -6,6 +6,7 @@
 #include <finite_element/fem_linear_subsystem.h>
 #include <global_geometry/global_vertex_manager.h>
 #include <finite_element/mas_preconditioner_engine.h>
+#include <uipc/builtin/attribute_name.h>
 #include <uipc/geometry/simplicial_complex.h>
 #include <uipc/common/log.h>
 #include <set>
@@ -16,16 +17,8 @@ namespace uipc::backend::cuda_mixed
 using StoreScalar = GlobalLinearSystem::StoreScalar;
 using PcgAuxScalar = GlobalLinearSystem::PcgAuxScalar;
 using DiagInvMat3x3 = Eigen::Matrix<PcgAuxScalar, 3, 3>;
-#if defined(UIPC_MIXED_LEVEL_PATH2) || defined(UIPC_MIXED_LEVEL_PATH3) \
-    || defined(UIPC_MIXED_LEVEL_PATH4) || defined(UIPC_MIXED_LEVEL_PATH5) \
-    || defined(UIPC_MIXED_LEVEL_PATH6) || defined(UIPC_MIXED_LEVEL_PATH7) \
-    || defined(UIPC_MIXED_LEVEL_PATH8)
-static constexpr bool kMasEngineCompatible = false;
-#define UIPC_MAS_ENGINE_DISABLED 1
-#else
-static constexpr bool kMasEngineCompatible = true;
-#define UIPC_MAS_ENGINE_DISABLED 0
-#endif
+using StoreMat3 = Eigen::Matrix<StoreScalar, 3, 3>;
+constexpr ::uipc::U64 kEmptyConstitutionUID = 0ull;
 
 // Free function: NVCC on Windows forbids __device__ lambdas in static / internal-linkage functions
 void fill_identity_indices(muda::DeviceBuffer<uint32_t>& buf, int count)
@@ -268,6 +261,26 @@ class FEMMASPreconditioner : public LocalPreconditioner
             return;
         }
 
+        std::vector<uint8_t> h_empty_fem(vert_num, 0);
+        for(auto& geo_info : fem.geo_infos)
+        {
+            auto& geo_slot = geo_slots[geo_info.geo_slot_index];
+            auto& geo      = geo_slot->geometry();
+            auto  cuid     = geo.meta().find<U64>(builtin::constitution_uid);
+            if(!cuid || cuid->view()[0] != kEmptyConstitutionUID)
+                continue;
+            for(SizeT v = 0; v < geo_info.vertex_count; ++v)
+                h_empty_fem[geo_info.vertex_offset + v] = 1;
+        }
+        for(SizeT v = 0; v < vert_num; ++v)
+        {
+            UIPC_ASSERT(!(h_empty_fem[v] != 0 && part_ids[v] >= 0),
+                        "MAS: Empty FEM vertex {} has mesh_part / partition id {}. "
+                        "Strip mesh_part on Empty geometries.",
+                        v,
+                        part_ids[v]);
+        }
+
         // Check if any vertices are unpartitioned (part_ids[v] == -1)
         {
             std::vector<int> h_unpart_flags(vert_num, 0);
@@ -363,15 +376,10 @@ class FEMMASPreconditioner : public LocalPreconditioner
         auto row_view      = A.row_indices();
         auto col_view      = A.col_indices();
 
-        auto* values  = reinterpret_cast<const Eigen::Matrix3d*>(values_view.data());
+        auto* values  = reinterpret_cast<const StoreMat3*>(values_view.data());
         auto* row_ids = reinterpret_cast<const int*>(row_view.data());
         auto* col_ids = reinterpret_cast<const int*>(col_view.data());
 
-#if UIPC_MAS_ENGINE_DISABLED
-        (void)values;
-        (void)row_ids;
-        (void)col_ids;
-#else
         if(m_contact_aware)
         {
             engine.set_hessian_coupling(
@@ -390,7 +398,6 @@ class FEMMASPreconditioner : public LocalPreconditioner
                                   dof_offset / 3,
                                   static_cast<int>(triplet_count),
                                   0);
-#endif
 
         // Diagonal fallback assembly for unpartitioned vertices
         if(m_has_unpartitioned)
@@ -412,12 +419,8 @@ class FEMMASPreconditioner : public LocalPreconditioner
 
         using namespace muda;
 
-#if UIPC_MAS_ENGINE_DISABLED
-        info.z().buffer_view().copy_from(info.r().buffer_view());
-#else
         auto converged = info.converged();
         engine.apply(info.r(), info.z(), converged);
-#endif
 
         // Diagonal fallback for unpartitioned vertices
         if(m_has_unpartitioned)

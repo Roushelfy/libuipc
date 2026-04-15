@@ -194,7 +194,7 @@ Edge             = ({}, {}))",
 
                        Alu E;
                        RJ::Eaxis<Alu>(E, kappa, F);
-                       Es(I) = safe_cast<Float>(E);
+                       Es(I) = safe_cast<ActivePolicy::EnergyScalar>(E);
                    });
     }
 

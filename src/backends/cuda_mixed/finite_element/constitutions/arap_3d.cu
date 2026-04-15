@@ -97,7 +97,7 @@ class ARAP3D final : public FEM3DConstitution
                        const Alu v   = safe_cast<Alu>(volumes(I));
 
                        ARAP::E(E, kt2, v, F);
-                       energies(I) = safe_cast<Float>(E);
+                       energies(I) = safe_cast<ActivePolicy::EnergyScalar>(E);
                    });
     }
 

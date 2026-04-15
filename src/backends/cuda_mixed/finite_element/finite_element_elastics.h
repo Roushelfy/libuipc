@@ -16,6 +16,7 @@ class FiniteElementElastics final : public SimSystem
   public:
     using SimSystem::SimSystem;
     using StoreScalar = FEMLinearSubsystem::StoreScalar;
+    using EnergyScalar = FEMLineSearchReporter::EnergyScalar;
 
     class Impl;
 
@@ -47,7 +48,7 @@ class FiniteElementElastics final : public SimSystem
     class ComputeEnergyInfo
     {
       public:
-        ComputeEnergyInfo(Impl* impl, SizeT index, Float dt, muda::BufferView<Float> energies)
+        ComputeEnergyInfo(Impl* impl, SizeT index, Float dt, muda::BufferView<EnergyScalar> energies)
             : m_impl(impl)
             , m_index(index)
             , m_dt(dt)
@@ -66,7 +67,7 @@ class FiniteElementElastics final : public SimSystem
         Impl*                   m_impl  = nullptr;
         SizeT                   m_index = 0;
         Float                   m_dt    = 0.0;
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class ComputeGradientHessianInfo

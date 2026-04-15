@@ -19,6 +19,7 @@ class AffineBodyAnimator final : public Animator
   public:
     using Animator::Animator;
     using StoreScalar = ABDLinearSubsystem::StoreScalar;
+    using EnergyScalar = ABDLineSearchReporter::EnergyScalar;
 
     class Impl;
 
@@ -75,16 +76,16 @@ class AffineBodyAnimator final : public Animator
     class ComputeEnergyInfo : public BaseInfo
     {
       public:
-        ComputeEnergyInfo(Impl* impl, SizeT index, Float dt, muda::BufferView<Float> energy)
+        ComputeEnergyInfo(Impl* impl, SizeT index, Float dt, muda::BufferView<EnergyScalar> energy)
             : BaseInfo(impl, index, dt)
             , m_energies(energy)
         {
         }
-        muda::BufferView<Float> energies() const noexcept;
+        muda::BufferView<EnergyScalar> energies() const noexcept;
 
       private:
         friend class AffineBodyAnimator;
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class ComputeGradientHessianInfo : public BaseInfo

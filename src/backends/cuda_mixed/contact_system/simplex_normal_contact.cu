@@ -177,7 +177,7 @@ muda::CBufferView<Vector4i> SimplexNormalContact::PTs() const
     return m_impl.simplex_trajectory_filter->PTs();
 }
 
-muda::CBufferView<Float> SimplexNormalContact::PT_energies() const
+muda::CBufferView<SimplexNormalContact::EnergyScalar> SimplexNormalContact::PT_energies() const
 {
     return m_impl.PT_energies;
 }
@@ -197,7 +197,7 @@ muda::CBufferView<Vector4i> SimplexNormalContact::EEs() const
     return m_impl.simplex_trajectory_filter->EEs();
 }
 
-muda::CBufferView<Float> SimplexNormalContact::EE_energies() const
+muda::CBufferView<SimplexNormalContact::EnergyScalar> SimplexNormalContact::EE_energies() const
 {
     return m_impl.EE_energies;
 }
@@ -217,7 +217,7 @@ muda::CBufferView<Vector3i> SimplexNormalContact::PEs() const
     return m_impl.simplex_trajectory_filter->PEs();
 }
 
-muda::CBufferView<Float> SimplexNormalContact::PE_energies() const
+muda::CBufferView<SimplexNormalContact::EnergyScalar> SimplexNormalContact::PE_energies() const
 {
     return m_impl.PE_energies;
 }
@@ -237,7 +237,7 @@ muda::CBufferView<Vector2i> SimplexNormalContact::PPs() const
     return m_impl.simplex_trajectory_filter->PPs();
 }
 
-muda::CBufferView<Float> SimplexNormalContact::PP_energies() const
+muda::CBufferView<SimplexNormalContact::EnergyScalar> SimplexNormalContact::PP_energies() const
 {
     return m_impl.PP_energies;
 }

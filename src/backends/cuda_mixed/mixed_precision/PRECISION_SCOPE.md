@@ -13,6 +13,7 @@
 |---|---|---|
 | `AluScalar` | 计算/ALU 精度（梯度、Hessian 内核计算） | Path1/3/5/6/7/8 |
 | `StoreScalar` | 存储精度（Hessian Triplet/BCOO、梯度向量） | Path2/3/4/5/6/7/8 |
+| `EnergyScalar` | 共享 energy / line-search / reporter 精度 | Path1/3/5/6/7/8 |
 | `PcgAuxScalar` | PCG 辅助向量（r/z/p/Ap） | Path4/5/6/7/8 |
 | `SolveScalar` | 求解向量 x | Path7/8 |
 | `PcgIterScalar` | PCG 迭代标量（rz, alpha, beta） | Path7 only |
@@ -54,7 +55,7 @@
 |---|------|------|------|
 | 1 | IPC Contact 法向 ALU 梯度 | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
 | 2 | IPC Contact 法向 ALU Hessian | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
-| 3 | IPC Contact 摩擦/半平面 ALU | `contact_system/contact_models/ipc_simplex_frictional_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu` | ✅ |
+| 3 | IPC Contact 摩擦/半平面 ALU | `contact_system/contact_models/ipc_simplex_frictional_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu` | ✅（active mixed path；不是旧的 `ipc_simplex_frictional_contact_function.h`） |
 | 3b | AL-IPC Contact / Half-plane ALU | `contact_system/al_simplex_normal_contact.cu`<br>`contact_system/al_simplex_frictional_contact.cu`<br>`contact_system/al_vertex_half_plane_normal_contact.cu`<br>`contact_system/al_vertex_half_plane_frictional_contact.cu` | ✅ |
 | 4 | FEM SNH 变形梯度 F ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
 | 5 | FEM SNH 能量梯度 G ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
@@ -75,8 +76,8 @@
 | 15e | ABD SphericalJoint ALU | `affine_body/constitutions/affine_body_spherical_joint.cu` | ✅ |
 | 15c | ABD Driving Revolute External Force ALU | `affine_body/affine_body_revolute_joint_external_body_force.cu` | ✅ |
 | 15d | ABD Driving Prismatic External Force ALU | `affine_body/affine_body_prismatic_joint_external_body_force.cu` | ✅ |
-| 16 | ABDJacobi J^T H J ALU domain | `affine_body/abd_jacobi_matrix.h/.cu` | ⚠️ |
-| 17 | ABDJacobiStack mat-vec / to_mat ALU | `affine_body/details/abd_jacobi_matrix.inl` | ⚠️ |
+| 16 | ABDJacobi J^T H J ALU domain | `affine_body/abd_jacobi_matrix.h/.cu` | ✅ |
+| 17 | ABDJacobiStack mat-vec / to_mat ALU | `affine_body/details/abd_jacobi_matrix.inl` | ✅ |
 | 18 | ABD 线性子系统 kinetic+shape | `affine_body/abd_linear_subsystem.cu` | ✅ |
 | 19 | ABD 线性子系统 Reporter | `affine_body/abd_linear_subsystem.cu` | ✅ |
 | 20 | ABD 线性子系统 DyTopo | `affine_body/abd_linear_subsystem.cu` | ✅ |
@@ -91,11 +92,18 @@
 | 24 | Global BCOO Hessian A_bcoo | `linear_system/global_linear_system.h` | ✅ |
 | 25 | Global 梯度向量 b | `linear_system/global_linear_system.h` | ✅ |
 
+### EnergyScalar 组件（与 AluScalar 同步激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 25b | Shared energy / line search / reporter buffers | `line_search/line_searcher.h/.cu`<br>`affine_body/abd_line_search_reporter.h/.cu`<br>`finite_element/fem_line_search_reporter.h/.cu`<br>`dytopo_effect_system/*line_search_reporter*`<br>`contact_system/contact_reporter.h` | ✅ |
+
 ### PcgAuxScalar 组件（path4 起激活）
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
 | 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h`<br>`linear_system/linear_fused_pcg.h` | ✅ |
+| 26b | FEM MAS 预条件器（mixed-compatible） | `finite_element/fem_mas_preconditioner.cu`<br>`finite_element/mas_preconditioner_engine.h/.cu` | ✅ |
 
 ### SolveScalar 组件（path7/path8 起激活）
 

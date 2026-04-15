@@ -23,6 +23,7 @@ struct PrecisionPolicy
     using AluMat9x9 = Eigen::Matrix<AluScalar, 9, 9>;
     using AluVec12  = Eigen::Matrix<AluScalar, 12, 1>;
     using AluMat12x12 = Eigen::Matrix<AluScalar, 12, 12>;
+    using EnergyScalar = AluScalar;
 
     using StoreScalar =
         std::conditional_t<L == MixedPrecisionLevel::FP64 || L == MixedPrecisionLevel::Path1,

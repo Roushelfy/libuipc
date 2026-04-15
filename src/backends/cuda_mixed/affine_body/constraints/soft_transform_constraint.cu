@@ -130,10 +130,11 @@ class SoftTransformConstraint final : public AffineBodyConstraint
                     aim_transforms = aim_transforms.viewer().name("aim_transforms"),
                     strength_ratios = strength_ratios.viewer().name("strength_ratios"),
                     body_masses = info.body_masses().viewer().name("body_masses"),
-                    energies = info.energies().viewer().name("energies"),
+                   energies = info.energies().viewer().name("energies"),
                     is_fixed = info.is_fixed().viewer().name("is_fixed")] __device__(int I)
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Energy = ActivePolicy::EnergyScalar;
                        auto  i = indices(I);
                        auto& E = energies(I);
 
@@ -157,7 +158,7 @@ class SoftTransformConstraint final : public AffineBodyConstraint
 
                            Alu E_alu = safe_cast<Alu>(0.5)
                                        * dq_alu.dot((M_alu * dq_alu).eval());
-                           E = safe_cast<Float>(E_alu);
+                           E = safe_cast<Energy>(E_alu);
                        }
                    });
     }

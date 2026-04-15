@@ -56,6 +56,7 @@ void ABDLineSearchReporter::Impl::step_forward(LineSearcher::StepInfo& info)
 void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo& info)
 {
     using namespace muda;
+    using EnergyScalar = ABDLineSearchReporter::EnergyScalar;
 
     auto body_count = abd().body_count();
 
@@ -79,12 +80,12 @@ void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
                    [is_fixed = abd().body_id_to_is_fixed.cviewer().name("is_fixed"),
                     external_kinetic =
                         abd().body_id_to_external_kinetic.cviewer().name("external_kinetic"),
-                    kinetic_energy = body_id_to_kinetic_energy.viewer().name(
+                           kinetic_energy = body_id_to_kinetic_energy.viewer().name(
                         "kinetic_energy")] __device__(int i) mutable
                    {
                        if(is_fixed(i) || external_kinetic(i))
                        {
-                           kinetic_energy(i) = 0.0;
+                           kinetic_energy(i) = EnergyScalar{0};
                        }
                    });
 
@@ -147,11 +148,11 @@ void ABDLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
     }
 
     // Copy from device to host
-    Float K       = abd_kinetic_energy;
-    Float shape_E = abd_shape_energy;
-    Float other_E = total_reporter_energy;
+    EnergyScalar K       = abd_kinetic_energy;
+    EnergyScalar shape_E = abd_shape_energy;
+    EnergyScalar other_E = total_reporter_energy;
 
-    Float E = K + shape_E + other_E;
+    EnergyScalar E = K + shape_E + other_E;
 
     info.energy(E);
 }

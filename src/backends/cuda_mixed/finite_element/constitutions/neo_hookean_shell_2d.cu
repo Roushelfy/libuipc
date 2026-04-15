@@ -157,7 +157,7 @@ class NeoHookeanShell2D final : public Codim2DConstitution
                        // thickness is one-sided so we multiply by 2
                        const Alu Vdt2  = rest_area * safe_cast<Alu>(2.0) * thickness
                                         * safe_cast<Alu>(dt * dt);
-                       energies(I) = safe_cast<Float>(E * Vdt2);
+                       energies(I) = safe_cast<ActivePolicy::EnergyScalar>(E * Vdt2);
                    });
     }
 

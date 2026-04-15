@@ -138,7 +138,8 @@ void SimEngine::advance_AL()
         return alpha;
     };
 
-    auto compute_energy = [this, filter_dcd_candidates](Float alpha) -> Float
+    auto compute_energy =
+        [this, filter_dcd_candidates](Float alpha) -> LineSearcher::EnergyScalar
     {
         // Step Forward => x = x_0 + alpha * dx
         m_global_vertex_manager->step_forward(alpha);
@@ -361,14 +362,14 @@ void SimEngine::advance_AL()
                     m_global_vertex_manager->record_start_point();
 
                     // Compute Current Energy => E_0
-                    Float E0 = m_line_searcher->compute_energy(true);  // initial energy
+                    LineSearcher::EnergyScalar E0 = m_line_searcher->compute_energy(true);  // initial energy
 
                     // CFL Condition
                     alpha = cfl_condition(alpha);
 
                     // * Step Forward => x = x_0 + alpha * dx
                     // Compute Test Energy => E
-                    Float E = compute_energy(alpha);
+                    LineSearcher::EnergyScalar E = compute_energy(alpha);
 
                     {
                         SizeT line_search_iter = 0;
@@ -378,7 +379,8 @@ void SimEngine::advance_AL()
 
                             // Check Energy Decrease
                             // TODO: maybe better condition like Wolfe condition/Armijo condition in the future
-                            bool success = E <= E0 + 1e-12 || newton_converged;
+                            bool success = E <= E0 + static_cast<LineSearcher::EnergyScalar>(1e-12)
+                                           || newton_converged;
 
                             if(success)
                                 break;

@@ -61,6 +61,7 @@ void FEMLineSearchReporter::Impl::step_forward(LineSearcher::StepInfo& info)
 void FEMLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo& info)
 {
     using namespace muda;
+    using EnergyScalar = FEMLineSearchReporter::EnergyScalar;
 
     // Compute Kinetic (special)
     {
@@ -103,9 +104,9 @@ void FEMLineSearchReporter::Impl::compute_energy(LineSearcher::ComputeEnergyInfo
                            reporter_energies.size());
     }
 
-    Float K       = total_kinetic_energy;
-    Float other_E = total_reporter_energy;
-    Float total_E = K + other_E;
+    EnergyScalar K       = total_kinetic_energy;
+    EnergyScalar other_E = total_reporter_energy;
+    EnergyScalar total_E = K + other_E;
 
     info.energy(total_E);
 }

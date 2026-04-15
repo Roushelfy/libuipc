@@ -142,7 +142,7 @@ IndexT VertexHalfPlaneNormalContact::BaseInfo::half_plane_vertex_offset() const
     return m_impl->vertex_reporter->vertex_offset();
 }
 
-muda::BufferView<Float> VertexHalfPlaneNormalContact::EnergyInfo::energies() const noexcept
+muda::BufferView<VertexHalfPlaneNormalContact::EnergyScalar> VertexHalfPlaneNormalContact::EnergyInfo::energies() const noexcept
 {
     return m_energies;
 }
@@ -153,7 +153,7 @@ muda::CBufferView<Vector2i> VertexHalfPlaneNormalContact::PHs() const noexcept
     return m_impl.veretx_half_plane_trajectory_filter->PHs();
 }
 
-muda::CBufferView<Float> VertexHalfPlaneNormalContact::energies() const noexcept
+muda::CBufferView<VertexHalfPlaneNormalContact::EnergyScalar> VertexHalfPlaneNormalContact::energies() const noexcept
 {
     return m_impl.energies;
 }

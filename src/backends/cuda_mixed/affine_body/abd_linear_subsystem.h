@@ -13,8 +13,10 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
   public:
     using DiagLinearSubsystem::DiagLinearSubsystem;
     using StoreScalar = GlobalLinearSystem::StoreScalar;
+    using StoreVec12 = Eigen::Matrix<StoreScalar, 12, 1>;
+    using StoreMat12x12 = Eigen::Matrix<StoreScalar, 12, 12>;
 
-    muda::CBufferView<Matrix12x12> diag_hessian() const noexcept
+    muda::CBufferView<StoreMat12x12> diag_hessian() const noexcept
     {
         return m_impl.diag_hessian.view();
     }
@@ -23,8 +25,8 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
     {
       public:
         ComputeGradientHessianInfo(bool                          gradient_only,
-                                   muda::BufferView<Vector12>    gradient,
-                                   muda::BufferView<Matrix12x12> hessians,
+                                   muda::BufferView<StoreVec12>  gradient,
+                                   muda::BufferView<StoreMat12x12> hessians,
                                    Float                         dt) noexcept
             : m_gradient_only(gradient_only)
             , m_gradients(gradient)
@@ -40,8 +42,8 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
 
       private:
         bool                          m_gradient_only = false;
-        muda::BufferView<Matrix12x12> m_hessians;
-        muda::BufferView<Vector12>    m_gradients;
+        muda::BufferView<StoreMat12x12> m_hessians;
+        muda::BufferView<StoreVec12>    m_gradients;
         Float                         m_dt = 0.0;
     };
 
@@ -118,13 +120,13 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         muda::DeviceDoubletVector<StoreScalar, 12>     reporter_gradients;
 
         // intermediate gradient/hessian buffers for kinetic/shape
-        muda::DeviceBuffer<Matrix12x12> body_id_to_shape_hessian;
-        muda::DeviceBuffer<Vector12>    body_id_to_shape_gradient;
-        muda::DeviceBuffer<Matrix12x12> body_id_to_kinetic_hessian;
-        muda::DeviceBuffer<Vector12>    body_id_to_kinetic_gradient;
+        muda::DeviceBuffer<StoreMat12x12> body_id_to_shape_hessian;
+        muda::DeviceBuffer<StoreVec12>    body_id_to_shape_gradient;
+        muda::DeviceBuffer<StoreMat12x12> body_id_to_kinetic_hessian;
+        muda::DeviceBuffer<StoreVec12>    body_id_to_kinetic_gradient;
 
         // diag hessian for preconditioner
-        muda::DeviceBuffer<Matrix12x12> diag_hessian;
+        muda::DeviceBuffer<StoreMat12x12> diag_hessian;
 
         Float dt = 0.0f;  // time step, used in assemble
     };

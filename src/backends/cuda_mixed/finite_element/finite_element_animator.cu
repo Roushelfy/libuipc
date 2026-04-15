@@ -197,7 +197,7 @@ muda::CBufferView<IndexT> FiniteElementAnimator::BaseInfo::is_fixed() const noex
     return m_impl->finite_element_method->is_fixed();
 }
 
-muda::BufferView<Float> FiniteElementAnimator::ComputeEnergyInfo::energies() const noexcept
+muda::BufferView<FiniteElementAnimator::EnergyScalar> FiniteElementAnimator::ComputeEnergyInfo::energies() const noexcept
 {
     auto [offset, count] = m_impl->constraint_energy_offsets_counts[m_index];
     return m_energies.subview(offset, count);

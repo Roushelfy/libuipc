@@ -148,7 +148,7 @@ IndexT VertexHalfPlaneFrictionalContact::BaseInfo::half_plane_vertex_offset() co
     return m_impl->vertex_reporter->vertex_offset();
 }
 
-muda::BufferView<Float> VertexHalfPlaneFrictionalContact::EnergyInfo::energies() const noexcept
+muda::BufferView<VertexHalfPlaneFrictionalContact::EnergyScalar> VertexHalfPlaneFrictionalContact::EnergyInfo::energies() const noexcept
 {
     return m_energies;
 }
@@ -158,7 +158,7 @@ muda::CBufferView<Vector2i> VertexHalfPlaneFrictionalContact::PHs() const noexce
     return m_impl.veretx_half_plane_trajectory_filter->friction_PHs();
 }
 
-muda::CBufferView<Float> VertexHalfPlaneFrictionalContact::energies() const noexcept
+muda::CBufferView<VertexHalfPlaneFrictionalContact::EnergyScalar> VertexHalfPlaneFrictionalContact::energies() const noexcept
 {
     return m_impl.energies;
 }

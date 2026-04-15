@@ -282,7 +282,7 @@ class PlasticDiscreteShellBending final : public FiniteElementExtraConstitution
                        Eigen::Matrix<Alu, 3, 1> x3 = xs(stencil[3]).template cast<Alu>();
 
                        Alu E = PDSB::E(x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
-                       energies(I) = safe_cast<Float>(
+                       energies(I) = safe_cast<ActivePolicy::EnergyScalar>(
                            E * V_bar * safe_cast<Alu>(dt * dt));
                    });
     }

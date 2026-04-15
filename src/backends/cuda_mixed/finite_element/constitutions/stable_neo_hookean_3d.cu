@@ -116,7 +116,7 @@ class StableNeoHookean3D final : public FEM3DConstitution
                        Alu E = Alu{0};
 
                        SNH::E(E, mu, lambda, F);
-                       energies(I) = safe_cast<Float>(E * Vdt2);
+                       energies(I) = safe_cast<ActivePolicy::EnergyScalar>(E * Vdt2);
                    });
     }
 

@@ -9,6 +9,7 @@ class DyTopoEffectReporter : public SimSystem
 {
   public:
     using SimSystem::SimSystem;
+    using EnergyScalar = GlobalDyTopoEffectManager::EnergyScalar;
 
     class BuildInfo
     {
@@ -23,7 +24,7 @@ class DyTopoEffectReporter : public SimSystem
     class Impl
     {
       public:
-        muda::CBufferView<Float>           energies;
+        muda::CBufferView<EnergyScalar>    energies;
         muda::CDoubletVectorView<GlobalDyTopoEffectManager::StoreScalar, 3> gradients;
         muda::CTripletMatrixView<GlobalDyTopoEffectManager::StoreScalar, 3> hessians;
     };

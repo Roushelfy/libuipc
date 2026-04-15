@@ -83,7 +83,7 @@ void ALVertexHalfPlaneNormalContact::Impl::do_compute_energy(GlobalContactManage
                    Alu  scale = safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu;
                    Vec3A grad = d_grad(idx).template cast<Alu>();
                    Vec3A pos  = x(vI).template cast<Alu>();
-                   Es(idx) = safe_cast<Float>(half_plane_penalty_energy(
+                   Es(idx) = safe_cast<ActivePolicy::EnergyScalar>(half_plane_penalty_energy(
                        scale,
                        safe_cast<Alu>(d0(idx)),
                        grad,

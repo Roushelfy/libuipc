@@ -16,6 +16,7 @@ class InterAffineBodyConstitutionManager final : public SimSystem
   public:
     using SimSystem::SimSystem;
     using StoreScalar = ABDLinearSubsystem::StoreScalar;
+    using EnergyScalar = ABDLineSearchReporter::EnergyScalar;
 
     class Impl;
 
@@ -89,16 +90,16 @@ class InterAffineBodyConstitutionManager final : public SimSystem
     class EnergyInfo : public BaseInfo
     {
       public:
-        EnergyInfo(Impl* impl, IndexT index, Float dt, muda::BufferView<Float> energy)
+        EnergyInfo(Impl* impl, IndexT index, Float dt, muda::BufferView<EnergyScalar> energy)
             : BaseInfo(impl, index, dt)
             , m_energies(energy)
         {
         }
-        muda::BufferView<Float> energies() const noexcept;
+        muda::BufferView<EnergyScalar> energies() const noexcept;
 
       private:
         friend class InterAffineBodyConstitutionManager;
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class GradientHessianInfo : public BaseInfo

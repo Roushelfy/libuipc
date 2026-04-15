@@ -34,6 +34,8 @@ namespace uipc::backend::cuda_mixed
 {
 REGISTER_SIM_SYSTEM(ABDLinearSubsystem);
 using StoreScalar = GlobalLinearSystem::StoreScalar;
+using StoreVec12 = ABDLinearSubsystem::StoreVec12;
+using StoreMat12x12 = ABDLinearSubsystem::StoreMat12x12;
 
 // ref: https://github.com/spiriMirror/libuipc/issues/271
 constexpr U64 ABDLinearSubsystemUID = 0ull;
@@ -295,7 +297,7 @@ void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
                    }
 
                    // record diagonal hessian for diag-inv preconditioner
-                   diag_hessian(I) = downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
+                   diag_hessian(I) = downcast_hessian<StoreScalar>(H12x12_alu);
 
                    // set the lower triangle blocks to zero for robustness
                    zero_out_lower(H12x12_alu);
@@ -372,8 +374,7 @@ void ABDLinearSubsystem::Impl::_assemble_reporters(IndexT& offset,
                        // Fill diagonal hessian for diag-inv preconditioner
                        if(body_i == body_j && !has_fixed)
                        {
-                           auto H12x12_diag =
-                               downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
+                           auto H12x12_diag = downcast_hessian<StoreScalar>(H12x12_alu);
                            eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
                        }
 
@@ -446,9 +447,8 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                        }
                        else
                        {
-                           Eigen::Matrix<Float, 12, 1> G12_float =
-                               (J_i.T() * G3.template cast<Float>()).eval();
-                           Eigen::Matrix<Alu, 12, 1> G12_alu = G12_float.template cast<Alu>();
+                           Eigen::Matrix<Alu, 12, 1> G12_alu =
+                               J_i.T().template mul<Alu>(G3.template cast<Alu>());
                            auto                        G12_store =
                                downcast_gradient<StoreScalar>(G12_alu);
                            gradients.segment<12>(body_i * 12).atomic_add(G12_store);
@@ -514,10 +514,8 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                         }
                         else
                         {
-                            const Eigen::Matrix<Alu, 3, 12> J_i_mat =
-                                J_i.to_mat().template cast<Alu>();
-                            const Eigen::Matrix<Alu, 3, 12> J_j_mat =
-                                J_j.to_mat().template cast<Alu>();
+                            const Eigen::Matrix<Alu, 3, 12> J_i_mat = J_i.to_mat_t<Alu>();
+                            const Eigen::Matrix<Alu, 3, 12> J_j_mat = J_j.to_mat_t<Alu>();
                             const Eigen::Matrix<Alu, 3, 3> H3x3_alu =
                                 H3x3.template cast<Alu>();
 
@@ -546,8 +544,7 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
                                 }
 
                                // Fill diagonal hessian for diag-inv preconditioner
-                               auto H12x12_diag =
-                                   downcast_hessian<typename Matrix12x12::Scalar>(H12x12_alu);
+                               auto H12x12_diag = downcast_hessian<StoreScalar>(H12x12_alu);
                                eigen::atomic_add(diag_hessian(body_i), H12x12_diag);
 
                                // Since body_i == body_j, we only fill the upper triangle part

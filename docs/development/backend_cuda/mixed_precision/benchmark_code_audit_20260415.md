@@ -16,6 +16,14 @@ This note has two goals:
 1. Consolidate the benchmark conclusions into one engineering-facing summary.
 2. Audit whether the code actually pushes the intended domains to fp32, instead of relying only on the path table in `policy.h`.
 
+Update after the same-day coverage-fill patch:
+
+- shared mixed energy interfaces now use `EnergyScalar = ActivePolicy::AluScalar`
+- the active mixed friction path is the `codim_*` / `al_*` simplex friction chain, not `ipc_simplex_frictional_contact_function.h`
+- mixed FEM MAS is no longer compile-time disabled on `path2` through `path8`
+- ABD local buffers and targeted joint / BDF / constraint writeback paths were rewritten toward ALU/store-domain typing
+- the remaining major open precision question from this benchmark is still the `path8` SpMV / PCG contract
+
 ## 1. Executive Summary
 
 The benchmark conclusion is still:

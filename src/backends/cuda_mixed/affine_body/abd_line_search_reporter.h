@@ -12,6 +12,7 @@ class ABDLineSearchReporter final : public LineSearchReporter
 {
   public:
     using LineSearchReporter::LineSearchReporter;
+    using EnergyScalar = LineSearcher::EnergyScalar;
 
     class ReportExtentInfo
     {
@@ -26,13 +27,13 @@ class ABDLineSearchReporter final : public LineSearchReporter
     class ComputeEnergyInfo
     {
       public:
-        muda::BufferView<Float> energies() const { return m_energies; }
-        Float                   dt() const noexcept { return m_dt; }
+        muda::BufferView<EnergyScalar> energies() const { return m_energies; }
+        Float                          dt() const noexcept { return m_dt; }
 
       private:
         friend class ABDLineSearchReporter;
-        muda::BufferView<Float> m_energies;
-        Float                   m_dt = 0.0;
+        muda::BufferView<EnergyScalar> m_energies;
+        Float                          m_dt = 0.0;
     };
 
     class Impl
@@ -46,15 +47,15 @@ class ABDLineSearchReporter final : public LineSearchReporter
         SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
 
         // intermediate energy buffers
-        muda::DeviceBuffer<Float> body_id_to_kinetic_energy;
-        muda::DeviceVar<Float>    abd_kinetic_energy;
-        muda::DeviceBuffer<Float> body_id_to_shape_energy;
-        muda::DeviceVar<Float>    abd_shape_energy;
+        muda::DeviceBuffer<EnergyScalar> body_id_to_kinetic_energy;
+        muda::DeviceVar<EnergyScalar>    abd_kinetic_energy;
+        muda::DeviceBuffer<EnergyScalar> body_id_to_shape_energy;
+        muda::DeviceVar<EnergyScalar>    abd_shape_energy;
 
         SimSystemSlotCollection<ABDLineSearchSubreporter> reporters;
         OffsetCountCollection<IndexT> reporter_energy_offsets_counts;
-        muda::DeviceBuffer<Float>     reporter_energies;
-        muda::DeviceVar<Float>        total_reporter_energy;
+        muda::DeviceBuffer<EnergyScalar> reporter_energies;
+        muda::DeviceVar<EnergyScalar>    total_reporter_energy;
 
         AffineBodyDynamics::Impl& abd() const
         {

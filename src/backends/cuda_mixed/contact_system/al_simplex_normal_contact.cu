@@ -90,7 +90,7 @@ void ALSimplexNormalContact::Impl::do_compute_energy(GlobalContactManager::Energ
                                                min(mu_v(PT(2)), mu_v(PT(3)))));
                    auto c    = cnt(idx) >= 0 ? cnt(idx) : max(-cnt(idx) - 6, 0);
                    Alu  scale = safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu;
-                   Es(idx) = safe_cast<Float>(
+                   Es(idx) = safe_cast<ActivePolicy::EnergyScalar>(
                        penalty_energy(scale,
                                       safe_cast<Alu>(d0(idx)),
                                       d_grad_alu,
@@ -122,7 +122,7 @@ void ALSimplexNormalContact::Impl::do_compute_energy(GlobalContactManager::Energ
                                                min(mu_v(EE(2)), mu_v(EE(3)))));
                    auto c    = cnt(idx) >= 0 ? cnt(idx) : max(-cnt(idx) - 6, 0);
                    Alu  scale = safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu;
-                   Es(idx) = safe_cast<Float>(
+                   Es(idx) = safe_cast<ActivePolicy::EnergyScalar>(
                        penalty_energy(scale,
                                       safe_cast<Alu>(d0(idx)),
                                       d_grad_alu,

@@ -93,7 +93,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = safe_cast<Float>(
+                       Es(i) = safe_cast<ActivePolicy::EnergyScalar>(
                            PT_barrier_energy(flag, kt2, d_hat, thickness, P, T0, T1, T2));
                    });
 
@@ -171,7 +171,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                        }
 
 
-                       Es(i) = safe_cast<Float>(mollified_EE_barrier_energy(flag,
+                       Es(i) = safe_cast<ActivePolicy::EnergyScalar>(mollified_EE_barrier_energy(flag,
                                                                              kt2,
                                                                              d_hat,
                                                                              thickness,
@@ -242,7 +242,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = safe_cast<Float>(
+                       Es(i) = safe_cast<ActivePolicy::EnergyScalar>(
                            PE_barrier_energy(flag, kt2, d_hat, thickness, P, E0, E1));
                    });
 
@@ -295,7 +295,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                                        range(1));
                        }
 
-                       Es(i) = safe_cast<Float>(
+                       Es(i) = safe_cast<ActivePolicy::EnergyScalar>(
                            PP_barrier_energy(flag, kt2, d_hat, thickness, Pa, Pb));
                    });
     }

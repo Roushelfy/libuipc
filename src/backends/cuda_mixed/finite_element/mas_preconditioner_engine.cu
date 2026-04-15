@@ -18,6 +18,9 @@ using ClusterMatrixSym  = MASPreconditionerEngine::ClusterMatrixSym;
 using ClusterMatrixSymF = MASPreconditionerEngine::ClusterMatrixSymF;
 using LevelTable        = MASPreconditionerEngine::LevelTable;
 using Int2              = MASPreconditionerEngine::Int2;
+using StoreMat3         = MASPreconditionerEngine::StoreMat3;
+using PcgVec3           = MASPreconditionerEngine::PcgVec3;
+using PcgAuxScalar      = MASPreconditionerEngine::PcgAuxScalar;
 
 // Device helper: bitmask with bits [0, lane_id) set
 MUDA_DEVICE unsigned int lanemask_lt(int lane_id)
@@ -717,7 +720,7 @@ void MASPreconditionerEngine::build_hessian_connection(
 // ============================================================================
 
 void MASPreconditionerEngine::set_preconditioner(
-    const Eigen::Matrix3d* d_triplet_values,
+    const StoreMat3*       d_triplet_values,
     const int*             d_row_ids,
     const int*             d_col_ids,
     const uint32_t*        d_indices,
@@ -772,7 +775,7 @@ void MASPreconditionerEngine::set_preconditioner(
 // Scatter BCOO Hessian entries into cluster-level dense matrices
 // ---------------------------------------------------------------------------
 void MASPreconditionerEngine::scatter_hessian_to_clusters(
-    const Eigen::Matrix3d* d_triplet_values,
+    const StoreMat3*       d_triplet_values,
     const int*             d_row_ids,
     const int*             d_col_ids,
     const uint32_t*        d_indices,
@@ -925,7 +928,7 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(
                 __syncthreads();
 
                 // Read the 3x3 block from the symmetric cluster matrix
-                Eigen::Matrix3d mat3;
+                StoreMat3 mat3;
                 if(local_col >= local_row)
                 {
                     int si = sym_index(local_row, local_col);
@@ -952,7 +955,7 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(
 
                     for(int iter = 1; iter < 32; iter <<= 1)
                     {
-                        Eigen::Matrix3d tmp;
+                        StoreMat3 tmp;
                         for(int i = 0; i < 3; i++)
                             for(int j = 0; j < 3; j++)
                                 tmp(i, j) = __shfl_down_sync(0xffffffff, mat3(i, j), iter);
@@ -1041,8 +1044,8 @@ void MASPreconditionerEngine::invert_cluster_matrices()
                 int block_mat_id = threadIdx.x / MAT_DIM;
 
                 // Load the full symmetric matrix into shared memory
-                __shared__ double s_mat[32 / BANKSIZE][MAT_DIM][MAT_DIM];
-                __shared__ double s_col[32 / BANKSIZE][MAT_DIM];
+                __shared__ PcgAuxScalar s_mat[32 / BANKSIZE][MAT_DIM][MAT_DIM];
+                __shared__ PcgAuxScalar s_col[32 / BANKSIZE][MAT_DIM];
 
                 for(int row = 0; row < MAT_DIM; row++)
                 {
@@ -1069,7 +1072,7 @@ void MASPreconditionerEngine::invert_cluster_matrices()
                 for(int pivot = 0; pivot < MAT_DIM; pivot++)
                 {
                     __syncthreads();
-                    double pivot_val = s_mat[block_mat_id][pivot][pivot];
+                    PcgAuxScalar pivot_val = s_mat[block_mat_id][pivot][pivot];
                     s_col[block_mat_id][col] = s_mat[block_mat_id][col][pivot];
                     __syncthreads();
 
@@ -1084,7 +1087,7 @@ void MASPreconditionerEngine::invert_cluster_matrices()
                     {
                         if(row != pivot)
                         {
-                            double factor = -s_col[block_mat_id][row];
+                            PcgAuxScalar factor = -s_col[block_mat_id][row];
                             __syncthreads();
                             s_mat[block_mat_id][row][col] +=
                                 factor * s_mat[block_mat_id][pivot][col];
@@ -1100,7 +1103,7 @@ void MASPreconditionerEngine::invert_cluster_matrices()
                     s_mat[block_mat_id][col][col - 2] = s_mat[block_mat_id][col - 2][col];
                 __syncthreads();
 
-                // Write result back as float (mixed precision)
+                // Write result back in the PCG auxiliary precision domain.
                 for(int row = 0; row < MAT_DIM; row++)
                 {
                     int node_row = row / 3;
@@ -1109,7 +1112,7 @@ void MASPreconditionerEngine::invert_cluster_matrices()
                     {
                         int si = sym_index(node_row, node_col);
                         cluster_inv[mat_id].M[si](row % 3, col % 3) =
-                            static_cast<float>(s_mat[block_mat_id][row][col]);
+                            static_cast<PcgAuxScalar>(s_mat[block_mat_id][row][col]);
                     }
                 }
             });
@@ -1122,7 +1125,7 @@ void MASPreconditionerEngine::invert_cluster_matrices()
 // ---------------------------------------------------------------------------
 // Restrict: accumulate residual R from fine to all coarser levels
 // ---------------------------------------------------------------------------
-void MASPreconditionerEngine::build_multi_level_R(const double3* R,
+void MASPreconditionerEngine::build_multi_level_R(const PcgVec3* R,
                                                   muda::CVarView<IndexT> converged)
 {
     using namespace muda;
@@ -1150,16 +1153,14 @@ void MASPreconditionerEngine::build_multi_level_R(const double3* R,
 
                 int idx = part_to_real(pdx);
 
-                Eigen::Vector3f r;
+                PcgVec3 r;
                 if(idx >= 0)
                 {
-                    r[0] = static_cast<float>(R[idx].x);
-                    r[1] = static_cast<float>(R[idx].y);
-                    r[2] = static_cast<float>(R[idx].z);
+                    r = R[idx];
                 }
                 else
                 {
-                    r = Eigen::Vector3f::Zero();
+                    r = PcgVec3::Zero();
                 }
 
                 int lane_id       = threadIdx.x % BANKSIZE;
@@ -1168,7 +1169,7 @@ void MASPreconditionerEngine::build_multi_level_R(const double3* R,
 
                 multi_lr[pdx] = r;
 
-                __shared__ float sum_residual[DEFAULT_BLOCKSIZE * 3];
+                __shared__ PcgAuxScalar sum_residual[DEFAULT_BLOCKSIZE * 3];
                 __shared__ int   prefix_sum_s[DEFAULT_WARPNUM];
 
                 if(lane_id == 0)
@@ -1192,9 +1193,9 @@ void MASPreconditionerEngine::build_multi_level_R(const double3* R,
 
                     for(int s = 1; s < BANKSIZE; s <<= 1)
                     {
-                        float tx = __shfl_down_sync(mask_val, r[0], s);
-                        float ty = __shfl_down_sync(mask_val, r[1], s);
-                        float tz = __shfl_down_sync(mask_val, r[2], s);
+                        PcgAuxScalar tx = __shfl_down_sync(mask_val, r[0], s);
+                        PcgAuxScalar ty = __shfl_down_sync(mask_val, r[1], s);
+                        PcgAuxScalar tz = __shfl_down_sync(mask_val, r[2], s);
                         if(interval >= (unsigned int)s)
                         {
                             r[0] += tx;
@@ -1279,13 +1280,13 @@ void MASPreconditionerEngine::schwarz_local_solve(muda::CVarView<IndexT> converg
                 int vert_col = cluster_id * BANKSIZE + local_col;
 
                 // Load residual for this column node into shared memory
-                __shared__ Eigen::Vector3f s_R[BANKSIZE];
+                __shared__ PcgVec3 s_R[BANKSIZE];
                 if(threadIdx.x < BANKSIZE)
                     s_R[threadIdx.x] = multi_lr[vert_col];
                 __syncthreads();
 
                 // Multiply: result = inverse_block * R_col
-                Eigen::Vector3f result;
+                PcgVec3 result;
                 if(vert_col >= vert_row)
                 {
                     int si = sym_index(local_row, local_col);
@@ -1310,9 +1311,9 @@ void MASPreconditionerEngine::schwarz_local_solve(muda::CVarView<IndexT> converg
                 int max_shfl = min(32, BANKSIZE);
                 for(int s = 1; s < max_shfl; s <<= 1)
                 {
-                    float tx = __shfl_down_sync(0xffffffff, result[0], s);
-                    float ty = __shfl_down_sync(0xffffffff, result[1], s);
-                    float tz = __shfl_down_sync(0xffffffff, result[2], s);
+                    PcgAuxScalar tx = __shfl_down_sync(0xffffffff, result[0], s);
+                    PcgAuxScalar ty = __shfl_down_sync(0xffffffff, result[1], s);
+                    PcgAuxScalar tz = __shfl_down_sync(0xffffffff, result[2], s);
                     if(interval >= (unsigned int)s)
                     {
                         result[0] += tx;
@@ -1323,9 +1324,9 @@ void MASPreconditionerEngine::schwarz_local_solve(muda::CVarView<IndexT> converg
 
                 if(is_boundary)
                 {
-                    atomicAdd(&(multi_lz[vert_row].x), result[0]);
-                    atomicAdd(&(multi_lz[vert_row].y), result[1]);
-                    atomicAdd(&(multi_lz[vert_row].z), result[2]);
+                    atomicAdd(&(multi_lz[vert_row](0)), result[0]);
+                    atomicAdd(&(multi_lz[vert_row](1)), result[1]);
+                    atomicAdd(&(multi_lz[vert_row](2)), result[2]);
                 }
             });
 }
@@ -1333,7 +1334,7 @@ void MASPreconditionerEngine::schwarz_local_solve(muda::CVarView<IndexT> converg
 // ---------------------------------------------------------------------------
 // Prolongate: sum Z contributions from all levels for each fine node
 // ---------------------------------------------------------------------------
-void MASPreconditionerEngine::collect_final_Z(double3* Z,
+void MASPreconditionerEngine::collect_final_Z(PcgVec3* Z,
                                               muda::CVarView<IndexT> converged)
 {
     using namespace muda;
@@ -1359,22 +1360,18 @@ void MASPreconditionerEngine::collect_final_Z(double3* Z,
                    if(rdx < 0) return;
 
                    // Start with the fine-level solution
-                   float3 cz = multi_lz(rdx);
+                   PcgVec3 cz = multi_lz(rdx);
 
                    // Add contributions from all coarser levels
                    LevelTable table = coarse_table(idx);
                    for(int l = 1; l < level_num; l++)
                    {
                        int node = table.index[l - 1];
-                       float3 val = multi_lz(node);
-                       cz.x += val.x;
-                       cz.y += val.y;
-                       cz.z += val.z;
+                       PcgVec3 val = multi_lz(node);
+                       cz += val;
                    }
 
-                   Z[idx].x = static_cast<double>(cz.x);
-                   Z[idx].y = static_cast<double>(cz.y);
-                   Z[idx].z = static_cast<double>(cz.z);
+                   Z[idx] = cz;
                });
 }
 
@@ -1382,8 +1379,8 @@ void MASPreconditionerEngine::collect_final_Z(double3* Z,
 // Apply: full preconditioning pipeline  z = M^{-1} r
 // ============================================================================
 
-void MASPreconditionerEngine::apply(muda::CDenseVectorView<Float> r,
-                                    muda::DenseVectorView<Float>  z,
+void MASPreconditionerEngine::apply(muda::CDenseVectorView<PcgAuxScalar> r,
+                                    muda::DenseVectorView<PcgAuxScalar>  z,
                                     muda::CVarView<IndexT>        converged)
 {
     if(m_total_nodes < 1)
@@ -1399,22 +1396,22 @@ void MASPreconditionerEngine::apply(muda::CDenseVectorView<Float> r,
     // Zero coarse-level residuals (beyond fine nodes)
     if(m_total_num_clusters > m_total_map_nodes)
     {
-        cudaMemset(multi_level_R.data() + m_total_map_nodes, 0,
-                   (m_total_num_clusters - m_total_map_nodes) * sizeof(Eigen::Vector3f));
+        multi_level_R
+            .view(m_total_map_nodes, m_total_num_clusters - m_total_map_nodes)
+            .fill(PcgVec3::Zero());
     }
 
     // Zero all solution levels
-    cudaMemset(multi_level_Z.data(), 0,
-               m_total_num_clusters * sizeof(float3));
+    multi_level_Z.view(0, m_total_num_clusters).fill(PcgVec3::Zero());
 
     // 1. Restrict: accumulate residual down through levels
-    build_multi_level_R(reinterpret_cast<const double3*>(r.data()), converged);
+    build_multi_level_R(reinterpret_cast<const PcgVec3*>(r.data()), converged);
 
     // 2. Local solve: Z = cluster_inverse * R at each level
     schwarz_local_solve(converged);
 
     // 3. Prolongate: sum Z from all levels back to fine nodes
-    collect_final_Z(reinterpret_cast<double3*>(z.data()), converged);
+    collect_final_Z(reinterpret_cast<PcgVec3*>(z.data()), converged);
 }
 
 }  // namespace uipc::backend::cuda_mixed

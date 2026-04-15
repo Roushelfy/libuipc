@@ -62,6 +62,7 @@ class ARAP final : public AffineBodyConstitution
         using namespace muda;
         namespace abd_arap = sym::abd_arap;
         using Alu          = ActivePolicy::AluScalar;
+        using Store        = ActivePolicy::StoreScalar;
 
         auto body_count = info.qs().size();
 
@@ -84,7 +85,7 @@ class ARAP final : public AffineBodyConstitution
                        Alu E = Alu{0};
                        abd_arap::E(E, kappa, q_alu);
 
-                       shape_energies(i) = safe_cast<Float>(E * Vdt2);
+                       shape_energies(i) = safe_cast<ActivePolicy::EnergyScalar>(E * Vdt2);
                    });
     }
 
@@ -106,11 +107,11 @@ class ARAP final : public AffineBodyConstitution
                     gradients = info.gradients().viewer().name("shape_gradients"),
                     hessians = info.hessians().viewer().name("shape_hessian"),
                     kappas   = kappas.cviewer().name("kappas"),
-                    dt       = info.dt(),
-                    gradient_only] __device__(int i) mutable
+                   dt       = info.dt(),
+                   gradient_only] __device__(int i) mutable
                    {
-                       Matrix12x12 H = Matrix12x12::Zero();
-                       Vector12    G = Vector12::Zero();
+                       Eigen::Matrix<Store, 12, 12> H = Eigen::Matrix<Store, 12, 12>::Zero();
+                       Eigen::Matrix<Store, 12, 1>  G = Eigen::Matrix<Store, 12, 1>::Zero();
 
                        const auto& q      = qs(i);
                        Eigen::Matrix<Alu, 12, 1> q_alu = q.template cast<Alu>();
@@ -121,7 +122,7 @@ class ARAP final : public AffineBodyConstitution
 
                        Eigen::Matrix<Alu, 9, 1> G9_alu;
                        abd_arap::dEdq(G9_alu, kappa, q_alu);
-                       G.segment<9>(3) = (G9_alu * Vdt2).template cast<Float>();
+                       G.template segment<9>(3) = downcast_gradient<Store>(G9_alu * Vdt2);
                        gradients(i)    = G;
 
                        if(gradient_only)
@@ -129,7 +130,7 @@ class ARAP final : public AffineBodyConstitution
 
                        Eigen::Matrix<Alu, 9, 9> H9x9_alu;
                        abd_arap::ddEddq(H9x9_alu, kappa, q_alu);
-                       H.block<9, 9>(3, 3) = (H9x9_alu * Vdt2).template cast<Float>();
+                       H.template block<9, 9>(3, 3) = downcast_hessian<Store>(H9x9_alu * Vdt2);
 
                        hessians(i) = H;
                    });

@@ -31,6 +31,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
         using namespace muda;
         using namespace sym::codim_ipc_contact;
         using Alu = ActivePolicy::AluScalar;
+        using Energy = ActivePolicy::EnergyScalar;
         using Vec3A = Eigen::Matrix<Alu, 3, 1>;
 
         // Compute Point-Triangle energy
@@ -87,7 +88,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                            d_hats(PT[0]), d_hats(PT[1]), d_hats(PT[2]), d_hats(PT[3])));
 
 
-                       Es(i) = safe_cast<Float>(PT_friction_energy(
+                       Es(i) = safe_cast<Energy>(PT_friction_energy(
                            kt2,
                            d_hat,
                            thickness,
@@ -145,6 +146,10 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& Ea1 = Ps(EE[1]);
                        const Vector3& Eb0 = Ps(EE[2]);
                        const Vector3& Eb1 = Ps(EE[3]);
+                       Vec3A         rest_Ea0_alu = rest_Ea0.template cast<Alu>();
+                       Vec3A         rest_Ea1_alu = rest_Ea1.template cast<Alu>();
+                       Vec3A         rest_Eb0_alu = rest_Eb0.template cast<Alu>();
+                       Vec3A         rest_Eb1_alu = rest_Eb1.template cast<Alu>();
                        Vec3A         prev_Ea0_alu = prev_Ea0.template cast<Alu>();
                        Vec3A         prev_Ea1_alu = prev_Ea1.template cast<Alu>();
                        Vec3A         prev_Eb0_alu = prev_Eb0.template cast<Alu>();
@@ -162,17 +167,17 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        Alu d_hat = safe_cast<Alu>(EE_d_hat(
                            d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3])));
 
-                       Float eps_x;
-                       distance::edge_edge_mollifier_threshold(rest_Ea0,
-                                                               rest_Ea1,
-                                                               rest_Eb0,
-                                                               rest_Eb1,
-                                                               static_cast<Float>(1e-3),
+                       Alu eps_x;
+                       distance::edge_edge_mollifier_threshold(rest_Ea0_alu,
+                                                               rest_Ea1_alu,
+                                                               rest_Eb0_alu,
+                                                               rest_Eb1_alu,
+                                                               static_cast<Alu>(1e-3),
                                                                eps_x);
-                       if(distance::need_mollify(prev_Ea0,
-                                                 prev_Ea1,
-                                                 prev_Eb0,
-                                                 prev_Eb1,
+                       if(distance::need_mollify(prev_Ea0_alu,
+                                                 prev_Ea1_alu,
+                                                 prev_Eb0_alu,
+                                                 prev_Eb1_alu,
                                                  eps_x))
                        // almost parallel, don't compute energy
                        {
@@ -180,7 +185,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        }
                        else
                        {
-                           Es(i) = safe_cast<Float>(EE_friction_energy(
+                           Es(i) = safe_cast<Energy>(EE_friction_energy(
                                kt2,
                                d_hat,
                                thickness,
@@ -244,7 +249,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        Alu d_hat =
                            safe_cast<Alu>(PE_d_hat(d_hats(PE[0]), d_hats(PE[1]), d_hats(PE[2])));
 
-                       Es(i) = safe_cast<Float>(PE_friction_energy(
+                       Es(i) = safe_cast<Energy>(PE_friction_energy(
                            kt2,
                            d_hat,
                            thickness,
@@ -296,7 +301,7 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 
                        Alu d_hat = safe_cast<Alu>(PP_d_hat(d_hats(PP[0]), d_hats(PP[1])));
 
-                       Es(i) = safe_cast<Float>(PP_friction_energy(
+                       Es(i) = safe_cast<Energy>(PP_friction_energy(
                            kt2,
                            d_hat,
                            thickness,
@@ -470,6 +475,10 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        const Vector3& Ea1 = Ps(EE[1]);
                        const Vector3& Eb0 = Ps(EE[2]);
                        const Vector3& Eb1 = Ps(EE[3]);
+                       Vec3A         rest_Ea0_alu = rest_Ea0.template cast<Alu>();
+                       Vec3A         rest_Ea1_alu = rest_Ea1.template cast<Alu>();
+                       Vec3A         rest_Eb0_alu = rest_Eb0.template cast<Alu>();
+                       Vec3A         rest_Eb1_alu = rest_Eb1.template cast<Alu>();
                        Vec3A         prev_Ea0_alu = prev_Ea0.template cast<Alu>();
                        Vec3A         prev_Ea1_alu = prev_Ea1.template cast<Alu>();
                        Vec3A         prev_Eb0_alu = prev_Eb0.template cast<Alu>();
@@ -487,21 +496,21 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                        Alu d_hat = safe_cast<Alu>(EE_d_hat(
                            d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3])));
 
-                       Float eps_x;
-                       distance::edge_edge_mollifier_threshold(rest_Ea0,
-                                                               rest_Ea1,
-                                                               rest_Eb0,
-                                                               rest_Eb1,
-                                                               static_cast<Float>(1e-3),
+                       Alu eps_x;
+                       distance::edge_edge_mollifier_threshold(rest_Ea0_alu,
+                                                               rest_Ea1_alu,
+                                                               rest_Eb0_alu,
+                                                               rest_Eb1_alu,
+                                                               static_cast<Alu>(1e-3),
                                                                eps_x);
 
                        Vec12A G;
 
                        bool mollified = distance::need_mollify(
-                           prev_Ea0,
-                           prev_Ea1,
-                           prev_Eb0,
-                           prev_Eb1,
+                           prev_Ea0_alu,
+                           prev_Ea1_alu,
+                           prev_Eb0_alu,
+                           prev_Eb1_alu,
                            eps_x);
 
                        if(gradient_only)

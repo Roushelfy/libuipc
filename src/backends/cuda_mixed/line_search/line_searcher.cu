@@ -70,7 +70,7 @@ void LineSearcher::step_forward(Float alpha)
     }
 }
 
-Float LineSearcher::compute_energy(bool is_initial)
+LineSearcher::EnergyScalar LineSearcher::compute_energy(bool is_initial)
 {
     Timer timer{"Compute Energy"};
 
@@ -94,8 +94,8 @@ Float LineSearcher::compute_energy(bool is_initial)
     auto energy_reporter_energyes =
         span{m_energy_values}.subspan(m_reporters.view().size());
 
-    Float total_energy =
-        std::accumulate(m_energy_values.begin(), m_energy_values.end(), 0.0);
+    EnergyScalar total_energy =
+        std::accumulate(m_energy_values.begin(), m_energy_values.end(), EnergyScalar{0});
 
     if(m_report_energy)
     {
@@ -134,7 +134,7 @@ Float LineSearcher::ComputeEnergyInfo::dt() noexcept
     return m_impl->m_dt;
 }
 
-void LineSearcher::ComputeEnergyInfo::energy(Float e) noexcept
+void LineSearcher::ComputeEnergyInfo::energy(EnergyScalar e) noexcept
 {
     m_energy = e;
 }

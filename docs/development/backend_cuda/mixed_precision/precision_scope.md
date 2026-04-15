@@ -24,6 +24,8 @@ The paths are cumulative, but not all changes are just "more fp32". Two late-sta
 | `path7` | `path6` plus full-PCG fp32 for `SolveScalar` and `PcgIterScalar` |
 | `path8` | `path6` plus `SolveScalar = float` while keeping `PcgIterScalar = double` |
 
+Shared energy buffers and line-search reductions use `EnergyScalar = ActivePolicy::AluScalar`.
+
 ## ALU Domain
 
 The ALU domain covers local kernel evaluation before values are downcast into storage buffers.
@@ -44,8 +46,18 @@ The ALU domain covers local kernel evaluation before values are downcast into st
 | ABD constraints | `affine_body/constraints/soft_transform_constraint.cu`, `affine_body/constraints/external_articulation_constraint.cu` | Implemented | Constraint evaluation is in-policy before assembly |
 | ABD linear-subsystem aggregation | `affine_body/abd_linear_subsystem.cu` | Implemented | Aggregation path keeps typed local results through subsystem assembly |
 | ABD-FEM coupling aggregation | `coupling_system/abd_fem_linear_subsystem.cu` | Implemented | Coupling assembly downcasts from typed ALU results into storage buffers |
-| ABDJacobi `J^T H J` and stack helpers | `affine_body/abd_jacobi_matrix.h`, `affine_body/abd_jacobi_matrix.cu`, `affine_body/details/abd_jacobi_matrix.inl` | Partial | Still transitional and not fully generalized across all precision domains |
+| ABDJacobi `J^T H J` and stack helpers | `affine_body/abd_jacobi_matrix.h`, `affine_body/abd_jacobi_matrix.cu`, `affine_body/details/abd_jacobi_matrix.inl` | Implemented | Mixed helper math is templated so joint and inter-ABD assembly can stay in ALU / store domains until the final downcast |
 | External-force constraint host bridge | `affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu`, `affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu` | Bridge-only | Host-side attribute bridge remains `Float` and is not the kernel-side ALU path |
+
+## Energy Domain
+
+The energy domain covers the shared interfaces used by constitutions, reporters, contact managers, and line search.
+
+| Component | Representative files | Status | Notes |
+|---|---|---|---|
+| Shared line-search energy type | `line_search/line_searcher.h`, `line_search/line_searcher.cu` | Implemented | `EnergyScalar = ActivePolicy::AluScalar` is used for buffered energies and final reductions |
+| Contact energy buffers and reporters | `contact_system/contact_reporter.h`, `contact_system/simplex_normal_contact.h`, `contact_system/simplex_frictional_contact.h`, `contact_system/vertex_half_plane_normal_contact.h`, `contact_system/vertex_half_plane_frictional_contact.h` | Implemented | Normal and friction contact both write into `EnergyScalar` buffers |
+| ABD / FEM / inter-primitive reporters | `affine_body/abd_line_search_reporter.h`, `finite_element/fem_line_search_reporter.h`, `inter_primitive_effect_system/inter_primitive_constitution_manager.h`, `dytopo_effect_system/dytopo_effect_line_search_reporter.h` | Implemented | Shared reporter surfaces no longer force mixed kernels back through `Float` |
 
 ## Store Domain
 
@@ -70,7 +82,7 @@ The PCG auxiliary domain covers vectors and preconditioner outputs used during i
 | Global SpMV interface | `linear_system/global_linear_system.h`, `linear_system/global_linear_system.cu`, `linear_system/iterative_solver.h`, `linear_system/iterative_solver.cu` | Implemented | Current interface explicitly handles `StoreScalar x PcgAuxScalar x PcgIterScalar` |
 | ABD diagonal preconditioner | `affine_body/abd_diag_preconditioner.cu` | Implemented | `path6` and `path7` switch the intermediate inverse/input algebra to `float` |
 | FEM diagonal preconditioner | `finite_element/fem_diag_preconditioner.cu` | Implemented | Same `preconditioner_no_double_intermediate` boundary as ABD |
-| FEM MAS preconditioner | `finite_element/fem_mas_preconditioner.cu` | Partial | Compatible in fp64-store builds, but intentionally disabled when `StoreScalar = float` |
+| FEM MAS preconditioner | `finite_element/fem_mas_preconditioner.cu`, `finite_element/mas_preconditioner_engine.h`, `finite_element/mas_preconditioner_engine.cu` | Implemented | Mixed path now supports MAS; partitioned meshes use MAS and unpartitioned vertices fall back to diagonal blocks inside the same preconditioner |
 
 ## Solve and Iteration Domain
 
@@ -87,8 +99,8 @@ The solve domain is intentionally conservative until `path7`.
 - `path6` is not just a label change from `path5`. It activates `preconditioner_no_double_intermediate` in supported preconditioners.
 - `path7` is the first level that moves both the solve vector and PCG iteration scalars to fp32.
 - `path8` is a diagnostic split path for `path7`: solve-vector storage stays fp32 while iteration scalars return to fp64.
-- The FEM MAS preconditioner is disabled when `StoreScalar = float`, which currently means `path2` through `path8`.
-- `ABDJacobi` is still partially typed and should be treated as transitional code.
+- The active mixed friction helper is the `codim_*` simplex friction call chain in `contact_system/contact_models/`. The older `ipc_simplex_frictional_contact_function.h` file is not the active mixed path.
+- `dt`, scene config values, contact coefficients, and a few host-side bridge buffers intentionally remain `Float`; the mixed-precision patch only moves kernel-local compute and shared energy/storage interfaces.
 - Mixed precision remains compile-time only. There is no runtime precision switch and no auto-fallback path.
 
 ## Insertion Points

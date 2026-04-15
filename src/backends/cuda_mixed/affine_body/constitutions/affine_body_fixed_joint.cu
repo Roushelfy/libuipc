@@ -32,8 +32,9 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
     vector<Vector6>  h_rest_bs;
     vector<Float>    h_strength_ratios;
 
-    using Vector24    = Vector<Float, 24>;
-    using Matrix24x24 = Matrix<Float, 24, 24>;
+    using Store       = ActivePolicy::StoreScalar;
+    using Vector24    = Vector<Store, 24>;
+    using Matrix24x24 = Matrix<Store, 24, 24>;
 
     void do_build(BuildInfo& info) override
     {
@@ -187,7 +188,7 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                        Alu Et_val;
                        FJ::Et<Alu>(Et_val, kappa_alu, Ft_val);
 
-                       Es(I) = safe_cast<Float>(Er_val + Et_val);
+                       Es(I) = safe_cast<ActivePolicy::EnergyScalar>(Er_val + Et_val);
                    });
     }
 
@@ -263,7 +264,7 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                        Eigen::Vector<Alu, 24> JtT_Gt_val;
                        FJ::JtT_Gt<Alu>(JtT_Gt_val, dEdFt_val, ci0, cj0);
 
-                       Vector24               G = (JrT_Gr_val + JtT_Gt_val).template cast<Float>();
+                       Vector24               G = downcast_gradient<Store>(JrT_Gr_val + JtT_Gt_val);
                        DoubletVectorAssembler DVA{G12s};
                        Vector2i               indices = {bids(0), bids(1)};
                        DVA.segment<2>(2 * I).write(indices, G);
@@ -285,7 +286,7 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                            Eigen::Matrix<Alu, 24, 24> JtT_Ht_Jt_val;
                            FJ::JtT_Ht_Jt<Alu>(JtT_Ht_Jt_val, ddEdFt_val, ci0, cj0);
 
-                           Matrix24x24            H = (JrT_Hr_Jr_val + JtT_Ht_Jt_val).template cast<Float>();
+                           Matrix24x24            H = downcast_hessian<Store>(JrT_Hr_Jr_val + JtT_Ht_Jt_val);
                            TripletMatrixAssembler TMA{H12x12s};
                            TMA.half_block<2>(HalfHessianSize * I).write(indices, H);
                        }

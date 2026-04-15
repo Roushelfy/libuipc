@@ -18,6 +18,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
   public:
     using SimSystem::SimSystem;
     using StoreScalar = ActivePolicy::StoreScalar;
+    using EnergyScalar = ActivePolicy::EnergyScalar;
 
     class Impl;
 
@@ -72,13 +73,13 @@ class GlobalDyTopoEffectManager final : public SimSystem
     class EnergyInfo
     {
       public:
-        muda::BufferView<Float> energies() const { return m_energies; }
-        bool                    is_initial() const { return m_is_initial; }
+        muda::BufferView<EnergyScalar> energies() const { return m_energies; }
+        bool                           is_initial() const { return m_is_initial; }
 
       private:
         friend class DyTopoEffectLineSearchReporter;
-        muda::BufferView<Float> m_energies;
-        bool                    m_is_initial = false;
+        muda::BufferView<EnergyScalar> m_energies;
+        bool                           m_is_initial = false;
     };
 
     using ClassifyInfo = DyTopoClassifyInfo;

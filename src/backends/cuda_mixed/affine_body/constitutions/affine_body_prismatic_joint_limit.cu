@@ -257,7 +257,7 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
                         E       = strength * d * d * d;
                     }
 
-                    Es(I) = safe_cast<Float>(E);
+                    Es(I) = safe_cast<ActivePolicy::EnergyScalar>(E);
                 });
     }
 

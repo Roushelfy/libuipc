@@ -14,6 +14,7 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
   public:
     using ContactReporter::ContactReporter;
     using StoreScalar = ContactReporter::StoreScalar;
+    using EnergyScalar = ContactReporter::EnergyScalar;
 
     class Impl;
 
@@ -77,11 +78,11 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         {
         }
 
-        muda::BufferView<Float> energies() const noexcept;
+        muda::BufferView<EnergyScalar> energies() const noexcept;
 
       private:
         friend class VertexHalfPlaneFrictionalContact;
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class Impl
@@ -98,13 +99,13 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         SizeT PH_count = 0;
         Float dt       = 0.0;
 
-        muda::CBufferView<Float>           energies;
+        muda::CBufferView<EnergyScalar>    energies;
         muda::CDoubletVectorView<StoreScalar, 3> gradients;
         muda::CTripletMatrixView<StoreScalar, 3> hessians;
     };
 
     muda::CBufferView<Vector2i>        PHs() const noexcept;
-    muda::CBufferView<Float>           energies() const noexcept;
+    muda::CBufferView<EnergyScalar>    energies() const noexcept;
     muda::CDoubletVectorView<StoreScalar, 3> gradients() const noexcept;
     muda::CTripletMatrixView<StoreScalar, 3> hessians() const noexcept;
 

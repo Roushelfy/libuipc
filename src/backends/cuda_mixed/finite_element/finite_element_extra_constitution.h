@@ -12,6 +12,7 @@ class FiniteElementExtraConstitution : public SimSystem
 {
   public:
     using SimSystem::SimSystem;
+    using EnergyScalar = FiniteElementElastics::EnergyScalar;
 
     class Impl
     {

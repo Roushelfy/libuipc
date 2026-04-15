@@ -56,6 +56,7 @@ void ALVertexHalfPlaneFrictionalContact::Impl::do_compute_energy(GlobalContactMa
     using namespace muda;
     using namespace sym::al_vertex_half_plane_contact;
     using Alu = ActivePolicy::AluScalar;
+    using Energy = ActivePolicy::EnergyScalar;
     using Vec3A = Eigen::Matrix<Alu, 3, 1>;
     auto& active_set = global_active_set_manager;
 
@@ -98,7 +99,7 @@ void ALVertexHalfPlaneFrictionalContact::Impl::do_compute_energy(GlobalContactMa
                    Vec3A prev_v      = prev_x(vI).template cast<Alu>();
                    Vec3A normal      = plane_normals(HI).template cast<Alu>();
 
-                   Es(idx) = safe_cast<Float>(half_plane_frictional_energy(
+                   Es(idx) = safe_cast<Energy>(half_plane_frictional_energy(
                        mu,
                        safe_cast<Alu>(eps_v * dt),
                        normal_force,

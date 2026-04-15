@@ -152,7 +152,7 @@ class KirchhoffRodBending final : public FiniteElementExtraConstitution
                        Alu E = Alu{0};
                        KRB::E(E, k, X, L0, r, pi);
 
-                       energies(I) = safe_cast<Float>(E);
+                       energies(I) = safe_cast<ActivePolicy::EnergyScalar>(E);
                    });
     }
 

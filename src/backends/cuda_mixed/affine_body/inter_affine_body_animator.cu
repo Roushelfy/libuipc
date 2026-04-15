@@ -237,7 +237,7 @@ muda::CBufferView<IndexT> InterAffineBodyAnimator::BaseInfo::is_fixed() const no
     return m_impl->affine_body_dynamics->body_is_fixed();
 }
 
-muda::BufferView<Float> InterAffineBodyAnimator::ComputeEnergyInfo::energies() const noexcept
+muda::BufferView<InterAffineBodyAnimator::EnergyScalar> InterAffineBodyAnimator::ComputeEnergyInfo::energies() const noexcept
 {
     auto [offset, count] = m_impl->constraint_energy_offsets_counts[m_index];
     return m_energies.subview(offset, count);

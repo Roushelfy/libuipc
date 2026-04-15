@@ -113,7 +113,8 @@ void SimEngine::advance()
         return alpha;
     };
 
-    auto compute_energy = [this, filter_dcd_candidates](Float alpha) -> Float
+    auto compute_energy =
+        [this, filter_dcd_candidates](Float alpha) -> LineSearcher::EnergyScalar
     {
         // Step Forward => x = x_0 + alpha * dx
         m_global_vertex_manager->step_forward(alpha);
@@ -366,7 +367,7 @@ void SimEngine::advance()
                     detect_trajectory_candidates(alpha);
 
                     // Compute Current Energy => E_0
-                    Float E0 = m_line_searcher->compute_energy(true);  // initial energy
+                    LineSearcher::EnergyScalar E0 = m_line_searcher->compute_energy(true);  // initial energy
 
                     // CCD filter
                     alpha = filter_toi(alpha);
@@ -387,7 +388,7 @@ void SimEngine::advance()
                         // Compute Test Energy:
                         //  * Step Forward => x = x_0 + alpha * dx
                         //  * Compute New Energy => E
-                        Float E = compute_energy(alpha);
+                        LineSearcher::EnergyScalar E = compute_energy(alpha);
 
                         // To prevent numerical energy (fake-) increasing caused by tiny dx
                         if(converged)

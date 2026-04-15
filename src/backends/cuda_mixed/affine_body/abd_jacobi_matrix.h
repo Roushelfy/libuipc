@@ -17,6 +17,8 @@ class ABDJacobi  // for every point
             : m_j(j)
         {
         }
+        template <typename Scalar>
+        MUDA_GENERIC Vector<Scalar, 12> mul(const Vector<Scalar, 3>& g) const;
         MUDA_GENERIC friend Vector12 operator*(const ABDJacobiT& j, const Vector3& g);
 
         MUDA_GENERIC const auto& J() const { return m_j; }
@@ -38,16 +40,27 @@ class ABDJacobi  // for every point
     {
         return (*this) * q;
     }
+    template <typename Scalar>
+    MUDA_GENERIC Vector<Scalar, 3> point_from_affine_t(const Vector<Scalar, 12>& q) const
+    {
+        return point_x_t(q);
+    }
 
     MUDA_GENERIC Vector3 point_x(const Vector12& q) const
     {
         return (*this) * q;
     };
+    template <typename Scalar>
+    MUDA_GENERIC Vector<Scalar, 3> point_x_t(const Vector<Scalar, 12>& q) const;
 
     // without translation, only rotation and scaling
     MUDA_GENERIC Vector3 vec_x(const Vector12& q) const;
+    template <typename Scalar>
+    MUDA_GENERIC Vector<Scalar, 3> vec_x_t(const Vector<Scalar, 12>& q) const;
 
     MUDA_GENERIC Matrix3x12 to_mat() const;
+    template <typename Scalar>
+    MUDA_GENERIC Matrix<Scalar, 3, 12> to_mat_t() const;
 
     MUDA_GENERIC ABDJacobiT T() const { return ABDJacobiT(*this); }
 
@@ -57,6 +70,11 @@ class ABDJacobi  // for every point
     static MUDA_GENERIC Matrix12x12 JT_H_J(const ABDJacobiT& lhs_J_T,
                                            const Matrix3x3&  Hessian,
                                            const ABDJacobi&  rhs_J);
+    template <typename Scalar>
+    static MUDA_GENERIC Matrix<Scalar, 12, 12> JT_H_J_t(
+        const ABDJacobiT&             lhs_J_T,
+        const Matrix<Scalar, 3, 3>&   Hessian,
+        const ABDJacobi&              rhs_J);
 
   private:
     //tex: $$ \bar{\mathbf{x}} $$
@@ -79,11 +97,17 @@ class ABDJacobiStack
             : m_origin(j)
         {
         }
+        template <typename Scalar>
+        MUDA_GENERIC Vector<Scalar, 12> mul(const Vector<Scalar, 3 * N>& g) const;
         MUDA_GENERIC Vector12 operator*(const Vector<Float, 3 * N>& g) const;
     };
 
+    template <typename Scalar>
+    MUDA_GENERIC Vector<Scalar, 3 * N> mul(const Vector<Scalar, 12>& q) const;
     MUDA_GENERIC Vector<Float, 3 * N> operator*(const Vector12& q) const;
 
+    template <typename Scalar>
+    MUDA_GENERIC Matrix<Scalar, 3 * N, 12> to_mat_t() const;
     MUDA_GENERIC Matrix<Float, 3 * N, 12> to_mat() const;
 
     MUDA_GENERIC ABDJacobiStackT T() const { return ABDJacobiStackT(*this); }

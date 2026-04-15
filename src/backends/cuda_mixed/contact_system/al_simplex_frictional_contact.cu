@@ -56,6 +56,7 @@ void ALSimplexFrictionalContact::Impl::do_compute_energy(GlobalContactManager::E
     using namespace muda;
     using namespace sym::al_simplex_contact;
     using Alu = ActivePolicy::AluScalar;
+    using Energy = ActivePolicy::EnergyScalar;
     using Vec3A = Eigen::Matrix<Alu, 3, 1>;
     auto& active_set = global_active_set_manager;
 
@@ -115,7 +116,7 @@ void ALSimplexFrictionalContact::Impl::do_compute_energy(GlobalContactManager::E
                    Vec3A T1_alu      = T1.template cast<Alu>();
                    Vec3A T2_alu      = T2.template cast<Alu>();
 
-                   Es(idx) = safe_cast<Float>(PT_friction_energy(
+                   Es(idx) = safe_cast<Energy>(PT_friction_energy(
                        mu,
                        safe_cast<Alu>(eps_v * dt),
                        safe_cast<Alu>(lambda(idx)),
@@ -170,7 +171,7 @@ void ALSimplexFrictionalContact::Impl::do_compute_energy(GlobalContactManager::E
                    Vec3A Eb0_alu      = Eb0.template cast<Alu>();
                    Vec3A Eb1_alu      = Eb1.template cast<Alu>();
 
-                   Es(idx) = safe_cast<Float>(EE_friction_energy(
+                   Es(idx) = safe_cast<Energy>(EE_friction_energy(
                        mu,
                        safe_cast<Alu>(eps_v * dt),
                        safe_cast<Alu>(lambda(idx)),
@@ -320,6 +321,10 @@ void ALSimplexFrictionalContact::Impl::do_assemble(GlobalContactManager::Gradien
                    const Vector3& Ea1 = x(EE[1]);
                    const Vector3& Eb0 = x(EE[2]);
                    const Vector3& Eb1 = x(EE[3]);
+                   Vec3A rest_Ea0_alu = rest_Ea0.template cast<Alu>();
+                   Vec3A rest_Ea1_alu = rest_Ea1.template cast<Alu>();
+                   Vec3A rest_Eb0_alu = rest_Eb0.template cast<Alu>();
+                   Vec3A rest_Eb1_alu = rest_Eb1.template cast<Alu>();
                    Vec3A prev_Ea0_alu = prev_Ea0.template cast<Alu>();
                    Vec3A prev_Ea1_alu = prev_Ea1.template cast<Alu>();
                    Vec3A prev_Eb0_alu = prev_Eb0.template cast<Alu>();
@@ -329,18 +334,18 @@ void ALSimplexFrictionalContact::Impl::do_assemble(GlobalContactManager::Gradien
                    Vec3A Eb0_alu      = Eb0.template cast<Alu>();
                    Vec3A Eb1_alu      = Eb1.template cast<Alu>();
 
-                   Float eps_x;
+                   Alu eps_x;
                    distance::edge_edge_mollifier_threshold(
-                       rest_Ea0,
-                       rest_Ea1,
-                       rest_Eb0,
-                       rest_Eb1,
-                       -1.0,
+                       rest_Ea0_alu,
+                       rest_Ea1_alu,
+                       rest_Eb0_alu,
+                       rest_Eb1_alu,
+                       static_cast<Alu>(-1.0),
                        eps_x);
-                   if(!distance::need_mollify(prev_Ea0,
-                                              prev_Ea1,
-                                              prev_Eb0,
-                                              prev_Eb1,
+                   if(!distance::need_mollify(prev_Ea0_alu,
+                                              prev_Ea1_alu,
+                                              prev_Eb0_alu,
+                                              prev_Eb1_alu,
                                               eps_x))
                    {
                        Vec12A G;

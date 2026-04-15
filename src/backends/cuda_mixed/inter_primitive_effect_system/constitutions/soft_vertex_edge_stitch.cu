@@ -36,7 +36,7 @@ class SoftVertexEdgeStitch : public InterPrimitiveConstitution
     vector<Float>     h_rest_areas;
     vector<Float>     h_thicknesses;
 
-    muda::CBufferView<Float>                  energies;
+    muda::CBufferView<ActivePolicy::EnergyScalar> energies;
     muda::CDoubletVectorView<StoreScalar, 3>  gradients;
     muda::CTripletMatrixView<StoreScalar, 3, 3> hessians;
 
@@ -253,7 +253,7 @@ class SoftVertexEdgeStitch : public InterPrimitiveConstitution
                        NH::E(E_val, lambdas(I), mus(I), X, IBs(I));
 
                        Float Vdt2 = rest_areas(I) * 2 * thick(I) * dt * dt;
-                       Es(I)      = E_val * Vdt2;
+                       Es(I)      = safe_cast<ActivePolicy::EnergyScalar>(E_val * Vdt2);
                    });
     }
 

@@ -634,7 +634,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
 
                     Alu E = safe_cast<Alu>(0.5) * (delta_theta_i - delta_theta_tilde_i)
                             * m_ij * (delta_theta_j - delta_theta_tilde_j);
-                    energies(I) = safe_cast<Float>(E);
+                    energies(I) = safe_cast<ActivePolicy::EnergyScalar>(E);
                 });
     }
 

@@ -11,6 +11,7 @@ class SimplexFrictionalContact : public ContactReporter
   public:
     using ContactReporter::ContactReporter;
     using StoreScalar = ContactReporter::StoreScalar;
+    using EnergyScalar = ContactReporter::EnergyScalar;
     constexpr static SizeT PTHalfHessianSize = 4 * (4 + 1) / 2;  // 4 vertices, symmetric matrix
     constexpr static SizeT EEHalfHessianSize = 4 * (4 + 1) / 2;  // 4 vertices, symmetric matrix
     constexpr static SizeT PEHalfHessianSize = 3 * (3 + 1) / 2;  // 3 vertices, symmetric matrix
@@ -93,29 +94,29 @@ class SimplexFrictionalContact : public ContactReporter
         {
         }
 
-        muda::BufferView<Float> friction_PT_energies() const noexcept
+        muda::BufferView<EnergyScalar> friction_PT_energies() const noexcept
         {
             return m_PT_energies;
         }
-        muda::BufferView<Float> friction_EE_energies() const noexcept
+        muda::BufferView<EnergyScalar> friction_EE_energies() const noexcept
         {
             return m_EE_energies;
         }
-        muda::BufferView<Float> friction_PE_energies() const noexcept
+        muda::BufferView<EnergyScalar> friction_PE_energies() const noexcept
         {
             return m_PE_energies;
         }
-        muda::BufferView<Float> friction_PP_energies() const noexcept
+        muda::BufferView<EnergyScalar> friction_PP_energies() const noexcept
         {
             return m_PP_energies;
         }
 
       private:
         friend class SimplexFrictionalContact;
-        muda::BufferView<Float> m_PT_energies;
-        muda::BufferView<Float> m_EE_energies;
-        muda::BufferView<Float> m_PE_energies;
-        muda::BufferView<Float> m_PP_energies;
+        muda::BufferView<EnergyScalar> m_PT_energies;
+        muda::BufferView<EnergyScalar> m_EE_energies;
+        muda::BufferView<EnergyScalar> m_PE_energies;
+        muda::BufferView<EnergyScalar> m_PP_energies;
     };
 
     class Impl
@@ -133,40 +134,40 @@ class SimplexFrictionalContact : public ContactReporter
         SizeT PP_count = 0;
         Float dt       = 0;
 
-        muda::CBufferView<Float>           PT_energies;
+        muda::CBufferView<EnergyScalar>    PT_energies;
         muda::CDoubletVectorView<StoreScalar, 3> PT_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> PT_hessians;
 
-        muda::CBufferView<Float>           EE_energies;
+        muda::CBufferView<EnergyScalar>    EE_energies;
         muda::CDoubletVectorView<StoreScalar, 3> EE_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> EE_hessians;
 
-        muda::CBufferView<Float>           PE_energies;
+        muda::CBufferView<EnergyScalar>    PE_energies;
         muda::CDoubletVectorView<StoreScalar, 3> PE_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> PE_hessians;
 
-        muda::CBufferView<Float>           PP_energies;
+        muda::CBufferView<EnergyScalar>    PP_energies;
         muda::CDoubletVectorView<StoreScalar, 3> PP_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> PP_hessians;
     };
 
     muda::CBufferView<Vector4i>        PTs() const;
-    muda::CBufferView<Float>           PT_energies() const;
+    muda::CBufferView<EnergyScalar>    PT_energies() const;
     muda::CDoubletVectorView<StoreScalar, 3> PT_gradients() const;
     muda::CTripletMatrixView<StoreScalar, 3> PT_hessians() const;
 
     muda::CBufferView<Vector4i>        EEs() const;
-    muda::CBufferView<Float>           EE_energies() const;
+    muda::CBufferView<EnergyScalar>    EE_energies() const;
     muda::CDoubletVectorView<StoreScalar, 3> EE_gradients() const;
     muda::CTripletMatrixView<StoreScalar, 3> EE_hessians() const;
 
     muda::CBufferView<Vector3i>        PEs() const;
-    muda::CBufferView<Float>           PE_energies() const;
+    muda::CBufferView<EnergyScalar>    PE_energies() const;
     muda::CDoubletVectorView<StoreScalar, 3> PE_gradients() const;
     muda::CTripletMatrixView<StoreScalar, 3> PE_hessians() const;
 
     muda::CBufferView<Vector2i>        PPs() const;
-    muda::CBufferView<Float>           PP_energies() const;
+    muda::CBufferView<EnergyScalar>    PP_energies() const;
     muda::CDoubletVectorView<StoreScalar, 3> PP_gradients() const;
     muda::CTripletMatrixView<StoreScalar, 3> PP_hessians() const;
 

@@ -13,6 +13,7 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
   public:
     using DyTopoEffectReporter::DyTopoEffectReporter;
     using StoreScalar = GlobalDyTopoEffectManager::StoreScalar;
+    using EnergyScalar = GlobalDyTopoEffectManager::EnergyScalar;
 
     class Impl;
 
@@ -83,16 +84,16 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
     class EnergyInfo : public BaseInfo
     {
       public:
-        EnergyInfo(Impl* impl, IndexT index, Float dt, muda::BufferView<Float> energy)
+        EnergyInfo(Impl* impl, IndexT index, Float dt, muda::BufferView<EnergyScalar> energy)
             : BaseInfo(impl, index, dt)
             , m_energies(energy)
         {
         }
-        muda::BufferView<Float> energies() const noexcept;
+        muda::BufferView<EnergyScalar> energies() const noexcept;
 
       private:
         friend class InterPrimitiveConstitutionManager;
-        muda::BufferView<Float> m_energies;
+        muda::BufferView<EnergyScalar> m_energies;
     };
 
     class GradientHessianInfo : public BaseInfo

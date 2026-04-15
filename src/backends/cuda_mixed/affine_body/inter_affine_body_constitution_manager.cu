@@ -234,7 +234,7 @@ void InterAffineBodyConstitutionManager::EnergyExtentInfo::energy_count(SizeT co
     m_energy_count = count;
 }
 
-muda::BufferView<Float> InterAffineBodyConstitutionManager::EnergyInfo::energies() const noexcept
+muda::BufferView<InterAffineBodyConstitutionManager::EnergyScalar> InterAffineBodyConstitutionManager::EnergyInfo::energies() const noexcept
 {
     auto [offset, count] = m_impl->constitution_energy_offsets_counts[m_index];
     return m_energies.subview(offset, count);

@@ -201,7 +201,7 @@ void InterPrimitiveConstitutionManager::do_report_energy_extent(GlobalDyTopoEffe
     info.energy_count(m_impl.constitution_energy_offsets_counts.total_count());
 }
 
-muda::BufferView<Float> InterPrimitiveConstitutionManager::EnergyInfo::energies() const noexcept
+muda::BufferView<InterPrimitiveConstitutionManager::EnergyScalar> InterPrimitiveConstitutionManager::EnergyInfo::energies() const noexcept
 {
     auto [offset, count] = m_impl->constitution_energy_offsets_counts[m_index];
     return m_energies.subview(offset, count);

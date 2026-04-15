@@ -58,6 +58,7 @@ Important constraints:
 |---|---|
 | `AluScalar` | Kernel-side compute precision for gradients, Hessians, and local algebra |
 | `StoreScalar` | Global matrix / vector storage precision |
+| `EnergyScalar` | Shared energy / line-search / reporter precision |
 | `PcgAuxScalar` | PCG auxiliary vectors such as `r`, `z`, `p`, and `Ap` |
 | `SolveScalar` | Solve vector `x` precision |
 | `PcgIterScalar` | PCG iteration scalars such as `rz`, `alpha`, and `beta` |
@@ -104,4 +105,5 @@ Three files define the mixed-precision contract:
 ## Next Pages
 
 - [Mixed Precision Scope](precision_scope.md) maps the current implementation by precision domain.
+- [Coverage Fill 2026-04-15](coverage_fill_20260415.md) records the mixed-coverage patch that enabled FEM MAS on `cuda_mixed`, unified shared energy precision, and removed key ABD / friction double bridges.
 - [Mixed Precision Validation](validation.md) describes the benchmark and comparison workflow used to audit the paths.

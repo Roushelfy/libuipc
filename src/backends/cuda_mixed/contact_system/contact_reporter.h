@@ -10,6 +10,7 @@ class ContactReporter : public DyTopoEffectReporter
   public:
     using DyTopoEffectReporter::DyTopoEffectReporter;
     using StoreScalar = GlobalDyTopoEffectManager::StoreScalar;
+    using EnergyScalar = GlobalDyTopoEffectManager::EnergyScalar;
 
     class BuildInfo
     {
@@ -24,7 +25,7 @@ class ContactReporter : public DyTopoEffectReporter
     class Impl
     {
       public:
-        muda::CBufferView<Float>           energies;
+        muda::CBufferView<EnergyScalar>    energies;
         muda::CDoubletVectorView<StoreScalar, 3> gradients;
         muda::CTripletMatrixView<StoreScalar, 3> hessians;
     };

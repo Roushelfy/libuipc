@@ -35,7 +35,7 @@ class SoftVertexTriangleStitch : public InterPrimitiveConstitution
     vector<Matrix3x3> h_Dm_invs;
     vector<Float>     h_rest_volumes;
 
-    muda::CBufferView<Float>                  energies;
+    muda::CBufferView<ActivePolicy::EnergyScalar> energies;
     muda::CDoubletVectorView<StoreScalar, 3>  gradients;
     muda::CTripletMatrixView<StoreScalar, 3, 3> hessians;
 
@@ -217,7 +217,7 @@ class SoftVertexTriangleStitch : public InterPrimitiveConstitution
 
                        Float E_val;
                        SVTS::E(E_val, mus(I), lambdas(I), VecF);
-                       Es(I) = E_val * dt * dt * rest_vols(I);
+                       Es(I) = safe_cast<ActivePolicy::EnergyScalar>(E_val * dt * dt * rest_vols(I));
                    });
     }
 

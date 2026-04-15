@@ -32,13 +32,14 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                     q_tildes  = info.q_tildes().cviewer().name("q_tildes"),
                     gravities = info.gravities().cviewer().name("gravities"),
                     masses    = info.masses().cviewer().name("masses"),
-                    Ks = info.energies().viewer().name("kinetic_energy")] __device__(int i) mutable
+                   Ks = info.energies().viewer().name("kinetic_energy")] __device__(int i) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Energy = ActivePolicy::EnergyScalar;
                        auto& K = Ks(i);
                        if(is_fixed(i) || ext_kinetic(i))
                        {
-                           K = 0.0;
+                           K = Energy{0};
                        }
                        else
                        {
@@ -51,7 +52,7 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                                M.to_mat().template cast<Alu>();
                            Alu K_alu = safe_cast<Alu>(0.5)
                                        * dq_alu.dot((M_alu * dq_alu).eval());
-                           K = safe_cast<Float>(K_alu);
+                           K = safe_cast<Energy>(K_alu);
                        }
                    });
     }
@@ -74,9 +75,10 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                     gradients  = info.gradients().viewer().name("gradients"),
                     dt         = info.dt(),
                     gradient_only = info.gradient_only(),
-                    cout = KernelCout::viewer()] __device__(int i) mutable
+                   cout = KernelCout::viewer()] __device__(int i) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
+                       using Store = ActivePolicy::StoreScalar;
                        const auto& q       = qs(i);
                        const auto& q_prev  = q_prevs(i);
                        const auto& q_tilde = q_tildes(i);
@@ -93,14 +95,14 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                        {
                            G_alu.setZero();
                        }
-                       G = downcast_gradient<typename Vector12::Scalar>(G_alu);
+                       G = downcast_gradient<Store>(G_alu);
 
                        // cout << "KG(" << i << "): " << G.transpose().eval() << "\n";
 
                        if(gradient_only)
                            return;
 
-                       hessians(i) = downcast_hessian<typename Matrix12x12::Scalar>(M_alu);
+                       hessians(i) = downcast_hessian<Store>(M_alu);
                    });
     }
 };

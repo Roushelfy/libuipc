@@ -30,7 +30,7 @@ class SoftVertexStitch : public InterPrimitiveConstitution
     vector<Float>    h_rest_lengths;
 
     using StoreScalar = ActivePolicy::StoreScalar;
-    muda::CBufferView<Float>                    energies;
+    muda::CBufferView<ActivePolicy::EnergyScalar> energies;
     muda::CDoubletVectorView<StoreScalar, 3>    gradients;
     muda::CTripletMatrixView<StoreScalar, 3, 3> hessians;
 
@@ -144,7 +144,7 @@ class SoftVertexStitch : public InterPrimitiveConstitution
                        const auto x1  = xs(PP[1]).template cast<Alu>();
                        const Alu dist = (x0 - x1).norm();
                        const Alu diff = dist - safe_cast<Alu>(rest_lengths(I));
-                       Es(I)          = safe_cast<Float>(Alu{0.5} * Kt2 * diff * diff);
+                       Es(I)          = safe_cast<ActivePolicy::EnergyScalar>(Alu{0.5} * Kt2 * diff * diff);
                    });
     }
 

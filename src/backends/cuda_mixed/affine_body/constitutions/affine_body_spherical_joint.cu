@@ -26,8 +26,9 @@ class AffineBodySphericalJoint final : public InterAffineBodyConstitution
     vector<Vector6>  h_rest_cs;
     vector<Float>    h_strength_ratios;
 
-    using Vector24    = Vector<Float, 24>;
-    using Matrix24x24 = Matrix<Float, 24, 24>;
+    using Store       = ActivePolicy::StoreScalar;
+    using Vector24    = Vector<Store, 24>;
+    using Matrix24x24 = Matrix<Store, 24, 24>;
 
     void do_build(BuildInfo& info) override
     {
@@ -136,7 +137,7 @@ class AffineBodySphericalJoint final : public InterAffineBodyConstitution
                        Alu Et_val;
                        SJ::Et<Alu>(Et_val, kappa, Ft_val);
 
-                       Es(I) = safe_cast<Float>(Et_val);
+                       Es(I) = safe_cast<ActivePolicy::EnergyScalar>(Et_val);
                    });
     }
 
@@ -190,7 +191,7 @@ class AffineBodySphericalJoint final : public InterAffineBodyConstitution
                        Eigen::Matrix<Alu, 24, 1> G_alu;
                        SJ::JtT_Gt<Alu>(G_alu, dEdFt_val, ci_bar, cj_bar);
 
-                       Vector24               G       = G_alu.template cast<Float>();
+                       Vector24               G       = downcast_gradient<Store>(G_alu);
                        DoubletVectorAssembler DVA{G12s};
                        Vector2i               indices = {bids(0), bids(1)};
                        DVA.segment<2>(2 * I).write(indices, G);
@@ -204,7 +205,7 @@ class AffineBodySphericalJoint final : public InterAffineBodyConstitution
                            Eigen::Matrix<Alu, 24, 24> H_alu;
                            SJ::JtT_Ht_Jt<Alu>(H_alu, ddEdFt_val, ci_bar, cj_bar);
 
-                           Matrix24x24            H = H_alu.template cast<Float>();
+                           Matrix24x24            H = downcast_hessian<Store>(H_alu);
                            TripletMatrixAssembler TMA{H12x12s};
                            TMA.half_block<2>(HalfHessianSize * I).write(indices, H);
                        }
