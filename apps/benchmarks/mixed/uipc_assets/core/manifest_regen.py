@@ -195,6 +195,7 @@ def _merged_spec(runtime_spec: AssetSpec, scene_meta: SceneClassification) -> As
         scenario=scene_meta.scenario,
         scenario_family=scene_meta.scenario_family,
         frames_perf=runtime_spec.frames_perf,
+        perf_warmup_frames=runtime_spec.perf_warmup_frames,
         frames_quality=runtime_spec.frames_quality,
         quality_enabled=runtime_spec.quality_enabled,
         contact_enabled=scene_meta.contact_enabled,

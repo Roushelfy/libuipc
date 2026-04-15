@@ -205,7 +205,14 @@ def build_scene(scene):
     specs = [
         AssetSpec(name="abd_external_force", frames_perf=60, frames_quality=25, quality_enabled=True, perf_warning_pct=15.0),
         AssetSpec(name="rigid_ipc_fracture_cube", frames_perf=120, frames_quality=30, quality_enabled=False, perf_warning_pct=25.0),
-        AssetSpec(name="rigid_ipc_gear_chain", frames_perf=200, frames_quality=50, quality_enabled=False, perf_warning_pct=25.0),
+        AssetSpec(
+            name="rigid_ipc_gear_chain",
+            frames_perf=200,
+            perf_warmup_frames=12,
+            frames_quality=50,
+            quality_enabled=False,
+            perf_warning_pct=25.0,
+        ),
         AssetSpec(name="abd_fem_tower", frames_perf=60, frames_quality=25, quality_enabled=True, perf_warning_pct=20.0),
         AssetSpec(name="ipc_2cubes_fall_larger_dt", frames_perf=50, frames_quality=20, quality_enabled=True, perf_warning_pct=20.0),
         AssetSpec(name="particle_rain", frames_perf=80, frames_quality=20, quality_enabled=True, perf_warning_pct=15.0),
@@ -251,6 +258,8 @@ def build_scene(scene):
         "rigid_ipc_gear_chain",
         "ipc_2cubes_fall_larger_dt",
     ]
+    assert payloads["assets_catalog.json"][2].perf_warmup_frames == 12
+    assert payloads["representative.json"][1].perf_warmup_frames == 12
 
     assert not (manifest_dir / "rigid.json").exists()
     assert not (manifest_dir / "rigid_fracture.json").exists()

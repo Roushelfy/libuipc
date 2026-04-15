@@ -13,6 +13,10 @@ class LinearFusedPCG : public IterativeSolver
 {
   public:
     using IterativeSolver::IterativeSolver;
+    virtual std::string_view iteration_counter_name() const override
+    {
+        return "PCG Iteration Count";
+    }
 
   protected:
     virtual void do_build(BuildInfo& info) override;

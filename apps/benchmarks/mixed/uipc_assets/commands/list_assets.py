@@ -25,7 +25,7 @@ def run(args) -> int:
             f"family={spec.scenario_family or '-'}\t"
             f"tags={','.join(spec.tags or []) or '-'}\t"
             f"quality={'on' if spec.quality_enabled else 'off'}\t"
-            f"perf={spec.frames_perf}\tquality_frames={spec.frames_quality}\t"
+            f"perf={spec.frames_perf}\twarmup={spec.perf_warmup_frames}\tquality_frames={spec.frames_quality}\t"
             f"origin={origin}\t"
             f"notes={spec.notes}"
         )

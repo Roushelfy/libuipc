@@ -99,6 +99,13 @@ python scripts/rebuild_mixed_uipc_assets_manifests.py `
 
 这些选择器统一取交集。
 
+manifest 里的运行相关字段现在分成两段：
+
+- `frames_perf`: 真正进入 perf 报表的 profile 帧数
+- `perf_warmup_frames`: 仅用于 perf 的预热帧数，默认 `0`
+
+worker 会先推进 `perf_warmup_frames`，再统计 `frames_perf`。现有 `ms/frame`、`perf_by_asset.csv`、`perf_by_stage.csv` 只按 profile 段计算。`--visual_export --frames ...` 也继续使用 profile-local 帧号。
+
 共享 Python 环境固定在：
 
 ```text

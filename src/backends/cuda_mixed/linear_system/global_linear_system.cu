@@ -470,6 +470,9 @@ void GlobalLinearSystem::Impl::solve_linear_system()
         info.m_b = b.cview();
         info.m_x = x.view();
         iterative_solver->solve(info);
+        auto counter_name = iterative_solver->iteration_counter_name();
+        if(!counter_name.empty())
+            Timer::record_count(counter_name, info.iter_count());
         logger::info("Iterative linear solver iteration count: {}", info.m_iter_count);
     }
 }

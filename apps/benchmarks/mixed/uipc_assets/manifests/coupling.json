@@ -5,6 +5,7 @@
     "scenario": "coupling",
     "scenario_family": "libuipc_test",
     "frames_perf": 60,
+    "perf_warmup_frames": 50,
     "frames_quality": 25,
     "quality_enabled": true,
     "contact_enabled": true,

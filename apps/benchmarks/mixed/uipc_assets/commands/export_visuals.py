@@ -63,7 +63,13 @@ def run(args) -> int:
                 workspace = perf_dir / f"workspace_{spec.name}"
                 if not any(workspace.rglob("scene_surface*.obj")):
                     raise
-                copy_visual_exports(workspace, visual_dir, frames)
+                copy_visual_exports(
+                    workspace,
+                    visual_dir,
+                    frames,
+                    source_frame_offset=spec.perf_warmup_frames,
+                    frame_count=spec.frames_perf,
+                )
                 print(f"visual export recovered from workspace: {visual_dir}")
                 continue
             print(f"visual export refreshed: {visual_dir}")

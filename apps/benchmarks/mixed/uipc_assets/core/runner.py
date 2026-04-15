@@ -18,6 +18,7 @@ from .selection import REPO_ID
 from .timers import summarize_iteration_counters, summarize_timer_frames
 
 SEARCH_DIRECTION_INVALID_PREFIX = "search_direction_invalid:"
+BENCHMARK_MPLBACKEND = "Agg"
 BENCHMARK_LINE_SEARCH_FAIL_CONFIG_PATH = (
     "extras/benchmark/fail_after_consecutive_line_search_max_newton_iters"
 )
@@ -154,21 +155,40 @@ def worker_set_scene_config(scene: Any, path: str, value: Any) -> None:
         uipc.view(slot)[0] = value
 
 
-def copy_visual_exports(workspace: Path, visual_dir: Path, frames: set[int] | None = None) -> Dict[str, Any]:
+def _local_visual_filename(obj: Path, local_frame: int) -> str:
+    frame_str = obj.stem.removeprefix("scene_surface")
+    if frame_str.isdigit():
+        return f"scene_surface{local_frame:04d}{obj.suffix}"
+    return obj.name
+
+
+def copy_visual_exports(
+    workspace: Path,
+    visual_dir: Path,
+    frames: set[int] | None = None,
+    *,
+    source_frame_offset: int = 0,
+    frame_count: int | None = None,
+) -> Dict[str, Any]:
     exported = []
     for obj in sorted(workspace.rglob("scene_surface*.obj")):
         stem = obj.stem
         frame_str = stem.removeprefix("scene_surface")
         if not frame_str.isdigit():
             continue
-        frame = int(frame_str)
+        source_frame = int(frame_str)
+        if source_frame < source_frame_offset:
+            continue
+        frame = source_frame - source_frame_offset
+        if frame_count is not None and frame >= frame_count:
+            continue
         if frames is not None and frame not in frames:
             continue
         frame_dir = visual_dir / f"frame_{frame:04d}"
         frame_dir.mkdir(parents=True, exist_ok=True)
-        dst = frame_dir / obj.name
+        dst = frame_dir / _local_visual_filename(obj, frame)
         shutil.copy2(obj, dst)
-        exported.append({"frame": frame, "file": str(dst)})
+        exported.append({"frame": frame, "source_frame": source_frame, "file": str(dst)})
     manifest = {
         "visual_dir": str(visual_dir),
         "frames_exported": len({row["frame"] for row in exported}),
@@ -192,6 +212,22 @@ def _assert_worker_world_valid(world: Any, *, stage: str, frame_hint: int) -> No
     raise RuntimeError(f"worker simulation became invalid during {stage} at frame {frame_hint}")
 
 
+def _update_benchmark_metadata(
+    benchmark_json: Path,
+    *,
+    warmup_frames: int,
+    warmup_wall_time_s: float,
+    end_to_end_wall_time_s: float,
+) -> None:
+    if not benchmark_json.exists():
+        return
+    payload = read_json(benchmark_json)
+    payload["warmup_frames"] = warmup_frames
+    payload["warmup_wall_time_s"] = warmup_wall_time_s
+    payload["end_to_end_wall_time_s"] = end_to_end_wall_time_s
+    write_json(benchmark_json, payload)
+
+
 def _save_worker_profile_result(
     *,
     asset_name: str,
@@ -199,7 +235,18 @@ def _save_worker_profile_result(
     workspace: Path,
     stats: Any,
     wall_time: float,
+    warmup_frames: int,
+    warmup_wall_time_s: float,
+    end_to_end_wall_time_s: float,
 ) -> Dict[str, Any]:
+    # Benchmark workers should always render reports headlessly.
+    os.environ["MPLBACKEND"] = BENCHMARK_MPLBACKEND
+    try:
+        import matplotlib
+
+        matplotlib.use(BENCHMARK_MPLBACKEND, force=True)
+    except Exception:
+        pass
     import uipc.profile as uipc_profile
 
     num_frames = getattr(stats, "num_frames", len(getattr(stats, "_frames", [])))
@@ -215,9 +262,18 @@ def _save_worker_profile_result(
             f"Avg: {wall_time / max(num_frames, 1) * 1000:.1f}ms/frame"
         ),
         "workspace": str(workspace.resolve()),
-        "steps": [("profile", num_frames)],
+        "steps": ([("warmup", warmup_frames)] if warmup_frames > 0 else []) + [("profile", num_frames)],
     }
     uipc_profile._save_result(result, str(profile_dir))
+    _update_benchmark_metadata(
+        profile_dir / "benchmark.json",
+        warmup_frames=warmup_frames,
+        warmup_wall_time_s=warmup_wall_time_s,
+        end_to_end_wall_time_s=end_to_end_wall_time_s,
+    )
+    result["warmup_frames"] = warmup_frames
+    result["warmup_wall_time_s"] = warmup_wall_time_s
+    result["end_to_end_wall_time_s"] = end_to_end_wall_time_s
     return result
 
 
@@ -260,33 +316,59 @@ def run_profile_worker(
         worker_set_scene_config(scene, "extras/debug/dump_solution_x", 1)
 
     num_frames = asset_spec.frames_perf if mode == "perf" else asset_spec.frames_quality
+    warmup_frames = asset_spec.perf_warmup_frames if mode == "perf" else 0
     workspace = output_dir / f"workspace_{asset_spec.name}"
     profile_dir = output_dir / asset_spec.name
     workspace.mkdir(parents=True, exist_ok=True)
     engine = Engine("cuda_mixed", str(workspace))
     world = World(engine)
     stats = SimulationStats()
-    start = time.perf_counter()
+    run_start = time.perf_counter()
+    warmup_start: float | None = None
+    profile_start: float | None = None
+    warmup_wall_time_s = 0.0
+    profile_wall_time_s = 0.0
     pending_error: Exception | None = None
     try:
         world.init(scene)
         _assert_worker_world_valid(world, stage="init", frame_hint=0)
+        if warmup_frames > 0:
+            warmup_start = time.perf_counter()
+            for warmup_index in range(warmup_frames):
+                frame_hint = warmup_index + 1
+                world.advance()
+                _assert_worker_world_valid(world, stage="warmup advance", frame_hint=frame_hint)
+                world.retrieve()
+                _assert_worker_world_valid(world, stage="warmup retrieve", frame_hint=frame_hint)
+            warmup_wall_time_s = time.perf_counter() - warmup_start
+        profile_start = time.perf_counter()
         for frame_index in range(num_frames):
-            frame_hint = frame_index + 1
+            frame_hint = warmup_frames + frame_index + 1
             world.advance()
             _assert_worker_world_valid(world, stage="advance", frame_hint=frame_hint)
             world.retrieve()
             _assert_worker_world_valid(world, stage="retrieve", frame_hint=frame_hint)
             stats.collect()
     except Exception as exc:
+        if warmup_start is not None and profile_start is None:
+            warmup_wall_time_s = time.perf_counter() - warmup_start
+        if profile_start is not None:
+            profile_wall_time_s = time.perf_counter() - profile_start
         pending_error = exc
+    else:
+        if profile_start is not None:
+            profile_wall_time_s = time.perf_counter() - profile_start
+    end_to_end_wall_time_s = time.perf_counter() - run_start
 
     result = _save_worker_profile_result(
         asset_name=asset_spec.name,
         profile_dir=profile_dir,
         workspace=workspace,
         stats=stats,
-        wall_time=time.perf_counter() - start,
+        wall_time=profile_wall_time_s,
+        warmup_frames=warmup_frames,
+        warmup_wall_time_s=warmup_wall_time_s,
+        end_to_end_wall_time_s=end_to_end_wall_time_s,
     )
     benchmark_json = profile_dir / "benchmark.json"
     timer_frames_json = profile_dir / "timer_frames.json"
@@ -313,6 +395,9 @@ def run_profile_worker(
         "profile_dir": str(profile_dir),
         "workspace": str(Path(result["workspace"]).resolve()),
         "frames": num_frames,
+        "warmup_frames": warmup_frames,
+        "warmup_wall_time_s": warmup_wall_time_s,
+        "end_to_end_wall_time_s": end_to_end_wall_time_s,
         "benchmark_json": str(benchmark_json) if benchmark_json.exists() else None,
         "timer_frames_json": str(timer_frames_json) if timer_frames_json.exists() else None,
         "stage_summary_json": str(output_dir / "stage_summary.json"),
@@ -322,7 +407,13 @@ def run_profile_worker(
     }
 
     if dump_surface:
-        worker_result["visual_manifest"] = copy_visual_exports(Path(result["workspace"]).resolve(), output_dir.parent / "visual", visual_frames)
+        worker_result["visual_manifest"] = copy_visual_exports(
+            Path(result["workspace"]).resolve(),
+            output_dir.parent / "visual",
+            visual_frames,
+            source_frame_offset=warmup_frames,
+            frame_count=num_frames,
+        )
 
     if mode == "quality":
         x_dump = next(Path(result["workspace"]).resolve().rglob("x.*.mtx"), None)
@@ -362,6 +453,7 @@ def run_worker_subprocess(
 ) -> Dict[str, Any]:
     env = prepend_library_path(os.environ.copy(), module_dir)
     env = prepend_pythonpath(env, pyuipc_src_dir)
+    env["MPLBACKEND"] = BENCHMARK_MPLBACKEND
     output_dir.mkdir(parents=True, exist_ok=True)
     spec_path = output_dir / "asset_spec.json"
     result_path = output_dir / "worker_result.json"

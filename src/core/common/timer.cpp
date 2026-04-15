@@ -87,6 +87,22 @@ Json Timer::report_as_json()
     return json;
 }
 
+void Timer::record_count(std::string_view blockName, size_t count, bool force_on)
+{
+    if(count == 0)
+        return;
+
+    if(!GlobalTimer::current())
+        return;
+    if(!m_global_on && !force_on)
+        return;
+
+    if(m_sync)
+        m_sync();
+
+    GlobalTimer::current()->record_counter(blockName, count);
+}
+
 double Timer::elapsed() const
 {
     sync();
@@ -135,6 +151,17 @@ auto GlobalTimer::pop_timer() -> STimer&
     auto& top = m_timer_stack.top();
     m_timer_stack.pop();
     return *top;
+}
+
+void GlobalTimer::record_counter(std::string_view name, size_t count)
+{
+    auto& u         = m_timers.emplace_back(new STimer{name});
+    u->duration     = STimer::Duration::zero();
+    u->count_weight = count;
+    u->depth        = m_timer_stack.size();
+    m_timer_stack.top()->children.push_back(u.get());
+    u->parent = m_timer_stack.top();
+    u->setup_full_name();
 }
 
 GlobalTimer::GlobalTimer(std::string_view name)
@@ -303,13 +330,13 @@ void GlobalTimer::merge_timers()
                 m_merge_root                       = new_merged_timer.get();
             }
             new_merged_timer->duration = timer->duration.count();
-            new_merged_timer->count    = 1;
+            new_merged_timer->count    = timer->count_weight;
             new_merged_timer->depth    = timer->depth;
         }
         else
         {
             iter->second->duration += timer->duration.count();
-            iter->second->count++;
+            iter->second->count += timer->count_weight;
         }
     }
 

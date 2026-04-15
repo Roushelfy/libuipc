@@ -34,10 +34,16 @@ CANONICAL_STAGES = [
 ]
 
 ITERATION_COUNTERS = {
-    "newton_iteration_count": "Newton Iteration",
-    "line_search_iteration_count": "Line Search Iteration",
-    "pcg_iteration_count": "PCG Iteration",
+    "newton_iteration_count": ("Newton Iteration",),
+    "line_search_iteration_count": ("Line Search Iteration",),
+    "pcg_iteration_count": ("PCG Iteration Count", "PCG Iteration"),
 }
+
+
+def _counter_aliases(value: str | Iterable[str]) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
 
 
 def flatten_timer_tree(node: Dict[str, Any], out: List[Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
@@ -61,15 +67,24 @@ def load_frame_stage_values(frame: Dict[str, Any], stages: Iterable[str] = CANON
 
 def load_frame_counter_values(
     frame: Dict[str, Any],
-    counters: Dict[str, str] = ITERATION_COUNTERS,
+    counters: Dict[str, str | Iterable[str]] = ITERATION_COUNTERS,
 ) -> Dict[str, int]:
     values: Dict[str, int] = {key: 0 for key in counters}
-    wanted = {name: key for key, name in counters.items()}
-    for row in flatten_timer_tree(frame):
+    rows = flatten_timer_tree(frame)
+    grouped: Dict[str, int] = {}
+    present_names = set()
+    for row in rows:
         name = row.get("name")
-        key = wanted.get(name)
-        if key is not None:
-            values[key] += int(row.get("count", 0))
+        if not isinstance(name, str):
+            continue
+        present_names.add(name)
+        grouped[name] = grouped.get(name, 0) + int(row.get("count", 0))
+
+    for key, raw_names in counters.items():
+        for name in _counter_aliases(raw_names):
+            if name in present_names:
+                values[key] = grouped.get(name, 0)
+                break
     return values
 
 
@@ -107,11 +122,12 @@ def summarize_timer_frames(timer_frames: List[Dict[str, Any]], stages: Iterable[
 
 def summarize_iteration_counters(
     timer_frames: List[Dict[str, Any]],
-    counters: Dict[str, str] = ITERATION_COUNTERS,
+    counters: Dict[str, str | Iterable[str]] = ITERATION_COUNTERS,
 ) -> Dict[str, Any]:
     per_frame = [load_frame_counter_values(frame, counters) for frame in timer_frames if isinstance(frame, dict)]
     rows: List[Dict[str, Any]] = []
-    for key, timer_name in counters.items():
+    for key, raw_names in counters.items():
+        timer_name = _counter_aliases(raw_names)[0]
         samples = [int(frame[key]) for frame in per_frame]
         total = sum(samples)
         mean = statistics.fmean(samples) if samples else 0.0

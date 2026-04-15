@@ -9,6 +9,7 @@ class IterativeSolver : public SimSystem
 {
   public:
     using SimSystem::SimSystem;
+    virtual std::string_view iteration_counter_name() const { return {}; }
 
     class BuildInfo
     {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -12,34 +13,130 @@ from ..core.runner import SEARCH_DIRECTION_INVALID_PREFIX, parse_visual_frames, 
 from ..core.selection import resolve_asset_specs, selection_payload
 
 
-def _detect_failure_stage(output_dir: Path) -> str:
+def _load_failure_log_text(output_dir: Path) -> str:
     log_texts: list[str] = []
     for log_path in (output_dir / "worker_stderr.log", output_dir / "worker_stdout.log"):
         if log_path.exists():
             log_texts.append(log_path.read_text(encoding="utf-8", errors="replace"))
-    if not log_texts:
-        return "unknown"
-    text = "\n".join(log_texts)
-    checks = [
-        (SEARCH_DIRECTION_INVALID_PREFIX, "search direction"),
-        ("FusedPCG", "FusedPCG"),
-        ("Line Search", "Line Search"),
-        ("quality_metrics", "quality compare"),
-        ("JSONDecodeError", "timer parse"),
-        ("dump_solution_x", "solution dump"),
+    failure_json = output_dir / "failure.json"
+    if failure_json.exists():
+        try:
+            failure_payload = json.loads(failure_json.read_text(encoding="utf-8", errors="replace"))
+            error_text = failure_payload.get("error")
+            if isinstance(error_text, str) and error_text.strip():
+                log_texts.append(error_text)
+        except json.JSONDecodeError:
+            pass
+    return "\n".join(log_texts)
+
+
+def _extract_exit_code(error_text: str) -> int | None:
+    match = re.search(r"\(exit=(\d+)\)", error_text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _detect_failure_classification(output_dir: Path, error: Exception | None = None) -> dict:
+    text = _load_failure_log_text(output_dir)
+    error_text = "" if error is None else str(error)
+    combined_text = "\n".join(part for part in (text, error_text) if part)
+    exit_code = _extract_exit_code(error_text) or _extract_exit_code(combined_text)
+
+    def result(stage: str, reason_code: str, reason: str) -> dict:
+        return {
+            "stage": stage,
+            "reason_code": reason_code,
+            "reason": reason,
+            "exit_code": exit_code,
+        }
+
+    stage_checks = [
+        (
+            SEARCH_DIRECTION_INVALID_PREFIX,
+            result("search direction", "search_direction_invalid", "search direction invalid"),
+        ),
+        ("FusedPCG", result("FusedPCG", "fused_pcg", "fused PCG failure")),
+        ("quality_metrics", result("quality compare", "quality_compare", "quality compare failure")),
+        ("JSONDecodeError", result("timer parse", "timer_parse", "timer frame parse failure")),
+        (
+            "dump_solution_x",
+            result("solution dump", "solution_dump", "solution dump failure"),
+        ),
+        (
+            "Solution x dump not found",
+            result("solution dump", "solution_dump_missing", "solution dump missing"),
+        ),
     ]
-    for needle, stage in checks:
-        if needle in text:
-            return stage
-    return "worker"
+    for needle, classification in stage_checks:
+        if needle in combined_text:
+            return classification
+
+    if any(
+        needle in combined_text
+        for needle in ("SimplicialSurfaceIntersectionCheck", "SimplicialSurfaceDistanceCheck", "Intersection detected")
+    ):
+        return result("worker", "sanity_check", "sanity check failure")
+
+    if any(
+        needle in combined_text
+        for needle in ("Residual is nan", "check_rz_nan_inf", "norm(z) = nan", "norm(r) = inf")
+    ):
+        return result("worker", "linear_solver_nan_inf", "linear solver nan/inf")
+
+    if (
+        ("LineSearcher::compute_energy" in combined_text or "Energy [" in combined_text)
+        and (" is inf" in combined_text or " is nan" in combined_text)
+    ):
+        return result("worker", "energy_nan_inf", "energy nan/inf")
+
+    if "worker simulation became invalid" in combined_text:
+        return result("worker", "world_invalid", "world became invalid")
+
+    if (
+        "Traceback (most recent call last):" in combined_text
+        and "matplotlib" in combined_text
+        and ("summary_report" in combined_text or "_draw_system_dependency_graph" in combined_text)
+    ):
+        return result("worker", "python_report_generation", "python report generation failure")
+
+    if "No module named" in combined_text:
+        return result("worker", "python_import_error", "python import error")
+
+    if "FileNotFoundError" in combined_text:
+        return result("worker", "missing_file", "missing file")
+
+    if "Traceback (most recent call last):" in combined_text:
+        return result("worker", "python_exception", "python exception")
+
+    if "Assertion " in combined_text:
+        return result("worker", "native_assertion", "native assertion")
+
+    if exit_code == 3221225477:
+        return result("worker", "native_access_violation", "native access violation")
+    if exit_code == 3221226505:
+        return result("worker", "native_stack_buffer_overrun", "native stack buffer overrun")
+    if exit_code is not None:
+        return result("worker", f"exit_{exit_code}", f"worker exited with code {exit_code}")
+    if not combined_text.strip():
+        return result("unknown", "unknown", "unknown failure")
+    return result("worker", "worker", "worker failure")
+
+
+def _detect_failure_stage(output_dir: Path) -> str:
+    return _detect_failure_classification(output_dir)["stage"]
 
 
 def _record_failure(failures: list[dict], *, asset: str, level: str, mode: str, output_dir: Path, error: Exception) -> None:
+    classification = _detect_failure_classification(output_dir, error)
     failure = {
         "asset": asset,
         "level": level,
         "mode": mode,
-        "stage": _detect_failure_stage(output_dir),
+        "stage": classification["stage"],
+        "reason_code": classification["reason_code"],
+        "reason": classification["reason"],
+        "exit_code": classification["exit_code"],
         "error": str(error),
         "output_dir": str(output_dir),
         "stdout_log": str(output_dir / "worker_stdout.log"),

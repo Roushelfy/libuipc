@@ -138,3 +138,77 @@ def test_run_suite_records_search_direction_failure_and_continues(
     assert failure["stage"] == "search direction"
     assert (run_root / "runs" / "abd_external_force" / "path5" / "perf" / "worker_result.json").exists()
     assert ("abd_external_force", "path5", "perf") in calls
+
+
+def test_detect_failure_stage_does_not_promote_generic_line_search_warning(tmp_path: Path) -> None:
+    output_dir = tmp_path / "worker"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "worker_stdout.log").write_text(
+        "\n".join(
+            [
+                "[warning] [cuda_mixed] Line Search Exits with Max Iteration: 8 (Frame=12, Newton=928)",
+                "[error] [cuda_mixed] Assertion !std::isnan(rz) && std::isfinite(rz) failed. Residual is nan, norm(r) = 0.1, norm(z) = nan",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert run_suite._detect_failure_stage(output_dir) == "worker"
+    classification = run_suite._detect_failure_classification(output_dir)
+    assert classification["reason_code"] == "linear_solver_nan_inf"
+
+
+def test_detect_failure_classification_picks_sanity_check(tmp_path: Path) -> None:
+    output_dir = tmp_path / "worker"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "worker_stdout.log").write_text(
+        "\n".join(
+            [
+                "[error] Intersection detected between Edge(1,2) and Triangle(3,4,5)",
+                "[error] [class uipc::sanity_check::SimplicialSurfaceIntersectionCheck(1)]:",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    classification = run_suite._detect_failure_classification(output_dir)
+    assert classification["stage"] == "worker"
+    assert classification["reason_code"] == "sanity_check"
+
+
+def test_detect_failure_classification_picks_python_report_generation(tmp_path: Path) -> None:
+    output_dir = tmp_path / "worker"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "worker_stderr.log").write_text(
+        "\n".join(
+            [
+                "Traceback (most recent call last):",
+                "  File \"runner.py\", line 1, in <module>",
+                "  File \"stats.py\", line 1709, in summary_report",
+                "    self.system_dependency_graph(str(systems_json), output_path=str(out / dep_file))",
+                "  File \"stats.py\", line 1531, in system_dependency_graph",
+                "    return self._draw_system_dependency_graph(str(p), output_path)",
+                "AttributeError: 'dict' object has no attribute 'get_siblings'",
+                "matplotlib",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    classification = run_suite._detect_failure_classification(output_dir)
+    assert classification["stage"] == "worker"
+    assert classification["reason_code"] == "python_report_generation"
+
+
+def test_detect_failure_classification_reads_exit_code_from_failure_json(tmp_path: Path) -> None:
+    output_dir = tmp_path / "worker"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "failure.json").write_text(
+        json.dumps(
+            {
+                "error": "worker failed for asset=test mode=quality level=path3 (exit=3221225477)",
+            }
+        ),
+        encoding="utf-8",
+    )
+    classification = run_suite._detect_failure_classification(output_dir)
+    assert classification["stage"] == "worker"
+    assert classification["reason_code"] == "native_access_violation"
+    assert classification["exit_code"] == 3221225477

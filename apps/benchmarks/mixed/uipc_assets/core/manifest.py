@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional
 DEFAULT_PERF_WARNING_PCT = 15.0
 DEFAULT_FRAMES_PERF = 100
 DEFAULT_FRAMES_QUALITY = 30
+DEFAULT_PERF_WARMUP_FRAMES = 0
 LEVEL_ORDER = ("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7", "path8")
 
 
@@ -19,6 +20,7 @@ class AssetSpec:
     scenario: str = ""
     scenario_family: str = ""
     frames_perf: int = DEFAULT_FRAMES_PERF
+    perf_warmup_frames: int = DEFAULT_PERF_WARMUP_FRAMES
     frames_quality: int = DEFAULT_FRAMES_QUALITY
     quality_enabled: bool = True
     contact_enabled: Optional[bool] = None
@@ -35,6 +37,7 @@ class AssetSpec:
             scenario=str(obj.get("scenario", "")),
             scenario_family=str(obj.get("scenario_family", "")),
             frames_perf=int(obj.get("frames_perf", DEFAULT_FRAMES_PERF)),
+            perf_warmup_frames=int(obj.get("perf_warmup_frames", DEFAULT_PERF_WARMUP_FRAMES)),
             frames_quality=int(obj.get("frames_quality", DEFAULT_FRAMES_QUALITY)),
             quality_enabled=bool(obj.get("quality_enabled", True)),
             contact_enabled=(

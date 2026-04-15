@@ -37,6 +37,7 @@ class UIPC_CORE_API ScopedTimer
     TimePoint          start;
     TimePoint          end;
     Duration           duration;
+    size_t             count_weight = 1;
     list<ScopedTimer*> children;
     ScopedTimer*       parent = nullptr;
     size_t             depth  = 0;
@@ -70,6 +71,9 @@ class UIPC_CORE_API Timer
     static void disable_all() { m_global_on = false; }
     static void enable_all() { m_global_on = true; }
     static void set_sync_func(std::function<void()> sync) { m_sync = sync; }
+    static void record_count(std::string_view blockName,
+                             size_t           count,
+                             bool             force_on = false);
 
     static void report(std::ostream& o = std::cout);
     static Json report_as_json();
@@ -95,6 +99,7 @@ class UIPC_CORE_API GlobalTimer
     friend class Timer;
     STimer& push_timer(std::string_view);
     STimer& pop_timer();
+    void    record_counter(std::string_view name, size_t count);
 
     static GlobalTimer  default_instance;
     static GlobalTimer* m_current;

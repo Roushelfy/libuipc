@@ -5,6 +5,7 @@
     "scenario": "particle",
     "scenario_family": "libuipc_test",
     "frames_perf": 80,
+    "perf_warmup_frames": 10,
     "frames_quality": 20,
     "quality_enabled": true,
     "contact_enabled": true,
