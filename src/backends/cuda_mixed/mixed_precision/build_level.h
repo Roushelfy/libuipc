@@ -10,16 +10,10 @@ enum class MixedPrecisionLevel
     Path3,
     Path4,
     Path5,
-    Path6,
-    Path7,
-    Path8
+    Path6
 };
 
-#if defined(UIPC_MIXED_LEVEL_PATH8)
-inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path8;
-#elif defined(UIPC_MIXED_LEVEL_PATH7)
-inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path7;
-#elif defined(UIPC_MIXED_LEVEL_PATH6)
+#if defined(UIPC_MIXED_LEVEL_PATH6)
 inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path6;
 #elif defined(UIPC_MIXED_LEVEL_PATH5)
 inline constexpr auto kBuildLevel = MixedPrecisionLevel::Path5;

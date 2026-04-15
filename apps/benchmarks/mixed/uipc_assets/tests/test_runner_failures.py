@@ -46,7 +46,7 @@ def test_run_suite_records_search_direction_failure_and_continues(
         output_dir.mkdir(parents=True, exist_ok=True)
         calls.append((asset_spec.name, level, mode))
 
-        if asset_spec.name == "rigid_ipc_double_pendulum" and level == "path5" and mode == "perf":
+        if asset_spec.name == "rigid_ipc_double_pendulum" and level == "path3" and mode == "perf":
             (output_dir / "worker_stdout.log").write_text(
                 "RuntimeError: "
                 f"{SEARCH_DIRECTION_INVALID_PREFIX} frame=12 newton=34 consecutive_hits=10 threshold=10 line_search_max_iter=8\n",
@@ -113,7 +113,7 @@ def test_run_suite_records_search_direction_failure_and_continues(
         all=False,
         revision="main",
         local_repo=None,
-        levels=["fp64", "path5"],
+        levels=["fp64", "path3"],
         build={},
         config="RelWithDebInfo",
         run_root=run_root,
@@ -131,13 +131,13 @@ def test_run_suite_records_search_direction_failure_and_continues(
     assert run_suite.run(args) == 0
 
     failure = json.loads(
-        (run_root / "runs" / "rigid_ipc_double_pendulum" / "path5" / "perf" / "failure.json").read_text(
+        (run_root / "runs" / "rigid_ipc_double_pendulum" / "path3" / "perf" / "failure.json").read_text(
             encoding="utf-8"
         )
     )
     assert failure["stage"] == "search direction"
-    assert (run_root / "runs" / "abd_external_force" / "path5" / "perf" / "worker_result.json").exists()
-    assert ("abd_external_force", "path5", "perf") in calls
+    assert (run_root / "runs" / "abd_external_force" / "path3" / "perf" / "worker_result.json").exists()
+    assert ("abd_external_force", "path3", "perf") in calls
 
 
 def test_detect_failure_stage_does_not_promote_generic_line_search_warning(tmp_path: Path) -> None:

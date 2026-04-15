@@ -4,6 +4,8 @@
 
 ## Context
 
+> 历史说明：本文档保留原始规划语义。当前代码已删除旧 `path2` 和旧 `path4`，并将旧 `path3/5/6/7/8` 顺延为新 `path2/3/4/5/6`。阅读本文时，如与当前实现编号不一致，以 `src/backends/cuda_mixed/mixed_precision/policy.h` 和 `docs/development/backend_cuda/mixed_precision/*.md` 为准。
+
 **目标**：在 `cuda_mixed` 后端引入混合精度（Mixed-Precision）计算，提供编译期精度档位（当前代码已扩展为 `fp64 / path1 / path2 / path3 / path4 / path5 / path6 / path7`）。以全 FP64（`fp64`）为 Ground Truth 基准，按路径分层控制 ALU / Hessian 存储 / PCG 辅助向量精度，并配套 Telemetry 系统（Timer + PCG 统计 + ErrorTracker + NVTX）。
 
 **重要约束**：

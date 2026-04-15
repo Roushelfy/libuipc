@@ -16,21 +16,32 @@ This note has two goals:
 1. Consolidate the benchmark conclusions into one engineering-facing summary.
 2. Audit whether the code actually pushes the intended domains to fp32, instead of relying only on the path table in `policy.h`.
 
+Renumbering note after the same-day path cleanup:
+
+- old `path2` and old `path4` were deleted
+- old `path3` -> new `path2`
+- old `path5` -> new `path3`
+- old `path6` -> new `path4`
+- old `path7` -> new `path5`
+- old `path8` -> new `path6`
+
+The detailed benchmark tables below preserve the original run labels where needed. When reading them against current code, apply the mapping above.
+
 Update after the same-day coverage-fill patch:
 
 - shared mixed energy interfaces now use `EnergyScalar = ActivePolicy::AluScalar`
 - the active mixed friction path is the `codim_*` / `al_*` simplex friction chain, not `ipc_simplex_frictional_contact_function.h`
-- mixed FEM MAS is no longer compile-time disabled on `path2` through `path8`
+- mixed FEM MAS is no longer compile-time disabled on current `path2` through `path6`
 - ABD local buffers and targeted joint / BDF / constraint writeback paths were rewritten toward ALU/store-domain typing
-- the remaining major open precision question from this benchmark is still the `path8` SpMV / PCG contract
+- the remaining major open precision question from this benchmark is still the current `path6` SpMV / PCG contract
 
 ## 1. Executive Summary
 
 The benchmark conclusion is still:
 
-- `path8` is the current best general-purpose path for `ABD/contact/animated/solve-heavy` cases.
-- `path3` is the strongest path for pure assembly speedups.
-- `path6/7/8` are the paths that materially improve `Build Linear System`, `Assemble Preconditioner`, and `Solve Global Linear System`.
+- current `path6` (old `path8`) is the best general-purpose path for `ABD/contact/animated/solve-heavy` cases.
+- current `path2` (old `path3`) is the strongest path for pure assembly speedups.
+- current `path4/5/6` (old `path6/7/8`) are the paths that materially improve `Build Linear System`, `Assemble Preconditioner`, and `Solve Global Linear System`.
 - `Compute Energy` and `Line Search` are not currently strong mixed-precision win zones. Their gains are small and unstable.
 
 The code audit conclusion is:
@@ -40,7 +51,7 @@ The code audit conclusion is:
 - FEM assembly is mostly wired correctly through `AluScalar` plus `downcast_gradient/downcast_hessian<StoreScalar>`.
 - ABD is not fully store-domain typed yet. Several important intermediate buffers and helper math paths still stay in `Float`, and `Float` is `double` in this repo.
 - Friction contact has a more serious gap: some helper functions are still hard-coded on `Float`, so the nominal `AluScalar=float` path can get promoted back to double inside the helper.
-- `path8` does not restore double accumulation in SpMV. It restores some PCG iteration scalars to double, but the actual `A<float> * x<float> -> y<float>` SpMV kernel still instantiates the `float` accumulation path.
+- current `path6` does not restore double accumulation in SpMV. It restores some PCG iteration scalars to double, but the actual `A<float> * x<float> -> y<float>` SpMV kernel still instantiates the `float` accumulation path.
 
 So the short answer to "the places that should be fp32, are they all fp32?" is:
 
@@ -53,9 +64,9 @@ The short answer to "are some paths already no longer worth keeping?" is:
 
 - The benchmark is accurate for the current code.
 - But it does not yet measure the fully realized design intent of every path.
-- `path2` and `path4` already look weak enough that they should be treated as low-value product candidates.
+- deleted old `path2` and old `path4` already looked weak enough that dropping them is consistent with the benchmark.
 - They still retain diagnostic value as ablation paths.
-- `path3`, `path6`, and `path8` are still the main paths worth actively optimizing and re-measuring after coverage fixes.
+- current `path2`, `path4`, and `path6` are still the main paths worth actively optimizing and re-measuring after coverage fixes.
 
 ## 2. Benchmark Conclusions
 
@@ -76,9 +87,9 @@ From the primary representative run:
 
 Interpretation:
 
-- `path8` is the best current default.
-- `path3` is not the best total path, but it is the strongest assembly path.
-- `path2` and `path4` are diagnostic paths, not good final choices.
+- current `path6` (old `path8`) is the best current default.
+- current `path2` (old `path3`) is not the best total path, but it is the strongest assembly path.
+- deleted old `path2` and old `path4` were diagnostic paths, not good final choices.
 
 ### 2.2 Path-to-scenario mapping
 
@@ -86,25 +97,25 @@ Interpretation:
   - Best use: low-risk ALU-only speedup, small/clean cases, sanity baseline.
   - Evidence: `libuipc_test` family is best on `path1`.
 
-- `path3`
+- current `path2` (old `path3`)
   - Best use: assembly-dominated cases, especially `ABD/contact-heavy` setups where local constitutions dominate.
-  - Evidence: stage leaderboard winner on `Assemble ABD`, `Assemble Contact`, `Assemble FEM`, and `Assemble Linear System`.
+  - Evidence: old `path3` is the stage leaderboard winner on `Assemble ABD`, `Assemble Contact`, `Assemble FEM`, and `Assemble Linear System`.
 
-- `path5`
-  - Best use: intermediate `contains_fem` or medium-cost mixed scenes when `path3` is not enough and solver-side work starts to matter.
-  - Evidence: best pipeline path on `contains_fem` in this run.
+- current `path3` (old `path5`)
+  - Best use: intermediate `contains_fem` or medium-cost mixed scenes when current `path2` is not enough and solver-side work starts to matter.
+  - Evidence: old `path5` is the best pipeline path on `contains_fem` in this run.
 
-- `path6`
+- current `path4` (old `path6`)
   - Best use: preconditioner/solver-heavy workloads, especially FEM-side workloads.
-  - Evidence: best `Build Linear System` median overall; best pipeline/solve on the limited pure-FEM slice in this run.
+  - Evidence: old `path6` has the best `Build Linear System` median overall and the best pipeline/solve on the limited pure-FEM slice in this run.
 
-- `path7`
+- current `path5` (old `path7`)
   - Best use: experimental full-fp32 PCG path.
-  - Evidence: strong preconditioner results, but not clearly better than `path8` in end-to-end results and has higher failure rate.
+  - Evidence: old `path7` shows strong preconditioner results, but is not clearly better than old `path8` in end-to-end results and has higher failure rate.
 
-- `path8`
+- current `path6` (old `path8`)
   - Best use: current general-purpose production candidate.
-  - Evidence: best overall pipeline, simulation, and solver results; strongest on `abd` and `animated`.
+  - Evidence: old `path8` has the best overall pipeline, simulation, and solver results; strongest on `abd` and `animated`.
 
 ### 2.3 Where the gains really come from
 
@@ -122,13 +133,13 @@ The largest gains are concentrated in:
 
 The most important split is:
 
-- `path3` wins the assembly stages.
-- `path6/7/8` win the build / preconditioner / solve stages.
+- current `path2` (old `path3`) wins the assembly stages.
+- current `path4/5/6` (old `path6/7/8`) win the build / preconditioner / solve stages.
 
-This is why `path8` beats `path3` overall even though `path3` wins more individual assembly leaderboards:
+This is why current `path6` (old `path8`) beats current `path2` (old `path3`) overall even though the old `path3` row wins more individual assembly leaderboards:
 
-- `path3` accelerates "make the system".
-- `path8` accelerates "make the system and then solve it".
+- current `path2` accelerates "make the system".
+- current `path6` accelerates "make the system and then solve it".
 
 ### 2.4 Why line search did not improve much
 

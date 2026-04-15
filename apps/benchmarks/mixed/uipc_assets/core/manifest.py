@@ -10,7 +10,7 @@ DEFAULT_PERF_WARNING_PCT = 15.0
 DEFAULT_FRAMES_PERF = 100
 DEFAULT_FRAMES_QUALITY = 30
 DEFAULT_PERF_WARMUP_FRAMES = 0
-LEVEL_ORDER = ("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7", "path8")
+LEVEL_ORDER = ("fp64", "path1", "path2", "path3", "path4", "path5", "path6")
 
 
 @dataclass(frozen=True)

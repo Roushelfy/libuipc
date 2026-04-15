@@ -110,8 +110,9 @@ struct Flags
 //   MatScalar : scalar type stored in the BCOO matrix (float or double)
 //   AccScalar : scalar type used for vectors and accumulation (float or double)
 // This single implementation covers fp64 (MatScalar=double, AccScalar=double),
-// path2 (MatScalar=float, AccScalar=double), and path3 (MatScalar=float,
-// AccScalar=float).  All paths go through the same WarpReduce kernel.
+// new path2/path4/path6 (MatScalar=float, AccScalar=double), and
+// new path3/path5 (MatScalar=float, AccScalar=float). All paths go through the
+// same WarpReduce kernel.
 namespace detail
 {
 template <typename MatScalar, typename AccScalar>

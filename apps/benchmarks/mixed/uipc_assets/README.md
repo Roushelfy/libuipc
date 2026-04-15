@@ -21,8 +21,6 @@ powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
 - `build/build_impl_path4`
 - `build/build_impl_path5`
 - `build/build_impl_path6`
-- `build/build_impl_path7`
-- `build/build_impl_path8`
 
 单个 level 内部使用 `cmake --build --parallel` 并行编译。默认配置为 `RelWithDebInfo`，并且每个 level 都会带上 `UIPC_BUILD_PYBIND=ON`，这样 `uipc_assets` 才能直接使用对应的 `python/src` 绑定目录。
 
@@ -51,12 +49,12 @@ python apps/benchmarks/mixed/uipc_assets/cli.py resolve \
 
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --manifest apps/benchmarks/mixed/uipc_assets/manifests/representative.json \
-  --levels fp64 path1 path7 path8
+  --levels fp64 path1 path5 path6
 
 python apps/benchmarks/mixed/uipc_assets/cli.py export \
   --run_root output/benchmarks/mixed/uipc_assets/<run_id> \
   --scenario coupling \
-  --levels fp64 path8 \
+  --levels fp64 path6 \
   --frames 0,1,5,10
 ```
 

@@ -156,7 +156,7 @@ def test_run_profile_worker_perf_warmup_collects_profile_only(tmp_path: Path, mo
     result = runner.run_profile_worker(
         asset_spec=asset_spec,
         mode="perf",
-        level="path8",
+        level="path6",
         module_dir=tmp_path / "module_dir",
         output_dir=output_dir,
         revision="main",
@@ -192,7 +192,7 @@ def test_run_profile_worker_quality_ignores_perf_warmup_frames(tmp_path: Path, m
     result = runner.run_profile_worker(
         asset_spec=asset_spec,
         mode="quality",
-        level="path8",
+        level="path6",
         module_dir=tmp_path / "module_dir",
         output_dir=output_dir,
         revision="main",

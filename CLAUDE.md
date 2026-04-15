@@ -32,7 +32,7 @@ cmake --build . --config Release -j8
 - `UIPC_BUILD_EXAMPLES` - Build examples (ON by default)
 - `UIPC_WITH_CUDA_BACKEND` - Enable CUDA backend (auto, disabled on macOS)
 - `UIPC_WITH_CUDA_MIXED_BACKEND` - Enable the separate `cuda_mixed` backend
-- `UIPC_CUDA_MIXED_PRECISION_LEVEL` - Mixed precision build level for `cuda_mixed` (`fp64|path1|path2|path3|path4|path5|path6|path7`)
+- `UIPC_CUDA_MIXED_PRECISION_LEVEL` - Mixed precision build level for `cuda_mixed` (`fp64|path1|path2|path3|path4|path5|path6`)
 - `UIPC_WITH_NVTX` - Enable optional NVTX markers in `cuda_mixed`
 
 ### Run Tests

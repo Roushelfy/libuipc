@@ -56,8 +56,8 @@ def run_one(level: str, module_dir: Path, scene: str) -> None:
 def main() -> None:
     levels = {
         "path1": REPO_ROOT / "build" / "build_impl_path1" / "RelWithDebInfo" / "bin",
-        "path7": REPO_ROOT / "build" / "build_impl_path7" / "RelWithDebInfo" / "bin",
-        "path8": REPO_ROOT / "build" / "build_impl_path8" / "RelWithDebInfo" / "bin",
+        "path5": REPO_ROOT / "build" / "build_impl_path5" / "RelWithDebInfo" / "bin",
+        "path6": REPO_ROOT / "build" / "build_impl_path6" / "RelWithDebInfo" / "bin",
     }
     scenes = ["rigid_ipc_wrecking_ball"]
     for level, module_dir in levels.items():

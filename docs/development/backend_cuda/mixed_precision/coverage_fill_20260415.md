@@ -34,12 +34,12 @@ This removes the previous mixed friction / energy situation where a kernel could
 
 ### 2. FEM MAS is available on mixed paths
 
-The mixed backend no longer compile-time disables MAS on `path2` through `path8`.
+The mixed backend no longer compile-time disables MAS on `path2` through `path6`.
 
 The implementation changes are:
 
 - `finite_element/fem_mas_preconditioner.cu`
-  - removed the path2~8 compile-time disable
+  - removed the path2~6 compile-time disable
   - synced `mesh_part` validation with `cuda`
   - added Empty FEM vertex `mesh_part` validation
   - kept the existing `contact_aware` extension path
@@ -109,14 +109,14 @@ The patch intentionally does not touch:
 
 - the path table itself
 - `cuda` backend logic
-- `path8` SpMV / PCG accumulation semantics
+- `path6` SpMV / PCG accumulation semantics
 - a stronger FEM preconditioner beyond the existing MAS
 - benchmark manifests or external asset datasets
 
 So the remaining high-value precision questions are now narrower:
 
 1. how much line-search gain is still limited by control flow and repeated evaluation rather than precision alone
-2. how much `path8` is still bounded by float-accumulation SpMV
+2. how much `path6` is still bounded by float-accumulation SpMV
 3. whether additional mixed coverage is needed in host bridges or diagnostic / export code
 
 ## Static Audit Checklist
@@ -124,7 +124,7 @@ So the remaining high-value precision questions are now narrower:
 After this patch, these repo-local checks should be clean:
 
 ```powershell
-rg -n "UIPC_MAS_ENGINE_DISABLED|defined\\(UIPC_MIXED_LEVEL_PATH[2-8]\\)" src/backends/cuda_mixed/finite_element
+rg -n "UIPC_MAS_ENGINE_DISABLED|defined\\(UIPC_MIXED_LEVEL_PATH[2-6]\\)" src/backends/cuda_mixed/finite_element
 
 rg -n "BufferView<Float>.*ener|CBufferView<Float>.*ener|DeviceBuffer<Float>.*ener|DeviceVar<Float>.*ener|std::optional<Float> m_energy|vector<Float>\\s+m_energy_values|Float compute_energy\\(|void\\s+energy\\(Float" src/backends/cuda_mixed
 
@@ -146,7 +146,7 @@ Repo-local verification added with this patch:
 
 Build verification in this workspace was partially completed:
 
-- `cuda_mixed` for `build_impl_path6` was rebuilt far enough to catch and fix a new `ABDJacobi` template-definition error introduced during this patch
+- pre-renumber `cuda_mixed` for `build_impl_path6` was rebuilt far enough to catch and fix a new `ABDJacobi` template-definition error introduced during this patch
 - after the fix, the target progressed substantially further, but a full no-timeout clean build of every mixed path was not completed inside this turn
 
 So the current state is:

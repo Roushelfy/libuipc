@@ -21,8 +21,6 @@ The repository convention is one build directory per level:
 - `build/build_impl_path4`
 - `build/build_impl_path5`
 - `build/build_impl_path6`
-- `build/build_impl_path7`
-- `build/build_impl_path8`
 
 On Windows, the recommended entrypoint is the provisioning script:
 
@@ -30,7 +28,7 @@ On Windows, the recommended entrypoint is the provisioning script:
 powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
 ```
 
-It provisions `build/build_impl_fp64` through `build/build_impl_path8`, configures them with `RelWithDebInfo`, enables `UIPC_BUILD_PYBIND=ON`, and schedules the levels serially while each `cmake --build` uses `--parallel`.
+It provisions `build/build_impl_fp64` through `build/build_impl_path6`, configures them with `RelWithDebInfo`, enables `UIPC_BUILD_PYBIND=ON`, and schedules the levels serially while each `cmake --build` uses `--parallel`.
 
 The script keeps the default worker count conservative: it uses a default cap of 8 workers and can be overridden with `-Parallel` when the machine has enough memory headroom.
 
@@ -69,7 +67,7 @@ Example:
 ```shell
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --manifest apps/benchmarks/mixed/uipc_assets/manifests/full.json \
-  --levels fp64 path1 path2 path3 path4 path5 path6 path7 path8 \
+  --levels fp64 path1 path2 path3 path4 path5 path6 \
   --build fp64=build/build_impl_fp64 \
   --build path1=build/build_impl_path1 \
   --build path2=build/build_impl_path2 \
@@ -77,8 +75,6 @@ python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --build path4=build/build_impl_path4 \
   --build path5=build/build_impl_path5 \
   --build path6=build/build_impl_path6 \
-  --build path7=build/build_impl_path7 \
-  --build path8=build/build_impl_path8 \
   --run_root output/benchmarks/mixed/uipc_assets/mixed_audit
 ```
 

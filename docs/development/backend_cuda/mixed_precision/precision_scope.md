@@ -16,13 +16,11 @@ The paths are cumulative, but not all changes are just "more fp32". Two late-sta
 |---|---|
 | `fp64` | Full baseline |
 | `path1` | `AluScalar = float` |
-| `path2` | `StoreScalar = float` |
-| `path3` | `AluScalar = float`, `StoreScalar = float` |
-| `path4` | `StoreScalar = float`, `PcgAuxScalar = float` |
-| `path5` | `AluScalar = float`, `StoreScalar = float`, `PcgAuxScalar = float` |
-| `path6` | `path5` plus `preconditioner_no_double_intermediate` |
-| `path7` | `path6` plus full-PCG fp32 for `SolveScalar` and `PcgIterScalar` |
-| `path8` | `path6` plus `SolveScalar = float` while keeping `PcgIterScalar = double` |
+| `path2` | `path1` plus `StoreScalar = float` |
+| `path3` | `path2` plus `PcgAuxScalar = float` |
+| `path4` | `path3` plus `preconditioner_no_double_intermediate` |
+| `path5` | `path4` plus full-PCG fp32 for `SolveScalar` and `PcgIterScalar` |
+| `path6` | `path4` plus `SolveScalar = float` while keeping `PcgIterScalar = double` |
 
 Shared energy buffers and line-search reductions use `EnergyScalar = ActivePolicy::AluScalar`.
 
@@ -77,28 +75,28 @@ The PCG auxiliary domain covers vectors and preconditioner outputs used during i
 
 | Component | Representative files | Status | Notes |
 |---|---|---|---|
-| Classic PCG auxiliary vectors | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu` | Implemented | `r`, `z`, `p`, and `Ap` follow `PcgAuxScalar`; `path7` also changes solve and iteration scalars |
+| Classic PCG auxiliary vectors | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu` | Implemented | `r`, `z`, `p`, and `Ap` follow `PcgAuxScalar`; `path5` also changes solve and iteration scalars |
 | Fused PCG auxiliary vectors | `linear_system/linear_fused_pcg.h`, `linear_system/linear_fused_pcg.cu` | Implemented | Same domain contract, with fused dot/update kernels |
 | Global SpMV interface | `linear_system/global_linear_system.h`, `linear_system/global_linear_system.cu`, `linear_system/iterative_solver.h`, `linear_system/iterative_solver.cu` | Implemented | Current interface explicitly handles `StoreScalar x PcgAuxScalar x PcgIterScalar` |
-| ABD diagonal preconditioner | `affine_body/abd_diag_preconditioner.cu` | Implemented | `path6` and `path7` switch the intermediate inverse/input algebra to `float` |
+| ABD diagonal preconditioner | `affine_body/abd_diag_preconditioner.cu` | Implemented | `path4`, `path5`, and `path6` switch the intermediate inverse/input algebra to `float` |
 | FEM diagonal preconditioner | `finite_element/fem_diag_preconditioner.cu` | Implemented | Same `preconditioner_no_double_intermediate` boundary as ABD |
 | FEM MAS preconditioner | `finite_element/fem_mas_preconditioner.cu`, `finite_element/mas_preconditioner_engine.h`, `finite_element/mas_preconditioner_engine.cu` | Implemented | Mixed path now supports MAS; partitioned meshes use MAS and unpartitioned vertices fall back to diagonal blocks inside the same preconditioner |
 
 ## Solve and Iteration Domain
 
-The solve domain is intentionally conservative until `path7`.
+The solve domain is intentionally conservative until `path5`.
 
 | Component | Representative files | Status | Notes |
 |---|---|---|---|
-| Solve vector `x` | `linear_system/global_linear_system.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` for `fp64` through `path6`; `float` in `path7` and `path8` |
-| Iteration scalars `rz`, `alpha`, `beta` | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.h`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` through `path6`, `float` in `path7`, restored to `double` in diagnostic `path8` |
+| Solve vector `x` | `linear_system/global_linear_system.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` for `fp64` through `path4`; `float` in `path5` and `path6` |
+| Iteration scalars `rz`, `alpha`, `beta` | `linear_system/linear_pcg.h`, `linear_system/linear_pcg.cu`, `linear_system/linear_fused_pcg.h`, `linear_system/linear_fused_pcg.cu` | Implemented | `double` through `path4`, `float` in `path5`, restored to `double` in diagnostic `path6` |
 | Solution export for quality checks | `linear_system/global_linear_system.cu` | Implemented | `extras/debug/dump_solution_x` dumps the current `x` for offline comparison |
 
 ## Important Caveats
 
-- `path6` is not just a label change from `path5`. It activates `preconditioner_no_double_intermediate` in supported preconditioners.
-- `path7` is the first level that moves both the solve vector and PCG iteration scalars to fp32.
-- `path8` is a diagnostic split path for `path7`: solve-vector storage stays fp32 while iteration scalars return to fp64.
+- `path4` is not just a label change from `path3`. It activates `preconditioner_no_double_intermediate` in supported preconditioners.
+- `path5` is the first level that moves both the solve vector and PCG iteration scalars to fp32.
+- `path6` is a diagnostic split path for `path5`: solve-vector storage stays fp32 while iteration scalars return to fp64.
 - The active mixed friction helper is the `codim_*` simplex friction call chain in `contact_system/contact_models/`. The older `ipc_simplex_frictional_contact_function.h` file is not the active mixed path.
 - `dt`, scene config values, contact coefficients, and a few host-side bridge buffers intentionally remain `Float`; the mixed-precision patch only moves kernel-local compute and shared energy/storage interfaces.
 - Mixed precision remains compile-time only. There is no runtime precision switch and no auto-fallback path.

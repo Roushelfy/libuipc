@@ -18,7 +18,7 @@ def test_run_worker_subprocess_forces_agg_backend(tmp_path: Path, monkeypatch) -
     output_dir = tmp_path / "worker"
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "worker_result.json").write_text(
-        json.dumps({"asset": "test_asset", "mode": "perf", "level": "path8"}),
+        json.dumps({"asset": "test_asset", "mode": "perf", "level": "path6"}),
         encoding="utf-8",
     )
 
@@ -36,7 +36,7 @@ def test_run_worker_subprocess_forces_agg_backend(tmp_path: Path, monkeypatch) -
         python_exe=sys.executable,
         asset_spec=AssetSpec(name="test_asset"),
         mode="perf",
-        level="path8",
+        level="path6",
         module_dir=tmp_path / "module_dir",
         pyuipc_src_dir=tmp_path / "pyuipc_src_dir",
         output_dir=output_dir,

@@ -47,7 +47,7 @@ class Spmv
                       double                          b,
                       muda::DenseVectorView<float>    y);
 
-    // mixed precision (path7 full-fp32 PCG): A<float> * x<float> -> y<float>, float scalars
+    // mixed precision (path5 full-fp32 PCG): A<float> * x<float> -> y<float>, float scalars
     void rbk_sym_spmv(float                           a,
                       muda::CBCOOMatrixView<float, 3> A,
                       muda::CDenseVectorView<float>   x,

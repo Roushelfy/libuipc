@@ -11,19 +11,19 @@
 
 | 类型别名 | 含义 | fp32 路径 |
 |---|---|---|
-| `AluScalar` | 计算/ALU 精度（梯度、Hessian 内核计算） | Path1/3/5/6/7/8 |
-| `StoreScalar` | 存储精度（Hessian Triplet/BCOO、梯度向量） | Path2/3/4/5/6/7/8 |
-| `EnergyScalar` | 共享 energy / line-search / reporter 精度 | Path1/3/5/6/7/8 |
-| `PcgAuxScalar` | PCG 辅助向量（r/z/p/Ap） | Path4/5/6/7/8 |
-| `SolveScalar` | 求解向量 x | Path7/8 |
-| `PcgIterScalar` | PCG 迭代标量（rz, alpha, beta） | Path7 only |
+| `AluScalar` | 计算/ALU 精度（梯度、Hessian 内核计算） | Path1/2/3/4/5/6 |
+| `StoreScalar` | 存储精度（Hessian Triplet/BCOO、梯度向量） | Path2/3/4/5/6 |
+| `EnergyScalar` | 共享 energy / line-search / reporter 精度 | Path1/2/3/4/5/6 |
+| `PcgAuxScalar` | PCG 辅助向量（r/z/p/Ap） | Path3/4/5/6 |
+| `SolveScalar` | 求解向量 x | Path5/6 |
+| `PcgIterScalar` | PCG 迭代标量（rz, alpha, beta） | Path5 only |
 
 附加编译期 flag：
 
 | Flag | 含义 | 激活路径 |
 |---|---|---|
-| `preconditioner_no_double_intermediate` | 预条件子无 double 中间量 | Path6/7/8 |
-| `full_pcg_fp32` | 完整 PCG 全 fp32（含 x） | Path7 only |
+| `preconditioner_no_double_intermediate` | 预条件子无 double 中间量 | Path4/5/6 |
+| `full_pcg_fp32` | 完整 PCG 全 fp32（含 x） | Path5 only |
 
 ---
 
@@ -33,17 +33,15 @@
 |------|-----------|-------------|--------------|-------------|---------------|
 | fp64 | double | double | double | double | double |
 | path1 | **float** | double | double | double | double |
-| path2 | double | **float** | double | double | double |
-| path3 | **float** | **float** | double | double | double |
-| path4 | double | **float** | **float** | double | double |
-| path5 | **float** | **float** | **float** | double | double |
-| path6 | **float** | **float** | **float** | double | double |
-| path7 | **float** | **float** | **float** | **float** | **float** |
-| path8 | **float** | **float** | **float** | **float** | double |
+| path2 | **float** | **float** | double | double | double |
+| path3 | **float** | **float** | **float** | double | double |
+| path4 | **float** | **float** | **float** | double | double |
+| path5 | **float** | **float** | **float** | **float** | **float** |
+| path6 | **float** | **float** | **float** | **float** | double |
 
-> path6 与 path5 类型相同，但额外启用 `preconditioner_no_double_intermediate`
+> path4 与 path3 类型相同，但额外启用 `preconditioner_no_double_intermediate`
 >
-> path8 是 path7 的诊断拆分路径：保留 `SolveScalar=float`，但把 `PcgIterScalar` 恢复为 `double`，用于隔离 PCG 迭代标量精度的影响。
+> path6 是 path5 的诊断拆分路径：保留 `SolveScalar=float`，但把 `PcgIterScalar` 恢复为 `double`，用于隔离 PCG 迭代标量精度的影响。
 
 ---
 
@@ -98,24 +96,24 @@
 |---|------|------|------|
 | 25b | Shared energy / line search / reporter buffers | `line_search/line_searcher.h/.cu`<br>`affine_body/abd_line_search_reporter.h/.cu`<br>`finite_element/fem_line_search_reporter.h/.cu`<br>`dytopo_effect_system/*line_search_reporter*`<br>`contact_system/contact_reporter.h` | ✅ |
 
-### PcgAuxScalar 组件（path4 起激活）
+### PcgAuxScalar 组件（path3 起激活）
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
 | 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h`<br>`linear_system/linear_fused_pcg.h` | ✅ |
 | 26b | FEM MAS 预条件器（mixed-compatible） | `finite_element/fem_mas_preconditioner.cu`<br>`finite_element/mas_preconditioner_engine.h/.cu` | ✅ |
 
-### SolveScalar 组件（path7/path8 起激活）
+### SolveScalar 组件（path5/path6 起激活）
 
 | # | 组件 | 文件 | 说明 |
 |---|------|------|------|
-| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu` | ✅（path7/8） |
+| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu` | ✅（path5/6） |
 
-### PcgIterScalar 组件（path7 起激活；path8 回退到 double）
+### PcgIterScalar 组件（path5 起激活；path6 回退到 double）
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
-| 28 | PCG 迭代标量 rz/alpha/beta + SpMV 标量接口 | `linear_system/global_linear_system.h/.cu`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu`<br>`linear_system/iterative_solver.h/.cu` | ✅（path7 为 float，path8 回到 double） |
+| 28 | PCG 迭代标量 rz/alpha/beta + SpMV 标量接口 | `linear_system/global_linear_system.h/.cu`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu`<br>`linear_system/iterative_solver.h/.cu` | ✅（path5 为 float，path6 回到 double） |
 
 ### 保留 Float 的非计算桥接
 
@@ -177,7 +175,7 @@ git diff ORIG_HEAD..HEAD -- src/backends/cuda/ \
 ```bash
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --manifest apps/benchmarks/mixed/uipc_assets/manifests/full.json \
-  --levels fp64 path1 path2 path3 path4 path5 path6 path7 path8 \
+  --levels fp64 path1 path2 path3 path4 path5 path6 \
   --build fp64=build/build_impl_fp64 \
   --build path1=build/build_impl_path1 \
   --build path2=build/build_impl_path2 \
@@ -185,8 +183,6 @@ python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --build path4=build/build_impl_path4 \
   --build path5=build/build_impl_path5 \
   --build path6=build/build_impl_path6 \
-  --build path7=build/build_impl_path7 \
-  --build path8=build/build_impl_path8 \
   --run_root output/benchmarks/mixed/uipc_assets/<run_id>
 ```
 

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string[]]$Levels = @("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7", "path8"),
+    [string[]]$Levels = @("fp64", "path1", "path2", "path3", "path4", "path5", "path6"),
     [string]$Config = "RelWithDebInfo",
     [string]$Generator = "Ninja",
     [int]$Parallel = 0,
@@ -10,7 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$levelOrder = @("fp64", "path1", "path2", "path3", "path4", "path5", "path6", "path7", "path8")
+$levelOrder = @("fp64", "path1", "path2", "path3", "path4", "path5", "path6")
 
 function Get-DefaultParallelism {
     param(
