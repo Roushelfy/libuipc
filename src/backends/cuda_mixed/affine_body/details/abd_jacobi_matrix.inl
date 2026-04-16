@@ -1,4 +1,5 @@
 #include <muda/ext/eigen/atomic.h>
+#include <mixed_precision/cast.h>
 namespace uipc::backend::cuda_mixed
 {
 template <typename Scalar>
@@ -144,5 +145,37 @@ MUDA_GENERIC Vector12
 ABDJacobiStack<N>::ABDJacobiStackT::operator*(const Vector<Float, 3 * N>& g) const
 {
     return mul<Float>(g);
+}
+
+template <typename Scalar>
+MUDA_GENERIC void ABDJacobiDyadicMass::add_to_t(Matrix<Scalar, 12, 12>& h) const
+{
+    const Scalar m = safe_cast<Scalar>(m_mass);
+    const auto   x = m_mass_times_x_bar.template cast<Scalar>();
+    const auto   D = m_mass_times_dyadic_x_bar.template cast<Scalar>();
+
+    h(0, 0) += m;
+    h.template block<1, 3>(0, 3) += x.transpose();
+    h.template block<3, 1>(3, 0) += x;
+
+    h(1, 1) += m;
+    h.template block<1, 3>(1, 6) += x.transpose();
+    h.template block<3, 1>(6, 1) += x;
+
+    h(2, 2) += m;
+    h.template block<1, 3>(2, 9) += x.transpose();
+    h.template block<3, 1>(9, 2) += x;
+
+    h.template block<3, 3>(3, 3) += D;
+    h.template block<3, 3>(6, 6) += D;
+    h.template block<3, 3>(9, 9) += D;
+}
+
+template <typename Scalar>
+MUDA_GENERIC Matrix<Scalar, 12, 12> ABDJacobiDyadicMass::to_mat_t() const
+{
+    Matrix<Scalar, 12, 12> h = Matrix<Scalar, 12, 12>::Zero();
+    add_to_t(h);
+    return h;
 }
 }  // namespace uipc::backend::cuda_mixed

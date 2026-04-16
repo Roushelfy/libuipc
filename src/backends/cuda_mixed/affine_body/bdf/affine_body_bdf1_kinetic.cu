@@ -49,7 +49,7 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                            Eigen::Matrix<Alu, 12, 1> dq_alu =
                                (q - q_tilde).template cast<Alu>();
                            Eigen::Matrix<Alu, 12, 12> M_alu =
-                               M.to_mat().template cast<Alu>();
+                               M.template to_mat_t<Alu>();
                            Alu K_alu = safe_cast<Alu>(0.5)
                                        * dq_alu.dot((M_alu * dq_alu).eval());
                            K = safe_cast<Energy>(K_alu);
@@ -86,7 +86,7 @@ class AffineBodyBDF1Kinetic final : public AffineBodyKinetic
                        const auto& M       = masses(i);
 
                        Eigen::Matrix<Alu, 12, 12> M_alu =
-                           M.to_mat().template cast<Alu>();
+                           M.template to_mat_t<Alu>();
                        Eigen::Matrix<Alu, 12, 1> G_alu =
                            (M_alu * (q - q_tilde).template cast<Alu>()).eval();
 

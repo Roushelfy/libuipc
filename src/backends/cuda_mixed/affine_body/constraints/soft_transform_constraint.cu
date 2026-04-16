@@ -14,7 +14,7 @@ compute_constraint_mass(const ABDJacobiDyadicMass& mass,
                         T                          translation_strength,
                         T                          rotation_strength)
 {
-    Eigen::Matrix<T, 12, 12> M = mass.to_mat().template cast<T>();
+    Eigen::Matrix<T, 12, 12> M = mass.template to_mat_t<T>();
     T cross_term_strength = std::sqrt(translation_strength * rotation_strength);
     M.block<3, 3>(0, 0) *= translation_strength;
     M.block<3, 9>(0, 3) *= cross_term_strength;

@@ -230,6 +230,7 @@ class GlobalLinearSystem : public SimSystem
         DenseVectorView  x() { return m_x; }
         CDenseVectorView b() { return m_b; }
         void iter_count(SizeT iter_count) { m_iter_count = iter_count; }
+        SizeT iter_count() const { return m_iter_count; }
 
       private:
         friend class Impl;

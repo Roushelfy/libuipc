@@ -233,8 +233,12 @@ class ABDJacobiDyadicMass
     MUDA_GENERIC ABDJacobiDyadicMass& operator+=(const ABDJacobiDyadicMass& rhs);
 
     MUDA_GENERIC void add_to(Matrix12x12& h) const;
+    template <typename Scalar>
+    MUDA_GENERIC void add_to_t(Matrix<Scalar, 12, 12>& h) const;
 
     MUDA_GENERIC Matrix12x12 to_mat() const;
+    template <typename Scalar>
+    MUDA_GENERIC Matrix<Scalar, 12, 12> to_mat_t() const;
 
     MUDA_GENERIC double mass() const { return m_mass; }
 

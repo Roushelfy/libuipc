@@ -74,6 +74,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
   public:
     static constexpr U64   ConstraintUID   = 24ull;
     static constexpr SizeT HalfHessianSize = 2 * (2 + 1) / 2;
+    using InternalScalar                  = ActivePolicy::AluScalar;
 
     using InterAffineBodyConstraint::InterAffineBodyConstraint;
 
@@ -84,26 +85,26 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
     vector<IndexT>                h_joint_id_to_art_id;
     vector<U64>                   h_joint_id_to_uid;
     vector<Vector2i>              h_joint_id_to_body_ids;
-    vector<Float>                 h_joint_id_to_delta_theta;
-    vector<Float>                 h_joint_id_to_delta_theta_tilde;
+    vector<InternalScalar>        h_joint_id_to_delta_theta;
+    vector<InternalScalar>        h_joint_id_to_delta_theta_tilde;
 
     OffsetCountCollection<IndexT> h_art_id_to_joint_joint_offsets_counts;
     vector<IndexT>                h_joint_joint_id_to_art_id;
     vector<Vector2i>              h_joint_joint_id_to_joint_ij;
-    vector<Float>                 h_joint_joint_id_to_mass;
+    vector<InternalScalar>        h_joint_joint_id_to_mass;
 
     muda::DeviceBuffer<IndexT>   art_id_to_joint_offsets;
     muda::DeviceBuffer<IndexT>   art_id_to_joint_counts;
     muda::DeviceBuffer<IndexT>   joint_id_to_art_id;
     muda::DeviceBuffer<U64>      joint_id_to_uid;
     muda::DeviceBuffer<Vector2i> joint_id_to_body_ids;
-    muda::DeviceBuffer<Float>    joint_id_to_delta_theta;
-    muda::DeviceBuffer<Float>    joint_id_to_delta_theta_tilde;
+    muda::DeviceBuffer<InternalScalar> joint_id_to_delta_theta;
+    muda::DeviceBuffer<InternalScalar> joint_id_to_delta_theta_tilde;
 
     muda::DeviceBuffer<IndexT>   art_id_to_joint_joint_offsets;
     muda::DeviceBuffer<IndexT>   art_id_to_joint_joint_counts;
     muda::DeviceBuffer<Vector2i> joint_joint_id_to_joint_ij;
-    muda::DeviceBuffer<Float>    joint_joint_id_to_mass;
+    muda::DeviceBuffer<InternalScalar> joint_joint_id_to_mass;
 
 
     unordered_map<IndexT, IndexT> h_body_id_to_ref_q_prev_id;
@@ -129,7 +130,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
     muda::DeviceBuffer<Vector6> joint_id_to_R_basis;
 
     // G^theta for each joint, intermediate variable for gradient and hessian computation
-    muda::DeviceBuffer<Float> joint_id_to_G_theta;
+    muda::DeviceBuffer<InternalScalar> joint_id_to_G_theta;
 
     void do_build(BuildInfo& info) override
     {
@@ -364,14 +365,15 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     auto geo_slot = scene.find_geometry(geo_id);
 
                     h_joint_id_to_art_id.push_back(I.index());
-                    h_joint_id_to_delta_theta_tilde.push_back(delta_theta_tilde);
+                    h_joint_id_to_delta_theta_tilde.push_back(
+                        safe_cast<InternalScalar>(delta_theta_tilde));
 
                     build_joint_info(geo_slots, info, geo_slot->geometry(), index);
                 }
 
                 for(auto&& m : mass_view)
                 {
-                    h_joint_joint_id_to_mass.push_back(m);
+                    h_joint_joint_id_to_mass.push_back(safe_cast<InternalScalar>(m));
                     h_joint_joint_id_to_art_id.push_back(I.index());
                 }
 
@@ -427,8 +429,8 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
 
         // init delta_theta to zero
         joint_id_to_delta_theta.resize(n_joint);
-        joint_id_to_delta_theta.fill(0.0f);
-        h_joint_id_to_delta_theta.resize(n_joint, 0.0f);
+        joint_id_to_delta_theta.fill(InternalScalar{0});
+        h_joint_id_to_delta_theta.resize(n_joint, InternalScalar{0});
 
         // init delta_theta_tilde
         joint_id_to_delta_theta_tilde.resize(h_joint_id_to_delta_theta_tilde.size());
@@ -476,7 +478,9 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
         for(auto&& mass : h_art_joint_joint_mass)
         {
             auto mass_view = mass->view();
-            std::ranges::copy(mass_view, std::back_inserter(h_joint_joint_id_to_mass));
+            std::ranges::transform(mass_view,
+                                   std::back_inserter(h_joint_joint_id_to_mass),
+                                   [](Float v) { return safe_cast<InternalScalar>(v); });
         }
 
         // Update Predicted Delta Theta
@@ -484,8 +488,9 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
         for(auto&& delta_theta_tilde : h_art_joint_delta_theta_tilde)
         {
             auto delta_theta_tilde_view = delta_theta_tilde->view();
-            std::ranges::copy(delta_theta_tilde_view,
-                              std::back_inserter(h_joint_id_to_delta_theta_tilde));
+            std::ranges::transform(delta_theta_tilde_view,
+                                   std::back_inserter(h_joint_id_to_delta_theta_tilde),
+                                   [](Float v) { return safe_cast<InternalScalar>(v); });
         }
 
         // Update Ref Dof Prev
@@ -505,9 +510,10 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
             muda::BufferLaunch().copy<T>(device_buffer.view(), host_vector.data());
         };
 
-        async_copy(joint_joint_id_to_mass, span<const Float>{h_joint_joint_id_to_mass});
+        async_copy(joint_joint_id_to_mass,
+                   span<const InternalScalar>{h_joint_joint_id_to_mass});
         async_copy(joint_id_to_delta_theta_tilde,
-                   span<const Float>{h_joint_id_to_delta_theta_tilde});
+                   span<const InternalScalar>{h_joint_id_to_delta_theta_tilde});
         async_copy(ref_q_prevs, span<const Vector12>{h_ref_q_prevs});
     }
 
@@ -680,7 +686,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                  joint_id_to_uid = joint_id_to_uid.cviewer().name("joint_id_to_uid"),
                  RevoluteUID = ExternalArticulationConstituion::RevoluteJointConstitutionUID,
                  PrismaticUID =
-                     ExternalArticulationConstituion::PrismaticJointConstitutionUID] __device__(IndexT joint_jointI) -> Float
+                     ExternalArticulationConstituion::PrismaticJointConstitutionUID] __device__(IndexT joint_jointI) -> InternalScalar
                 {
                     using Alu = ActivePolicy::AluScalar;
                     Vector2i ij   = joint_joint_id_to_joint_ij(joint_jointI);
@@ -734,7 +740,8 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     Alu delta_theta_tilde_j =
                         safe_cast<Alu>(joint_id_to_delta_theta_tilde(joint_id));
 
-                    return safe_cast<Float>(m_ij * (delta_theta_j - delta_theta_tilde_j));
+                    return safe_cast<InternalScalar>(
+                        m_ij * (delta_theta_j - delta_theta_tilde_j));
                 });
 
 
@@ -1013,8 +1020,10 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     auto delta_theta_view = view(*delta_theta);
                     auto [offset, count] =
                         h_art_id_to_joint_offsets_counts[I_info.index()];
-                    std::ranges::copy(span{h_joint_id_to_delta_theta}.subspan(offset, count),
-                                      delta_theta_view.begin());
+                    std::ranges::transform(
+                        span{h_joint_id_to_delta_theta}.subspan(offset, count),
+                        delta_theta_view.begin(),
+                        [](InternalScalar v) { return safe_cast<Float>(v); });
                 }
             });
     }
@@ -1145,7 +1154,7 @@ class ExternalArticulationConstraintTimeIntegrator final : public TimeIntegrator
                         delta_theta = safe_cast<Alu>(0.0);
                     }
 
-                    joint_id_to_delta_theta(jointI) = safe_cast<Float>(delta_theta);
+                    joint_id_to_delta_theta(jointI) = delta_theta;
                 });
     }
 };
