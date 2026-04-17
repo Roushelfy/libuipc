@@ -356,14 +356,7 @@ class SimplexNormalContactPTExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PTs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        energies.copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(energies, vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -450,14 +443,7 @@ class SimplexNormalContactEEExporter final : public ContactExporter
         auto topo_view = view(*topo);
         EEs.copy_to(topo_view.data());
 
-        auto energy = energy_geo.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = energy_geo.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        energies.copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(energies, energy_geo);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -544,14 +530,7 @@ class SimplexNormalContactPEExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PEs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        energies.copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(energies, vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -639,14 +618,7 @@ class SimplexNormalContactPPExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PPs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        energies.copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(energies, vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -701,4 +673,3 @@ class SimplexNormalContactPPExporter final : public ContactExporter
 };
 REGISTER_SIM_SYSTEM(SimplexNormalContactPPExporter);
 }  // namespace uipc::backend::cuda_mixed
-

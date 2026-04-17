@@ -1,0 +1,511 @@
+{
+  "contract_version": 1,
+  "source_roots": [
+    "src/backends/cuda_mixed"
+  ],
+  "components": [
+    {
+      "id": "1",
+      "name": "IPC Contact normal ALU gradient",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_normal_contact.cu"
+      ]
+    },
+    {
+      "id": "2",
+      "name": "IPC Contact normal ALU Hessian",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_normal_contact.cu"
+      ]
+    },
+    {
+      "id": "3",
+      "name": "IPC Contact friction and half-plane ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_frictional_contact.cu",
+        "src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu",
+        "src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu"
+      ]
+    },
+    {
+      "id": "3b",
+      "name": "AL-IPC contact and half-plane ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/contact_system/al_simplex_normal_contact.cu",
+        "src/backends/cuda_mixed/contact_system/al_simplex_frictional_contact.cu",
+        "src/backends/cuda_mixed/contact_system/al_vertex_half_plane_normal_contact.cu",
+        "src/backends/cuda_mixed/contact_system/al_vertex_half_plane_frictional_contact.cu"
+      ]
+    },
+    {
+      "id": "4",
+      "name": "FEM SNH deformation gradient ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+      ]
+    },
+    {
+      "id": "5",
+      "name": "FEM SNH energy gradient ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+      ]
+    },
+    {
+      "id": "6",
+      "name": "FEM SNH Hessian ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+      ]
+    },
+    {
+      "id": "6b",
+      "name": "FEM plastic discrete shell bending ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/constitutions/plastic_discrete_shell_bending.cu"
+      ]
+    },
+    {
+      "id": "6c",
+      "name": "FEM stress plastic discrete shell bending ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/constitutions/stress_plastic_discrete_shell_bending.cu"
+      ]
+    },
+    {
+      "id": "7",
+      "name": "ABD OrthoPotential ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/ortho_potential.cu"
+      ]
+    },
+    {
+      "id": "8",
+      "name": "ABD ARAP ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/arap.cu"
+      ]
+    },
+    {
+      "id": "9",
+      "name": "ABD RevoluteJoint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint.cu"
+      ]
+    },
+    {
+      "id": "10",
+      "name": "ABD PrismaticJoint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint.cu"
+      ]
+    },
+    {
+      "id": "11",
+      "name": "ABD RevoluteJointLimit ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint_limit.cu"
+      ]
+    },
+    {
+      "id": "12",
+      "name": "ABD PrismaticJointLimit ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint_limit.cu"
+      ]
+    },
+    {
+      "id": "13",
+      "name": "ABD BDF1 kinetic ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf1_kinetic.cu"
+      ]
+    },
+    {
+      "id": "13b",
+      "name": "ABD BDF2 kinetic ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf2_kinetic.cu"
+      ]
+    },
+    {
+      "id": "14",
+      "name": "ABD SoftTransformConstraint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constraints/soft_transform_constraint.cu"
+      ]
+    },
+    {
+      "id": "15",
+      "name": "ABD ExternalArticulationConstraint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constraints/external_articulation_constraint.cu"
+      ]
+    },
+    {
+      "id": "15b",
+      "name": "ABD FixedJoint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_fixed_joint.cu"
+      ]
+    },
+    {
+      "id": "15c",
+      "name": "ABD Driving revolute external force ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/affine_body_revolute_joint_external_body_force.cu"
+      ]
+    },
+    {
+      "id": "15d",
+      "name": "ABD Driving prismatic external force ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/affine_body_prismatic_joint_external_body_force.cu"
+      ]
+    },
+    {
+      "id": "15e",
+      "name": "ABD SphericalJoint ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_spherical_joint.cu"
+      ]
+    },
+    {
+      "id": "16",
+      "name": "ABDJacobi JT_H_J ALU domain",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h",
+        "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl"
+      ]
+    },
+    {
+      "id": "17",
+      "name": "ABDJacobiStack mat-vec and to_mat ALU",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl"
+      ]
+    },
+    {
+      "id": "18",
+      "name": "ABD linear subsystem kinetic and shape",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+      ]
+    },
+    {
+      "id": "19",
+      "name": "ABD linear subsystem reporter",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+      ]
+    },
+    {
+      "id": "20",
+      "name": "ABD linear subsystem DyTopo",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+      ]
+    },
+    {
+      "id": "21",
+      "name": "ABD-FEM coupling",
+      "dimension": "AluScalar",
+      "files": [
+        "src/backends/cuda_mixed/coupling_system/abd_fem_linear_subsystem.cu"
+      ]
+    },
+    {
+      "id": "22",
+      "name": "Reporter and assembler local buffers",
+      "dimension": "StoreScalar",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.h",
+        "src/backends/cuda_mixed/finite_element/fem_linear_subsystem.h"
+      ]
+    },
+    {
+      "id": "23",
+      "name": "Global triplet Hessian A_triplet",
+      "dimension": "StoreScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+      ]
+    },
+    {
+      "id": "24",
+      "name": "Global BCOO Hessian A_bcoo",
+      "dimension": "StoreScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+      ]
+    },
+    {
+      "id": "25",
+      "name": "Global gradient vector b",
+      "dimension": "StoreScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+      ]
+    },
+    {
+      "id": "25b",
+      "name": "Shared energy and line-search buffers",
+      "dimension": "EnergyScalar",
+      "files": [
+        "src/backends/cuda_mixed/line_search/line_searcher.cu",
+        "src/backends/cuda_mixed/line_search/line_searcher.h",
+        "src/backends/cuda_mixed/affine_body/abd_line_search_reporter.cu",
+        "src/backends/cuda_mixed/affine_body/abd_line_search_reporter.h",
+        "src/backends/cuda_mixed/finite_element/fem_line_search_reporter.cu",
+        "src/backends/cuda_mixed/finite_element/fem_line_search_reporter.h",
+        "src/backends/cuda_mixed/contact_system/contact_reporter.h"
+      ]
+    },
+    {
+      "id": "26",
+      "name": "PCG auxiliary vectors",
+      "dimension": "PcgAuxScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
+        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h"
+      ]
+    },
+    {
+      "id": "26b",
+      "name": "FEM MAS preconditioner",
+      "dimension": "PcgAuxScalar",
+      "files": [
+        "src/backends/cuda_mixed/finite_element/fem_mas_preconditioner.cu",
+        "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.h",
+        "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.cu"
+      ]
+    },
+    {
+      "id": "27",
+      "name": "Solve vector x",
+      "dimension": "SolveScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/global_linear_system.h",
+        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
+        "src/backends/cuda_mixed/linear_system/linear_pcg.cu",
+        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h",
+        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.cu"
+      ]
+    },
+    {
+      "id": "28",
+      "name": "PCG iteration scalars and SpMV scalar interface",
+      "dimension": "PcgIterScalar",
+      "files": [
+        "src/backends/cuda_mixed/linear_system/global_linear_system.h",
+        "src/backends/cuda_mixed/linear_system/global_linear_system.cu",
+        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
+        "src/backends/cuda_mixed/linear_system/linear_pcg.cu",
+        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h",
+        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.cu",
+        "src/backends/cuda_mixed/linear_system/iterative_solver.h",
+        "src/backends/cuda_mixed/linear_system/iterative_solver.cu"
+      ]
+    },
+    {
+      "id": "29",
+      "name": "Host bridge float attributes for external force constraints",
+      "dimension": "BridgeFloat",
+      "files": [
+        "src/backends/cuda_mixed/affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu",
+        "src/backends/cuda_mixed/affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu"
+      ]
+    }
+  ],
+  "global_forbidden_patterns": [
+    {
+      "pattern": "\\bcudaMalloc(?:Async)?\\s*\\(",
+      "reason": "cuda_mixed code should allocate through muda::Memory or BufferLaunch."
+    },
+    {
+      "pattern": "\\bcudaFree(?:Async)?\\s*\\(",
+      "reason": "cuda_mixed code should free through muda::Memory or BufferLaunch."
+    }
+  ],
+  "file_rules": [
+    {
+      "path": "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf1_kinetic.cu",
+      "required_patterns": [
+        {
+          "pattern": "to_mat_t<Alu>",
+          "reason": "BDF1 kinetic must keep the dyadic mass matrix in the active ALU type."
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "to_mat\\(\\)\\.template cast<Alu>",
+          "reason": "BDF1 kinetic must not materialize Float matrices and cast them back to Alu."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf2_kinetic.cu",
+      "required_patterns": [
+        {
+          "pattern": "to_mat_t<Alu>",
+          "reason": "BDF2 kinetic must keep the dyadic mass matrix in the active ALU type."
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "to_mat\\(\\)\\.template cast<Alu>",
+          "reason": "BDF2 kinetic must not materialize Float matrices and cast them back to Alu."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/affine_body/constraints/soft_transform_constraint.cu",
+      "required_patterns": [
+        {
+          "pattern": "to_mat_t<T>",
+          "reason": "SoftTransformConstraint must build policy-typed mass matrices directly."
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "to_mat\\(\\)\\.template cast<",
+          "reason": "SoftTransformConstraint must not add intermediate Float matrix casts."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h",
+      "required_patterns": [
+        {
+          "pattern": "template <typename Scalar>\\s+MUDA_GENERIC Matrix<Scalar, 3, 12> to_mat_t\\(\\) const;",
+          "reason": "ABDJacobi must expose a templated to_mat_t helper for mixed precision."
+        },
+        {
+          "pattern": "template <typename Scalar>\\s+MUDA_GENERIC Matrix<Scalar, 3 \\* N, 12> to_mat_t\\(\\) const;",
+          "reason": "ABDJacobiStack must expose a templated to_mat_t helper for mixed precision."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl",
+      "required_patterns": [
+        {
+          "pattern": "return to_mat_t<Float>\\(\\);",
+          "reason": "ABDJacobiStack::to_mat should stay a thin wrapper over to_mat_t<Float>()."
+        },
+        {
+          "pattern": "m_jacobis\\[i\\]->template to_mat_t<Scalar>\\(\\)",
+          "reason": "ABDJacobiStack assembly must use templated to_mat_t dispatch."
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "to_mat\\(\\)\\.template cast<",
+          "reason": "ABDJacobi hot paths must not rebuild Float matrices and cast them into mixed ALU types."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/affine_body/constraints/external_articulation_constraint.cu",
+      "required_patterns": [
+        {
+          "pattern": "DeviceBuffer<InternalScalar> joint_id_to_delta_theta;",
+          "reason": "External articulation delta-theta scratch must use InternalScalar."
+        },
+        {
+          "pattern": "DeviceBuffer<InternalScalar> joint_id_to_delta_theta_tilde;",
+          "reason": "External articulation delta-theta-tilde scratch must use InternalScalar."
+        },
+        {
+          "pattern": "DeviceBuffer<InternalScalar> joint_joint_id_to_mass;",
+          "reason": "External articulation mass coupling scratch must use InternalScalar."
+        }
+      ],
+      "line_watch_patterns": [
+        {
+          "pattern": "DeviceBuffer<Float>",
+          "reason": "External articulation compute scratch must not regress to Float device buffers."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/finite_element/fem_diag_preconditioner.cu",
+      "forbidden_patterns": [
+        {
+          "pattern": "static_cast<double>",
+          "reason": "Path4+ preconditioner code must not introduce double intermediates."
+        },
+        {
+          "pattern": "cast<double>",
+          "reason": "Path4+ preconditioner code must not introduce double intermediates."
+        },
+        {
+          "pattern": "Matrix<double",
+          "reason": "Path4+ preconditioner code must not introduce double intermediates."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/finite_element/fem_mas_preconditioner.cu",
+      "forbidden_patterns": [
+        {
+          "pattern": "static_cast<double>",
+          "reason": "Path4+ MAS preconditioner code must not introduce double intermediates."
+        },
+        {
+          "pattern": "cast<double>",
+          "reason": "Path4+ MAS preconditioner code must not introduce double intermediates."
+        },
+        {
+          "pattern": "Matrix<double",
+          "reason": "Path4+ MAS preconditioner code must not introduce double intermediates."
+        }
+      ]
+    },
+    {
+      "path": "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.cu",
+      "forbidden_patterns": [
+        {
+          "pattern": "static_cast<double>",
+          "reason": "Path4+ MAS engine code must not introduce double intermediates."
+        },
+        {
+          "pattern": "cast<double>",
+          "reason": "Path4+ MAS engine code must not introduce double intermediates."
+        },
+        {
+          "pattern": "Matrix<double",
+          "reason": "Path4+ MAS engine code must not introduce double intermediates."
+        }
+      ]
+    }
+  ]
+}

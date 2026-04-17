@@ -72,7 +72,7 @@ TEST_CASE("83_cuda_mixed_abd_revolute_joint_external_force_smoke",
     vector<S<SimplicialComplexSlot>> r_geo_slots = {right_geo_slot};
     revolute_joint.apply_to(joint_mesh, span{l_geo_slots}, span{r_geo_slots}, 100.0);
 
-    AffineBodyRevoluteJointExternalBodyForce ext_torque;
+    AffineBodyRevoluteJointExternalForce ext_torque;
     ext_torque.apply_to(joint_mesh, Float{0});
 
     auto revolute_joint_object = scene.objects().create("revolute_joint");

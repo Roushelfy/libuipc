@@ -1,0 +1,109 @@
+[
+  {
+    "name": "abd_external_force",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 30,
+    "perf_warmup_frames": 5,
+    "frames_quality": 12,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_libuipc_test",
+      "contact",
+      "animated",
+      "precision_contract"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Short representative ABD external-force scene for mixed precision contract runs.",
+    "config_overrides": {}
+  },
+  {
+    "name": "abd_fem_tower",
+    "enabled": true,
+    "scenario": "coupling",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 30,
+    "perf_warmup_frames": 10,
+    "frames_quality": 12,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "coupling",
+      "contains_abd",
+      "contains_fem",
+      "source_libuipc_test",
+      "contact",
+      "precision_contract"
+    ],
+    "perf_warning_pct": 20.0,
+    "notes": "Short representative ABD-FEM coupling scene for mixed precision contract runs.",
+    "config_overrides": {}
+  },
+  {
+    "name": "fem_bouncing_cubes",
+    "enabled": true,
+    "scenario": "fem",
+    "scenario_family": "libuipc_test",
+    "frames_perf": 30,
+    "perf_warmup_frames": 10,
+    "frames_quality": 12,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "fem",
+      "contains_fem",
+      "source_libuipc_test",
+      "contact",
+      "precision_contract"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Short representative FEM contact scene for mixed precision contract runs.",
+    "config_overrides": {}
+  },
+  {
+    "name": "hello_affine_body",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "libuipc_example",
+    "frames_perf": 24,
+    "perf_warmup_frames": 4,
+    "frames_quality": 10,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_libuipc_example",
+      "contact",
+      "precision_contract"
+    ],
+    "perf_warning_pct": 15.0,
+    "notes": "Short representative hello_affine_body scene for mixed precision contract runs.",
+    "config_overrides": {}
+  },
+  {
+    "name": "rigid_ipc_card_house_2",
+    "enabled": true,
+    "scenario": "abd",
+    "scenario_family": "rigid_ipc_friction_card_house",
+    "frames_perf": 40,
+    "perf_warmup_frames": 10,
+    "frames_quality": 12,
+    "quality_enabled": true,
+    "contact_enabled": true,
+    "tags": [
+      "abd",
+      "contains_abd",
+      "source_rigid_ipc",
+      "contact",
+      "precision_contract"
+    ],
+    "perf_warning_pct": 25.0,
+    "notes": "Short representative friction-heavy card-house scene for mixed precision contract runs.",
+    "config_overrides": {}
+  }
+]

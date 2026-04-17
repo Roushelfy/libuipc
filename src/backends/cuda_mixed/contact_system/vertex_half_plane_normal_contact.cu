@@ -214,14 +214,7 @@ class VertexHalfPlaneNormalContactExporter : public ContactExporter
             topo[1] += v_offset;
 
 
-        auto energy = energy_geo.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = energy_geo.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        energies.copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(energies, energy_geo);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -277,4 +270,3 @@ class VertexHalfPlaneNormalContactExporter : public ContactExporter
 
 REGISTER_SIM_SYSTEM(VertexHalfPlaneNormalContactExporter);
 }  // namespace uipc::backend::cuda_mixed
-

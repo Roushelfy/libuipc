@@ -360,14 +360,7 @@ class SimplexFrictionalContactPTExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PTs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        simplex_frictional_contact->PT_energies().copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(simplex_frictional_contact->PT_energies(), vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -452,14 +445,7 @@ class SimplexFrictionalContactEEExporter final : public ContactExporter
         auto topo_view = view(*topo);
         EEs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        simplex_frictional_contact->EE_energies().copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(simplex_frictional_contact->EE_energies(), vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -543,14 +529,7 @@ class SimplexFrictionalContactPEExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PEs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        simplex_frictional_contact->PE_energies().copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(simplex_frictional_contact->PE_energies(), vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override
@@ -635,14 +614,7 @@ class SimplexFrictionalContactPPExporter final : public ContactExporter
         auto topo_view = view(*topo);
         PPs.copy_to(topo_view.data());
 
-        auto energy = vert_grad.instances().find<Float>("energy");
-        if(!energy)
-        {
-            energy = vert_grad.instances().create<Float>("energy", 0.0f);
-        }
-
-        auto energy_view = view(*energy);
-        simplex_frictional_contact->PP_energies().copy_to(energy_view.data());
+        copy_contact_energies_to_geometry(simplex_frictional_contact->PP_energies(), vert_grad);
     }
 
     void get_contact_gradient(std::string_view prim_type, geometry::Geometry& vert_grad) override

@@ -72,7 +72,7 @@ TEST_CASE("82_cuda_mixed_abd_prismatic_joint_external_force_smoke",
     vector<S<SimplicialComplexSlot>> r_geo_slots = {right_geo_slot};
     prismatic_joint.apply_to(joint_mesh, span{l_geo_slots}, span{r_geo_slots}, 100.0);
 
-    AffineBodyPrismaticJointExternalBodyForce ext_force;
+    AffineBodyPrismaticJointExternalForce ext_force;
     ext_force.apply_to(joint_mesh, Float{0});
 
     auto prismatic_joint_object = scene.objects().create("prismatic_joint");

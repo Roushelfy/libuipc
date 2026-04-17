@@ -34,6 +34,7 @@ powershell -File scripts/setup_mixed_uipc_assets_builds.ps1
 - `run`: 运行 `fp64` 与各 `path` 的 perf / quality / timer 采集
 - `compare`: 对已有 run 重新计算质量指标
 - `report`: 生成 Markdown / JSON / CSV 报告
+- `validate`: 校验 representative run 的质量阈值与 deep-analysis PCG 细项
 - `export`: 导出逐帧 OBJ 序列
 
 示例：
@@ -50,6 +51,12 @@ python apps/benchmarks/mixed/uipc_assets/cli.py resolve \
 python apps/benchmarks/mixed/uipc_assets/cli.py run \
   --manifest apps/benchmarks/mixed/uipc_assets/manifests/representative.json \
   --levels fp64 path1 path5 path6
+
+python scripts/analyze_mixed_uipc_paths.py \
+  --run-root output/benchmarks/mixed/uipc_assets/<run_id>
+
+python apps/benchmarks/mixed/uipc_assets/cli.py validate \
+  --run_root output/benchmarks/mixed/uipc_assets/<run_id>
 
 python apps/benchmarks/mixed/uipc_assets/cli.py export \
   --run_root output/benchmarks/mixed/uipc_assets/<run_id> \
@@ -137,6 +144,15 @@ output/benchmarks/mixed/uipc_assets/<run_id>/
 - `reports/perf_by_scenario.csv`
 - `reports/quality.csv`
 - `reports/visual_exports.csv`
+
+代表性 benchmark 的契约校验推荐顺序：
+
+1. `run` 生成 perf / quality / summary 报表
+2. `scripts/analyze_mixed_uipc_paths.py --run-root ...` 生成 `reports/deep_analysis/`
+3. `validate --run_root ...` 统一检查：
+   - `fp64/path1..path6` 是否齐全
+   - 质量阈值是否满足 `rel_l2_x.max < 1e-5`、`abs_linf_x.max < 5e-4`、`nan_inf_count = 0`
+   - `deep_analysis` 是否包含详细 PCG 产物，而不是 omitted 降级报告
 
 `report` 会自动补一组阶段堆叠柱状图：
 

@@ -10,7 +10,7 @@ PACKAGE_PARENT = SCRIPT_DIR.parent
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
-from uipc_assets.commands import compare_quality, export_visuals, list_assets, render_report, resolve_selection, run_suite, sync_dataset
+from uipc_assets.commands import compare_quality, export_visuals, list_assets, render_report, resolve_selection, run_suite, sync_dataset, validate_contract
 from uipc_assets.core.manifest import AssetSpec
 from uipc_assets.core.runner import ensure_runtime_dependencies, parse_visual_frames, run_profile_worker
 from uipc_assets.core.selection import default_manifest_path, full_manifest_path
@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_report = sub.add_parser("report", help="render reports from an existing run")
     p_report.add_argument("--run_root", type=Path, required=True)
+
+    p_validate = sub.add_parser("validate", help="validate representative benchmark contract outputs")
+    p_validate.add_argument("--run_root", type=Path, required=True)
+    p_validate.add_argument("--levels", nargs="*", default=None, help="required levels (default: fp64 path1..path6)")
+    p_validate.add_argument("--max_rel_l2", type=float, default=1.0e-5, help="strict upper bound for rel_l2_max")
+    p_validate.add_argument("--max_abs_linf", type=float, default=5.0e-4, help="strict upper bound for abs_linf_max")
 
     p_export = sub.add_parser("export", help="export visual OBJ sequences for selected assets")
     p_export.add_argument("--run_root", type=Path, required=True)
@@ -120,6 +126,8 @@ def main() -> int:
         return compare_quality.run(args)
     if args.command == "report":
         return render_report.run(args)
+    if args.command == "validate":
+        return validate_contract.run(args)
     if args.command == "export":
         from uipc_assets.core.builds import parse_build_args
 

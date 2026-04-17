@@ -29,6 +29,16 @@ function(uipc_add_gui_test name)
     target_link_libraries(${name} PRIVATE uipc::gui)
 endfunction()
 
+function(uipc_register_catch_test test_name target_name)
+    if(NOT BUILD_TESTING)
+        return()
+    endif()
+
+    add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${ARGN})
+    set_tests_properties(${test_name} PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>)
+endfunction()
+
 add_subdirectory(geometry)
 add_subdirectory(core)
 add_subdirectory(common)

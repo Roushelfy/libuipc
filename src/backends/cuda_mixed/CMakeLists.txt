@@ -41,6 +41,9 @@ target_compile_definitions(cuda_mixed PRIVATE "UIPC_MIXED_LEVEL_${_UIPC_MIXED_LE
 if(UIPC_WITH_NVTX)
     target_compile_definitions(cuda_mixed PRIVATE UIPC_WITH_NVTX=1)
 endif()
+if(UIPC_BUILD_TESTS)
+    target_compile_definitions(cuda_mixed PRIVATE UIPC_ENABLE_MUDA_MEMORY_TRACKING=1)
+endif()
 
 # all files in this directory
 file(GLOB_RECURSE SOURCES "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
