@@ -51,7 +51,8 @@ class ABDDiagPreconditioner final : public LocalPreconditioner
                        }
                        else
                        {
-                           diag_inv(i) = muda::eigen::inverse(diag_hessian(i));
+                           diag_inv(i) =
+                               muda::eigen::inverse(diag_hessian(i)).template cast<PrecondScalar>();
                        }
                    });
     }
