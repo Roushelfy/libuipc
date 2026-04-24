@@ -6,6 +6,7 @@ find_package(CUDAToolkit QUIET COMPONENTS cusolver cusparse)
 set(SOL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 set(SOL_CORE_SOURCES
+    src/contact.cpp
     src/graph.cpp
     src/io.cpp
     src/ordering.cpp
@@ -14,6 +15,7 @@ set(SOL_CORE_SOURCES
 )
 
 set(SOL_CORE_HEADERS
+    include/sol/contact.h
     include/sol/graph.h
     include/sol/io.h
     include/sol/ordering.h
@@ -46,6 +48,7 @@ set_property(TARGET socu_ordering_lab_core PROPERTY FOLDER "experiments/socu_ord
 
 add_executable(socu_ordering_lab_test
     src/cli/test_main.cpp
+    tests/contact_tests.cpp
     tests/graph_tests.cpp
     tests/io_tests.cpp
     tests/ordering_tests.cpp

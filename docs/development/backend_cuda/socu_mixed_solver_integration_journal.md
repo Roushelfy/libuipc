@@ -377,3 +377,163 @@ The next implementation step should start from Milestone 2 in
 `experiments/socu_ordering_lab`: introduce contact primitives and contribution
 classification, keep the work lab-only, and preserve the same JSON/CSV plus
 Catch2 verification style used by M0 and M1.
+
+### Milestone 2: Contact Simulation Lab
+
+Status: **Complete for the standalone contact-classification checkpoint.**
+
+The ordering lab now includes simulated runtime-contact classification under
+the same `experiments/socu_ordering_lab` target. This remains lab-only: it does
+not touch the real collision pipeline, does not change `cuda_mixed`, and does
+not assemble a structured solver buffer yet.
+
+The new public experiment surface is:
+
+```text
+include/sol/contact.h
+src/contact.cpp
+tests/contact_tests.cpp
+```
+
+The new CLI command is:
+
+```bash
+socu_ordering_bench contact \
+  --ordering order.json \
+  --scenario adversarial \
+  --count 24 \
+  --report contact.json \
+  --summary-csv contact.csv
+```
+
+`--ordering` accepts the JSON report produced by `socu_ordering_bench order`.
+The contact command supports these scenarios:
+
+```text
+near_band
+mixed
+adversarial
+from_file
+```
+
+`from_file` reads a contact CSV with this shape:
+
+```text
+kind,stiffness,atom0,atom1,atom2,atom3
+PP,1.0,0,1
+PE,2.0,0,80,81
+PT,3.0,0,80,81,82
+EE,3.0,0,1,80,81
+```
+
+The primitive kinds currently supported are `PP`, `PE`, `PT`, and `EE`.
+Each primitive is expanded into unordered pairwise Hessian block
+contributions across its participating atoms. Classification is then reported
+at two levels:
+
+1. primitive level, where a primitive is near-band only if all expanded
+   contributions are near-band;
+2. expanded contribution level, where each block pair is independently
+   classified by `abs(block_i - block_j) <= 1`.
+
+The report records active contact counts, near/off/mixed primitive counts,
+near/off contribution counts, primitive ratios, contribution ratios, weighted
+near-band contribution norm, weighted off-band dropped norm, contact classify
+time, frame-boundary reorder time, estimated absorbed contribution count,
+estimated dropped contribution count, and the fixed-permutation contract for
+the frame.
+
+The frame contract is explicit in the report:
+
+```text
+newton_iteration_reorder_count = 0
+permutation_fixed_within_frame = true
+```
+
+### Milestone 2 Verification
+
+The lab was rebuilt with:
+
+```bash
+cmake --build build-socu-ordering-lab \
+  --target socu_ordering_bench socu_ordering_lab_test -j 8
+```
+
+The latest test result is:
+
+```text
+All tests passed (3072 assertions in 22 test cases)
+100% tests passed, 0 tests failed out of 1
+```
+
+The direct test commands were:
+
+```bash
+./build-socu-ordering-lab/Release/bin/socu_ordering_lab_test
+
+ctest --test-dir build-socu-ordering-lab \
+  -R socu_ordering_lab --output-on-failure
+```
+
+A CLI smoke test was run with:
+
+```bash
+socu_ordering_bench order \
+  --preset shuffled_tet_block \
+  --orderer rcm \
+  --block-size 32 \
+  --report /tmp/socu_m2_verify/order.json \
+  --summary-csv /tmp/socu_m2_verify/order.csv \
+  --mapping-csv /tmp/socu_m2_verify/mapping.csv
+
+socu_ordering_bench contact \
+  --ordering /tmp/socu_m2_verify/order.json \
+  --scenario adversarial \
+  --count 24 \
+  --report /tmp/socu_m2_verify/contact.json \
+  --summary-csv /tmp/socu_m2_verify/contact.csv
+```
+
+For the adversarial smoke test, the key result was:
+
+```text
+active_contact_count = 24
+near_band_contact_count = 0
+mixed_contact_count = 24
+off_band_contact_count = 24
+near_band_contribution_count = 48
+off_band_contribution_count = 96
+off_band_ratio = 1.0
+contribution_off_band_ratio = 0.6666666667
+weighted_off_band_ratio = 0.6666666667
+contact_classify_time_ms ~= 0.0084
+frame_boundary_reorder_time_ms = 0
+newton_iteration_reorder_count = 0
+permutation_fixed_within_frame = true
+```
+
+### Milestone 2 Completion Criteria
+
+M2 is considered complete because the lab now has:
+
+- standalone contact primitive data structures;
+- synthetic `near_band`, `mixed`, and `adversarial` contact scenarios;
+- recorded contact primitive CSV input through `from_file`;
+- primitive-level and expanded-contribution-level classification;
+- weighted contribution accounting so stiff off-band contacts are visible;
+- separate contact classify time and frame-boundary reorder time fields;
+- an explicit no-Newton-reorder frame contract;
+- JSON and CSV report output;
+- Catch2 and CTest coverage for near-band absorption, mixed primitive
+  accounting, adversarial off-band pressure, high-stiffness weighted drops,
+  and CSV input.
+
+This completion does **not** include real collision pipeline integration,
+structured Hessian sinks, `socu_native`, or `cuda_mixed` runtime changes.
+
+### Next Work
+
+The next planned step is Milestone 3: add the `LinearSolver` abstraction inside
+`cuda_mixed` as a no-regression checkpoint. That work should keep the current
+PCG and fused PCG algorithms unchanged, add selected-solver validation, and
+avoid introducing any `socu_native` or structured assembly path yet.

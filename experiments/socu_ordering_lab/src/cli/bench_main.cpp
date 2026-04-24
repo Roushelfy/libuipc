@@ -1,3 +1,4 @@
+#include <sol/contact.h>
 #include <sol/graph.h>
 #include <sol/io.h>
 #include <sol/ordering.h>
@@ -25,7 +26,7 @@ struct Args
 Args parse_args(int argc, char** argv)
 {
     if(argc < 2)
-        throw std::invalid_argument("usage: socu_ordering_bench <order|reorder> [options]");
+        throw std::invalid_argument("usage: socu_ordering_bench <order|reorder|contact> [options]");
 
     Args args;
     args.command = argv[1];
@@ -211,7 +212,27 @@ int main(int argc, char** argv)
             return 0;
         }
 
-        throw std::invalid_argument("command must be 'order' or 'reorder'");
+        if(args.command == "contact")
+        {
+            const auto ordering = load_ordering(args);
+            const auto scenario = get(args, "scenario", "near_band");
+            const auto contact_count = get_size(args, "count", 32);
+            const auto contact_csv = get(args, "contact-csv", "");
+            const double frame_reorder_ms =
+                std::stod(get(args, "frame-reorder-ms", "0"));
+
+            const auto primitives =
+                scenario == "from_file"
+                    ? sol::read_contact_primitives_csv(contact_csv)
+                    : sol::make_contact_scenario(ordering, scenario, contact_count);
+            const auto report = sol::classify_contacts(ordering, primitives, scenario, frame_reorder_ms);
+
+            sol::write_json_report(get(args, "report", get(args, "json", "-")), sol::to_json(report));
+            sol::write_contact_summary_csv(get(args, "summary-csv", ""), report);
+            return 0;
+        }
+
+        throw std::invalid_argument("command must be 'order', 'reorder', or 'contact'");
     }
     catch(const std::exception& e)
     {
