@@ -25,6 +25,7 @@ option(UIPC_BUILD_TESTS "Build tests" ON)
 option(UIPC_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(UIPC_BUILD_TENSOR_CORE_LAB "Build independent tensor core experiment targets" OFF)
 option(UIPC_BUILD_TENSOR_CORE_GEMM "Build independent batched GEMM experiment targets" OFF)
+option(UIPC_BUILD_SOCU_ORDERING_LAB "Build independent SOCU ordering experiment targets" OFF)
 option(UIPC_DEV_MODE "Enable developer mode" OFF)
 option(UIPC_WITH_USD_SUPPORT "Build with Universal Scene Description (USD) support" OFF)
 option(UIPC_WITH_VDB_SUPPORT "Build with Volumetric DataBase (VDB) support" OFF)
@@ -116,6 +117,10 @@ endif()
 
 if(UIPC_BUILD_TENSOR_CORE_GEMM)
     add_subdirectory(experiments/tensor_core_gemm)
+endif()
+
+if(UIPC_BUILD_SOCU_ORDERING_LAB)
+    add_subdirectory(experiments/socu_ordering_lab)
 endif()
 
 # install headers (libuipc/include)

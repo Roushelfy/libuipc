@@ -13,6 +13,8 @@ The mixed-precision documentation is developer-focused and follows current code 
 - [Mixed Precision Overview](mixed_precision/index.md)
 - [Mixed Precision Scope](mixed_precision/precision_scope.md)
 - [Mixed Precision Validation](mixed_precision/validation.md)
+- [SOCU Mixed Solver Integration Plan](socu_mixed_solver_integration_plan.md)
+- [SOCU Mixed Solver Integration Journal](socu_mixed_solver_integration_journal.md)
 
 ## From Local to Global
 
