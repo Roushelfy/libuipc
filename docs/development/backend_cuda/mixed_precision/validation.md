@@ -2,6 +2,8 @@
 
 This page documents the validation workflow used by `cuda_mixed`. It focuses on the supported scripts, build matrix, and result interpretation, not on freezing current benchmark numbers into the docs.
 
+For the exact runtime environment needed by manual Python scripts, viewers, C++ tests, and each `fp64/path1..path6` build, see [Mixed Backend Path 运行手册](running_paths.md). That page is the first place to check when a manual run behaves differently from `uipc_assets`.
+
 ## Validation Goals
 
 The mixed-precision workflow checks three things:

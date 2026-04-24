@@ -103,5 +103,6 @@ Three files define the mixed-precision contract:
 ## Next Pages
 
 - [Mixed Precision Scope](precision_scope.md) maps the current implementation by precision domain.
+- [Mixed Backend Path 运行手册](running_paths.md) records the safe runtime commands for `fp64` and `path1` to `path6`, including Python, viewer, benchmark, and C++ test usage.
 - [Coverage Fill 2026-04-15](coverage_fill_20260415.md) records the mixed-coverage patch that enabled FEM MAS on `cuda_mixed`, unified shared energy precision, and removed key ABD / friction double bridges.
 - [Mixed Precision Validation](validation.md) describes the benchmark and comparison workflow used to audit the paths.

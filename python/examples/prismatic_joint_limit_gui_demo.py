@@ -17,6 +17,7 @@ Run:
 
 import os
 import sys
+import argparse
 import numpy as np
 import polyscope as ps
 import polyscope.imgui as psim
@@ -37,6 +38,8 @@ from uipc.constitution import (
     LinearMotor,
 )
 
+from cuda_mixed_runtime import init_cuda_mixed_module_dir
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "tests"))
 from asset import AssetDir
 
@@ -51,12 +54,12 @@ def process_surface(sc: SimplicialComplex) -> SimplicialComplex:
     return flip_inward_triangles(sc)
 
 
-def build_scene():
+def build_scene(backend: str = "cuda"):
     """Create world/scene and return objects needed by GUI update callbacks."""
     Logger.set_level(Logger.Level.Warn)
 
     workspace = AssetDir.output_path(__file__)
-    engine = Engine("cuda", workspace)
+    engine = Engine(backend, workspace)
     world = World(engine)
 
     config = Scene.default_config()
@@ -163,10 +166,19 @@ def build_scene():
     return engine, world, scene, link_slot, lower, upper
 
 
-def run_gui_demo():
+def run_gui_demo(backend: str = "cuda", smoke_frames: int = 0):
     """Launch Polyscope UI and step simulation interactively."""
-    engine, world, scene, link_slot, lower, upper = build_scene()
+    engine, world, scene, link_slot, lower, upper = build_scene(backend)
     sio = SceneIO(scene)
+
+    if smoke_frames > 0:
+        for _ in range(smoke_frames):
+            world.advance()
+            if not world.is_valid():
+                raise RuntimeError(f"world became invalid at frame {world.frame()}")
+            world.retrieve()
+        print(f"prismatic joint limit smoke passed: backend={backend}, frame={world.frame()}")
+        return
 
     transforms0 = view(link_slot.geometry().transforms())
     x0_no_limit = float(transforms0[0][0, 3])
@@ -218,6 +230,7 @@ def run_gui_demo():
 
         psim.Separator()
         psim.Text("Prismatic limit demo (reciprocal drive)")
+        psim.Text(f"Backend: {backend}")
         psim.Text("Left: no limit, Right: with limit")
         psim.Text(f"Frame: {world.frame()}")
         psim.Text(f"Commanded velocity: {drive_vel:+.3f} m/s")
@@ -230,5 +243,15 @@ def run_gui_demo():
     ps.show()
 
 
+def main(default_backend: str = "cuda"):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", default=default_backend)
+    parser.add_argument("--smoke-frames", type=int, default=0)
+    args = parser.parse_args()
+    if args.backend == "cuda_mixed":
+        init_cuda_mixed_module_dir()
+    run_gui_demo(backend=args.backend, smoke_frames=args.smoke_frames)
+
+
 if __name__ == "__main__":
-    run_gui_demo()
+    main()
