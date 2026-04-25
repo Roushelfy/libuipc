@@ -7,7 +7,7 @@ from .artifacts import read_json, write_json
 from .charts import render_chart_artifacts
 from .quality import write_quality_csv
 from .selection import load_assets_catalog_map
-from .timers import CANONICAL_STAGES, summarize_iteration_counters
+from .timers import CANONICAL_STAGES, summarize_iteration_counters, summarize_timer_frames
 
 
 def _perf_dir(run_root: Path, asset: str, level: str) -> Path:
@@ -45,6 +45,19 @@ def _load_iteration_summary(run_root: Path, asset: str, level: str) -> Dict[str,
     return summarize_iteration_counters(timer_frames)
 
 
+def _load_stage_summary(run_root: Path, asset: str, level: str) -> Dict[str, Any] | None:
+    timer_frames_path = _perf_dir(run_root, asset, level) / "timer_frames.json"
+    if timer_frames_path.exists():
+        try:
+            timer_frames = read_json(timer_frames_path)
+        except Exception:
+            timer_frames = None
+        if isinstance(timer_frames, list):
+            return summarize_timer_frames(timer_frames)
+
+    return _load_json_if_exists(_perf_dir(run_root, asset, level) / "stage_summary.json")
+
+
 def collect_report_data(run_root: Path) -> Dict[str, Any]:
     run_meta = read_json(run_root / "run_meta.json")
     selection = read_json(run_root / "selection.json")
@@ -66,7 +79,7 @@ def collect_report_data(run_root: Path) -> Dict[str, Any]:
     for asset in assets:
         data["assets"][asset] = {}
         for level in levels:
-            perf = _load_json_if_exists(_perf_dir(run_root, asset, level) / "stage_summary.json")
+            perf = _load_stage_summary(run_root, asset, level)
             iteration = _load_iteration_summary(run_root, asset, level)
             bench = _load_json_if_exists(_perf_dir(run_root, asset, level) / "benchmark.json")
             quality = _load_json_if_exists(_quality_dir(run_root, asset, level) / "quality_metrics.json")

@@ -19,7 +19,7 @@ const char* line_search_reporter_timer_name(const LineSearchReporter& reporter)
         return "Energy Reporter: FEM";
     if(dynamic_cast<const DyTopoEffectLineSearchReporter*>(&reporter))
         return "Energy Reporter: Contact";
-    return "Energy Reporter: Other";
+    return "Energy Reporter: Unclassified";
 }
 }  // namespace
 

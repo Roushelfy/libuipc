@@ -21,7 +21,8 @@ enum class SubsystemTimerClass
 {
     Abd,
     Fem,
-    Other,
+    AbdFemCoupling,
+    Unclassified,
 };
 
 const char* assemble_timer_name(SubsystemTimerClass cls)
@@ -32,10 +33,19 @@ const char* assemble_timer_name(SubsystemTimerClass cls)
             return "Assemble ABD";
         case SubsystemTimerClass::Fem:
             return "Assemble FEM";
-        case SubsystemTimerClass::Other:
+        case SubsystemTimerClass::AbdFemCoupling:
+            return "Assemble ABD-FEM Coupling";
+        case SubsystemTimerClass::Unclassified:
         default:
-            return "Assemble Other";
+            return "Assemble Unclassified Linear Subsystem";
     }
+}
+
+bool system_name_ends_with(const SimSystem& system, std::string_view suffix)
+{
+    auto name = system.name();
+    return name.size() >= suffix.size()
+           && name.substr(name.size() - suffix.size()) == suffix;
 }
 
 SubsystemTimerClass classify_subsystem(const DiagLinearSubsystem& subsystem)
@@ -44,12 +54,14 @@ SubsystemTimerClass classify_subsystem(const DiagLinearSubsystem& subsystem)
         return SubsystemTimerClass::Abd;
     if(dynamic_cast<const FEMLinearSubsystem*>(&subsystem))
         return SubsystemTimerClass::Fem;
-    return SubsystemTimerClass::Other;
+    return SubsystemTimerClass::Unclassified;
 }
 
-SubsystemTimerClass classify_subsystem(const OffDiagLinearSubsystem&)
+SubsystemTimerClass classify_subsystem(const OffDiagLinearSubsystem& subsystem)
 {
-    return SubsystemTimerClass::Other;
+    if(system_name_ends_with(subsystem, "ABDFEMLinearSubsystem"))
+        return SubsystemTimerClass::AbdFemCoupling;
+    return SubsystemTimerClass::Unclassified;
 }
 }  // namespace
 
