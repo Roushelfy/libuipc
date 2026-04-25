@@ -1326,3 +1326,100 @@ The final whitespace check passed:
 ```bash
 git diff --check
 ```
+
+## M6 Checkpoint: Synthetic `socu_native` Solve Smoke
+
+Milestone 6 now has a backend-level synthetic solve smoke under
+`apps/tests/backends/cuda_mixed/socu_native_synthetic_solve.cu`. This test does
+not use a real assembled Hessian yet. It constructs a synthetic SPD
+block-tridiagonal problem through `socu_native::generate_random_spd_block_tridiag`
+and exercises the embedding API directly:
+
+```text
+query_solver_capability
+describe_problem_layout
+create_solver_plan
+factor_and_solve_inplace_async
+```
+
+The test uses the planned first performance policy:
+
+```text
+SolverBackend::NativePerf
+PerfBackend::MathDx
+MathMode::Auto
+GraphMode::Off
+```
+
+It validates both `n=32` and `n=64` layouts, checks `diag/off_diag/rhs` element
+counts from `describe_problem_layout`, runs three repeated solves on one
+long-lived plan, synchronizes only at the test boundary, computes a host-side
+residual with `socu_native::residual_norm`, and checks that the resulting
+direction satisfies a descent condition for `g = -rhs`.
+
+The test has explicit runtime preflights:
+
+- `UIPC_WITH_SOCU_NATIVE=1`;
+- a CUDA device is available;
+- `ActivePolicy::StoreScalar == ActivePolicy::SolveScalar`;
+- the configured MathDx manifest path exists;
+- a Warp native runtime library is discoverable through `SOCU_NATIVE_WARP_SO`
+  or a repo-local `socu_native` virtual environment.
+
+Without those artifacts, the test skips instead of failing the normal
+`backend_cuda_mixed` contract. With artifacts present, it performs the real
+`socu_native` async solve.
+
+For this local `fp64` verification, the build tree was wired to the already
+generated MathDx LTO artifacts from the sibling `socu-native-cuda` checkout:
+
+```bash
+ln -s /home/zhaofeng/work/socu-native-cuda/build/mathdx_lto \
+  build/build_impl_fp64/mathdx_lto
+```
+
+The CUDA mixed backend test target was rebuilt with controlled parallelism:
+
+```bash
+ninja -C build/build_impl_fp64 -j4 backend_cuda_mixed
+```
+
+The ordinary no-env contract path passes and skips the synthetic runtime solve
+when Warp is not configured:
+
+```bash
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+Result:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+```
+
+The real M6 solve path was then run with the Warp runtime from the sibling
+checkout:
+
+```bash
+SOCU_NATIVE_WARP_SO=/home/zhaofeng/work/socu-native-cuda/.venv/lib/python3.13/site-packages/warp/bin/warp.so \
+  ./build/build_impl_fp64/Release/bin/uipc_test_backend_cuda_mixed \
+  "cuda_mixed_socu_native_synthetic_solve_smoke" -s
+```
+
+Result:
+
+```text
+All tests passed (84 assertions in 1 test case)
+n=32 repeat residual ~= 9.99e-14, relative residual ~= 2.18e-15
+n=64 repeat residual ~= 1.56e-13, relative residual ~= 2.46e-15
+```
+
+This completes the synthetic `socu_native` call-chain smoke for `fp64` on this
+machine. It still does not mean `SocuApproxSolver` solves a real simulation
+frame. The next checkpoint should connect the M5 dry-run packed
+`diag/off_diag/rhs` buffers to a guarded `socu_native` solve path, then scatter
+the direction back into the solver-owned displacement buffer and validate the
+direction before line search.
