@@ -1121,3 +1121,75 @@ controlled `socu_native` call. That step should validate `n=32` and `n=64`,
 finite residual, descent direction, stream compatibility, and repeated-run
 resource stability before any real `cuda_mixed` FEM/ABD/contact contribution is
 sent to `socu_native`.
+
+## M6 Dependency Checkpoint: `socu_native` Submodule Wiring
+
+Before implementing the synthetic `socu` solve, the external solver dependency
+was introduced as a submodule at:
+
+```text
+external/socu-native-cuda -> 6195c060526a63705e488c36eb87f0fe9ba2d6c0
+```
+
+The `.gitmodules` entry records the upstream origin:
+
+```text
+https://github.com/Roushelfy/socu-native-cuda
+```
+
+The local checkout was populated from `~/work/socu-native-cuda` because the
+non-interactive shell could not authenticate against GitHub over HTTPS. No files
+inside the submodule were modified.
+
+The root CMake now exposes:
+
+```text
+UIPC_WITH_SOCU_NATIVE = AUTO | ON | OFF
+```
+
+The default is `AUTO`. With `UIPC_WITH_CUDA_MIXED_BACKEND=ON`, `AUTO` enables
+the submodule when `external/socu-native-cuda/CMakeLists.txt` is present and
+skips it when the submodule is missing. `ON` makes the dependency mandatory and
+fails configure if the submodule is absent or if `cuda_mixed` is disabled. `OFF`
+keeps the existing no-socu build path.
+
+The submodule is added with `EXCLUDE_FROM_ALL`, and its own tests are suppressed
+while it is consumed by libuipc. The `cuda_mixed` target links `socu_native`
+only when the target exists, and publishes `UIPC_WITH_SOCU_NATIVE=1`; otherwise
+it publishes `UIPC_WITH_SOCU_NATIVE=0`.
+
+A small compile-time contract was added to
+`apps/tests/backends/cuda_mixed/policy_contract.cu`:
+
+- `UIPC_WITH_SOCU_NATIVE` must always be defined as `0` or `1`;
+- when it is `1`, the backend test must be able to include
+  `socu_native/common.h` and see `socu_native::ProblemShape`.
+
+Validation was performed on `build/build_impl_fp64`:
+
+```bash
+cmake -S . -B build/build_impl_fp64
+cmake --build build/build_impl_fp64 --target backend_cuda_mixed --parallel 8
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|sim_case_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The configure step reported:
+
+```text
+socu_native integration enabled from /home/zhaofeng/work/libuipc/external/socu-native-cuda
+```
+
+The build compiled `external/socu-native-cuda/libsocu_native.a`, linked
+`libuipc_backend_cuda_mixed.so`, and rebuilt `uipc_test_backend_cuda_mixed`.
+The targeted tests passed:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+sim_case_cuda_mixed_contract: passed
+```
+
+This checkpoint does not call `socu_native` from runtime yet. It only establishes
+the dependency boundary needed for the next synthetic solve milestone.

@@ -16,6 +16,13 @@ target_link_libraries(cuda_mixed PUBLIC
     uipc_geometry
 )
 
+if(TARGET socu_native)
+    target_link_libraries(cuda_mixed PUBLIC socu_native)
+    target_compile_definitions(cuda_mixed PUBLIC UIPC_WITH_SOCU_NATIVE=1)
+else()
+    target_compile_definitions(cuda_mixed PUBLIC UIPC_WITH_SOCU_NATIVE=0)
+endif()
+
 # add CCCL include directory for CUDA 13.0 compatibility
 if(CUDAToolkit_VERSION_MAJOR GREATER_EQUAL 13)
     target_include_directories(cuda_mixed PUBLIC ${CUDAToolkit_INCLUDE_DIRS}/cccl)

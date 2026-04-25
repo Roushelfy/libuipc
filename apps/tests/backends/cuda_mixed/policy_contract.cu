@@ -7,6 +7,14 @@
 #include <mixed_precision/policy.h>
 #include <type_traits>
 
+#ifndef UIPC_WITH_SOCU_NATIVE
+#error "cuda_mixed must define UIPC_WITH_SOCU_NATIVE as 0 or 1"
+#endif
+
+#if UIPC_WITH_SOCU_NATIVE
+#include <socu_native/common.h>
+#endif
+
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
@@ -126,6 +134,12 @@ static_assert(std::is_base_of_v<LinearSolver, IterativeSolver>);
 static_assert(std::is_base_of_v<IterativeSolver, LinearPCG>);
 static_assert(std::is_base_of_v<IterativeSolver, LinearFusedPCG>);
 static_assert(std::is_base_of_v<LinearSolver, SocuApproxSolver>);
+
+static_assert(UIPC_WITH_SOCU_NATIVE == 0 || UIPC_WITH_SOCU_NATIVE == 1);
+
+#if UIPC_WITH_SOCU_NATIVE
+static_assert(std::is_same_v<decltype(socu_native::ProblemShape{}.n), int>);
+#endif
 }  // namespace
 
 TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")
