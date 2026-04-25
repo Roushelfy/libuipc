@@ -180,6 +180,38 @@ void write_socu_ordering_report(const fs::path& path,
     ofs << report.dump(2);
 }
 
+void write_socu_three_block_ordering_report(const fs::path& path, SizeT block_size)
+{
+    Json report = {
+        {"selected",
+         {{"ok", true},
+          {"ordering",
+           {{"orderer", "test"},
+            {"block_size", block_size},
+            {"chain_to_old", Json::array({0, 1, 2, 3})},
+            {"old_to_chain", Json::array({0, 1, 2, 3})},
+            {"atom_to_block", Json::array({0, 1, 1, 2})},
+            {"atom_block_offset", Json::array({0, 0, 3, 0})},
+            {"atom_dof_count", Json::array({3, 3, 3, 3})},
+            {"block_to_atom_range",
+             Json::array({Json{{"block", 0},
+                                {"chain_begin", 0},
+                                {"chain_end", 1},
+                                {"dof_count", 3}},
+                          Json{{"block", 1},
+                                {"chain_begin", 1},
+                                {"chain_end", 3},
+                                {"dof_count", 6}},
+                          Json{{"block", 2},
+                                {"chain_begin", 3},
+                                {"chain_end", 4},
+                                {"dof_count", 3}}})}}},
+          {"metrics", {{"near_band_ratio", 2.0 / 3.0}, {"off_band_ratio", 1.0 / 3.0}}}}}};
+
+    std::ofstream ofs{path};
+    ofs << report.dump(2);
+}
+
 void write_socu_contact_report(const fs::path& path)
 {
     Json report = {{"active_contact_count", 3},
@@ -194,6 +226,45 @@ void write_socu_contact_report(const fs::path& path)
                    {"weighted_off_band_ratio", 0.2},
                    {"estimated_absorbed_hessian_contribution_count", 4},
                    {"estimated_dropped_contribution_count", 2}};
+
+    std::ofstream ofs{path};
+    ofs << report.dump(2);
+}
+
+void write_socu_structured_contact_report(const fs::path& path)
+{
+    Json report = {
+        {"active_contact_count", 3},
+        {"near_band_contact_count", 2},
+        {"mixed_contact_count", 0},
+        {"off_band_contact_count", 1},
+        {"near_band_contribution_count", 2},
+        {"off_band_contribution_count", 1},
+        {"contribution_near_band_ratio", 2.0 / 3.0},
+        {"contribution_off_band_ratio", 1.0 / 3.0},
+        {"weighted_near_band_ratio", 0.8},
+        {"weighted_off_band_ratio", 0.2},
+        {"estimated_absorbed_hessian_contribution_count", 2},
+        {"estimated_dropped_contribution_count", 1},
+        {"structured_hessian_contributions",
+         Json::array({Json{{"block_i", 0},
+                            {"lane_i", 1},
+                            {"block_j", 0},
+                            {"lane_j", 1},
+                            {"value", 4.0},
+                            {"weight", 1.0}},
+                      Json{{"block_i", 0},
+                            {"lane_i", 2},
+                            {"block_j", 1},
+                            {"lane_j", 3},
+                            {"value", 5.0},
+                            {"weight", 1.0}},
+                      Json{{"block_i", 0},
+                            {"lane_i", 0},
+                            {"block_j", 2},
+                            {"lane_j", 0},
+                            {"value", 6.0},
+                            {"weight", 1.0}}})}};
 
     std::ofstream ofs{path};
     ofs << report.dump(2);
@@ -277,9 +348,11 @@ void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
     REQUIRE(report["layout"]["block_count"].get<SizeT>() == 1);
     REQUIRE(report["layout"]["diag_block_count"].get<SizeT>() == 1);
     REQUIRE(report["layout"]["first_offdiag_block_count"].get<SizeT>() == 0);
-    REQUIRE(report["layout"]["rhs_scalar_count"].get<SizeT>() == 12);
-    REQUIRE(report["layout"]["diag_scalar_count"].get<SizeT>() == 144);
+    REQUIRE(report["layout"]["active_rhs_scalar_count"].get<SizeT>() == 12);
+    REQUIRE(report["layout"]["rhs_scalar_count"].get<SizeT>() == block_size);
+    REQUIRE(report["layout"]["diag_scalar_count"].get<SizeT>() == block_size * block_size);
     REQUIRE(report["layout"]["first_offdiag_scalar_count"].get<SizeT>() == 0);
+    REQUIRE(report["layout"]["diag_nonzero_count"].get<SizeT>() == block_size - 12);
     REQUIRE(report["layout"]["blocks"].size() == 1);
     REQUIRE(report["layout"]["blocks"][0]["dof_offset"].get<SizeT>() == 0);
     REQUIRE(report["layout"]["blocks"][0]["dof_count"].get<SizeT>() == 12);
@@ -296,6 +369,69 @@ void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
                    - 1.0 / 3.0)
           < 1e-12);
     CHECK(report["timing"]["dry_run_pack_time_ms"].get<double>() >= 0.0);
+}
+
+void require_socu_approx_structured_sink_dry_run(std::string_view name,
+                                                 SizeT            block_size)
+{
+    auto config                       = linear_solver_selection_config();
+    config["linear_system"]["solver"] = "socu_approx";
+
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    auto ordering_path = output_path / "ordering.json";
+    auto contact_path  = output_path / "contact.json";
+    auto dry_run_path  = output_path / "dry_run.json";
+    write_socu_three_block_ordering_report(ordering_path, block_size);
+    write_socu_structured_contact_report(contact_path);
+
+    config["linear_system"]["socu_approx"]["ordering_report"] =
+        ordering_path.string();
+    config["linear_system"]["socu_approx"]["contact_report"] =
+        contact_path.string();
+    config["linear_system"]["socu_approx"]["dry_run_report"] =
+        dry_run_path.string();
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_single_abd_tet(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    world.advance();
+    REQUIRE(world.is_valid());
+    REQUIRE(fs::exists(dry_run_path));
+
+    std::ifstream ifs{dry_run_path};
+    Json          report = Json::parse(ifs);
+    REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
+    REQUIRE(report["block_size"].get<SizeT>() == block_size);
+    REQUIRE(report["layout"]["block_count"].get<SizeT>() == 3);
+    REQUIRE(report["layout"]["diag_block_count"].get<SizeT>() == 3);
+    REQUIRE(report["layout"]["first_offdiag_block_count"].get<SizeT>() == 2);
+    REQUIRE(report["layout"]["rhs_scalar_count"].get<SizeT>() == 3 * block_size);
+    REQUIRE(report["layout"]["diag_scalar_count"].get<SizeT>()
+            == 3 * block_size * block_size);
+    REQUIRE(report["layout"]["first_offdiag_scalar_count"].get<SizeT>()
+            == 2 * block_size * block_size);
+
+    REQUIRE(report["contact"]["near_band_contribution_count"].get<SizeT>() == 2);
+    REQUIRE(report["contact"]["off_band_contribution_count"].get<SizeT>() == 1);
+    REQUIRE(report["contact"]["dropped_hessian_contribution_count"].get<SizeT>() == 1);
+    REQUIRE(report["contact"]["structured_diag_write_count"].get<SizeT>() == 1);
+    REQUIRE(report["contact"]["structured_first_offdiag_write_count"].get<SizeT>() == 1);
+    REQUIRE(report["contact"]["structured_off_band_drop_count"].get<SizeT>() == 1);
+    CHECK(std::abs(report["contact"]["structured_diag_contact_abs_sum"].get<double>() - 4.0)
+          < 1e-12);
+    CHECK(std::abs(report["contact"]["structured_first_offdiag_contact_abs_sum"].get<double>() - 5.0)
+          < 1e-12);
+    CHECK(std::abs(report["contact"]["structured_off_band_drop_abs_sum"].get<double>() - 6.0)
+          < 1e-12);
+    CHECK(report["layout"]["first_offdiag_nonzero_count"].get<SizeT>() == 1);
+    CHECK(report["layout"]["diag_nonzero_count"].get<SizeT>() == 3 * block_size - 12 + 1);
 }
 }  // namespace
 
@@ -394,6 +530,13 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
     SECTION("socu_approx_valid_report_runs_m5_dry_run_64")
     {
         require_socu_approx_dry_run("linear_solver_socu_approx_dry_run_64", 64);
+    }
+
+    SECTION("socu_approx_m5_structured_sink_writes_near_and_drops_off_band")
+    {
+        require_socu_approx_structured_sink_dry_run(
+            "linear_solver_socu_approx_structured_sink_32",
+            32);
     }
 }
 

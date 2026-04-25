@@ -46,6 +46,22 @@ class StructuredAssemblySink
 {
   public:
     virtual ~StructuredAssemblySink() = default;
+
+    virtual void add_rhs(SizeT block, SizeT lane, double value) = 0;
+
+    virtual void add_hessian(SizeT block_i,
+                             SizeT lane_i,
+                             SizeT block_j,
+                             SizeT lane_j,
+                             double value,
+                             double weight) = 0;
+
+    virtual void mark_off_band_drop(SizeT block_i,
+                                    SizeT lane_i,
+                                    SizeT block_j,
+                                    SizeT lane_j,
+                                    double value,
+                                    double weight) = 0;
 };
 
 class StructuredChainProvider

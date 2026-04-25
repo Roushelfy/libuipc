@@ -289,7 +289,8 @@ class GlobalLinearSystem : public SimSystem
         void init();
 
         void build_linear_system();
-        bool _update_subsystem_extent();
+        bool _update_subsystem_extent(bool needs_full_sparse_A);
+        void _assemble_gradient_vector();
         void _assemble_linear_system();
         void _assemble_preconditioner();
         void solve_linear_system();

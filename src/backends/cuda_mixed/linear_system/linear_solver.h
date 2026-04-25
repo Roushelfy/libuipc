@@ -12,8 +12,11 @@ class LinearSolver : public SimSystem
 
     struct AssemblyRequirements
     {
-        bool full_sparse_matrix = true;
-        bool preconditioner     = false;
+        bool needs_dof_extent       = true;
+        bool needs_gradient_b       = true;
+        bool needs_full_sparse_A    = true;
+        bool needs_structured_chain = false;
+        bool needs_preconditioner   = true;
     };
 
     class BuildInfo

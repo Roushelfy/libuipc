@@ -9,13 +9,19 @@
 #include <uipc/common/timer.h>
 
 #include <fmt/format.h>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#ifndef UIPC_WITH_SOCU_NATIVE
+#define UIPC_WITH_SOCU_NATIVE 0
+#endif
 
 namespace uipc::backend::cuda_mixed
 {
@@ -227,6 +233,140 @@ class OrderingStructuredChainProvider final : public StructuredChainProvider
     std::vector<StructuredDofSlot> m_slots;
 };
 
+class CpuStructuredDryRunSink final : public StructuredAssemblySink
+{
+  public:
+    CpuStructuredDryRunSink(SizeT block_size, std::vector<SocuApproxBlockLayout> blocks)
+        : m_block_size(block_size)
+        , m_blocks(std::move(blocks))
+        , m_rhs(m_blocks.size() * block_size, 0.0)
+        , m_diag(m_blocks.size() * block_size * block_size, 0.0)
+        , m_first_offdiag(m_blocks.size() > 1
+                              ? (m_blocks.size() - 1) * block_size * block_size
+                              : 0,
+                          0.0)
+    {
+        for(const auto& block : m_blocks)
+        {
+            if(block.block >= m_blocks.size())
+                continue;
+            for(SizeT lane = block.dof_count; lane < m_block_size; ++lane)
+                m_diag[diag_index(block.block, lane, lane)] = 1.0;
+        }
+    }
+
+    void add_rhs(SizeT block, SizeT lane, double value) override
+    {
+        if(!valid_lane(block, lane))
+            return;
+        m_rhs[block * m_block_size + lane] += value;
+        m_rhs_abs_sum += std::abs(value);
+    }
+
+    void add_hessian(SizeT block_i,
+                     SizeT lane_i,
+                     SizeT block_j,
+                     SizeT lane_j,
+                     double value,
+                     double weight) override
+    {
+        if(!valid_lane(block_i, lane_i) || !valid_lane(block_j, lane_j))
+        {
+            mark_off_band_drop(block_i, lane_i, block_j, lane_j, value, weight);
+            return;
+        }
+
+        const SizeT distance =
+            block_i > block_j ? block_i - block_j : block_j - block_i;
+        if(distance > 1)
+        {
+            mark_off_band_drop(block_i, lane_i, block_j, lane_j, value, weight);
+            return;
+        }
+
+        if(distance == 0)
+        {
+            m_diag[diag_index(block_i, lane_i, lane_j)] += value;
+            ++m_diag_write_count;
+            m_diag_contact_abs_sum += std::abs(value);
+            return;
+        }
+
+        const bool ij_is_forward = block_i < block_j;
+        const SizeT left_block   = ij_is_forward ? block_i : block_j;
+        const SizeT row          = ij_is_forward ? lane_i : lane_j;
+        const SizeT col          = ij_is_forward ? lane_j : lane_i;
+        m_first_offdiag[offdiag_index(left_block, row, col)] += value;
+        ++m_first_offdiag_write_count;
+        m_first_offdiag_contact_abs_sum += std::abs(value);
+    }
+
+    void mark_off_band_drop(SizeT,
+                            SizeT,
+                            SizeT,
+                            SizeT,
+                            double value,
+                            double weight) override
+    {
+        ++m_off_band_drop_count;
+        m_off_band_drop_abs_sum += std::abs(value) * std::max(1.0, std::abs(weight));
+    }
+
+    void finalize(SocuApproxDryRunReport& report) const
+    {
+        report.rhs_scalar_count = m_rhs.size();
+        report.diag_scalar_count = m_diag.size();
+        report.first_offdiag_scalar_count = m_first_offdiag.size();
+        report.rhs_nonzero_count = nonzero_count(m_rhs);
+        report.diag_nonzero_count = nonzero_count(m_diag);
+        report.first_offdiag_nonzero_count = nonzero_count(m_first_offdiag);
+        report.structured_diag_write_count = m_diag_write_count;
+        report.structured_first_offdiag_write_count = m_first_offdiag_write_count;
+        report.structured_off_band_drop_count = m_off_band_drop_count;
+        report.structured_diag_contact_abs_sum = m_diag_contact_abs_sum;
+        report.structured_first_offdiag_contact_abs_sum =
+            m_first_offdiag_contact_abs_sum;
+        report.structured_off_band_drop_abs_sum = m_off_band_drop_abs_sum;
+        report.rhs_abs_sum = m_rhs_abs_sum;
+    }
+
+  private:
+    bool valid_lane(SizeT block, SizeT lane) const
+    {
+        return block < m_blocks.size() && lane < m_block_size;
+    }
+
+    SizeT diag_index(SizeT block, SizeT row, SizeT col) const
+    {
+        return (block * m_block_size + row) * m_block_size + col;
+    }
+
+    SizeT offdiag_index(SizeT left_block, SizeT row, SizeT col) const
+    {
+        return (left_block * m_block_size + row) * m_block_size + col;
+    }
+
+    static SizeT nonzero_count(const std::vector<double>& values)
+    {
+        return static_cast<SizeT>(
+            std::count_if(values.begin(), values.end(), [](double v)
+                          { return v != 0.0; }));
+    }
+
+    SizeT m_block_size = 0;
+    std::vector<SocuApproxBlockLayout> m_blocks;
+    std::vector<double> m_rhs;
+    std::vector<double> m_diag;
+    std::vector<double> m_first_offdiag;
+    SizeT m_diag_write_count = 0;
+    SizeT m_first_offdiag_write_count = 0;
+    SizeT m_off_band_drop_count = 0;
+    double m_diag_contact_abs_sum = 0.0;
+    double m_first_offdiag_contact_abs_sum = 0.0;
+    double m_off_band_drop_abs_sum = 0.0;
+    double m_rhs_abs_sum = 0.0;
+};
+
 bool build_ordering_provider(const Json&                         ordering,
                              SizeT                               block_size,
                              const std::vector<SocuApproxBlockLayout>& blocks,
@@ -335,22 +475,6 @@ bool build_ordering_provider(const Json&                         ordering,
     return provider->is_available();
 }
 
-SizeT diag_scalar_count(const std::vector<SocuApproxBlockLayout>& blocks)
-{
-    SizeT count = 0;
-    for(const auto& block : blocks)
-        count += block.dof_count * block.dof_count;
-    return count;
-}
-
-SizeT first_offdiag_scalar_count(const std::vector<SocuApproxBlockLayout>& blocks)
-{
-    SizeT count = 0;
-    for(SizeT i = 1; i < blocks.size(); ++i)
-        count += blocks[i - 1].dof_count * blocks[i].dof_count;
-    return count;
-}
-
 SizeT optional_size_t(const Json& json, const char* key)
 {
     SizeT value = 0;
@@ -359,15 +483,46 @@ SizeT optional_size_t(const Json& json, const char* key)
     return 0;
 }
 
-double optional_double(const Json& json, const char* key)
+double optional_double(const Json& json, const char* key, double fallback = 0.0)
 {
     auto it = json.find(key);
     if(it == json.end() || !it->is_number())
-        return 0.0;
+        return fallback;
     return it->get<double>();
 }
 
-void load_contact_report(SocuApproxDryRunReport& dry_run)
+void apply_structured_contributions(const Json& contact, StructuredAssemblySink& sink)
+{
+    auto it = contact.find("structured_hessian_contributions");
+    if(it == contact.end())
+        it = contact.find("hessian_contributions");
+    if(it == contact.end() || !it->is_array())
+        return;
+
+    for(const Json& entry : *it)
+    {
+        if(!entry.is_object())
+            continue;
+
+        SizeT block_i = 0;
+        SizeT lane_i  = 0;
+        SizeT block_j = 0;
+        SizeT lane_j  = 0;
+        if(!read_size_t_field(entry, "block_i", block_i)
+           || !read_size_t_field(entry, "lane_i", lane_i)
+           || !read_size_t_field(entry, "block_j", block_j)
+           || !read_size_t_field(entry, "lane_j", lane_j))
+        {
+            continue;
+        }
+
+        const double value  = optional_double(entry, "value", 1.0);
+        const double weight = optional_double(entry, "weight", 1.0);
+        sink.add_hessian(block_i, lane_i, block_j, lane_j, value, weight);
+    }
+}
+
+void load_contact_report(SocuApproxDryRunReport& dry_run, StructuredAssemblySink& sink)
 {
     if(dry_run.contact_report_path.empty())
         return;
@@ -404,6 +559,8 @@ void load_contact_report(SocuApproxDryRunReport& dry_run)
         optional_double(contact, "weighted_near_band_ratio");
     dry_run.weighted_off_band_ratio =
         optional_double(contact, "weighted_off_band_ratio");
+
+    apply_structured_contributions(contact, sink);
 }
 
 Json to_json(const SocuApproxDryRunReport& report)
@@ -434,9 +591,14 @@ Json to_json(const SocuApproxDryRunReport& report)
                  {{"block_count", report.block_count},
                   {"diag_block_count", report.diag_block_count},
                   {"first_offdiag_block_count", report.first_offdiag_block_count},
+                  {"active_rhs_scalar_count", report.active_rhs_scalar_count},
                   {"rhs_scalar_count", report.rhs_scalar_count},
                   {"diag_scalar_count", report.diag_scalar_count},
                   {"first_offdiag_scalar_count", report.first_offdiag_scalar_count},
+                  {"rhs_nonzero_count", report.rhs_nonzero_count},
+                  {"diag_nonzero_count", report.diag_nonzero_count},
+                  {"first_offdiag_nonzero_count",
+                   report.first_offdiag_nonzero_count},
                   {"blocks", blocks}}},
                 {"contact",
                  {{"near_band_contact_count", report.near_band_contact_count},
@@ -452,7 +614,20 @@ Json to_json(const SocuApproxDryRunReport& report)
                   {"contribution_off_band_ratio",
                    report.contribution_off_band_ratio},
                   {"weighted_near_band_ratio", report.weighted_near_band_ratio},
-                  {"weighted_off_band_ratio", report.weighted_off_band_ratio}}},
+                  {"weighted_off_band_ratio", report.weighted_off_band_ratio},
+                  {"structured_diag_write_count",
+                   report.structured_diag_write_count},
+                  {"structured_first_offdiag_write_count",
+                   report.structured_first_offdiag_write_count},
+                  {"structured_off_band_drop_count",
+                   report.structured_off_band_drop_count},
+                  {"structured_diag_contact_abs_sum",
+                   report.structured_diag_contact_abs_sum},
+                  {"structured_first_offdiag_contact_abs_sum",
+                   report.structured_first_offdiag_contact_abs_sum},
+                  {"structured_off_band_drop_abs_sum",
+                   report.structured_off_band_drop_abs_sum},
+                  {"rhs_abs_sum", report.rhs_abs_sum}}},
                 {"timing", {{"dry_run_pack_time_ms", report.dry_run_pack_time_ms}}},
                 {"status",
                  {{"direction_available", false},
@@ -511,6 +686,13 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     {
         throw SimSystemException("SocuApproxSolver unused");
     }
+
+#if !UIPC_WITH_SOCU_NATIVE
+    m_gate_report = make_failure(
+        SocuApproxGateReason::SocuDisabled,
+        "socu_native is disabled or not available; configure with UIPC_WITH_SOCU_NATIVE=AUTO or ON and initialize external/socu-native-cuda");
+    throw_gate_failure(m_gate_report);
+#endif
 
     require<GlobalLinearSystem>();
 
@@ -678,6 +860,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_dry_run_report.block_utilization =
         provider->quality_report().block_utilization;
     m_dry_run_report.blocks             = std::move(block_layouts);
+    m_dof_slots.assign(provider->dof_slots().begin(), provider->dof_slots().end());
 
     m_gate_report.passed = true;
     m_gate_report.reason = SocuApproxGateReason::None;
@@ -697,16 +880,31 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
         auto  start = std::chrono::steady_clock::now();
 
         m_dry_run_report.packed                    = true;
-        m_dry_run_report.rhs_scalar_count          = info.b().size();
+        m_dry_run_report.active_rhs_scalar_count   = info.b().size();
         m_dry_run_report.diag_block_count          = m_dry_run_report.blocks.size();
         m_dry_run_report.first_offdiag_block_count =
             m_dry_run_report.blocks.empty() ? 0 : m_dry_run_report.blocks.size() - 1;
-        m_dry_run_report.diag_scalar_count =
-            diag_scalar_count(m_dry_run_report.blocks);
-        m_dry_run_report.first_offdiag_scalar_count =
-            first_offdiag_scalar_count(m_dry_run_report.blocks);
 
-        load_contact_report(m_dry_run_report);
+        CpuStructuredDryRunSink sink{m_dry_run_report.block_size,
+                                     m_dry_run_report.blocks};
+
+        std::vector<GlobalLinearSystem::StoreScalar> host_rhs(info.b().size());
+        if(!host_rhs.empty())
+            info.b().buffer_view().copy_to(host_rhs.data());
+
+        for(const StructuredDofSlot& slot : m_dof_slots)
+        {
+            if(slot.is_padding || slot.old_dof < 0)
+                continue;
+            const auto old_dof = static_cast<SizeT>(slot.old_dof);
+            if(old_dof < host_rhs.size())
+                sink.add_rhs(slot.block,
+                             slot.lane,
+                             static_cast<double>(host_rhs[old_dof]));
+        }
+
+        load_contact_report(m_dry_run_report, sink);
+        sink.finalize(m_dry_run_report);
 
         auto stop = std::chrono::steady_clock::now();
         m_dry_run_report.dry_run_pack_time_ms =

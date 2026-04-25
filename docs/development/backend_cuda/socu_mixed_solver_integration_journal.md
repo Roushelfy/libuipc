@@ -1193,3 +1193,136 @@ sim_case_cuda_mixed_contract: passed
 
 This checkpoint does not call `socu_native` from runtime yet. It only establishes
 the dependency boundary needed for the next synthetic solve milestone.
+
+## M0-M5 Strict Audit and Completion Patch
+
+This pass rechecked Milestones 0 through 5 against the current integration plan
+and tightened the two places where the implementation had drifted from the
+plan's stricter wording.
+
+### Audit Result
+
+Milestone 0 is implemented as an opt-in experiment under
+`experiments/socu_ordering_lab`. The root CMake option
+`UIPC_BUILD_SOCU_ORDERING_LAB` defaults to `OFF` and adds only the experiment
+directory when enabled. The lab exposes `socu_ordering_lab_core`,
+`socu_ordering_lab_test`, and `socu_ordering_bench`. The CLI supports the
+`order`, `reorder`, and `contact` subcommands and can emit JSON reports, CSV
+summaries, and mapping CSV files. The ordering path covers deterministic RCM,
+METIS-based candidates, NVIDIA symrcm when cuSolver is available, block sizes
+`32` and `64`, and the common rod, cloth-grid, and tet-block presets.
+
+Milestone 1 is implemented inside the same standalone experiment. The physical
+reorder path passes `chain_to_old` as the `New2Old` mapping to
+`AttributeCollection::reorder()`, then rewrites edge, triangle, and tetrahedron
+topology through `old_to_chain`. The mirror path keeps the original geometry
+order and only applies the solver-owned mapping. The test coverage checks
+preserved counts, legal topology indices, geometric invariants, mirror versus
+physical block classification, original-id metadata, and improved chain-order
+memory stride.
+
+Milestone 2 is implemented in the standalone lab. Contact classification is
+reported at both primitive and expanded contribution levels. The lab covers
+`near_band`, `mixed`, `adversarial`, and CSV-input scenarios; it records
+near/off-band counts, contribution ratios, weighted dropped norm, contact
+classify time, frame-boundary reorder time, and a fixed zero
+Newton-iteration reorder count.
+
+Milestone 3 is now stricter than the earlier checkpoint. `LinearSolver` exposes
+the plan-shaped `AssemblyRequirements` fields:
+
+```text
+needs_dof_extent
+needs_gradient_b
+needs_full_sparse_A
+needs_structured_chain
+needs_preconditioner
+```
+
+`IterativeSolver` returns the full sparse matrix plus preconditioner
+requirements, while `SocuApproxSolver` returns gradient plus structured-chain
+requirements and explicitly does not request full sparse `A` or a
+preconditioner. `GlobalLinearSystem` now reads the selected solver's
+requirements before assembly, runs a gradient-only assembly path when full
+sparse `A` is not needed, skips triplet-to-BCOO conversion and preconditioner
+assembly for `socu_approx`, and skips sparse debug dump when no sparse matrix
+was built. The default PCG path still requests and receives the original full
+sparse assembly.
+
+Milestone 4 is now strict about the optional dependency boundary. When
+`linear_system/solver = "socu_approx"` is selected but the build does not have
+`UIPC_WITH_SOCU_NATIVE=1`, the solver fails fast with `socu_disabled` and an
+actionable message. When `socu_approx` is not selected, the unused solver path
+still exits through the normal unused-system mechanism and does not affect the
+default `fused_pcg` path.
+
+Milestone 5 now has an actual CPU-side structured dry-run sink instead of only
+report-level counters. The sink packs full padded logical buffers for `rhs`,
+`diag`, and first `offdiag`; copies the live assembled RHS into
+`old_dof -> block/lane` slots; initializes padding diagonal entries; writes
+same-block structured contributions into the diagonal buffer; writes adjacent
+block contributions into the first off-diagonal buffer; and records off-band
+contributions as dropped without writing them into the structured buffers. The
+dry-run JSON now reports active RHS scalar count, full padded scalar counts,
+nonzero counts, structured diag/first-offdiag write counts, off-band drop
+count, structured contact absolute sums, RHS absolute sum, and dry-run pack
+time.
+
+The current Milestone 5 runtime path still consumes standalone contact-report
+JSON for structured synthetic contributions. Real contact/dytopo reporters and
+FEM/ABD subsystems do not yet write directly into `StructuredAssemblySink`;
+that remains future real-surrogate assembly work, not part of this dry-run
+checkpoint. This boundary is intentional: M5 proves block layout, dry-run
+packing, near/off-band classification behavior, and reporting without calling
+`socu_native`.
+
+### Verification
+
+The build machine had 32 logical cores and about 56 GiB available memory at the
+start of this verification pass. CUDA compilation was run with `-j4` to avoid
+the memory spike observed with Ninja's default parallelism.
+
+The experiment targets were configured, built, and tested with:
+
+```bash
+cmake -S . -B build/build_impl_fp64 -DUIPC_BUILD_SOCU_ORDERING_LAB=ON
+ninja -C build/build_impl_fp64 -j8 socu_ordering_bench socu_ordering_lab_test
+ctest --test-dir build/build_impl_fp64 -R socu_ordering_lab --output-on-failure
+```
+
+The result was:
+
+```text
+socu_ordering_lab: passed
+```
+
+The CUDA mixed implementation was rebuilt without rebuilding the ordinary
+`cuda` backend:
+
+```bash
+ninja -C build/build_impl_fp64 -j4 \
+  cuda_mixed backend_cuda_mixed \
+  apps/tests/sim_case/CMakeFiles/sim_case.dir/86_cuda_mixed_precision_contracts.cpp.o
+ctest --test-dir build/build_impl_fp64 -R 'backend_cuda_mixed' --output-on-failure
+```
+
+The result was:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+```
+
+The modified sim-case contract source
+`apps/tests/sim_case/86_cuda_mixed_precision_contracts.cpp` was compile-checked
+as an object. The full `uipc_test_sim_case` runtime was not rebuilt in this
+pass because a dry-run Ninja query showed that linking it from the current cache
+would rebuild the ordinary `cuda` backend, which was outside this verification
+scope. The newly added M5 sim-case sections should be run in a full backend
+validation pass when rebuilding the ordinary `cuda` backend is acceptable.
+
+The final whitespace check passed:
+
+```bash
+git diff --check
+```

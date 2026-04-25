@@ -126,11 +126,23 @@ void GlobalLinearSystem::solve()
     if(m_impl.empty_system) [[unlikely]]
         return;
 
-    logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
-                 m_impl.b.size(),
-                 m_impl.bcoo_A.triplet_count());
+    const auto requirements =
+        m_impl.selected_linear_solver
+            ? m_impl.selected_linear_solver->assembly_requirements()
+            : LinearSolver::AssemblyRequirements{};
+    if(requirements.needs_full_sparse_A)
+    {
+        logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
+                     m_impl.b.size(),
+                     m_impl.bcoo_A.triplet_count());
+    }
+    else
+    {
+        logger::info("GlobalLinearSystem has {} DoFs, full sparse A skipped by selected solver requirements",
+                     m_impl.b.size());
+    }
 
-    if(m_impl.need_debug_dump) [[unlikely]]
+    if(m_impl.need_debug_dump && requirements.needs_full_sparse_A) [[unlikely]]
         _dump_A_b();
 
     m_impl.solve_linear_system();
@@ -261,7 +273,11 @@ void GlobalLinearSystem::Impl::init()
 void GlobalLinearSystem::Impl::build_linear_system()
 {
     Timer timer{"Build Linear System"};
-    empty_system = !_update_subsystem_extent();
+    const auto requirements =
+        selected_linear_solver ? selected_linear_solver->assembly_requirements()
+                               : LinearSolver::AssemblyRequirements{};
+
+    empty_system = !_update_subsystem_extent(requirements.needs_full_sparse_A);
 
     if(empty_system) [[unlikely]]
     {
@@ -269,28 +285,39 @@ void GlobalLinearSystem::Impl::build_linear_system()
         return;
     }
 
+    if(requirements.needs_gradient_b && !requirements.needs_full_sparse_A)
+    {
+        Timer timer{"Assemble Gradient Vector"};
+        _assemble_gradient_vector();
+    }
+
+    if(!requirements.needs_gradient_b)
+    {
+        b.view().buffer_view().fill(0.0);
+    }
+
+    if(requirements.needs_full_sparse_A)
     {
         Timer timer{"Assemble Linear System"};
         _assemble_linear_system();
     }
 
+    if(requirements.needs_full_sparse_A)
     {
         Timer timer{"Convert Matrix"};
         converter.ge2sym(triplet_A);
         converter.convert(triplet_A, bcoo_A);
     }
 
+    if(requirements.needs_preconditioner)
     {
         Timer timer{"Assemble Preconditioner"};
         _assemble_preconditioner();
     }
 
-    logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
-                 b.size(),
-                 bcoo_A.triplet_count());
 }
 
-bool GlobalLinearSystem::Impl::_update_subsystem_extent()
+bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A)
 {
     bool dof_count_changed     = false;
     bool triplet_count_changed = false;
@@ -310,28 +337,35 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent()
             auto           triplet_i      = subsystem_info.index;
             auto&          diag_subsystem = diag_subsystem_view[dof_i];
             DiagExtentInfo info;
+            info.m_gradient_only = !needs_full_sparse_A;
             diag_subsystem->report_extent(info);
 
             dof_count_changed |= diag_dof_counts[dof_i] != info.m_dof_count;
             diag_dof_counts[dof_i] = info.m_dof_count;
 
-
-            triplet_count_changed |= subsystem_triplet_counts[triplet_i] != info.m_block_count;
-            subsystem_triplet_counts[triplet_i] = info.m_block_count;
+            const auto block_count = needs_full_sparse_A ? info.m_block_count : SizeT{0};
+            triplet_count_changed |= subsystem_triplet_counts[triplet_i] != block_count;
+            subsystem_triplet_counts[triplet_i] = block_count;
         }
         else
         {
             auto triplet_i = subsystem_info.index;
-            auto& off_diag_subsystem = off_diag_subsystem_view[subsystem_info.local_index];
-            OffDiagExtentInfo info;
-            off_diag_subsystem->report_extent(info);
+            SizeT2 off_diag_counts{0, 0};
+            if(needs_full_sparse_A)
+            {
+                auto& off_diag_subsystem =
+                    off_diag_subsystem_view[subsystem_info.local_index];
+                OffDiagExtentInfo info;
+                off_diag_subsystem->report_extent(info);
+                off_diag_counts = SizeT2{info.m_lr_block_count, info.m_rl_block_count};
+            }
 
-            auto total_block_count = info.m_lr_block_count + info.m_rl_block_count;
+            auto total_block_count = off_diag_counts.x + off_diag_counts.y;
 
             triplet_count_changed |= subsystem_triplet_counts[triplet_i] != total_block_count;
             subsystem_triplet_counts[triplet_i] = total_block_count;
             off_diag_lr_triplet_counts[subsystem_info.local_index] =
-                SizeT2{info.m_lr_block_count, info.m_rl_block_count};
+                off_diag_counts;
         }
     }
 
@@ -360,7 +394,7 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent()
     }
     total_triplet = subsystem_triplet_offsets_counts.total_count();
 
-    if(triplet_A.triplet_capacity() < total_triplet)
+    if(needs_full_sparse_A && triplet_A.triplet_capacity() < total_triplet)
     {
         auto reserve_count = total_triplet * reserve_ratio;
         triplet_A.reserve_triplets(reserve_count);
@@ -368,12 +402,42 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent()
     }
     triplet_A.resize_triplets(total_triplet);
 
-    if(total_dof == 0 || total_triplet == 0) [[unlikely]]
+    if(total_dof == 0 || (needs_full_sparse_A && total_triplet == 0)) [[unlikely]]
     {
         return false;
     }
 
     return true;
+}
+
+void GlobalLinearSystem::Impl::_assemble_gradient_vector()
+{
+    auto B = b.view();
+    B.buffer_view().fill(0.0);
+
+    auto diag_subsystem_view = diag_subsystems.view();
+    auto diag_dof_counts     = diag_dof_offsets_counts.counts();
+    auto diag_dof_offsets    = diag_dof_offsets_counts.offsets();
+
+    for(const auto& subsystem_info : subsystem_infos)
+    {
+        if(!subsystem_info.is_diag)
+            continue;
+
+        auto  dof_i          = subsystem_info.local_index;
+        auto  subsystem_i    = subsystem_info.index;
+        auto& diag_subsystem = diag_subsystem_view[dof_i];
+
+        DiagInfo info{this};
+        info.m_index         = subsystem_i;
+        info.m_gradients     = B.subview(diag_dof_offsets[dof_i], diag_dof_counts[dof_i]);
+        info.m_hessians      = TripletMatrixView{};
+        info.m_gradient_only = true;
+        info.m_component_flags = ComponentFlags::All;
+
+        Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
+        diag_subsystem->assemble(info);
+    }
 }
 
 void GlobalLinearSystem::Impl::_assemble_linear_system()
