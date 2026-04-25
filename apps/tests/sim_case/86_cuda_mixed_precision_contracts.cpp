@@ -517,13 +517,21 @@ void require_socu_approx_structured_sink_dry_run(std::string_view name,
 void require_socu_approx_m7_surrogate_solve(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
-    SKIP("socu_native is not enabled in this build");
+    WARN("socu_native is not enabled in this build; M7 surrogate solve smoke was not run");
+    return;
 #else
     const fs::path manifest_path{SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH};
     if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
-        SKIP("MathDx manifest is missing; expected " << manifest_path.string());
+    {
+        WARN("MathDx manifest is missing; M7 surrogate solve smoke was not run. expected "
+             << manifest_path.string());
+        return;
+    }
     if(discover_socu_warp_so().empty())
-        SKIP("Warp native library is missing; set SOCU_NATIVE_WARP_SO");
+    {
+        WARN("Warp native library is missing; set SOCU_NATIVE_WARP_SO to run M7 surrogate solve smoke");
+        return;
+    }
 
     auto config                       = linear_solver_selection_config();
     config["dt"]                      = 0.001;

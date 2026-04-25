@@ -1525,3 +1525,155 @@ The whitespace check passed:
 ```bash
 git diff --check
 ```
+
+### 2026-04-25 Addendum: Mixed-Only M7 World Contract and Runtime Smokes
+
+The M7 world smoke is now executable without rebuilding the ordinary `cuda`
+backend. A new test target was added under `apps/tests/sim_case`:
+
+```text
+sim_case_cuda_mixed_only
+```
+
+It compiles only `86_cuda_mixed_precision_contracts.cpp`, links only
+`uipc::backend::cuda_mixed` plus `muda::muda`, and registers this focused CTest:
+
+```text
+sim_case_cuda_mixed_only_linear_solver
+```
+
+The registered Catch filter is the exact test case
+`86_cuda_mixed_linear_solver_selection_smoke`, so it covers default
+`linear_fused_pcg`, explicit `linear_pcg`, invalid solver rejection, M5 dry-run
+packing, structured near/off-band contact writes, and the M7 surrogate solve
+world section without pulling unrelated sim-case files or the ordinary CUDA
+backend.
+
+The M7 optional-environment behavior was tightened. If `socu_native`, MathDx
+artifacts, or `SOCU_NATIVE_WARP_SO` are unavailable, the M7 section now emits a
+Catch warning and returns instead of marking the entire CTest as skipped. This
+keeps the default contract runnable on machines without the optional native
+runtime. When `SOCU_NATIVE_WARP_SO` is provided, the same test executes the real
+M7 surrogate solve.
+
+The new target was dry-run checked before building:
+
+```bash
+ninja -C build/build_impl_fp64 -n sim_case_cuda_mixed_only
+```
+
+The dry-run only listed:
+
+```text
+catch_main.cpp.o
+86_cuda_mixed_precision_contracts.cpp.o
+uipc_test_sim_case_cuda_mixed_only
+```
+
+No `src/backends/cuda/` or `uipc_backend_cuda` build steps were present.
+
+The focused target was built with controlled parallelism:
+
+```bash
+ninja -C build/build_impl_fp64 -j4 sim_case_cuda_mixed_only
+```
+
+The default no-Warp contract path passed:
+
+```bash
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+```
+
+Result:
+
+```text
+100% tests passed, 0 tests failed out of 3
+```
+
+The strict MathDx/Warp-enabled path also passed:
+
+```bash
+SOCU_NATIVE_WARP_SO=/home/zhaofeng/work/socu-native-cuda/.venv/lib/python3.13/site-packages/warp/bin/warp.so \
+  ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+```
+
+Result:
+
+```text
+100% tests passed, 0 tests failed out of 3
+```
+
+The generated M7 report for
+`linear_solver_socu_approx_m7_surrogate_solve` recorded:
+
+```text
+mode = structured_surrogate_solve
+block_size = 32
+block_count = 64
+active_rhs_scalar_count = 12
+surrogate_relative_residual = 0
+descent_dot ~= -1.37e-16
+dry_run_pack_time_ms ~= 0.17
+socu_factor_solve_time_ms ~= 2.09
+scatter_time_ms ~= 0.04
+status.reason = none
+direction_available = true
+```
+
+This completes a strict world-level M7 surrogate solve validation for the
+current fp64 build while keeping the ordinary CUDA backend out of the targeted
+test cycle.
+
+Additional Python runtime smokes were run against the same fp64 build using
+`UIPC_MODULE_DIR=build/build_impl_fp64/Release/bin` and
+`PYTHONPATH=build/build_impl_fp64/python/src`. These examples all completed
+with `cuda_mixed`:
+
+```text
+cuda_mixed_particle_ground_viewer.py --smoke-frames 3
+cuda_mixed_abd_bdf2_viewer.py --smoke-frames 3
+cuda_mixed_fem_mas_hybrid_viewer.py --smoke-frames 2
+cuda_mixed_prismatic_joint_limit_viewer.py --smoke-frames 2
+cuda_mixed_revolute_joint_limit_viewer.py --smoke-frames 2
+```
+
+The `uipc_assets` benchmark harness was also exercised on a small real asset:
+
+```bash
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+  apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/smoke.json \
+  --scene cube_ground \
+  --levels fp64 \
+  --build fp64=build/build_impl_fp64 \
+  --config Release \
+  --run_root output/benchmarks/mixed/uipc_assets/socu_m7_cube_ground_smoke \
+  --resume
+```
+
+Result:
+
+```text
+run finished: output/benchmarks/mixed/uipc_assets/socu_m7_cube_ground_smoke
+run_meta.failures = []
+perf frames = 40
+quality frames = 20
+```
+
+Because this run used only the `fp64` level, the benchmark report does not
+produce cross-level regression rows. It still validates that the real asset
+runner, Python bindings, `cuda_mixed` backend load path, timer output,
+solution dumps, and report generation remain healthy after the M0-M7 changes.
+
+At this point, M0-M7 are complete for their documented checkpoint boundaries:
+M0-M2 remain experiment/lab artifacts, M3-M5 establish the no-regression
+solver abstraction and structured dry-run path, M6 validates direct
+`socu_native` synthetic solve calls, and M7 validates the guarded world-level
+surrogate solve/scatter path. The remaining gap is still the next milestone:
+replace the current damping/report-driven surrogate Hessian with real
+subsystem-native structured Hessian writes before treating `socu_approx` as a
+production solver.
