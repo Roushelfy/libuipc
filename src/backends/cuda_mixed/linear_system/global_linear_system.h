@@ -21,6 +21,7 @@ struct SizeT2
 
 class DiagLinearSubsystem;
 class OffDiagLinearSubsystem;
+class LinearSolver;
 class IterativeSolver;
 class LocalPreconditioner;
 class GlobalPreconditioner;
@@ -312,8 +313,10 @@ class GlobalLinearSystem : public SimSystem
         SimSystemSlotCollection<OffDiagLinearSubsystem> off_diag_subsystems;
         SimSystemSlotCollection<LocalPreconditioner>    local_preconditioners;
 
-        SimSystemSlot<IterativeSolver>      iterative_solver;
+        SimSystemSlotCollection<LinearSolver> linear_solvers;
         SimSystemSlot<GlobalPreconditioner> global_preconditioner;
+
+        LinearSolver* selected_linear_solver = nullptr;
 
         // Linear System
         muda::LinearSystemContext                ctx;
@@ -362,6 +365,7 @@ class GlobalLinearSystem : public SimSystem
 
   private:
     friend class SimEngine;
+    friend class LinearSolver;
     friend class IterativeSolver;
     friend class DiagLinearSubsystem;
     friend class OffDiagLinearSubsystem;
@@ -372,7 +376,7 @@ class GlobalLinearSystem : public SimSystem
 
     void add_subsystem(DiagLinearSubsystem* subsystem);
     void add_subsystem(OffDiagLinearSubsystem* subsystem);
-    void add_solver(IterativeSolver* solver);
+    void add_solver(LinearSolver* solver);
     void add_preconditioner(LocalPreconditioner* preconditioner);
     void add_preconditioner(GlobalPreconditioner* preconditioner);
 

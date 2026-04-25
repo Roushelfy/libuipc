@@ -2,16 +2,6 @@
 #include <linear_system/global_linear_system.h>
 namespace uipc::backend::cuda_mixed
 {
-void IterativeSolver::do_build()
-{
-    m_system = &require<GlobalLinearSystem>();
-
-    BuildInfo info;
-    do_build(info);
-
-    m_system->add_solver(this);
-}
-
 void IterativeSolver::spmv(ActivePolicy::PcgIterScalar                 a,
                            muda::CDenseVectorView<ActivePolicy::PcgAuxScalar> x,
                            ActivePolicy::PcgIterScalar                 b,
@@ -44,10 +34,5 @@ bool IterativeSolver::accuracy_statisfied(
 muda::LinearSystemContext& IterativeSolver::ctx() const
 {
     return m_system->m_impl.ctx;
-}
-
-void IterativeSolver::solve(GlobalLinearSystem::SolvingInfo& info)
-{
-    do_solve(info);
 }
 }  // namespace uipc::backend::cuda_mixed

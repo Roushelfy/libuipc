@@ -537,3 +537,202 @@ The next planned step is Milestone 3: add the `LinearSolver` abstraction inside
 `cuda_mixed` as a no-regression checkpoint. That work should keep the current
 PCG and fused PCG algorithms unchanged, add selected-solver validation, and
 avoid introducing any `socu_native` or structured assembly path yet.
+
+## 2026-04-25
+
+### Milestone 3 Baseline: fp64 No-Regression Benchmark
+
+Before changing the `cuda_mixed` linear solver abstraction, the `fp64` build was
+rebuilt and a single asset benchmark was recorded as the no-regression baseline.
+
+The rebuild command was:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target backend_cuda_mixed pyuipc uipc_test_backend_cuda_mixed uipc_test_sim_case \
+  --parallel 8
+```
+
+The benchmark command was:
+
+```bash
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+  apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/particle.json \
+  --levels fp64 \
+  --build fp64=build/build_impl_fp64 \
+  --config Release \
+  --run_root output/benchmarks/mixed/uipc_assets/socu_m3_baseline_fp64 \
+  --perf \
+  --timers
+```
+
+The recorded baseline is:
+
+```text
+asset = particle_rain
+level = fp64
+frames = 80
+warmup_frames = 10
+wall_time = 1.590889507 s
+end_to_end_wall_time = 1.764613934 s
+avg_frame_time = 19.886118838 ms/frame
+
+Pipeline mean = 21.070949050 ms
+Simulation mean = 21.067777313 ms
+Build Linear System mean = 1.576213125 ms
+Assemble Linear System mean = 0.291090225 ms
+Convert Matrix mean = 1.148941438 ms
+Solve Global Linear System mean = 5.928472675 ms
+Solve Linear System mean = 4.203382688 ms
+FusedPCG mean = 4.073189888 ms
+
+newton_iteration_count mean = 2.6875
+line_search_iteration_count mean = 3.975
+pcg_iteration_count mean = 14.9375
+```
+
+This benchmark uses the default `linear_system/solver = fused_pcg` path. After
+M3 lands, the same command should be rerun into a separate run root and compared
+against these numbers. Some run-to-run noise is expected, but the solver
+selection refactor should not introduce systematic extra work in `Build Linear
+System`, `Solve Linear System`, or `FusedPCG`.
+
+### Milestone 3 Implementation
+
+M3 added the `LinearSolver` abstraction as a no-regression checkpoint for
+`cuda_mixed`.
+
+The implementation keeps the existing sparse assembly and PCG algorithms intact:
+
+- `LinearSolver` now owns the common solver interface, selected solver system
+  pointer, assembly requirements, optional iteration counter name, and final
+  `SimSystem::do_build()` bridge.
+- `IterativeSolver` now derives from `LinearSolver` and preserves the existing
+  `spmv()`, `apply_preconditioner()`, `accuracy_statisfied()`, and `ctx()`
+  behavior.
+- `GlobalLinearSystem` collects `SimSystemSlotCollection<LinearSolver>`,
+  validates that exactly one solver is selected at init, and stores
+  `selected_linear_solver`.
+- `LinearFusedPCG` remains the default `linear_system/solver = fused_pcg` path.
+  `LinearPCG` now explicitly selects only `linear_system/solver = linear_pcg`.
+- `global_linear_system.h` only forward-declares `LinearSolver`; the concrete
+  solver header is included from `.cu` files to avoid a `GlobalLinearSystem` to
+  `LinearSolver` header cycle.
+
+The contract tests were extended with:
+
+- static inheritance checks for `SimSystem -> LinearSolver -> IterativeSolver`;
+- default `fused_pcg` solver selection smoke;
+- explicit `linear_pcg` solver selection smoke;
+- invalid solver selection smoke.
+
+M3 deliberately does not add `socu_native`, `socu_approx`, structured assembly
+sinks, or any runtime use of the SOCU ordering lab output.
+
+### Milestone 3 Verification
+
+The `fp64` build and contract tests passed with:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target backend_cuda_mixed uipc_test_backend_cuda_mixed uipc_test_sim_case \
+  --parallel 8
+
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|sim_case_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The final test result was:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+sim_case_cuda_mixed_contract: passed
+```
+
+For Python benchmark runs, `scripts/after_build_pyuipc.py` was rerun after the
+native rebuild. The copied package library and build output library matched:
+
+```text
+build/build_impl_fp64/python/src/uipc/_native/libuipc_backend_cuda_mixed.so
+build/build_impl_fp64/Release/bin/libuipc_backend_cuda_mixed.so
+sha256 = 0dabe9ab02af4d7319e7315be532b2020cbccae7e7cdf93d61ba164f44f110d7
+```
+
+The final M3 `fp64` benchmark run was:
+
+```bash
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+  apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/particle.json \
+  --levels fp64 \
+  --build fp64=build/build_impl_fp64 \
+  --config Release \
+  --run_root output/benchmarks/mixed/uipc_assets/socu_m3_after_fp64_final \
+  --perf \
+  --timers
+```
+
+The recorded M3 result was:
+
+```text
+asset = particle_rain
+level = fp64
+frames = 80
+warmup_frames = 10
+wall_time = 1.668819212 s
+end_to_end_wall_time = 1.852555498 s
+avg_frame_time = 20.860240150 ms/frame
+
+Pipeline mean = 22.214535025 ms
+Simulation mean = 22.210836288 ms
+Build Linear System mean = 1.757508688 ms
+Assemble Linear System mean = 0.303369150 ms
+Convert Matrix mean = 1.323632275 ms
+Solve Global Linear System mean = 6.187157838 ms
+Solve Linear System mean = 4.154478725 ms
+FusedPCG mean = 4.070428175 ms
+
+newton_iteration_count mean = 2.6875
+line_search_iteration_count mean = 3.975
+pcg_iteration_count mean = 14.9375
+```
+
+The first baseline and first M3 comparison showed noticeable wall-time movement,
+so a paired repeat check was run to separate code cost from machine/GPU run
+state. The same old checkpoint was rebuilt in `/tmp/libuipc_m3_base`, then the
+old and M3 builds were run in alternating order.
+
+The repeat averages were:
+
+```text
+old repeat avg_frame_time = 20.850079688 ms/frame
+M3 repeat avg_frame_time = 20.648711587 ms/frame
+delta = -0.965790554 %
+
+old repeat end_to_end_wall_time = 1.829858880 s
+M3 repeat end_to_end_wall_time = 1.817689780 s
+delta = -0.665029452 %
+```
+
+The solver iteration counters were unchanged in all runs:
+
+```text
+newton_iteration_count mean = 2.6875
+line_search_iteration_count mean = 3.975
+pcg_iteration_count mean = 14.9375
+```
+
+M3 is therefore considered complete as a no-regression abstraction checkpoint:
+the solver selection refactor changes ownership and validation, but does not
+add systematic extra PCG work or change the existing default fused PCG behavior.
+
+### Next Work
+
+The next planned step is Milestone 4: add a `SocuApproxSolver` skeleton and
+stub gate for `linear_system/solver = "socu_approx"`. The first M4 commit should
+still avoid calling `socu_native`; it should only validate configuration,
+report explicit gate-fail reasons, prove that default `fused_pcg` is unaffected,
+and make explicit `socu_approx` selection fatal when the stub cannot run.

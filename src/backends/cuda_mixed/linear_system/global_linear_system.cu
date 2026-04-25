@@ -2,6 +2,7 @@
 #include <linear_system/diag_linear_subsystem.h>
 #include <linear_system/off_diag_linear_subsystem.h>
 #include <uipc/common/range.h>
+#include <linear_system/linear_solver.h>
 #include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
@@ -142,6 +143,15 @@ void GlobalLinearSystem::solve()
 
 void GlobalLinearSystem::Impl::init()
 {
+    auto linear_solver_view = linear_solvers.view();
+    if(linear_solver_view.size() != 1)
+    {
+        throw SimSystemException(fmt::format(
+            "GlobalLinearSystem requires exactly one selected linear solver, got {}.",
+            linear_solver_view.size()));
+    }
+    selected_linear_solver = linear_solver_view.front();
+
     // 1) Init all diag subsystems and off-diag subsystems
 
     auto diag_subsystem_view     = diag_subsystems.view();
@@ -476,16 +486,16 @@ void GlobalLinearSystem::Impl::_assemble_preconditioner()
 void GlobalLinearSystem::Impl::solve_linear_system()
 {
     Timer timer{"Solve Linear System"};
-    if(iterative_solver)
+    if(selected_linear_solver)
     {
         SolvingInfo info{this};
         info.m_b = b.cview();
         info.m_x = x.view();
-        iterative_solver->solve(info);
-        auto counter_name = iterative_solver->iteration_counter_name();
+        selected_linear_solver->solve(info);
+        auto counter_name = selected_linear_solver->iteration_counter_name();
         if(!counter_name.empty())
             Timer::record_count(counter_name, info.iter_count());
-        logger::info("Iterative linear solver iteration count: {}", info.m_iter_count);
+        logger::info("Linear solver iteration count: {}", info.m_iter_count);
     }
 }
 
@@ -686,11 +696,11 @@ void GlobalLinearSystem::add_subsystem(OffDiagLinearSubsystem* subsystem)
     m_impl.off_diag_subsystems.register_sim_system(*subsystem);
 }
 
-void GlobalLinearSystem::add_solver(IterativeSolver* solver)
+void GlobalLinearSystem::add_solver(LinearSolver* solver)
 {
     check_state(SimEngineState::BuildSystems, "add_solver()");
     UIPC_ASSERT(solver != nullptr, "The solver should not be nullptr.");
-    m_impl.iterative_solver.register_sim_system(*solver);
+    m_impl.linear_solvers.register_sim_system(*solver);
 }
 
 void GlobalLinearSystem::add_preconditioner(LocalPreconditioner* preconditioner)

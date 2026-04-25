@@ -1,21 +1,21 @@
 #pragma once
-#include <sim_system.h>
+#include <linear_system/linear_solver.h>
 #include <muda/ext/linear_system.h>
-#include <linear_system/global_linear_system.h>
 #include <mixed_precision/policy.h>
 
 namespace uipc::backend::cuda_mixed
 {
-class IterativeSolver : public SimSystem
+class IterativeSolver : public LinearSolver
 {
   public:
-    using SimSystem::SimSystem;
-    virtual std::string_view iteration_counter_name() const { return {}; }
-
-    class BuildInfo
+    using LinearSolver::LinearSolver;
+    virtual AssemblyRequirements assembly_requirements() const override
     {
-      public:
-    };
+        AssemblyRequirements requirements;
+        requirements.full_sparse_matrix = true;
+        requirements.preconditioner     = true;
+        return requirements;
+    }
 
   protected:
     virtual void do_build(BuildInfo& info) = 0;
@@ -42,10 +42,5 @@ class IterativeSolver : public SimSystem
 
   private:
     friend class GlobalLinearSystem;
-    GlobalLinearSystem* m_system;
-
-    virtual void do_build() final override;
-
-    void solve(GlobalLinearSystem::SolvingInfo& info);
 };
 }  // namespace uipc::backend::cuda_mixed

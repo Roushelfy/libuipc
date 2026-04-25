@@ -2,6 +2,7 @@ enable_language(CUDA)
 file(GLOB_RECURSE SOURCE "*.cpp" "*.h" "*.cu" "*.inl")
 uipc_add_test(backend_cuda_mixed ${SOURCE})
 target_link_libraries(backend_cuda_mixed PRIVATE uipc::backend::cuda_mixed)
+target_include_directories(backend_cuda_mixed PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     if(UIPC_GITHUB_ACTIONS)

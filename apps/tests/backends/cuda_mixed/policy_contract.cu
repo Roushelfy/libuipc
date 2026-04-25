@@ -1,4 +1,8 @@
 #include <app/app.h>
+#include <linear_system/iterative_solver.h>
+#include <linear_system/linear_fused_pcg.h>
+#include <linear_system/linear_pcg.h>
+#include <linear_system/linear_solver.h>
 #include <mixed_precision/policy.h>
 #include <type_traits>
 
@@ -115,6 +119,11 @@ static_assert(
 static_assert(!PrecisionPolicy<MixedPrecisionLevel::Path6>::full_pcg_fp32);
 
 static_assert(std::is_same_v<ActivePolicy, PrecisionPolicy<kBuildLevel>>);
+
+static_assert(std::is_base_of_v<SimSystem, LinearSolver>);
+static_assert(std::is_base_of_v<LinearSolver, IterativeSolver>);
+static_assert(std::is_base_of_v<IterativeSolver, LinearPCG>);
+static_assert(std::is_base_of_v<IterativeSolver, LinearFusedPCG>);
 }  // namespace
 
 TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")

@@ -92,6 +92,63 @@ void run_zero_alloc_case(std::string_view name, Json config, BuildScene&& build_
     REQUIRE(world.is_valid());
     require_zero_steady_state_allocations(world);
 }
+
+void build_single_abd_tet(Scene& scene)
+{
+    AffineBodyConstitution abd;
+    auto                   obj = scene.objects().create("falling_abd");
+
+    vector<Vector4i> Ts = {Vector4i{0, 1, 2, 3}};
+    vector<Vector3>  Vs = {Vector3{0, 1, 0},
+                          Vector3{0, 0, 1},
+                          Vector3{-std::sqrt(3.0) / 2.0, 0, -0.5},
+                          Vector3{std::sqrt(3.0) / 2.0, 0, -0.5}};
+    std::transform(Vs.begin(), Vs.end(), Vs.begin(), [](const Vector3& v)
+                   { return v * 0.3; });
+
+    auto tet = tetmesh(Vs, Ts);
+    label_surface(tet);
+    label_triangle_orient(tet);
+    abd.apply_to(tet, 100.0_MPa);
+
+    auto trans = view(tet.transforms());
+    trans[0](1, 3) += 0.6;
+    obj->geometries().create(tet);
+}
+
+Json linear_solver_selection_config()
+{
+    auto config                 = test::Scene::default_config();
+    config["dt"]                = 0.01;
+    config["gravity"]           = Vector3{0, -9.8, 0};
+    config["integrator"]["type"] = "bdf2";
+    config["contact"]["enable"] = false;
+    return config;
+}
+
+void run_linear_solver_selection_case(std::string_view name, Json config)
+{
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+
+    build_single_abd_tet(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    for(int i = 0; i < 2; ++i)
+    {
+        world.advance();
+        REQUIRE(world.is_valid());
+        world.retrieve();
+    }
+    require_cuda_sync();
+}
 }  // namespace
 
 TEST_CASE("86_cuda_mixed_contract_abd_bdf2_zero_alloc",
@@ -103,31 +160,40 @@ TEST_CASE("86_cuda_mixed_contract_abd_bdf2_zero_alloc",
     config["integrator"]["type"] = "bdf2";
     config["contact"]["enable"] = false;
 
-    run_zero_alloc_case(
-        "abd_bdf2_zero_alloc",
-        config,
-        [](Scene& scene)
-        {
-            AffineBodyConstitution abd;
-            auto                   obj = scene.objects().create("falling_abd");
+    run_zero_alloc_case("abd_bdf2_zero_alloc", config, build_single_abd_tet);
+}
 
-            vector<Vector4i> Ts = {Vector4i{0, 1, 2, 3}};
-            vector<Vector3>  Vs = {Vector3{0, 1, 0},
-                                   Vector3{0, 0, 1},
-                                   Vector3{-std::sqrt(3.0) / 2.0, 0, -0.5},
-                                   Vector3{std::sqrt(3.0) / 2.0, 0, -0.5}};
-            std::transform(
-                Vs.begin(), Vs.end(), Vs.begin(), [](const Vector3& v) { return v * 0.3; });
+TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
+          "[cuda_mixed][contract][linear_solver]")
+{
+    SECTION("default_fused_pcg")
+    {
+        auto config = linear_solver_selection_config();
+        run_linear_solver_selection_case("linear_solver_default_fused_pcg", config);
+    }
 
-            auto tet = tetmesh(Vs, Ts);
-            label_surface(tet);
-            label_triangle_orient(tet);
-            abd.apply_to(tet, 100.0_MPa);
+    SECTION("explicit_linear_pcg")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "linear_pcg";
+        run_linear_solver_selection_case("linear_solver_explicit_linear_pcg", config);
+    }
 
-            auto trans = view(tet.transforms());
-            trans[0](1, 3) += 0.6;
-            obj->geometries().create(tet);
-        });
+    SECTION("invalid_solver")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "invalid_solver";
+        auto output_path = contract_workspace("linear_solver_invalid_solver");
+        fs::create_directories(output_path);
+        test::Scene::dump_config(config, output_path.string());
+
+        Engine engine{"cuda_mixed", output_path.string()};
+        World  world{engine};
+        Scene  scene{config};
+        build_single_abd_tet(scene);
+
+        REQUIRE_THROWS(world.init(scene));
+    }
 }
 
 TEST_CASE("86_cuda_mixed_contract_abd_fixed_joint_zero_alloc",
