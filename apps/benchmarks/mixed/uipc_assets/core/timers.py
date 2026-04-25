@@ -8,30 +8,57 @@ CANONICAL_STAGES = [
     "Pipeline",
     "Rebuild Scene",
     "Simulation",
+    "Frame Setup",
+    "Record Friction Candidates",
+    "Clear External Forces",
+    "Step Animation",
+    "Compute External Force Accelerations",
     "Predict Motion",
+    "Compute Adaptive Parameters",
     "Detect DCD Candidates",
     "Detect Trajectory Candidates",
+    "Filter Contact Candidates",
     "Filter CCD TOI",
+    "Compute CFL Condition",
+    "Compute DyTopo Effect",
+    "Assemble Dytopo Effect",
+    "Assemble Contact",
+    "Assemble Inter-Primitive",
+    "Assemble Unclassified DyTopo",
+    "Convert Dytopo Matrix",
+    "Distribute Dytopo Effect",
     "Build Linear System",
     "Assemble Linear System",
     "Assemble ABD",
     "Assemble FEM",
-    "Assemble Contact",
-    "Assemble Other",
+    "Assemble ABD-FEM Coupling",
+    "Assemble Unclassified Linear Subsystem",
     "Convert Matrix",
     "Assemble Preconditioner",
     "Solve Global Linear System",
+    "Solve Linear System",
     "FusedPCG",
     "SpMV",
     "Apply Preconditioner",
     "Line Search",
+    "Line Search Iteration",
     "Compute Energy",
     "Energy Reporter: ABD",
     "Energy Reporter: FEM",
     "Energy Reporter: Contact",
-    "Energy Reporter: Other",
+    "Energy Reporter: Unclassified",
+    "Linearize Contact Constraints",
+    "Recover to Non-Penetrating Positions",
+    "Advance Non-Penetrating Positions",
+    "Collect Vertex Displacements",
     "Update Velocity",
 ]
+
+LEGACY_CONTEXT_STAGE_ALIASES = {
+    ("Assemble Dytopo Effect", "Assemble Other"): "Assemble Unclassified DyTopo",
+    ("Assemble Linear System", "Assemble Other"): "Assemble Unclassified Linear Subsystem",
+    ("Compute Energy", "Energy Reporter: Other"): "Energy Reporter: Unclassified",
+}
 
 ITERATION_COUNTERS = {
     "newton_iteration_count": ("Newton Iteration",),
@@ -55,13 +82,30 @@ def flatten_timer_tree(node: Dict[str, Any], out: List[Dict[str, Any]] | None = 
     return rows
 
 
+def _stage_name(name: str, parents: List[str]) -> str:
+    for parent in reversed(parents):
+        alias = LEGACY_CONTEXT_STAGE_ALIASES.get((parent, name))
+        if alias is not None:
+            return alias
+    return name
+
+
 def load_frame_stage_values(frame: Dict[str, Any], stages: Iterable[str] = CANONICAL_STAGES) -> Dict[str, float]:
     wanted = set(stages)
     values: Dict[str, float] = {stage: 0.0 for stage in wanted}
-    for row in flatten_timer_tree(frame):
+
+    def visit(row: Dict[str, Any], parents: List[str]) -> None:
         name = row.get("name")
-        if name in wanted:
-            values[name] += float(row.get("duration", 0.0)) * 1000.0
+        if isinstance(name, str):
+            stage = _stage_name(name, parents)
+            if stage in wanted:
+                values[stage] += float(row.get("duration", 0.0)) * 1000.0
+            parents = [*parents, name]
+        for child in row.get("children", []) or []:
+            if isinstance(child, dict):
+                visit(child, parents)
+
+    visit(frame, [])
     return values
 
 

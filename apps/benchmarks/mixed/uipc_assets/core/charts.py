@@ -8,27 +8,76 @@ from .runner import load_timer_frames_json
 
 
 CHART_PHASES = [
+    "Rebuild Scene",
+    "Frame Setup",
     "Predict Motion",
-    "Detect DCD Candidates",
-    "Detect Trajectory Candidates",
-    "Filter CCD TOI",
-    "Build Linear System",
-    "Solve Global Linear System",
+    "Adaptive Parameters",
+    "Contact Detection",
+    "DyTopo Effect",
+    "Linear Build",
+    "Linear Solve",
     "Line Search",
+    "AL Active Set",
     "Update Velocity",
-    "Other",
+    "Bookkeeping",
 ]
 
 PHASE_COLORS = {
-    "Predict Motion": "#4C78A8",
-    "Detect DCD Candidates": "#F58518",
-    "Detect Trajectory Candidates": "#54A24B",
-    "Filter CCD TOI": "#E45756",
-    "Build Linear System": "#72B7B2",
-    "Solve Global Linear System": "#B279A2",
-    "Line Search": "#FF9DA6",
-    "Update Velocity": "#9D755D",
-    "Other": "#BAB0AC",
+    "Rebuild Scene": "#4C78A8",
+    "Frame Setup": "#F58518",
+    "Predict Motion": "#54A24B",
+    "Adaptive Parameters": "#EECA3B",
+    "Contact Detection": "#E45756",
+    "DyTopo Effect": "#72B7B2",
+    "Linear Build": "#B279A2",
+    "Linear Solve": "#FF9DA6",
+    "Line Search": "#9D755D",
+    "AL Active Set": "#A0CBE8",
+    "Update Velocity": "#8CD17D",
+    "Bookkeeping": "#BAB0AC",
+}
+
+DIRECT_PHASE_TIMERS = {
+    "Rebuild Scene": "Rebuild Scene",
+    "Frame Setup": "Frame Setup",
+    "Record Friction Candidates": "Frame Setup",
+    "Clear External Forces": "Frame Setup",
+    "Step Animation": "Frame Setup",
+    "Compute External Force Accelerations": "Frame Setup",
+    "Predict Motion": "Predict Motion",
+    "Compute Adaptive Parameters": "Adaptive Parameters",
+    "Detect DCD Candidates": "Contact Detection",
+    "Detect Trajectory Candidates": "Contact Detection",
+    "Filter Contact Candidates": "Contact Detection",
+    "Filter CCD TOI": "Contact Detection",
+    "Compute CFL Condition": "Contact Detection",
+    "Compute DyTopo Effect": "DyTopo Effect",
+    "Build Linear System": "Linear Build",
+    "Solve Linear System": "Linear Solve",
+    "FusedPCG": "Linear Solve",
+    "PCG": "Linear Solve",
+    "SpMV": "Linear Solve",
+    "Apply Preconditioner": "Linear Solve",
+    "Collect Vertex Displacements": "Linear Solve",
+    "Compute Energy": "Line Search",
+    "Energy Reporter: ABD": "Line Search",
+    "Energy Reporter: FEM": "Line Search",
+    "Energy Reporter: Contact": "Line Search",
+    "Energy Reporter: Unclassified": "Line Search",
+    "Energy Reporter: Other": "Line Search",
+    "Linearize Contact Constraints": "AL Active Set",
+    "Recover to Non-Penetrating Positions": "AL Active Set",
+    "Advance Non-Penetrating Positions": "AL Active Set",
+    "Update Velocity": "Update Velocity",
+}
+
+CONTAINER_RESIDUAL_PHASES = {
+    "Pipeline": "Bookkeeping",
+    "Simulation": "Frame Setup",
+    "Newton Iteration": "Bookkeeping",
+    "Solve Global Linear System": "Linear Solve",
+    "Line Search": "Line Search",
+    "Line Search Iteration": "Line Search",
 }
 
 
@@ -52,20 +101,53 @@ def _duration_ms(node: Dict[str, Any] | None) -> float:
     return float(node.get("duration", 0.0)) * 1000.0
 
 
-def _sum_named_durations_ms(node: Dict[str, Any], name: str) -> float:
-    total = 0.0
-    for row in _iter_nodes(node):
-        if row.get("name") == name:
-            total += _duration_ms(row)
-    return total
-
-
 def _clamp_nonnegative(value: float, *, eps: float = 1e-9) -> float:
     if value < 0.0 and abs(value) <= eps:
         return 0.0
     if value < 0.0:
         return 0.0
     return value
+
+
+def _add_phase(phases: Dict[str, float], phase: str, value: float) -> None:
+    phases[phase] = phases.get(phase, 0.0) + _clamp_nonnegative(value)
+
+
+def _merge_phases(dst: Dict[str, float], src: Dict[str, float], scale: float = 1.0) -> None:
+    for phase, value in src.items():
+        _add_phase(dst, phase, value * scale)
+
+
+def _allocate_chart_node(node: Dict[str, Any], warnings: List[str]) -> Dict[str, float]:
+    name = node.get("name")
+    duration_ms = _clamp_nonnegative(_duration_ms(node))
+    children = [child for child in node.get("children", []) or [] if isinstance(child, dict)]
+
+    phase = DIRECT_PHASE_TIMERS.get(str(name))
+    if phase is not None:
+        phases = {chart_phase: 0.0 for chart_phase in CHART_PHASES}
+        _add_phase(phases, phase, duration_ms)
+        return phases
+
+    phases = {phase_name: 0.0 for phase_name in CHART_PHASES}
+    child_phases = [_allocate_chart_node(child, warnings) for child in children]
+    child_ms = sum(sum(child.values()) for child in child_phases)
+
+    if child_ms > duration_ms + 1e-9:
+        scale = 0.0 if child_ms <= 0.0 else duration_ms / child_ms
+        for child in child_phases:
+            _merge_phases(phases, child, scale)
+        return phases
+
+    for child in child_phases:
+        _merge_phases(phases, child)
+
+    residual_ms = duration_ms - child_ms
+    if name in CONTAINER_RESIDUAL_PHASES:
+        _add_phase(phases, CONTAINER_RESIDUAL_PHASES[str(name)], residual_ms)
+    else:
+        _add_phase(phases, "Bookkeeping", residual_ms)
+    return phases
 
 
 def extract_chart_frame_segments(frame: Dict[str, Any]) -> Tuple[Dict[str, Any] | None, List[str]]:
@@ -75,30 +157,16 @@ def extract_chart_frame_segments(frame: Dict[str, Any]) -> Tuple[Dict[str, Any] 
         return None, ["missing Pipeline timer"]
 
     total_ms = _clamp_nonnegative(_duration_ms(pipeline))
-    build_linear_ms = _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Build Linear System"))
-    solve_global_total_ms = _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Solve Global Linear System"))
-    detect_trajectory_ms = _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Detect Trajectory Candidates"))
-    filter_ccd_ms = _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Filter CCD TOI"))
-    line_search_total_ms = _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Line Search"))
+    phases = _allocate_chart_node(pipeline, warnings)
 
-    phases = {
-        "Predict Motion": _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Predict Motion")),
-        "Detect DCD Candidates": _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Detect DCD Candidates")),
-        "Detect Trajectory Candidates": detect_trajectory_ms,
-        "Filter CCD TOI": filter_ccd_ms,
-        "Build Linear System": build_linear_ms,
-        "Solve Global Linear System": _clamp_nonnegative(solve_global_total_ms - build_linear_ms),
-        "Line Search": _clamp_nonnegative(line_search_total_ms - detect_trajectory_ms - filter_ccd_ms),
-        "Update Velocity": _clamp_nonnegative(_sum_named_durations_ms(pipeline, "Update Velocity")),
-    }
-
-    assigned_without_other = sum(phases.values())
-    other_ms = total_ms - assigned_without_other
-    if other_ms < -1e-3:
+    assigned_ms = sum(phases.values())
+    delta_ms = total_ms - assigned_ms
+    if delta_ms > 1e-6:
+        _add_phase(phases, "Bookkeeping", delta_ms)
+    elif delta_ms < -1e-3:
         warnings.append(
-            f"assigned chart phases exceed Pipeline total by {-other_ms:.6f} ms; clamping Other to 0"
+            f"assigned chart phases exceed Pipeline total by {-delta_ms:.6f} ms"
         )
-    phases["Other"] = _clamp_nonnegative(other_ms)
 
     return {
         "total_ms_per_frame": total_ms,
