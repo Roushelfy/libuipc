@@ -59,7 +59,6 @@ void SimEngine::advance()
     {
         if(m_global_trajectory_filter && m_friction_enabled)
         {
-            Timer timer{"Record Friction Candidates"};
             m_global_trajectory_filter->record_friction_candidates();
         }
     };
@@ -67,10 +66,7 @@ void SimEngine::advance()
     auto compute_adaptive_kappa = [this]
     {
         if(m_global_contact_manager)
-        {
-            Timer timer{"Compute Adaptive Parameters"};
             m_global_contact_manager->compute_adaptive_parameters();
-        }
     };
 
     auto compute_dytopo_effect = [this]
@@ -299,26 +295,20 @@ void SimEngine::advance()
             Timer timer{"Simulation"};
 
             // 0. Process External Changes
-            {
-                Timer timer{"Frame Setup"};
-                m_global_vertex_manager->update_attributes();
-                [[maybe_unused]] AABB bbox =
-                    m_global_vertex_manager->compute_vertex_bounding_box();
+            m_global_vertex_manager->update_attributes();
+            [[maybe_unused]] AABB bbox =
+                m_global_vertex_manager->compute_vertex_bounding_box();
 
-                // 1. Record Friction Candidates at the beginning of the frame
-                m_global_vertex_manager->record_prev_positions();
-                record_friction_candidates();
-            }
+            // 1. Record Friction Candidates at the beginning of the frame
+            m_global_vertex_manager->record_prev_positions();
+            record_friction_candidates();
 
             // 2. Predict Motion => x_tilde = x + v * dt
             m_state = SimEngineState::PredictMotion;
-            {
-                Timer timer{"Predict Motion"};
-                // MUST step animation before predicting dof
-                // some animation may provide information for DOF prediction
-                step_animation();
-                m_time_integrator_manager->predict_dof();
-            }
+            // MUST step animation before predicting dof
+            // some animation may provide information for DOF prediction
+            step_animation();
+            m_time_integrator_manager->predict_dof();
 
             // 3. Adaptive Parameter Calculation
             detect_dcd_candidates();
@@ -361,10 +351,7 @@ void SimEngine::advance()
 
 
                 // 5) Collect Vertex Displacements Globally
-                {
-                    Timer timer{"Collect Vertex Displacements"};
-                    m_global_vertex_manager->collect_vertex_displacements();
-                }
+                m_global_vertex_manager->collect_vertex_displacements();
 
                 // 7) Begin Line Search
                 m_state = SimEngineState::LineSearch;

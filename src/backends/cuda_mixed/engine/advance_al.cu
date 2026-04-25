@@ -79,7 +79,6 @@ void SimEngine::advance_AL()
     {
         if(m_global_active_set_manager && m_friction_enabled)
         {
-            Timer timer{"Record Friction Candidates"};
             m_global_active_set_manager->linearize_constraints();
             m_global_active_set_manager->update_friction();
         }
@@ -89,7 +88,6 @@ void SimEngine::advance_AL()
     {
         if(m_global_active_set_manager)
         {
-            Timer timer{"Compute Adaptive Parameters"};
             m_global_active_set_manager->disable();
 
             m_global_active_set_manager->init_mu();
@@ -113,7 +111,6 @@ void SimEngine::advance_AL()
     {
         if(m_global_contact_manager)
         {
-            Timer timer{"Compute CFL Condition"};
             cfl_alpha = m_global_contact_manager->compute_cfl_condition();
             if(cfl_alpha < alpha)
             {
@@ -295,27 +292,21 @@ void SimEngine::advance_AL()
         {
             Timer timer{"Simulation"};
             // 1. Record Friction Candidates at the beginning of the frame
+            record_friction_candidates();
+            m_global_vertex_manager->update_attributes();
+            m_global_vertex_manager->record_prev_positions();
+            if(m_global_active_set_manager)
             {
-                Timer timer{"Frame Setup"};
-                record_friction_candidates();
-                m_global_vertex_manager->update_attributes();
-                m_global_vertex_manager->record_prev_positions();
-                if(m_global_active_set_manager)
-                {
-                    m_global_active_set_manager->record_non_penetrate_positions();
-                    // m_global_active_set_manager->filter_active();
-                }
+                m_global_active_set_manager->record_non_penetrate_positions();
+                // m_global_active_set_manager->filter_active();
             }
 
             // 2. Predict Motion => x_tilde = x + v * dt
             m_state = SimEngineState::PredictMotion;
-            {
-                Timer timer{"Predict Motion"};
-                // MUST step animation before predicting dof (following basic IPC pattern)
-                // and before compute_adaptive_mu to ensure constraints report extents
-                step_animation();
-                m_time_integrator_manager->predict_dof();
-            }
+            // MUST step animation before predicting dof (following basic IPC pattern)
+            // and before compute_adaptive_mu to ensure constraints report extents
+            step_animation();
+            m_time_integrator_manager->predict_dof();
 
             // 3. Adaptive Parameter Calculation
             // Now safe to call compute_adaptive_mu->diag_norm() after step_animation
@@ -356,10 +347,7 @@ void SimEngine::advance_AL()
                 bool newton_converged = result_info.converged();
 
                 // 5) Collect Vertex Displacements Globally
-                {
-                    Timer timer{"Collect Vertex Displacements"};
-                    m_global_vertex_manager->collect_vertex_displacements();
-                }
+                m_global_vertex_manager->collect_vertex_displacements();
 
                 // 6) Begin Line Search
                 m_state = SimEngineState::LineSearch;
