@@ -16,10 +16,13 @@ enum class SocuApproxGateReason
     UnsupportedPrecisionContract,
     UnsupportedBlockSize,
     SocuMathDxUnsupported,
+    SocuRuntimeArtifactUnavailable,
     OrderingQualityTooLow,
     ContactOffBandRatioTooHigh,
     StructuredProviderMissing,
     StubNoDirection,
+    DirectionInvalid,
+    SocuRuntimeError,
 };
 
 std::string_view to_string(SocuApproxGateReason reason) noexcept;
@@ -47,6 +50,7 @@ struct SocuApproxBlockLayout
 struct SocuApproxDryRunReport
 {
     bool        packed = false;
+    std::string mode = "structured_dry_run";
     std::string report_path;
     std::string ordering_report_path;
     std::string contact_report_path;
@@ -88,6 +92,19 @@ struct SocuApproxDryRunReport
     double rhs_abs_sum                         = 0.0;
 
     double dry_run_pack_time_ms = 0.0;
+    double socu_factor_solve_time_ms = 0.0;
+    double scatter_time_ms = 0.0;
+
+    double damping_shift = 0.0;
+    double surrogate_residual = 0.0;
+    double surrogate_relative_residual = 0.0;
+    double descent_dot = 0.0;
+    double gradient_norm = 0.0;
+    double direction_norm = 0.0;
+
+    bool        direction_available = false;
+    std::string status_reason;
+    std::string status_detail;
 
     std::vector<SocuApproxBlockLayout> blocks;
 };

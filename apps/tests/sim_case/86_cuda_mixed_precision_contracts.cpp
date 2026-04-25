@@ -2,6 +2,7 @@
 #include <cuda_runtime_api.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
@@ -22,6 +23,20 @@
 #include <uipc/constitution/soft_vertex_triangle_stitch.h>
 #include <uipc/constitution/stable_neo_hookean.h>
 #include <uipc/geometry/utils/affine_body/transform.h>
+
+#ifndef UIPC_WITH_SOCU_NATIVE
+#define UIPC_WITH_SOCU_NATIVE 0
+#endif
+
+#if UIPC_WITH_SOCU_NATIVE
+#ifndef SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH
+#define SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH ""
+#endif
+
+#ifndef SOCU_NATIVE_SOURCE_DIR
+#define SOCU_NATIVE_SOURCE_DIR ""
+#endif
+#endif
 
 namespace
 {
@@ -212,6 +227,69 @@ void write_socu_three_block_ordering_report(const fs::path& path, SizeT block_si
     ofs << report.dump(2);
 }
 
+void write_socu_sparse_64_block_ordering_report(const fs::path& path, SizeT block_size)
+{
+    Json block_ranges = Json::array();
+    block_ranges.push_back(Json{{"block", 0},
+                                {"chain_begin", 0},
+                                {"chain_end", 4},
+                                {"dof_count", 12}});
+    for(SizeT block = 1; block < 64; ++block)
+    {
+        block_ranges.push_back(Json{{"block", block},
+                                    {"chain_begin", 4},
+                                    {"chain_end", 4},
+                                    {"dof_count", 0}});
+    }
+
+    Json report = {
+        {"selected",
+         {{"ok", true},
+          {"ordering",
+           {{"orderer", "test_m7"},
+            {"block_size", block_size},
+            {"chain_to_old", Json::array({0, 1, 2, 3})},
+            {"old_to_chain", Json::array({0, 1, 2, 3})},
+            {"atom_to_block", Json::array({0, 0, 0, 0})},
+            {"atom_block_offset", Json::array({0, 3, 6, 9})},
+            {"atom_dof_count", Json::array({3, 3, 3, 3})},
+            {"block_to_atom_range", block_ranges}}},
+          {"metrics", {{"near_band_ratio", 1.0}, {"off_band_ratio", 0.0}}}}}};
+
+    std::ofstream ofs{path};
+    ofs << report.dump(2);
+}
+
+#if UIPC_WITH_SOCU_NATIVE
+fs::path discover_socu_warp_so()
+{
+    if(const char* env = std::getenv("SOCU_NATIVE_WARP_SO"))
+    {
+        const fs::path candidate{env};
+        if(fs::is_regular_file(candidate))
+            return candidate;
+    }
+
+    const auto source_dir = fs::path{SOCU_NATIVE_SOURCE_DIR};
+    const auto venv_root  = source_dir / ".venv" / "lib";
+    if(!fs::is_directory(venv_root))
+        return {};
+
+    for(const auto& entry : fs::directory_iterator(venv_root))
+    {
+        if(!entry.is_directory())
+            continue;
+        if(entry.path().filename().string().rfind("python", 0) != 0)
+            continue;
+        const auto candidate =
+            entry.path() / "site-packages" / "warp" / "bin" / "warp.so";
+        if(fs::is_regular_file(candidate))
+            return candidate;
+    }
+    return {};
+}
+#endif
+
 void write_socu_contact_report(const fs::path& path)
 {
     Json report = {{"active_contact_count", 3},
@@ -304,6 +382,7 @@ void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
 {
     auto config                       = linear_solver_selection_config();
     config["linear_system"]["solver"] = "socu_approx";
+    config["linear_system"]["socu_approx"]["mode"] = "dry_run";
 
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
@@ -376,6 +455,7 @@ void require_socu_approx_structured_sink_dry_run(std::string_view name,
 {
     auto config                       = linear_solver_selection_config();
     config["linear_system"]["solver"] = "socu_approx";
+    config["linear_system"]["socu_approx"]["mode"] = "dry_run";
 
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
@@ -432,6 +512,63 @@ void require_socu_approx_structured_sink_dry_run(std::string_view name,
           < 1e-12);
     CHECK(report["layout"]["first_offdiag_nonzero_count"].get<SizeT>() == 1);
     CHECK(report["layout"]["diag_nonzero_count"].get<SizeT>() == 3 * block_size - 12 + 1);
+}
+
+void require_socu_approx_m7_surrogate_solve(std::string_view name)
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    SKIP("socu_native is not enabled in this build");
+#else
+    const fs::path manifest_path{SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH};
+    if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
+        SKIP("MathDx manifest is missing; expected " << manifest_path.string());
+    if(discover_socu_warp_so().empty())
+        SKIP("Warp native library is missing; set SOCU_NATIVE_WARP_SO");
+
+    auto config                       = linear_solver_selection_config();
+    config["dt"]                      = 0.001;
+    config["gravity"]                 = Vector3{0, -0.1, 0};
+    config["linear_system"]["solver"] = "socu_approx";
+    config["linear_system"]["socu_approx"]["mode"] = "solve";
+    config["linear_system"]["socu_approx"]["damping_shift"] = 10000.0;
+    config["linear_system"]["socu_approx"]["max_relative_residual"] = 1e-4;
+
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    auto ordering_path = output_path / "ordering.json";
+    auto report_path   = output_path / "surrogate_report.json";
+    write_socu_sparse_64_block_ordering_report(ordering_path, 32);
+
+    config["linear_system"]["socu_approx"]["ordering_report"] =
+        ordering_path.string();
+    config["linear_system"]["socu_approx"]["dry_run_report"] =
+        report_path.string();
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_single_abd_tet(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    world.advance();
+    REQUIRE(world.is_valid());
+    world.retrieve();
+    require_cuda_sync();
+
+    REQUIRE(fs::exists(report_path));
+    std::ifstream ifs{report_path};
+    Json          report = Json::parse(ifs);
+    REQUIRE(report["mode"].get<std::string>() == "structured_surrogate_solve");
+    REQUIRE(report["status"]["direction_available"].get<bool>() == true);
+    REQUIRE(report["status"]["reason"].get<std::string>() == "none");
+    REQUIRE(report["solve"]["surrogate_relative_residual"].get<double>() < 1e-4);
+    REQUIRE(report["solve"]["descent_dot"].get<double>() < 0.0);
+    CHECK(report["timing"]["socu_factor_solve_time_ms"].get<double>() >= 0.0);
+    CHECK(report["timing"]["scatter_time_ms"].get<double>() >= 0.0);
+#endif
 }
 }  // namespace
 
@@ -537,6 +674,12 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
         require_socu_approx_structured_sink_dry_run(
             "linear_solver_socu_approx_structured_sink_32",
             32);
+    }
+
+    SECTION("socu_approx_m7_surrogate_solve_world_smoke")
+    {
+        require_socu_approx_m7_surrogate_solve(
+            "linear_solver_socu_approx_m7_surrogate_solve");
     }
 }
 

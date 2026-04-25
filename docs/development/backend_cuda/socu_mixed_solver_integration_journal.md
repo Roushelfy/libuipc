@@ -1423,3 +1423,105 @@ frame. The next checkpoint should connect the M5 dry-run packed
 `diag/off_diag/rhs` buffers to a guarded `socu_native` solve path, then scatter
 the direction back into the solver-owned displacement buffer and validate the
 direction before line search.
+
+## M7 Checkpoint: Guarded Surrogate Solve Path
+
+Milestone 7 now has the first guarded `SocuApproxSolver` solve path. The config
+surface gained:
+
+```text
+linear_system/socu_approx/mode = "solve" | "dry_run"
+linear_system/socu_approx/damping_shift = 1.0
+linear_system/socu_approx/descent_eta = 1e-12
+linear_system/socu_approx/max_relative_residual = 1e-4
+```
+
+The default explicit `socu_approx` mode is now `solve`; existing M5-style tests
+set `mode = "dry_run"` to preserve the dry-run-only behavior. In solve mode,
+the solver performs MathDx artifact preflight during build, keeps a persistent
+runtime object, and lazily creates the `socu_native::SolverPlan` on first solve
+rather than during system initialization. The lazy plan creation matters because
+Warp/MathDx touches CUDA context state; creating it during `do_build()` was too
+early for full simulation startup.
+
+The solve path now uses the M5 structured pack as actual input. It copies the
+assembled global RHS, maps active old DoFs into chain lanes, absorbs any
+structured near-band contributions from the contact report, applies diagonal
+damping to every structured lane, expands first-offdiag storage to the full
+`socu_native::describe_problem_layout()` size, and calls:
+
+```text
+factor_and_solve_inplace_async()
+```
+
+After the solve, it computes the surrogate residual, relative residual, descent
+dot product for `g = -rhs`, gradient norm, and direction norm. Invalid,
+non-finite, non-descent, or high-residual directions fail fast with
+`direction_invalid`; `socu_native` exceptions are reported as
+`socu_runtime_error`. Valid directions are scattered back to
+`GlobalLinearSystem::x`, and the existing line-search path receives that
+direction normally. There is still no implicit fallback to `fused_pcg`.
+
+The JSON report mode is now either:
+
+```text
+structured_dry_run
+structured_surrogate_solve
+```
+
+The report records pack time, `socu_factor_solve_time_ms`, scatter time,
+damping shift, residuals, descent values, and final direction availability.
+
+The sim-case contract source now contains an M7 world smoke section that writes
+a sparse 64-block ordering for the single ABD tet scene and validates the M7
+report after one frame. That source was compile-checked as an object. The full
+`uipc_test_sim_case` binary was not rebuilt here because a Ninja dry run showed
+that it would rebuild the ordinary `cuda` backend:
+
+```text
+ninja -C build/build_impl_fp64 -n uipc_test_sim_case
+# first steps include 228 ordinary cuda backend rebuild/link actions
+```
+
+The current M7 boundary is important: this checkpoint connects the real
+simulation gradient and the structured surrogate solve/scatter path, but the
+Hessian surrogate is still damping plus structured contributions supplied
+through the current report/sink path. Real FEM/ABD subsystem-native Hessian
+writes into `StructuredAssemblySink` are still future work; they should be the
+next strict checkpoint before claiming a production-quality FEM/ABD surrogate
+assembly path.
+
+### Verification
+
+The CUDA mixed target and the updated sim-case contract source were built with
+controlled parallelism:
+
+```bash
+cmake -S . -B build/build_impl_fp64
+ninja -C build/build_impl_fp64 -j4 \
+  backend_cuda_mixed \
+  apps/tests/sim_case/CMakeFiles/sim_case.dir/86_cuda_mixed_precision_contracts.cpp.o
+```
+
+The normal backend contract path passed:
+
+```bash
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The MathDx/Warp-enabled backend contract path also passed:
+
+```bash
+SOCU_NATIVE_WARP_SO=/home/zhaofeng/work/socu-native-cuda/.venv/lib/python3.13/site-packages/warp/bin/warp.so \
+  ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The whitespace check passed:
+
+```bash
+git diff --check
+```

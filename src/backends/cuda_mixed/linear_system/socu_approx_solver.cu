@@ -8,13 +8,17 @@
 #include <uipc/common/json.h>
 #include <uipc/common/timer.h>
 
+#include <cuda_runtime.h>
 #include <fmt/format.h>
+#include <muda/buffer/device_buffer.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <numeric>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -23,13 +27,200 @@
 #define UIPC_WITH_SOCU_NATIVE 0
 #endif
 
+#if UIPC_WITH_SOCU_NATIVE
+#include <socu_native/problem_generator.h>
+#include <socu_native/solver.h>
+#endif
+
 namespace uipc::backend::cuda_mixed
 {
 REGISTER_SIM_SYSTEM(SocuApproxSolver);
 
+struct SocuApproxSolver::Runtime
+{
+#if UIPC_WITH_SOCU_NATIVE
+    using Scalar = ActivePolicy::SolveScalar;
+
+    struct SolverPlanDeleter
+    {
+        void operator()(socu_native::SolverPlan* plan) const
+        {
+            socu_native::destroy_solver_plan(plan);
+        }
+    };
+
+    socu_native::ProblemShape shape{};
+    socu_native::ProblemBufferLayout layout{};
+    socu_native::SolverPlanOptions options{};
+    std::unique_ptr<socu_native::SolverPlan, SolverPlanDeleter> plan;
+    muda::DeviceBuffer<Scalar> device_diag;
+    muda::DeviceBuffer<Scalar> device_off_diag;
+    muda::DeviceBuffer<Scalar> device_rhs;
+
+    Runtime(const socu_native::ProblemShape& shape_in,
+            const socu_native::SolverPlanOptions& options_in)
+        : shape(shape_in)
+        , layout(socu_native::describe_problem_layout(shape))
+        , options(options_in)
+    {
+    }
+
+    Runtime(const Runtime&) = delete;
+    Runtime& operator=(const Runtime&) = delete;
+
+    ~Runtime() = default;
+
+    void reserve()
+    {
+        if(device_diag.capacity() < layout.diag_element_count)
+            device_diag.reserve(layout.diag_element_count);
+        if(device_off_diag.capacity() < layout.off_diag_element_count)
+            device_off_diag.reserve(layout.off_diag_element_count);
+        if(device_rhs.capacity() < layout.rhs_element_count)
+            device_rhs.reserve(layout.rhs_element_count);
+        device_diag.resize(layout.diag_element_count);
+        device_off_diag.resize(layout.off_diag_element_count);
+        device_rhs.resize(layout.rhs_element_count);
+    }
+
+    void upload(const std::vector<Scalar>& diag,
+                const std::vector<Scalar>& off_diag,
+                const std::vector<Scalar>& rhs,
+                cudaStream_t stream)
+    {
+        if(diag.size() != layout.diag_element_count
+           || off_diag.size() != layout.off_diag_element_count
+           || rhs.size() != layout.rhs_element_count)
+        {
+            throw Exception{fmt::format(
+                "SocuApproxSolver runtime buffer size mismatch: diag {}/{}, off_diag {}/{}, rhs {}/{}",
+                diag.size(),
+                layout.diag_element_count,
+                off_diag.size(),
+                layout.off_diag_element_count,
+                rhs.size(),
+                layout.rhs_element_count)};
+        }
+
+        reserve();
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(device_diag.data(),
+                                               diag.data(),
+                                               diag.size() * sizeof(Scalar),
+                                               cudaMemcpyHostToDevice,
+                                               stream));
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(device_off_diag.data(),
+                                               off_diag.data(),
+                                               off_diag.size() * sizeof(Scalar),
+                                               cudaMemcpyHostToDevice,
+                                               stream));
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(device_rhs.data(),
+                                               rhs.data(),
+                                               rhs.size() * sizeof(Scalar),
+                                               cudaMemcpyHostToDevice,
+                                               stream));
+    }
+
+    void factor_and_solve(cudaStream_t stream)
+    {
+        ensure_plan();
+        socu_native::factor_and_solve_inplace_async(
+            plan.get(),
+            device_diag.data(),
+            device_off_diag.data(),
+            device_rhs.data(),
+            socu_native::LaunchOptions{stream});
+    }
+
+    std::vector<Scalar> download_solution(cudaStream_t stream) const
+    {
+        std::vector<Scalar> solution(layout.rhs_element_count);
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(solution.data(),
+                                               device_rhs.data(),
+                                               solution.size() * sizeof(Scalar),
+                                               cudaMemcpyDeviceToHost,
+                                               stream));
+        SOCU_NATIVE_CHECK_CUDA(cudaStreamSynchronize(stream));
+        return solution;
+    }
+
+  private:
+    void ensure_plan()
+    {
+        if(plan != nullptr)
+            return;
+        plan.reset(socu_native::create_solver_plan<Scalar>(shape, options));
+    }
+#endif
+};
+
 namespace
 {
 namespace fs = std::filesystem;
+
+#if UIPC_WITH_SOCU_NATIVE
+#ifndef SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH
+#define SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH ""
+#endif
+
+#ifndef SOCU_NATIVE_SOURCE_DIR
+#define SOCU_NATIVE_SOURCE_DIR ""
+#endif
+#endif
+
+template <typename T>
+double norm2(const std::vector<T>& values)
+{
+    double sum = 0.0;
+    for(const T value : values)
+    {
+        const double v = static_cast<double>(value);
+        sum += v * v;
+    }
+    return std::sqrt(sum);
+}
+
+template <typename T>
+double dot(const std::vector<T>& lhs, const std::vector<T>& rhs)
+{
+    return std::inner_product(lhs.begin(), lhs.end(), rhs.begin(), 0.0);
+}
+
+#if UIPC_WITH_SOCU_NATIVE
+fs::path default_mathdx_manifest_path()
+{
+    return fs::path{SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH};
+}
+
+fs::path discover_warp_so()
+{
+    if(const char* env = std::getenv("SOCU_NATIVE_WARP_SO"))
+    {
+        const fs::path candidate{env};
+        if(fs::is_regular_file(candidate))
+            return candidate;
+    }
+
+    const auto source_dir = fs::path{SOCU_NATIVE_SOURCE_DIR};
+    if(source_dir.empty())
+        return {};
+
+    const auto venv_root = source_dir / ".venv" / "lib";
+    if(!fs::is_directory(venv_root))
+        return {};
+
+    for(const auto& entry : fs::directory_iterator(venv_root))
+    {
+        if(!entry.is_directory())
+            continue;
+        if(entry.path().filename().string().rfind("python", 0) != 0)
+            continue;
+        const auto candidate = entry.path() / "site-packages" / "warp" / "bin" / "warp.so";
+        if(fs::is_regular_file(candidate))
+            return candidate;
+    }
+    return {};
+}
+#endif
 
 const Json* selected_candidate_json(const Json& report)
 {
@@ -294,8 +485,8 @@ class CpuStructuredDryRunSink final : public StructuredAssemblySink
 
         const bool ij_is_forward = block_i < block_j;
         const SizeT left_block   = ij_is_forward ? block_i : block_j;
-        const SizeT row          = ij_is_forward ? lane_i : lane_j;
-        const SizeT col          = ij_is_forward ? lane_j : lane_i;
+        const SizeT row          = ij_is_forward ? lane_j : lane_i;
+        const SizeT col          = ij_is_forward ? lane_i : lane_j;
         m_first_offdiag[offdiag_index(left_block, row, col)] += value;
         ++m_first_offdiag_write_count;
         m_first_offdiag_contact_abs_sum += std::abs(value);
@@ -330,6 +521,38 @@ class CpuStructuredDryRunSink final : public StructuredAssemblySink
         report.rhs_abs_sum = m_rhs_abs_sum;
     }
 
+    void apply_damping(double shift)
+    {
+        for(SizeT block = 0; block < m_blocks.size(); ++block)
+        {
+            for(SizeT lane = 0; lane < m_block_size; ++lane)
+                m_diag[diag_index(block, lane, lane)] += shift;
+        }
+    }
+
+    template <typename T>
+    std::vector<T> rhs_as() const
+    {
+        return convert<T>(m_rhs);
+    }
+
+    template <typename T>
+    std::vector<T> diag_as() const
+    {
+        return convert<T>(m_diag);
+    }
+
+    template <typename T>
+    std::vector<T> off_diag_as(std::size_t full_scalar_count) const
+    {
+        std::vector<T> values(full_scalar_count, T{0});
+        const std::size_t copy_count =
+            std::min<std::size_t>(values.size(), m_first_offdiag.size());
+        for(std::size_t i = 0; i < copy_count; ++i)
+            values[i] = static_cast<T>(m_first_offdiag[i]);
+        return values;
+    }
+
   private:
     bool valid_lane(SizeT block, SizeT lane) const
     {
@@ -351,6 +574,17 @@ class CpuStructuredDryRunSink final : public StructuredAssemblySink
         return static_cast<SizeT>(
             std::count_if(values.begin(), values.end(), [](double v)
                           { return v != 0.0; }));
+    }
+
+    template <typename T>
+    static std::vector<T> convert(const std::vector<double>& values)
+    {
+        std::vector<T> converted(values.size());
+        std::transform(values.begin(),
+                       values.end(),
+                       converted.begin(),
+                       [](double value) { return static_cast<T>(value); });
+        return converted;
     }
 
     SizeT m_block_size = 0;
@@ -576,8 +810,9 @@ Json to_json(const SocuApproxDryRunReport& report)
     }
 
     return Json{{"solver", "socu_approx"},
-                {"milestone", 5},
-                {"mode", "structured_dry_run"},
+                {"milestone",
+                 report.mode == "structured_surrogate_solve" ? 7 : 5},
+                {"mode", report.mode},
                 {"packed", report.packed},
                 {"ordering_report", report.ordering_report_path},
                 {"contact_report", report.contact_report_path},
@@ -628,10 +863,22 @@ Json to_json(const SocuApproxDryRunReport& report)
                   {"structured_off_band_drop_abs_sum",
                    report.structured_off_band_drop_abs_sum},
                   {"rhs_abs_sum", report.rhs_abs_sum}}},
-                {"timing", {{"dry_run_pack_time_ms", report.dry_run_pack_time_ms}}},
+                {"timing",
+                 {{"dry_run_pack_time_ms", report.dry_run_pack_time_ms},
+                  {"socu_factor_solve_time_ms", report.socu_factor_solve_time_ms},
+                  {"scatter_time_ms", report.scatter_time_ms}}},
+                {"solve",
+                 {{"damping_shift", report.damping_shift},
+                  {"surrogate_residual", report.surrogate_residual},
+                  {"surrogate_relative_residual",
+                   report.surrogate_relative_residual},
+                  {"descent_dot", report.descent_dot},
+                  {"gradient_norm", report.gradient_norm},
+                  {"direction_norm", report.direction_norm}}},
                 {"status",
-                 {{"direction_available", false},
-                  {"reason", std::string{to_string(SocuApproxGateReason::StubNoDirection)}}}}};
+                 {{"direction_available", report.direction_available},
+                  {"reason", report.status_reason},
+                  {"detail", report.status_detail}}}};
 }
 
 void write_dry_run_report(const SocuApproxDryRunReport& report)
@@ -664,6 +911,8 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept
         return "unsupported_block_size";
     case SocuApproxGateReason::SocuMathDxUnsupported:
         return "socu_mathdx_unsupported";
+    case SocuApproxGateReason::SocuRuntimeArtifactUnavailable:
+        return "socu_runtime_artifact_unavailable";
     case SocuApproxGateReason::OrderingQualityTooLow:
         return "ordering_quality_too_low";
     case SocuApproxGateReason::ContactOffBandRatioTooHigh:
@@ -672,9 +921,15 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept
         return "structured_provider_missing";
     case SocuApproxGateReason::StubNoDirection:
         return "socu_approx_stub_no_direction";
+    case SocuApproxGateReason::DirectionInvalid:
+        return "direction_invalid";
+    case SocuApproxGateReason::SocuRuntimeError:
+        return "socu_runtime_error";
     }
     return "unknown";
 }
+
+SocuApproxSolver::~SocuApproxSolver() = default;
 
 void SocuApproxSolver::do_build(BuildInfo& info)
 {
@@ -695,6 +950,18 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 #endif
 
     require<GlobalLinearSystem>();
+
+    auto mode_attr =
+        config.find<std::string>("linear_system/socu_approx/mode");
+    m_mode = mode_attr ? mode_attr->view()[0] : std::string{"solve"};
+    if(m_mode != "dry_run" && m_mode != "solve")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingReportInvalid,
+            fmt::format("linear_system/socu_approx/mode must be 'dry_run' or 'solve', got '{}'",
+                        m_mode));
+        throw_gate_failure(m_gate_report);
+    }
 
     auto ordering_report_attr =
         config.find<std::string>("linear_system/socu_approx/ordering_report");
@@ -846,6 +1113,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         contact_report_attr ? contact_report_attr->view()[0] : std::string{};
 
     m_dry_run_report                         = SocuApproxDryRunReport{};
+    m_dry_run_report.mode =
+        m_mode == "solve" ? "structured_surrogate_solve" : "structured_dry_run";
     m_dry_run_report.report_path             = dry_run_report_path.string();
     m_dry_run_report.ordering_report_path    = ordering_report_path.string();
     m_dry_run_report.contact_report_path =
@@ -865,9 +1134,100 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_gate_report.passed = true;
     m_gate_report.reason = SocuApproxGateReason::None;
     m_gate_report.detail =
-        "M5 structured dry-run gate passed; solve direction is intentionally unavailable";
+        m_mode == "solve"
+            ? "M7 structured surrogate solve gate passed"
+            : "M5 structured dry-run gate passed; solve direction is intentionally unavailable";
 
-    logger::info("SocuApproxSolver M5 dry-run enabled: block_size={}, blocks={}, report='{}'",
+    if(m_mode == "solve")
+    {
+#if UIPC_WITH_SOCU_NATIVE
+        const auto manifest_path = default_mathdx_manifest_path();
+        if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                fmt::format("MathDx manifest is missing; expected '{}'",
+                            manifest_path.string()),
+                ordering_report_path.string());
+            m_gate_report.block_size = m_dry_run_report.block_size;
+            throw_gate_failure(m_gate_report);
+        }
+
+        const auto warp_so = discover_warp_so();
+        if(warp_so.empty())
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                "Warp native library is missing; set SOCU_NATIVE_WARP_SO",
+                ordering_report_path.string());
+            m_gate_report.block_size = m_dry_run_report.block_size;
+            throw_gate_failure(m_gate_report);
+        }
+
+        int device_count = 0;
+        const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+        if(device_query != cudaSuccess || device_count == 0)
+        {
+            cudaGetLastError();
+            m_gate_report = make_failure(
+                SocuApproxGateReason::SocuMathDxUnsupported,
+                "no CUDA device is available for socu_approx",
+                ordering_report_path.string());
+            m_gate_report.block_size = m_dry_run_report.block_size;
+            throw_gate_failure(m_gate_report);
+        }
+
+        socu_native::ProblemShape shape{
+            static_cast<int>(m_dry_run_report.block_count),
+            static_cast<int>(m_dry_run_report.block_size),
+            1};
+        socu_native::SolverPlanOptions options;
+        options.backend      = socu_native::SolverBackend::NativePerf;
+        options.perf_backend = socu_native::PerfBackend::MathDx;
+        options.math_mode    = socu_native::MathMode::Auto;
+        options.graph_mode   = socu_native::GraphMode::Off;
+
+        const auto capability =
+            socu_native::query_solver_capability<Runtime::Scalar>(
+                shape,
+                socu_native::SolverOperation::FactorAndSolve,
+                options);
+        if(!capability.supported
+           || capability.resolved_backend != socu_native::SolverBackend::NativePerf
+           || capability.resolved_perf_backend != socu_native::PerfBackend::MathDx)
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::SocuMathDxUnsupported,
+                fmt::format("socu_native MathDx capability rejected: {}",
+                            capability.reason),
+                ordering_report_path.string());
+            m_gate_report.block_size = m_dry_run_report.block_size;
+            throw_gate_failure(m_gate_report);
+        }
+
+        try
+        {
+            m_runtime = std::make_unique<Runtime>(shape, options);
+        }
+        catch(const std::exception& e)
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::SocuRuntimeError,
+                fmt::format("socu_native plan creation failed: {}", e.what()),
+                ordering_report_path.string());
+            m_gate_report.block_size = m_dry_run_report.block_size;
+            throw_gate_failure(m_gate_report);
+        }
+#else
+        m_gate_report = make_failure(
+            SocuApproxGateReason::SocuDisabled,
+            "socu_native is disabled or not available");
+        throw_gate_failure(m_gate_report);
+#endif
+    }
+
+    logger::info("SocuApproxSolver {} enabled: block_size={}, blocks={}, report='{}'",
+                 m_mode == "solve" ? "M7 surrogate solve" : "M5 dry-run",
                  m_dry_run_report.block_size,
                  m_dry_run_report.block_count,
                  m_dry_run_report.report_path);
@@ -875,6 +1235,16 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 
 void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
 {
+    using StoreScalar = GlobalLinearSystem::StoreScalar;
+    using SolveScalar = GlobalLinearSystem::SolveScalar;
+
+    CpuStructuredDryRunSink sink{m_dry_run_report.block_size,
+                                 m_dry_run_report.blocks};
+    std::vector<StoreScalar> host_rhs(info.b().size());
+    std::vector<SolveScalar> structured_rhs;
+    std::vector<SolveScalar> structured_diag;
+    std::vector<SolveScalar> structured_off_diag;
+
     {
         Timer timer{"SocuApprox Dry Run Pack"};
         auto  start = std::chrono::steady_clock::now();
@@ -885,10 +1255,6 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
         m_dry_run_report.first_offdiag_block_count =
             m_dry_run_report.blocks.empty() ? 0 : m_dry_run_report.blocks.size() - 1;
 
-        CpuStructuredDryRunSink sink{m_dry_run_report.block_size,
-                                     m_dry_run_report.blocks};
-
-        std::vector<GlobalLinearSystem::StoreScalar> host_rhs(info.b().size());
         if(!host_rhs.empty())
             info.b().buffer_view().copy_to(host_rhs.data());
 
@@ -904,23 +1270,192 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
         }
 
         load_contact_report(m_dry_run_report, sink);
+
+        if(m_mode == "solve")
+        {
+            auto damping_attr =
+                world().scene().config().find<Float>("linear_system/socu_approx/damping_shift");
+            m_dry_run_report.damping_shift =
+                damping_attr ? static_cast<double>(damping_attr->view()[0]) : 1.0;
+            if(!(m_dry_run_report.damping_shift > 0.0))
+            {
+                m_dry_run_report.status_reason =
+                    std::string{to_string(SocuApproxGateReason::DirectionInvalid)};
+                m_dry_run_report.status_detail =
+                    "linear_system/socu_approx/damping_shift must be positive";
+                write_dry_run_report(m_dry_run_report);
+                throw Exception{fmt::format("SocuApproxSolver direction invalid: {}",
+                                            m_dry_run_report.status_detail)};
+            }
+            sink.apply_damping(m_dry_run_report.damping_shift);
+        }
+
         sink.finalize(m_dry_run_report);
+
+#if UIPC_WITH_SOCU_NATIVE
+        if(m_mode == "solve")
+        {
+            UIPC_ASSERT(m_runtime != nullptr,
+                        "SocuApproxSolver solve mode requires initialized runtime.");
+            structured_rhs = sink.rhs_as<SolveScalar>();
+            structured_diag = sink.diag_as<SolveScalar>();
+            structured_off_diag =
+                sink.off_diag_as<SolveScalar>(m_runtime->layout.off_diag_element_count);
+        }
+#endif
 
         auto stop = std::chrono::steady_clock::now();
         m_dry_run_report.dry_run_pack_time_ms =
             std::chrono::duration<double, std::milli>(stop - start).count();
     }
 
+    if(m_mode == "dry_run")
+    {
+        m_dry_run_report.direction_available = false;
+        m_dry_run_report.status_reason =
+            std::string{to_string(SocuApproxGateReason::StubNoDirection)};
+        m_dry_run_report.status_detail =
+            "M5 structured dry-run pack completed, but no socu solve direction is available yet";
+        write_dry_run_report(m_dry_run_report);
+
+        m_gate_report.reason = SocuApproxGateReason::StubNoDirection;
+        m_gate_report.detail = m_dry_run_report.status_detail;
+        info.x().buffer_view().fill(static_cast<SolveScalar>(0));
+        info.iter_count(0);
+
+        logger::warn("SocuApproxSolver M5 dry-run completed without a solve direction; "
+                     "returning a zero direction. report='{}'",
+                     m_dry_run_report.report_path);
+        return;
+    }
+
+#if UIPC_WITH_SOCU_NATIVE
+    std::vector<SolveScalar> structured_solution;
+    try
+    {
+        Timer timer{"SocuApprox Factor Solve"};
+        auto  start = std::chrono::steady_clock::now();
+        cudaStream_t stream = nullptr;
+        m_runtime->upload(structured_diag, structured_off_diag, structured_rhs, stream);
+        m_runtime->factor_and_solve(stream);
+        SOCU_NATIVE_CHECK_CUDA(cudaStreamSynchronize(stream));
+        structured_solution = m_runtime->download_solution(stream);
+        auto stop = std::chrono::steady_clock::now();
+        m_dry_run_report.socu_factor_solve_time_ms =
+            std::chrono::duration<double, std::milli>(stop - start).count();
+    }
+    catch(const std::exception& e)
+    {
+        m_dry_run_report.direction_available = false;
+        m_dry_run_report.status_reason =
+            std::string{to_string(SocuApproxGateReason::SocuRuntimeError)};
+        m_dry_run_report.status_detail =
+            fmt::format("socu_native factor_and_solve failed: {}", e.what());
+        write_dry_run_report(m_dry_run_report);
+        throw Exception{fmt::format("SocuApproxSolver solve failed: {}",
+                                    m_dry_run_report.status_detail)};
+    }
+
+    m_dry_run_report.surrogate_residual =
+        socu_native::residual_norm(structured_diag,
+                                   structured_off_diag,
+                                   structured_rhs,
+                                   structured_solution,
+                                   m_runtime->shape);
+    m_dry_run_report.gradient_norm = norm2(structured_rhs);
+    m_dry_run_report.direction_norm = norm2(structured_solution);
+    m_dry_run_report.surrogate_relative_residual =
+        m_dry_run_report.surrogate_residual
+        / std::max(1.0, m_dry_run_report.gradient_norm);
+    m_dry_run_report.descent_dot = -dot(structured_rhs, structured_solution);
+
+    auto eta_attr =
+        world().scene().config().find<Float>("linear_system/socu_approx/descent_eta");
+    auto residual_attr =
+        world().scene().config().find<Float>("linear_system/socu_approx/max_relative_residual");
+    const double descent_eta =
+        eta_attr ? static_cast<double>(eta_attr->view()[0]) : 1e-12;
+    const double max_relative_residual =
+        residual_attr ? static_cast<double>(residual_attr->view()[0]) : 1e-4;
+
+    const bool finite =
+        std::isfinite(m_dry_run_report.surrogate_residual)
+        && std::isfinite(m_dry_run_report.surrogate_relative_residual)
+        && std::isfinite(m_dry_run_report.descent_dot)
+        && std::isfinite(m_dry_run_report.gradient_norm)
+        && std::isfinite(m_dry_run_report.direction_norm);
+    const bool nonzero =
+        m_dry_run_report.gradient_norm > 0.0 && m_dry_run_report.direction_norm > 0.0;
+    const bool descent =
+        m_dry_run_report.descent_dot
+        < -descent_eta * m_dry_run_report.gradient_norm
+               * m_dry_run_report.direction_norm;
+    const bool residual_ok =
+        m_dry_run_report.surrogate_relative_residual <= max_relative_residual;
+
+    if(!finite || !nonzero || !descent || !residual_ok)
+    {
+        m_dry_run_report.direction_available = false;
+        m_dry_run_report.status_reason =
+            std::string{to_string(SocuApproxGateReason::DirectionInvalid)};
+        m_dry_run_report.status_detail =
+            fmt::format("direction validation failed: finite={}, nonzero={}, descent={}, "
+                        "residual_ok={}, g_dot_p={}, g_norm={}, p_norm={}, rel_residual={}, "
+                        "max_relative_residual={}",
+                        finite,
+                        nonzero,
+                        descent,
+                        residual_ok,
+                        m_dry_run_report.descent_dot,
+                        m_dry_run_report.gradient_norm,
+                        m_dry_run_report.direction_norm,
+                        m_dry_run_report.surrogate_relative_residual,
+                        max_relative_residual);
+        write_dry_run_report(m_dry_run_report);
+        throw Exception{fmt::format("SocuApproxSolver direction invalid: {}",
+                                    m_dry_run_report.status_detail)};
+    }
+
+    {
+        Timer timer{"SocuApprox Scatter Direction"};
+        auto  start = std::chrono::steady_clock::now();
+        std::vector<SolveScalar> host_x(info.x().size(), SolveScalar{0});
+        for(const StructuredDofSlot& slot : m_dof_slots)
+        {
+            if(!slot.scatter_write || slot.is_padding || slot.old_dof < 0
+               || slot.chain_dof < 0)
+                continue;
+            const auto old_dof = static_cast<SizeT>(slot.old_dof);
+            const auto chain_dof = static_cast<SizeT>(slot.chain_dof);
+            if(old_dof < host_x.size() && chain_dof < structured_solution.size())
+                host_x[old_dof] = structured_solution[chain_dof];
+        }
+        if(!host_x.empty())
+            info.x().buffer_view().copy_from(host_x.data());
+        auto stop = std::chrono::steady_clock::now();
+        m_dry_run_report.scatter_time_ms =
+            std::chrono::duration<double, std::milli>(stop - start).count();
+    }
+
+    m_dry_run_report.direction_available = true;
+    m_dry_run_report.status_reason = std::string{to_string(SocuApproxGateReason::None)};
+    m_dry_run_report.status_detail = "M7 structured surrogate direction solved and scattered";
     write_dry_run_report(m_dry_run_report);
 
-    m_gate_report.reason = SocuApproxGateReason::StubNoDirection;
-    m_gate_report.detail =
-        "M5 structured dry-run pack completed, but no socu solve direction is available yet";
-    info.x().buffer_view().fill(static_cast<GlobalLinearSystem::SolveScalar>(0));
-    info.iter_count(0);
+    m_gate_report.reason = SocuApproxGateReason::None;
+    m_gate_report.detail = m_dry_run_report.status_detail;
+    info.iter_count(1);
 
-    logger::warn("SocuApproxSolver M5 dry-run completed without a solve direction; "
-                 "returning a zero direction. report='{}'",
+    logger::info("SocuApproxSolver M7 solve completed: rel_residual={}, g_dot_p={}, "
+                 "pack_ms={}, solve_ms={}, scatter_ms={}, report='{}'",
+                 m_dry_run_report.surrogate_relative_residual,
+                 m_dry_run_report.descent_dot,
+                 m_dry_run_report.dry_run_pack_time_ms,
+                 m_dry_run_report.socu_factor_solve_time_ms,
+                 m_dry_run_report.scatter_time_ms,
                  m_dry_run_report.report_path);
+#else
+    throw Exception{"SocuApproxSolver solve mode reached without socu_native support"};
+#endif
 }
 }  // namespace uipc::backend::cuda_mixed

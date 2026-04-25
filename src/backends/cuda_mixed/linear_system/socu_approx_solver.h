@@ -3,6 +3,7 @@
 #include <linear_system/linear_solver.h>
 #include <linear_system/socu_approx_report.h>
 #include <linear_system/structured_chain_provider.h>
+#include <memory>
 #include <vector>
 
 namespace uipc::backend::cuda_mixed
@@ -11,6 +12,7 @@ class SocuApproxSolver : public LinearSolver
 {
   public:
     using LinearSolver::LinearSolver;
+    ~SocuApproxSolver();
 
     virtual AssemblyRequirements assembly_requirements() const override
     {
@@ -37,5 +39,9 @@ class SocuApproxSolver : public LinearSolver
     SocuApproxGateReport  m_gate_report;
     SocuApproxDryRunReport m_dry_run_report;
     std::vector<StructuredDofSlot> m_dof_slots;
+    std::string m_mode = "solve";
+
+    struct Runtime;
+    std::unique_ptr<Runtime> m_runtime;
 };
 }  // namespace uipc::backend::cuda_mixed
