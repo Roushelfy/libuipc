@@ -32,6 +32,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     //  - linear_pcg (30% slower)
     config.create("linear_system/solver", std::string{"fused_pcg"});
     config.create("linear_system/socu_approx/ordering_report", std::string{});
+    config.create("linear_system/socu_approx/contact_report", std::string{});
+    config.create("linear_system/socu_approx/dry_run_report", std::string{});
     config.create("linear_system/socu_approx/min_near_band_ratio", Float{0.0});
     config.create("linear_system/socu_approx/max_off_band_ratio", Float{1.0});
 

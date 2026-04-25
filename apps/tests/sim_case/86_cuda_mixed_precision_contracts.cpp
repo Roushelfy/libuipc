@@ -180,6 +180,25 @@ void write_socu_ordering_report(const fs::path& path,
     ofs << report.dump(2);
 }
 
+void write_socu_contact_report(const fs::path& path)
+{
+    Json report = {{"active_contact_count", 3},
+                   {"near_band_contact_count", 2},
+                   {"mixed_contact_count", 0},
+                   {"off_band_contact_count", 1},
+                   {"near_band_contribution_count", 4},
+                   {"off_band_contribution_count", 2},
+                   {"contribution_near_band_ratio", 2.0 / 3.0},
+                   {"contribution_off_band_ratio", 1.0 / 3.0},
+                   {"weighted_near_band_ratio", 0.8},
+                   {"weighted_off_band_ratio", 0.2},
+                   {"estimated_absorbed_hessian_contribution_count", 4},
+                   {"estimated_dropped_contribution_count", 2}};
+
+    std::ofstream ofs{path};
+    ofs << report.dump(2);
+}
+
 void require_socu_approx_init_failure(std::string_view name,
                                       Json             config,
                                       std::string_view expected_reason)
@@ -208,6 +227,75 @@ void require_socu_approx_init_failure(std::string_view name,
     INFO("exception message: " << message);
     REQUIRE(threw);
     REQUIRE(message.find(expected_reason) != std::string::npos);
+}
+
+void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
+{
+    auto config                       = linear_solver_selection_config();
+    config["linear_system"]["solver"] = "socu_approx";
+
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    auto ordering_path  = output_path / "ordering.json";
+    auto contact_path   = output_path / "contact.json";
+    auto dry_run_path   = output_path / "dry_run.json";
+    write_socu_ordering_report(ordering_path, block_size);
+    write_socu_contact_report(contact_path);
+
+    config["linear_system"]["socu_approx"]["ordering_report"] =
+        ordering_path.string();
+    config["linear_system"]["socu_approx"]["contact_report"] =
+        contact_path.string();
+    config["linear_system"]["socu_approx"]["dry_run_report"] =
+        dry_run_path.string();
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_single_abd_tet(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    world.advance();
+    REQUIRE(world.is_valid());
+    REQUIRE(fs::exists(dry_run_path));
+
+    std::ifstream ifs{dry_run_path};
+    Json          report = Json::parse(ifs);
+    REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
+    REQUIRE(report["status"]["reason"].get<std::string>()
+            == "socu_approx_stub_no_direction");
+    REQUIRE(report["status"]["direction_available"].get<bool>() == false);
+    REQUIRE(report["block_size"].get<SizeT>() == block_size);
+    REQUIRE(report["structured_slot_count"].get<SizeT>() == block_size);
+    REQUIRE(report["padding_slot_count"].get<SizeT>() == block_size - 12);
+    CHECK(std::abs(report["block_utilization"].get<double>()
+                   - static_cast<double>(12) / static_cast<double>(block_size))
+          < 1e-12);
+    REQUIRE(report["layout"]["block_count"].get<SizeT>() == 1);
+    REQUIRE(report["layout"]["diag_block_count"].get<SizeT>() == 1);
+    REQUIRE(report["layout"]["first_offdiag_block_count"].get<SizeT>() == 0);
+    REQUIRE(report["layout"]["rhs_scalar_count"].get<SizeT>() == 12);
+    REQUIRE(report["layout"]["diag_scalar_count"].get<SizeT>() == 144);
+    REQUIRE(report["layout"]["first_offdiag_scalar_count"].get<SizeT>() == 0);
+    REQUIRE(report["layout"]["blocks"].size() == 1);
+    REQUIRE(report["layout"]["blocks"][0]["dof_offset"].get<SizeT>() == 0);
+    REQUIRE(report["layout"]["blocks"][0]["dof_count"].get<SizeT>() == 12);
+    REQUIRE(report["contact"]["near_band_contact_count"].get<SizeT>() == 2);
+    REQUIRE(report["contact"]["off_band_contact_count"].get<SizeT>() == 1);
+    REQUIRE(report["contact"]["near_band_contribution_count"].get<SizeT>() == 4);
+    REQUIRE(report["contact"]["off_band_contribution_count"].get<SizeT>() == 2);
+    REQUIRE(report["contact"]["absorbed_hessian_contribution_count"].get<SizeT>() == 4);
+    REQUIRE(report["contact"]["dropped_hessian_contribution_count"].get<SizeT>() == 2);
+    CHECK(std::abs(report["contact"]["contribution_near_band_ratio"].get<double>()
+                   - 2.0 / 3.0)
+          < 1e-12);
+    CHECK(std::abs(report["contact"]["contribution_off_band_ratio"].get<double>()
+                   - 1.0 / 3.0)
+          < 1e-12);
+    CHECK(report["timing"]["dry_run_pack_time_ms"].get<double>() >= 0.0);
 }
 }  // namespace
 
@@ -298,20 +386,14 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "ordering_quality_too_low");
     }
 
-    SECTION("socu_approx_valid_report_stops_at_m4_stub")
+    SECTION("socu_approx_valid_report_runs_m5_dry_run_32")
     {
-        auto config                       = linear_solver_selection_config();
-        config["linear_system"]["solver"] = "socu_approx";
-        auto output_path = contract_workspace("linear_solver_socu_approx_stub");
-        fs::create_directories(output_path);
-        auto report_path = output_path / "ordering.json";
-        write_socu_ordering_report(report_path, 32);
-        config["linear_system"]["socu_approx"]["ordering_report"] =
-            report_path.string();
-        require_socu_approx_init_failure(
-            "linear_solver_socu_approx_stub",
-            config,
-            "structured_provider_missing");
+        require_socu_approx_dry_run("linear_solver_socu_approx_dry_run_32", 32);
+    }
+
+    SECTION("socu_approx_valid_report_runs_m5_dry_run_64")
+    {
+        require_socu_approx_dry_run("linear_solver_socu_approx_dry_run_64", 64);
     }
 }
 

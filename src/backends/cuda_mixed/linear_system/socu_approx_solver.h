@@ -19,12 +19,17 @@ class SocuApproxSolver : public LinearSolver
     }
 
     const SocuApproxGateReport& gate_report() const noexcept { return m_gate_report; }
+    const SocuApproxDryRunReport& dry_run_report() const noexcept
+    {
+        return m_dry_run_report;
+    }
 
   protected:
     virtual void do_build(BuildInfo& info) override;
     virtual void do_solve(GlobalLinearSystem::SolvingInfo& info) override;
 
   private:
-    SocuApproxGateReport m_gate_report;
+    SocuApproxGateReport  m_gate_report;
+    SocuApproxDryRunReport m_dry_run_report;
 };
 }  // namespace uipc::backend::cuda_mixed

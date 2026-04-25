@@ -918,3 +918,206 @@ contact contribution, and report pack quality and timing. Milestone 5 should
 still avoid invoking `socu_native`; it should only prove that the structured
 surrogate layout can be generated and compared against the standalone lab
 statistics.
+
+### Milestone 5 Implementation
+
+M5 added the first structured dry-run path for explicit
+`linear_system/solver = "socu_approx"`. This is still not a performance path:
+it does not call `socu_native`, does not skip the legacy full sparse assembly in
+the default solver path, and does not produce a real linear solve direction.
+
+The implementation added the runtime abstraction boundary:
+
+- `src/backends/cuda_mixed/linear_system/structured_chain_provider.h`
+
+The new header defines the logical provider contract for later real structured
+assembly:
+
+```text
+StructuredChainShape
+StructuredDofSlot
+StructuredContributionStats
+StructuredQualityReport
+StructuredAssemblySink
+StructuredChainProvider
+```
+
+`SocuApproxSolver` now builds an ordering-backed structured provider from the
+lab ordering JSON. The provider expands each ordered atom into explicit
+`old_dof -> padded chain_dof -> block/lane` slots and inserts explicit padding
+slots. Padding slots have no old DoF, are not scatter-written, and are included
+in the dry-run report so later kernels do not need implicit lane conventions.
+
+M5 also added two config fields:
+
+```text
+linear_system/socu_approx/contact_report = ""
+linear_system/socu_approx/dry_run_report = ""
+```
+
+When `socu_approx` is explicitly selected with a valid ordering report, the
+gate now passes initialization instead of failing at
+`structured_provider_missing`. During solve, the solver performs a CPU-side
+dry-run pack report and writes JSON with:
+
+```text
+mode = structured_dry_run
+block_size
+ordering_dof_count
+structured_slot_count
+padding_slot_count
+block_utilization
+layout.diag_block_count
+layout.first_offdiag_block_count
+layout.rhs_scalar_count
+layout.diag_scalar_count
+layout.first_offdiag_scalar_count
+layout.blocks[]
+contact near/off-band counts and contribution ratios
+timing.dry_run_pack_time_ms
+status.direction_available = false
+status.reason = socu_approx_stub_no_direction
+```
+
+For this checkpoint, the contact contribution statistics are read from the
+standalone lab contact report. Near-band contribution counts are propagated into
+the structured dry-run report, while off-band contribution counts are reported
+as dropped. The real contact/dytopo reporter is not yet writing directly into a
+structured sink.
+
+The solve phase deliberately returns a zero direction after writing the report.
+The report still states that no real direction is available. This avoids
+throwing through the CUDA/C++ solve stack while preserving an explicit,
+opt-in-only dry-run behavior. The default `fused_pcg` path remains unchanged and
+does not instantiate this path except through the normal unused-system registry
+flow.
+
+### Milestone 5 Verification
+
+The `fp64` build was rebuilt with:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target backend_cuda_mixed uipc_test_backend_cuda_mixed uipc_test_sim_case \
+  --parallel 8
+```
+
+The targeted contract tests passed with:
+
+```bash
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|sim_case_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The final test result was:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+sim_case_cuda_mixed_contract: passed
+```
+
+The M5 contract coverage now includes:
+
+- default `fused_pcg` selection remains valid;
+- explicit `linear_pcg` selection remains valid;
+- invalid solver selection still fails;
+- explicit `socu_approx` with no ordering report fails with `ordering_missing`;
+- explicit `socu_approx` with block size other than `32` or `64` fails with
+  `unsupported_block_size`;
+- explicit `socu_approx` with low ordering quality fails with
+  `ordering_quality_too_low`;
+- explicit `socu_approx` with valid `n=32` and `n=64` ordering reports runs the
+  structured dry-run, writes `dry_run.json`, and keeps
+  `status.reason = socu_approx_stub_no_direction`;
+- the dry-run report records correct one-block `diag/rhs` layout for the test
+  scene, explicit padding counts, block utilization, near/off-band contact
+  contribution counts, and dry-run pack timing.
+
+The `n=32` dry-run contract produced:
+
+```text
+block_size = 32
+ordering_dof_count = 12
+structured_slot_count = 32
+padding_slot_count = 20
+block_utilization = 0.375
+layout.diag_block_count = 1
+layout.first_offdiag_block_count = 0
+layout.rhs_scalar_count = 12
+layout.diag_scalar_count = 144
+near_band_contribution_count = 4
+off_band_contribution_count = 2
+```
+
+The `n=64` dry-run contract similarly produced one block with
+`padding_slot_count = 52` and `block_utilization = 0.1875`.
+
+The source check confirmed that the M5 runtime files still do not reference
+`socu_native`.
+
+After the final rebuild, the Python package native copy was refreshed with
+`scripts/after_build_pyuipc.py`. The copied package library and build output
+library matched:
+
+```text
+build/build_impl_fp64/python/src/uipc/_native/libuipc_backend_cuda_mixed.so
+build/build_impl_fp64/Release/bin/libuipc_backend_cuda_mixed.so
+sha256 = 0fcad518d9555eaa4dfc14c247de051e97b9db106c0cf95fac8caac78e2478bf
+```
+
+The default `fused_pcg` `fp64` benchmark was rerun with the final M5 code:
+
+```bash
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+  apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/particle.json \
+  --levels fp64 \
+  --build fp64=build/build_impl_fp64 \
+  --config Release \
+  --run_root output/benchmarks/mixed/uipc_assets/socu_m5_after_fp64_final \
+  --perf \
+  --timers
+```
+
+The recorded M5 default-path result was:
+
+```text
+asset = particle_rain
+level = fp64
+frames = 80
+warmup_frames = 10
+wall_time = 1.285899446 s
+end_to_end_wall_time = 1.429956108 s
+avg_frame_time = 16.073743075 ms/frame
+
+Pipeline mean = 16.975558113 ms
+Simulation mean = 16.972240750 ms
+Build Linear System mean = 1.326953850 ms
+Assemble Linear System mean = 0.286441425 ms
+Convert Matrix mean = 0.933967775 ms
+Solve Global Linear System mean = 4.843001200 ms
+Solve Linear System mean = 3.416679325 ms
+FusedPCG mean = 3.340769963 ms
+SpMV mean = 0.706344813 ms
+Apply Preconditioner mean = 0.471451300 ms
+
+newton_iteration_count mean = 2.6875
+line_search_iteration_count mean = 3.975
+pcg_iteration_count mean = 14.9375
+```
+
+The iteration counters match the M3/M4 records exactly. The frame time is within
+the machine/runtime variation already observed in paired M3/M4 checks. M5 is
+therefore considered complete as a structured dry-run checkpoint, not as a
+performance checkpoint.
+
+### Next Work
+
+The next planned step is synthetic `socu` solve: keep using the structured
+provider boundary, but introduce a synthetic SPD block-tridiagonal system and a
+controlled `socu_native` call. That step should validate `n=32` and `n=64`,
+finite residual, descent direction, stream compatibility, and repeated-run
+resource stability before any real `cuda_mixed` FEM/ABD/contact contribution is
+sent to `socu_native`.
