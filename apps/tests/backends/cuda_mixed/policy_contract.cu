@@ -3,6 +3,7 @@
 #include <linear_system/linear_fused_pcg.h>
 #include <linear_system/linear_pcg.h>
 #include <linear_system/linear_solver.h>
+#include <linear_system/socu_approx_solver.h>
 #include <mixed_precision/policy.h>
 #include <type_traits>
 
@@ -124,6 +125,7 @@ static_assert(std::is_base_of_v<SimSystem, LinearSolver>);
 static_assert(std::is_base_of_v<LinearSolver, IterativeSolver>);
 static_assert(std::is_base_of_v<IterativeSolver, LinearPCG>);
 static_assert(std::is_base_of_v<IterativeSolver, LinearFusedPCG>);
+static_assert(std::is_base_of_v<LinearSolver, SocuApproxSolver>);
 }  // namespace
 
 TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")

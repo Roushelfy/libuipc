@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <numbers>
 #include <ranges>
 #include <uipc/uipc.h>
@@ -149,6 +150,65 @@ void run_linear_solver_selection_case(std::string_view name, Json config)
     }
     require_cuda_sync();
 }
+
+void write_socu_ordering_report(const fs::path& path,
+                                SizeT           block_size,
+                                double          near_band_ratio = 1.0,
+                                double          off_band_ratio  = 0.0)
+{
+    Json report = {
+        {"selected",
+         {{"ok", true},
+          {"ordering",
+           {{"orderer", "test"},
+            {"block_size", block_size},
+            {"chain_to_old", Json::array({0, 1, 2, 3})},
+            {"old_to_chain", Json::array({0, 1, 2, 3})},
+            {"atom_to_block", Json::array({0, 0, 0, 0})},
+            {"atom_block_offset", Json::array({0, 3, 6, 9})},
+            {"atom_dof_count", Json::array({3, 3, 3, 3})},
+            {"block_to_atom_range",
+             Json::array({Json{{"block", 0},
+                                {"chain_begin", 0},
+                                {"chain_end", 4},
+                                {"dof_count", 12}}})}}},
+          {"metrics",
+           {{"near_band_ratio", near_band_ratio},
+            {"off_band_ratio", off_band_ratio}}}}}};
+
+    std::ofstream ofs{path};
+    ofs << report.dump(2);
+}
+
+void require_socu_approx_init_failure(std::string_view name,
+                                      Json             config,
+                                      std::string_view expected_reason)
+{
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_single_abd_tet(scene);
+
+    bool        threw = false;
+    std::string message;
+    try
+    {
+        world.init(scene);
+    }
+    catch(const std::exception& e)
+    {
+        threw   = true;
+        message = e.what();
+    }
+
+    INFO("exception message: " << message);
+    REQUIRE(threw);
+    REQUIRE(message.find(expected_reason) != std::string::npos);
+}
 }  // namespace
 
 TEST_CASE("86_cuda_mixed_contract_abd_bdf2_zero_alloc",
@@ -193,6 +253,65 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
         build_single_abd_tet(scene);
 
         REQUIRE_THROWS(world.init(scene));
+    }
+
+    SECTION("socu_approx_missing_ordering_report")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_missing_ordering",
+            config,
+            "ordering_missing");
+    }
+
+    SECTION("socu_approx_rejects_bad_block_size")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        auto output_path = contract_workspace("linear_solver_socu_approx_bad_block");
+        fs::create_directories(output_path);
+        auto report_path = output_path / "ordering.json";
+        write_socu_ordering_report(report_path, 48);
+        config["linear_system"]["socu_approx"]["ordering_report"] =
+            report_path.string();
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_bad_block",
+            config,
+            "unsupported_block_size");
+    }
+
+    SECTION("socu_approx_rejects_low_ordering_quality")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.9;
+        auto output_path = contract_workspace("linear_solver_socu_approx_low_quality");
+        fs::create_directories(output_path);
+        auto report_path = output_path / "ordering.json";
+        write_socu_ordering_report(report_path, 32, 0.5, 0.5);
+        config["linear_system"]["socu_approx"]["ordering_report"] =
+            report_path.string();
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_low_quality",
+            config,
+            "ordering_quality_too_low");
+    }
+
+    SECTION("socu_approx_valid_report_stops_at_m4_stub")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        auto output_path = contract_workspace("linear_solver_socu_approx_stub");
+        fs::create_directories(output_path);
+        auto report_path = output_path / "ordering.json";
+        write_socu_ordering_report(report_path, 32);
+        config["linear_system"]["socu_approx"]["ordering_report"] =
+            report_path.string();
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_stub",
+            config,
+            "structured_provider_missing");
     }
 }
 

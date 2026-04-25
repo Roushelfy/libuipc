@@ -736,3 +736,185 @@ stub gate for `linear_system/solver = "socu_approx"`. The first M4 commit should
 still avoid calling `socu_native`; it should only validate configuration,
 report explicit gate-fail reasons, prove that default `fused_pcg` is unaffected,
 and make explicit `socu_approx` selection fatal when the stub cannot run.
+
+### Milestone 4 Implementation
+
+M4 added a `SocuApproxSolver` skeleton as a gated experimental solver. It does
+not call `socu_native`, does not assemble structured chain buffers, and does not
+produce a solve direction yet.
+
+The implementation added:
+
+- `src/backends/cuda_mixed/linear_system/socu_approx_report.h`
+- `src/backends/cuda_mixed/linear_system/socu_approx_solver.h`
+- `src/backends/cuda_mixed/linear_system/socu_approx_solver.cu`
+
+The only new solver selection value is:
+
+```text
+linear_system/solver = "socu_approx"
+```
+
+The default solver remains `fused_pcg`. When `socu_approx` is not selected, the
+new solver exits through the normal unused-system `SimSystemException` path, so
+default runtime behavior is unchanged. When `socu_approx` is explicitly
+selected, gate failures throw a non-`SimSystemException` `uipc::Exception`, so
+the reason is fatal and cannot be swallowed by the system registry as an unused
+solver.
+
+M4 added default config fields:
+
+```text
+linear_system/socu_approx/ordering_report = ""
+linear_system/socu_approx/min_near_band_ratio = 0.0
+linear_system/socu_approx/max_off_band_ratio = 1.0
+```
+
+The skeleton reads the ordering report JSON produced by the standalone ordering
+lab and validates the basic mapping schema:
+
+```text
+block_size
+chain_to_old
+old_to_chain
+atom_to_block
+atom_block_offset
+atom_dof_count
+block_to_atom_range
+```
+
+The currently implemented fatal gate reasons are:
+
+```text
+ordering_missing
+ordering_report_invalid
+unsupported_precision_contract
+unsupported_block_size
+ordering_quality_too_low
+structured_provider_missing
+socu_approx_stub_no_direction
+```
+
+Additional reason names are reserved for later milestones:
+
+```text
+socu_disabled
+socu_mathdx_unsupported
+contact_off_band_ratio_too_high
+```
+
+For a valid report in an `fp64` build, M4 intentionally stops at
+`structured_provider_missing`, because Milestone 5 is the first milestone that
+will add a structured assembly dry run.
+
+### Milestone 4 Verification
+
+The `fp64` build was reconfigured so the new `socu_approx_solver.cu` file was
+included by the backend glob, then rebuilt with:
+
+```bash
+cmake -S . -B build/build_impl_fp64
+
+cmake --build build/build_impl_fp64 \
+  --target backend_cuda_mixed uipc_test_backend_cuda_mixed uipc_test_sim_case \
+  --parallel 8
+```
+
+The contract tests passed with:
+
+```bash
+ctest --test-dir build/build_impl_fp64 \
+  -R 'backend_cuda_mixed_contract|sim_case_cuda_mixed_contract|backend_cuda_mixed_source_contract_scan' \
+  --output-on-failure
+```
+
+The final test result was:
+
+```text
+backend_cuda_mixed_contract: passed
+backend_cuda_mixed_source_contract_scan: passed
+sim_case_cuda_mixed_contract: passed
+```
+
+The tests now cover:
+
+- static inheritance: `SocuApproxSolver` derives from `LinearSolver`;
+- default `fused_pcg` selection remains valid;
+- explicit `linear_pcg` selection remains valid;
+- invalid solver selection still fails;
+- explicit `socu_approx` with no ordering report fails with `ordering_missing`;
+- explicit `socu_approx` with block size other than `32` or `64` fails with
+  `unsupported_block_size`;
+- explicit `socu_approx` with low ordering quality fails with
+  `ordering_quality_too_low`;
+- explicit `socu_approx` with a valid ordering report stops at
+  `structured_provider_missing`.
+
+The source check confirmed that the M4 runtime files do not include or link
+`socu_native`.
+
+The Python package native copy was refreshed after the rebuild. The copied
+package library and build output library matched:
+
+```text
+build/build_impl_fp64/python/src/uipc/_native/libuipc_backend_cuda_mixed.so
+build/build_impl_fp64/Release/bin/libuipc_backend_cuda_mixed.so
+sha256 = 98efb14b1bf88b7d6eb9653e2d4f243444b76cd348579f42c5af5648909bc09c
+```
+
+The default `fused_pcg` `fp64` benchmark was then rerun:
+
+```bash
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+  apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/particle.json \
+  --levels fp64 \
+  --build fp64=build/build_impl_fp64 \
+  --config Release \
+  --run_root output/benchmarks/mixed/uipc_assets/socu_m4_after_fp64_final \
+  --perf \
+  --timers
+```
+
+The recorded M4 default-path result was:
+
+```text
+asset = particle_rain
+level = fp64
+frames = 80
+warmup_frames = 10
+wall_time = 1.352571868 s
+end_to_end_wall_time = 1.499347954 s
+avg_frame_time = 16.907148350 ms/frame
+
+Pipeline mean = 17.873403913 ms
+Simulation mean = 17.869898288 ms
+Build Linear System mean = 1.456503350 ms
+Assemble Linear System mean = 0.282735038 ms
+Convert Matrix mean = 0.999943888 ms
+Solve Global Linear System mean = 5.023033075 ms
+Solve Linear System mean = 3.450615763 ms
+FusedPCG mean = 3.371987937 ms
+
+newton_iteration_count mean = 2.6875
+line_search_iteration_count mean = 3.975
+pcg_iteration_count mean = 14.9375
+```
+
+The M4 run was faster than the M3 recorded run, but prior paired runs showed
+substantial device/runtime variation. The important no-regression facts are that
+the default solver remained `fused_pcg`, the iteration counters are unchanged,
+and the new `SocuApproxSolver` only takes the unused-system path unless
+explicitly selected.
+
+M4 is therefore considered complete as a skeleton/gate checkpoint.
+
+### Next Work
+
+The next planned step is Milestone 5: add the structured assembly dry run. That
+work should introduce the ordering-aware provider and structured sink needed to
+pack logical `diag`, first `offdiag`, and `rhs` buffers, classify near/off-band
+contact contribution, and report pack quality and timing. Milestone 5 should
+still avoid invoking `socu_native`; it should only prove that the structured
+surrogate layout can be generated and compared against the standalone lab
+statistics.
