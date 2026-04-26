@@ -4,6 +4,12 @@
 #include <dytopo_effect_system/dytopo_effect_receiver.h>
 #include <contact_system/contact_reporter.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution_manager.h>
+#include <affine_body/abd_linear_subsystem.h>
+#include <affine_body/affine_body_dynamics.h>
+#include <affine_body/affine_body_vertex_reporter.h>
+#include <finite_element/fem_linear_subsystem.h>
+#include <finite_element/finite_element_method.h>
+#include <finite_element/finite_element_vertex_reporter.h>
 #include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
 #include <kernel_cout.h>
@@ -68,6 +74,12 @@ void GlobalDyTopoEffectManager::do_build()
     const auto& config = world().scene().config();
 
     m_impl.global_vertex_manager = require<GlobalVertexManager>();
+    m_impl.abd_linear_subsystem = find<ABDLinearSubsystem>();
+    m_impl.fem_linear_subsystem = find<FEMLinearSubsystem>();
+    m_impl.affine_body_dynamics = find<AffineBodyDynamics>();
+    m_impl.finite_element_method = find<FiniteElementMethod>();
+    m_impl.affine_body_vertex_reporter = find<AffineBodyVertexReporter>();
+    m_impl.finite_element_vertex_reporter = find<FiniteElementVertexReporter>();
 }
 
 void GlobalDyTopoEffectManager::Impl::init(WorldVisitor& world)
@@ -109,7 +121,9 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
 
     auto reporter_gradient_counts = reporter_gradient_offsets_counts.counts();
     auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
-    bool gradient_only            = info.m_gradient_only;
+    const bool structured_hessian_direct =
+        info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian;
+    bool gradient_only = info.m_gradient_only || structured_hessian_direct;
 
     logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}, AssemblyMode={}",
                  info.m_gradient_only,
@@ -131,6 +145,13 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
                 "structured_dytopo_reporter_not_supported: reporter '{}' is not contact; "
                 "socu_approx M8 currently accepts only runtime contact in "
                 "GradientStructuredHessian assembly",
+                reporter->name())};
+        }
+        if(structured_hessian_direct && !reporter->supports_structured_hessian())
+        {
+            throw SimSystemException{fmt::format(
+                "structured_contact_reporter_not_supported: reporter '{}' does not "
+                "support direct StructuredAssemblySink Hessian writes",
                 reporter->name())};
         }
 
@@ -208,6 +229,8 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
     using namespace muda;
 
     auto vertex_count = global_vertex_manager->positions().size();
+    const bool structured_hessian_direct =
+        info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian;
 
     for(auto&& [i, receiver] : enumerate(dytopo_effect_receivers.view()))
     {
@@ -302,7 +325,8 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
         }
 
         // 2) report hessian
-        if(!info.m_gradient_only && !classify_info.is_empty())
+        if(!structured_hessian_direct && !info.m_gradient_only
+           && !classify_info.is_empty())
         {
             if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
             {
@@ -462,6 +486,61 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
     }
 }
 
+void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
+    GlobalLinearSystem::StructuredAssemblyInfo& structured_info)
+{
+    if(contact_reporters.view().empty())
+        return;
+
+    StructuredHessianInfo info;
+    info.m_stream = structured_info.stream();
+    auto contact_sink = structured_info.sink();
+    info.m_contact_sink.sink = contact_sink;
+    info.m_contact_sink.counters = structured_info.contact_counters();
+
+    if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
+    {
+        info.m_contact_sink.abd_vertex_offset =
+            affine_body_vertex_reporter->vertex_offset();
+        info.m_contact_sink.abd_vertex_count =
+            affine_body_vertex_reporter->vertex_count();
+        info.m_contact_sink.abd_old_dof_offset =
+            abd_linear_subsystem->dof_offset();
+        info.m_contact_sink.abd_vertex_to_body =
+            affine_body_dynamics->v2b();
+        info.m_contact_sink.abd_vertex_to_J =
+            affine_body_dynamics->Js();
+        info.m_contact_sink.abd_body_is_fixed =
+            affine_body_dynamics->body_is_fixed();
+    }
+
+    if(fem_linear_subsystem && finite_element_method && finite_element_vertex_reporter)
+    {
+        info.m_contact_sink.fem_vertex_offset =
+            finite_element_vertex_reporter->vertex_offset();
+        info.m_contact_sink.fem_vertex_count =
+            finite_element_vertex_reporter->vertex_count();
+        info.m_contact_sink.fem_old_dof_offset =
+            fem_linear_subsystem->dof_offset();
+        info.m_contact_sink.fem_vertex_is_fixed =
+            finite_element_method->is_fixed();
+    }
+
+    for(auto&& reporter : contact_reporters.view())
+    {
+        if(!reporter->supports_structured_hessian())
+        {
+            throw SimSystemException{fmt::format(
+                "structured_contact_reporter_not_supported: reporter '{}' does not "
+                "support direct StructuredAssemblySink Hessian writes",
+                reporter->name())};
+        }
+
+        Timer timer{dytopo_assemble_timer_name(*reporter)};
+        reporter->assemble_structured_hessian(info);
+    }
+}
+
 void GlobalDyTopoEffectManager::Impl::loose_resize_entries(
     muda::DeviceTripletMatrix<GlobalDyTopoEffectManager::StoreScalar, 3>& m,
     SizeT                                                                  size)
@@ -496,6 +575,12 @@ void GlobalDyTopoEffectManager::init()
 void GlobalDyTopoEffectManager::compute_dytopo_effect(ComputeDyTopoEffectInfo& info)
 {
     m_impl.compute_dytopo_effect(info);
+}
+
+void GlobalDyTopoEffectManager::assemble_structured_hessian(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    m_impl.assemble_structured_hessian(info);
 }
 
 void GlobalDyTopoEffectManager::compute_dytopo_effect()

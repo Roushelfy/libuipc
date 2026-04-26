@@ -36,6 +36,9 @@ class DyTopoEffectReporter : public SimSystem
     virtual void do_report_gradient_hessian_extent(
         GlobalDyTopoEffectManager::GradientHessianExtentInfo& info) = 0;
     virtual void do_assemble(GlobalDyTopoEffectManager::GradientHessianInfo& info) = 0;
+    virtual bool do_supports_structured_hessian() const;
+    virtual void do_assemble_structured_hessian(
+        GlobalDyTopoEffectManager::StructuredHessianInfo& info);
     virtual void do_compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info) = 0;
     virtual EnergyComponentFlags component_flags() = 0;
 
@@ -47,6 +50,9 @@ class DyTopoEffectReporter : public SimSystem
     void report_energy_extent(GlobalDyTopoEffectManager::EnergyExtentInfo& info);
     void report_gradient_hessian_extent(GlobalDyTopoEffectManager::GradientHessianExtentInfo& info);
     void  assemble(GlobalDyTopoEffectManager::GradientHessianInfo& info);
+    bool  supports_structured_hessian() const;
+    void  assemble_structured_hessian(
+         GlobalDyTopoEffectManager::StructuredHessianInfo& info);
     void  compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info);
     SizeT m_index = ~0ull;
     Impl  m_impl;

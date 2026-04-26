@@ -76,6 +76,24 @@ void VertexHalfPlaneNormalContact::do_assemble(GlobalContactManager::GradientHes
     do_assemble(this_info);
 }
 
+bool VertexHalfPlaneNormalContact::do_supports_structured_hessian() const
+{
+    return true;
+}
+
+void VertexHalfPlaneNormalContact::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    ContactInfo this_info{&m_impl};
+    this_info.m_gradient_only      = false;
+    this_info.m_hessian_only       = true;
+    this_info.m_structured_hessian = true;
+    this_info.m_structured_sink    = info.contact_sink();
+
+    m_impl.hessians = {};
+    do_assemble(this_info);
+}
+
 muda::CBuffer2DView<ContactCoeff> VertexHalfPlaneNormalContact::BaseInfo::contact_tabular() const
 {
     return m_impl->global_contact_manager->contact_tabular();

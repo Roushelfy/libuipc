@@ -6,6 +6,7 @@
 #include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
+#include <dytopo_effect_system/global_dytopo_effect_manager.h>
 #include <affine_body/abd_linear_subsystem.h>
 #include <finite_element/fem_linear_subsystem.h>
 #include <sim_engine.h>
@@ -87,6 +88,7 @@ void GlobalLinearSystem::do_build()
         dump_linear_system_attr ? dump_linear_system_attr->view()[0] : false;
     m_impl.need_solution_x_dump =
         dump_solution_x_attr ? dump_solution_x_attr->view()[0] : false;
+    m_impl.global_dytopo_effect_manager = find<GlobalDyTopoEffectManager>();
 
     auto structured_scope_attr =
         config.find<std::string>("linear_system/socu_approx/structured_scope");
@@ -447,6 +449,12 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
 
         Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
         off_diag_subsystem->assemble_structured(info);
+    }
+
+    if(global_dytopo_effect_manager)
+    {
+        Timer timer{"Assemble Structured DyTopo Hessian"};
+        global_dytopo_effect_manager->assemble_structured_hessian(info);
     }
 
     selected_linear_solver->finalize_structured_chain(info);

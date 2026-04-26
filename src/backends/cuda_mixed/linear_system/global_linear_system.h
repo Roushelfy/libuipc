@@ -29,6 +29,7 @@ class LinearSolver;
 class IterativeSolver;
 class LocalPreconditioner;
 class GlobalPreconditioner;
+class GlobalDyTopoEffectManager;
 
 class GlobalLinearSystem : public SimSystem
 {
@@ -170,6 +171,14 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_chain_to_old;
         }
+        muda::BufferView<IndexT> contact_counters() const noexcept
+        {
+            return m_contact_counters;
+        }
+        bool report_counters_enabled() const noexcept
+        {
+            return m_contact_counters.data() != nullptr;
+        }
 
         StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
         {
@@ -189,6 +198,10 @@ class GlobalLinearSystem : public SimSystem
                            muda::CBufferView<IndexT> old_to_chain,
                            muda::CBufferView<IndexT> chain_to_old,
                            cudaStream_t             stream) noexcept;
+        void set_contact_counters(muda::BufferView<IndexT> counters) noexcept
+        {
+            m_contact_counters = counters;
+        }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
         void record_diag_writes(SizeT count) noexcept { m_diag_write_count += count; }
@@ -256,6 +269,7 @@ class GlobalLinearSystem : public SimSystem
         muda::BufferView<SolveScalar> m_rhs;
         muda::CBufferView<IndexT>  m_old_to_chain;
         muda::CBufferView<IndexT>  m_chain_to_old;
+        muda::BufferView<IndexT>   m_contact_counters;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;
         SizeT                      m_old_dof_count  = 0;
@@ -459,6 +473,7 @@ class GlobalLinearSystem : public SimSystem
 
         SimSystemSlotCollection<LinearSolver> linear_solvers;
         SimSystemSlot<GlobalPreconditioner> global_preconditioner;
+        SimSystemSlot<GlobalDyTopoEffectManager> global_dytopo_effect_manager;
 
         LinearSolver* selected_linear_solver = nullptr;
 

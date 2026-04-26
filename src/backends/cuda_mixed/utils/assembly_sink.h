@@ -7,6 +7,14 @@
 
 namespace uipc::backend::cuda_mixed
 {
+enum class StructuredSinkWriteClass : unsigned char
+{
+    Skipped,
+    Diag,
+    FirstOffdiag,
+    OffBand,
+};
+
 template <typename StoreT, int BlockDim>
 struct TripletAssemblySink
 {
@@ -108,20 +116,19 @@ struct StructuredDeviceAssemblySink
                && block_size != 0;
     }
 
-    MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
-                                                        IndexT old_j,
-                                                        StoreT value) const noexcept
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
     {
         if(old_i < 0 || old_j < 0)
-            return;
+            return StructuredSinkWriteClass::Skipped;
         if(static_cast<SizeT>(old_i) >= old_to_chain.size()
            || static_cast<SizeT>(old_j) >= old_to_chain.size())
-            return;
+            return StructuredSinkWriteClass::Skipped;
 
         const IndexT chain_i = old_to_chain[static_cast<SizeT>(old_i)];
         const IndexT chain_j = old_to_chain[static_cast<SizeT>(old_j)];
         if(chain_i < 0 || chain_j < 0)
-            return;
+            return StructuredSinkWriteClass::Skipped;
 
         const SizeT ci = static_cast<SizeT>(chain_i);
         const SizeT cj = static_cast<SizeT>(chain_j);
@@ -130,19 +137,19 @@ struct StructuredDeviceAssemblySink
         const SizeT li = ci % block_size;
         const SizeT lj = cj % block_size;
         if(bi >= horizon || bj >= horizon)
-            return;
+            return StructuredSinkWriteClass::Skipped;
 
         const SolveT v = static_cast<SolveT>(value);
         if(bi == bj)
         {
             const SizeT index = (bi * block_size + li) * block_size + lj;
             muda::atomic_add(diag.data(index), v);
-            return;
+            return StructuredSinkWriteClass::Diag;
         }
 
         const SizeT distance = bi > bj ? bi - bj : bj - bi;
         if(distance != 1 || first_offdiag.data() == nullptr)
-            return;
+            return StructuredSinkWriteClass::OffBand;
 
         const bool  ij_is_forward = bi < bj;
         const SizeT left_block    = ij_is_forward ? bi : bj;
@@ -150,7 +157,18 @@ struct StructuredDeviceAssemblySink
         const SizeT col           = ij_is_forward ? lj : li;
         const SizeT index = (left_block * block_size + row) * block_size + col;
         if(index < first_offdiag.size())
+        {
             muda::atomic_add(first_offdiag.data(index), v);
+            return StructuredSinkWriteClass::FirstOffdiag;
+        }
+        return StructuredSinkWriteClass::Skipped;
+    }
+
+    MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
+                                                        IndexT old_j,
+                                                        StoreT value) const noexcept
+    {
+        (void)add_hessian_scalar_status(old_i, old_j, value);
     }
 
     template <typename HMat>

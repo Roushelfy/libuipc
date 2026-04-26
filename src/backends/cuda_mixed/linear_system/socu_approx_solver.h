@@ -46,6 +46,7 @@ class SocuApproxSolver : public LinearSolver
         const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 
   private:
+    void validate_direction_light(cudaStream_t stream);
     void debug_validate_direction(cudaStream_t stream);
 
     SocuApproxGateReport  m_gate_report;

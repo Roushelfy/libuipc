@@ -1,4 +1,6 @@
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
+#include <uipc/common/exception.h>
+#include <fmt/format.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -44,6 +46,31 @@ void DyTopoEffectReporter::assemble(GlobalDyTopoEffectManager::GradientHessianIn
     m_impl.hessians  = info.hessians();
 }
 
+bool DyTopoEffectReporter::do_supports_structured_hessian() const
+{
+    return false;
+}
+
+void DyTopoEffectReporter::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo&)
+{
+    throw Exception{fmt::format(
+        "structured_contact_reporter_not_supported: reporter '{}' cannot write "
+        "GradientStructuredHessian directly to the structured sink",
+        name())};
+}
+
+bool DyTopoEffectReporter::supports_structured_hessian() const
+{
+    return do_supports_structured_hessian();
+}
+
+void DyTopoEffectReporter::assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    do_assemble_structured_hessian(info);
+}
+
 void DyTopoEffectReporter::compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info)
 {
     do_compute_energy(info);
@@ -51,4 +78,3 @@ void DyTopoEffectReporter::compute_energy(GlobalDyTopoEffectManager::EnergyInfo&
     m_impl.energies = info.energies();
 }
 }  // namespace uipc::backend::cuda_mixed
-

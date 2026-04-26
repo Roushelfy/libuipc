@@ -464,8 +464,13 @@ void FEMLinearSubsystem::Impl::assemble_structured(
                    });
     }
 
-    structured_write_counts.resize(5);
-    BufferLaunch(info.stream()).fill<IndexT>(structured_write_counts.view(), 0);
+    muda::BufferView<IndexT> structured_counts_view;
+    if(info.report_counters_enabled())
+    {
+        structured_write_counts.resize(5);
+        BufferLaunch(info.stream()).fill<IndexT>(structured_write_counts.view(), 0);
+        structured_counts_view = structured_write_counts.view();
+    }
 
     const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
     auto         sink           = info.sink();
@@ -476,7 +481,7 @@ void FEMLinearSubsystem::Impl::assemble_structured(
                 old_dof_offset,
                 is_fixed = fem().is_fixed.cviewer().name("is_fixed"),
                 hessians = structured_temp_hessians.cviewer().name("fem_temp_hessians"),
-                counts = structured_write_counts.view(),
+                counts = structured_counts_view,
                 dytopo_hess_offset] __device__(
                    int I) mutable
                {
@@ -527,31 +532,37 @@ void FEMLinearSubsystem::Impl::assemble_structured(
                            H_store);
                    }
 
-                   if(off_band)
-                       muda::atomic_add(counts.data(2), IndexT{9});
-                   else if(first_offdiag)
-                       muda::atomic_add(counts.data(1), IndexT{9});
-                   else
-                       muda::atomic_add(counts.data(0), IndexT{9});
-
-                   if(I >= dytopo_hess_offset)
+                   if(counts.data() != nullptr)
                    {
                        if(off_band)
-                           muda::atomic_add(counts.data(4), IndexT{1});
+                           muda::atomic_add(counts.data(2), IndexT{9});
+                       else if(first_offdiag)
+                           muda::atomic_add(counts.data(1), IndexT{9});
                        else
-                           muda::atomic_add(counts.data(3), IndexT{1});
+                           muda::atomic_add(counts.data(0), IndexT{9});
+
+                       if(I >= dytopo_hess_offset)
+                       {
+                           if(off_band)
+                               muda::atomic_add(counts.data(4), IndexT{1});
+                           else
+                               muda::atomic_add(counts.data(3), IndexT{1});
+                       }
                    }
                });
 
-    std::array<IndexT, 5> write_counts{};
-    structured_write_counts.view().copy_to(write_counts.data());
-    info.record_diag_writes(static_cast<SizeT>(write_counts[0]));
-    info.record_first_offdiag_writes(static_cast<SizeT>(write_counts[1]));
-    info.record_contact_band_stats(static_cast<SizeT>(write_counts[3]),
-                                   static_cast<SizeT>(write_counts[4]),
-                                   static_cast<SizeT>(write_counts[0]
-                                                      + write_counts[1]),
-                                   static_cast<SizeT>(write_counts[2]));
+    if(info.report_counters_enabled())
+    {
+        std::array<IndexT, 5> write_counts{};
+        structured_write_counts.view().copy_to(write_counts.data());
+        info.record_diag_writes(static_cast<SizeT>(write_counts[0]));
+        info.record_first_offdiag_writes(static_cast<SizeT>(write_counts[1]));
+        info.record_contact_band_stats(static_cast<SizeT>(write_counts[3]),
+                                       static_cast<SizeT>(write_counts[4]),
+                                       static_cast<SizeT>(write_counts[0]
+                                                          + write_counts[1]),
+                                       static_cast<SizeT>(write_counts[2]));
+    }
 }
 
 void FEMLinearSubsystem::Impl::accuracy_check(GlobalLinearSystem::AccuracyInfo& info)

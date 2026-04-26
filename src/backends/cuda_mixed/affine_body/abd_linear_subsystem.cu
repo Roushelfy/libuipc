@@ -277,8 +277,15 @@ void ABDLinearSubsystem::Impl::assemble_structured(
     if(dytopo_effect_hessian_count)
     {
         auto vertex_offset = affine_body_vertex_reporter->vertex_offset();
-        structured_contact_counts.resize(5);
-        muda::BufferLaunch(info.stream()).fill<IndexT>(structured_contact_counts.view(), 0);
+        muda::BufferView<IndexT> contact_counts_view;
+        if(info.report_counters_enabled())
+        {
+            structured_contact_counts.resize(5);
+            muda::BufferLaunch(info.stream()).fill<IndexT>(
+                structured_contact_counts.view(),
+                0);
+            contact_counts_view = structured_contact_counts.view();
+        }
 
         ParallelFor(256, 0, info.stream())
             .file_line(__FILE__, __LINE__)
@@ -291,7 +298,7 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                     Js  = abd().vertex_id_to_J.cviewer().name("Js"),
                     is_fixed = abd().body_id_to_is_fixed.cviewer().name("is_fixed"),
                     old_to_chain = info.old_to_chain(),
-                    contact_counts = structured_contact_counts.view(),
+                    contact_counts = contact_counts_view,
                     vertex_offset] __device__(int I) mutable
                    {
                        const auto& [g_i, g_j, H3x3] = dytopo_effect_hessian(I);
@@ -377,32 +384,38 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                                H12x12_store);
                        }
 
-                       if(L == R)
+                       if(contact_counts.data() != nullptr)
                        {
-                           muda::atomic_add(contact_counts.data(0), IndexT{12 * 12});
-                           muda::atomic_add(contact_counts.data(3), IndexT{1});
-                       }
-                       else if(first_offdiag)
-                       {
-                           muda::atomic_add(contact_counts.data(1), IndexT{12 * 12});
-                           muda::atomic_add(contact_counts.data(3), IndexT{1});
-                       }
-                       else
-                       {
-                           muda::atomic_add(contact_counts.data(2), IndexT{12 * 12});
-                           muda::atomic_add(contact_counts.data(4), IndexT{1});
+                           if(L == R)
+                           {
+                               muda::atomic_add(contact_counts.data(0), IndexT{12 * 12});
+                               muda::atomic_add(contact_counts.data(3), IndexT{1});
+                           }
+                           else if(first_offdiag)
+                           {
+                               muda::atomic_add(contact_counts.data(1), IndexT{12 * 12});
+                               muda::atomic_add(contact_counts.data(3), IndexT{1});
+                           }
+                           else
+                           {
+                               muda::atomic_add(contact_counts.data(2), IndexT{12 * 12});
+                               muda::atomic_add(contact_counts.data(4), IndexT{1});
+                           }
                        }
                    });
 
-        std::array<IndexT, 5> contact_counts{};
-        structured_contact_counts.view().copy_to(contact_counts.data());
-        info.record_contact_diag_writes(static_cast<SizeT>(contact_counts[0]));
-        info.record_contact_first_offdiag_writes(static_cast<SizeT>(contact_counts[1]));
-        info.record_contact_band_stats(
-            static_cast<SizeT>(contact_counts[3]),
-            static_cast<SizeT>(contact_counts[4]),
-            static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
-            static_cast<SizeT>(contact_counts[2]));
+        if(info.report_counters_enabled())
+        {
+            std::array<IndexT, 5> contact_counts{};
+            structured_contact_counts.view().copy_to(contact_counts.data());
+            info.record_contact_diag_writes(static_cast<SizeT>(contact_counts[0]));
+            info.record_contact_first_offdiag_writes(static_cast<SizeT>(contact_counts[1]));
+            info.record_contact_band_stats(
+                static_cast<SizeT>(contact_counts[3]),
+                static_cast<SizeT>(contact_counts[4]),
+                static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
+                static_cast<SizeT>(contact_counts[2]));
+        }
     }
 }
 

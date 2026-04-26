@@ -153,8 +153,13 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
             return;
 
         muda::DeviceBuffer<IndexT> structured_counts;
-        structured_counts.resize(3);
-        muda::BufferLaunch(info.stream()).fill<IndexT>(structured_counts.view(), 0);
+        muda::BufferView<IndexT>   structured_counts_view;
+        if(info.report_counters_enabled())
+        {
+            structured_counts.resize(3);
+            muda::BufferLaunch(info.stream()).fill<IndexT>(structured_counts.view(), 0);
+            structured_counts_view = structured_counts.view();
+        }
 
         auto sink = info.sink();
         const IndexT abd_old_dof_offset =
@@ -176,7 +181,7 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
                         finite_element_method->is_fixed().viewer().name("vertex_is_fixed"),
                     abd_fem_dytopo_effect =
                         abd_fem_dytopo_effect_receiver->hessians().viewer().name("abd_fem_dytopo_effect"),
-                    counts = structured_counts.view(),
+                    counts = structured_counts_view,
                     abd_point_offset = affine_body_vertex_reporter->vertex_offset(),
                     fem_point_offset =
                         finite_element_vertex_reporter->vertex_offset()] __device__(int I) mutable
@@ -235,23 +240,29 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
                                H_store.transpose());
                        }
 
-                       if(off_band)
-                           muda::atomic_add(counts.data(2), IndexT{72});
-                       else if(first_offdiag)
-                           muda::atomic_add(counts.data(1), IndexT{72});
-                       else
-                           muda::atomic_add(counts.data(0), IndexT{72});
+                       if(counts.data() != nullptr)
+                       {
+                           if(off_band)
+                               muda::atomic_add(counts.data(2), IndexT{72});
+                           else if(first_offdiag)
+                               muda::atomic_add(counts.data(1), IndexT{72});
+                           else
+                               muda::atomic_add(counts.data(0), IndexT{72});
+                       }
                    });
 
-        std::array<IndexT, 3> counts_host{};
-        structured_counts.view().copy_to(counts_host.data());
-        info.record_diag_writes(static_cast<SizeT>(counts_host[0]));
-        info.record_first_offdiag_writes(static_cast<SizeT>(counts_host[1]));
-        info.record_contact_band_stats(0,
-                                       0,
-                                       static_cast<SizeT>(counts_host[0]
-                                                          + counts_host[1]),
-                                       static_cast<SizeT>(counts_host[2]));
+        if(info.report_counters_enabled())
+        {
+            std::array<IndexT, 3> counts_host{};
+            structured_counts.view().copy_to(counts_host.data());
+            info.record_diag_writes(static_cast<SizeT>(counts_host[0]));
+            info.record_first_offdiag_writes(static_cast<SizeT>(counts_host[1]));
+            info.record_contact_band_stats(0,
+                                           0,
+                                           static_cast<SizeT>(counts_host[0]
+                                                              + counts_host[1]),
+                                           static_cast<SizeT>(counts_host[2]));
+        }
     }
 };
 
