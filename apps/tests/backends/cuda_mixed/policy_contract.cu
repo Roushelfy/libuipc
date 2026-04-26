@@ -169,7 +169,7 @@ TEST_CASE("cuda_mixed_socu_approx_source_contract",
         source.find("const cudaStream_t stream = system().stream();", do_solve);
     REQUIRE(production_begin != std::string::npos);
     const auto production_end =
-        source.find("logger::info(\"SocuApproxSolver M7 strict solve completed",
+        source.find("logger::info(\"SocuApproxSolver M7 strict solve launched",
                     production_begin);
     REQUIRE(production_end != std::string::npos);
 
@@ -181,4 +181,7 @@ TEST_CASE("cuda_mixed_socu_approx_source_contract",
     CHECK(production.find(".copy_from(") == std::string::npos);
     CHECK(production.find("cudaStream_t stream = nullptr") == std::string::npos);
     CHECK(production.find("cudaStreamSynchronize") == std::string::npos);
+    CHECK(production.find("cudaEventSynchronize") == std::string::npos);
+    CHECK(production.find("snapshot_matrix") == std::string::npos);
+    CHECK(production.find("validate_structured_direction") == std::string::npos);
 }
