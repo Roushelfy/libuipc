@@ -37,6 +37,8 @@ struct SocuApproxGateReport
     SocuApproxGateReason reason = SocuApproxGateReason::SocuDisabled;
     std::string          detail;
     std::string          ordering_report_path;
+    std::string          provider_kind;
+    std::string          structured_scope = "multi_provider_experimental";
     SizeT                block_size = 0;
     double               near_band_ratio = 0.0;
     double               off_band_ratio  = 0.0;
@@ -75,6 +77,8 @@ struct SocuApproxDryRunReport
     std::string report_path;
     std::string ordering_report_path;
     std::string contact_report_path;
+    std::string provider_kind;
+    std::string structured_scope = "multi_provider_experimental";
 
     SizeT block_size            = 0;
     SizeT block_count           = 0;

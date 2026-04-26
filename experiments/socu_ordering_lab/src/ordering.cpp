@@ -640,13 +640,15 @@ std::vector<std::size_t> resolve_block_sizes(std::string_view value)
 
 std::vector<std::string> resolve_orderers(std::string_view value)
 {
-    if(value == "auto" || value == "all")
+    if(value == "auto_stable")
+        return {"original", "rcm", "metis_kway_rcm"};
+    if(value == "auto" || value == "all" || value == "auto_exhaustive")
         return {"original", "rcm", "nvidia_symrcm", "metis_nd", "metis_kway_rcm"};
     if(value == "original" || value == "rcm" || value == "nvidia_symrcm"
        || value == "metis_nd" || value == "metis_kway_rcm")
         return {std::string(value)};
     throw std::invalid_argument(
-        "orderer must be original, rcm, nvidia_symrcm, metis_nd, metis_kway_rcm, auto, or all");
+        "orderer must be original, rcm, nvidia_symrcm, metis_nd, metis_kway_rcm, auto_stable, auto_exhaustive, auto, or all");
 }
 
 void validate_permutation(const OrderingResult& ordering, std::size_t atom_count)

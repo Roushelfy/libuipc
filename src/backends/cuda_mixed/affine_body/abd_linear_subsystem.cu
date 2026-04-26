@@ -43,6 +43,11 @@ using StoreMat12x12 = ABDLinearSubsystem::StoreMat12x12;
 // ref: https://github.com/spiriMirror/libuipc/issues/271
 constexpr U64 ABDLinearSubsystemUID = 0ull;
 
+SizeT ABDLinearSubsystem::body_count() const noexcept
+{
+    return m_impl.affine_body_dynamics ? m_impl.abd().body_count() : SizeT{0};
+}
+
 void ABDLinearSubsystem::do_build(DiagLinearSubsystem::BuildInfo& info)
 {
     m_impl.affine_body_dynamics        = require<AffineBodyDynamics>();

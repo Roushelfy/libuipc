@@ -137,8 +137,12 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
 
         muda::DeviceDoubletVector<StoreScalar, 3> kinetic_gradients;
         muda::DeviceDoubletVector<StoreScalar, 3> reporter_gradients;
+        muda::DeviceTripletMatrix<StoreScalar, 3> structured_temp_hessians;
+        muda::DeviceBuffer<IndexT> structured_write_counts;
 
         void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);
+        void loose_resize_entries(muda::DeviceTripletMatrix<StoreScalar, 3>& m, SizeT size);
+        void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
     };
 
   private:
@@ -146,6 +150,8 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
     virtual void do_init(DiagLinearSubsystem::InitInfo& info) override;
     virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) override;
     virtual void do_assemble(GlobalLinearSystem::DiagInfo& info) override;
+    virtual bool do_supports_structured_assembly() const override;
+    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info) override;
     virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) override;
     virtual void do_report_init_extent(GlobalLinearSystem::InitDofExtentInfo& info) override;

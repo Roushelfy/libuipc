@@ -123,16 +123,21 @@ add_subdirectory(src)
 # apps
 add_subdirectory(apps)
 
+if(UIPC_WITH_CUDA_MIXED_BACKEND OR UIPC_BUILD_SOCU_ORDERING_LAB)
+    add_subdirectory(experiments/socu_ordering_lab)
+endif()
+
+if(UIPC_WITH_CUDA_MIXED_BACKEND AND TARGET cuda_mixed AND TARGET socu_ordering_lab_core)
+    target_link_libraries(cuda_mixed PUBLIC socu_ordering_lab_core)
+    target_compile_definitions(cuda_mixed PUBLIC UIPC_WITH_SOCU_ORDERING_LAB_CORE=1)
+endif()
+
 if(UIPC_BUILD_TENSOR_CORE_LAB)
     add_subdirectory(experiments/tensor_core_lab)
 endif()
 
 if(UIPC_BUILD_TENSOR_CORE_GEMM)
     add_subdirectory(experiments/tensor_core_gemm)
-endif()
-
-if(UIPC_BUILD_SOCU_ORDERING_LAB)
-    add_subdirectory(experiments/socu_ordering_lab)
 endif()
 
 # install headers (libuipc/include)

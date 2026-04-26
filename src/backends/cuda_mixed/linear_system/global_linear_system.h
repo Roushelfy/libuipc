@@ -430,6 +430,7 @@ class GlobalLinearSystem : public SimSystem
         void init();
 
         void build_linear_system();
+        void _validate_structured_chain_subsystems();
         bool _update_subsystem_extent(bool needs_full_sparse_A);
         void _assemble_gradient_vector();
         void _assemble_linear_system();
@@ -473,6 +474,7 @@ class GlobalLinearSystem : public SimSystem
         MatrixConverter<StoreScalar, 3> converter;
 
         bool empty_system = true;
+        bool socu_multi_provider_experimental = false;
 
         void apply_preconditioner(PcgDenseVectorView z,
                                   CPcgDenseVectorView r,

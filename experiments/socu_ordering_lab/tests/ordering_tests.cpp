@@ -128,6 +128,34 @@ TEST_CASE("auto block size reports both 32 and 64 candidates", "[socu][ordering]
     REQUIRE_NOTHROW(require_candidate(run, "metis_kway_rcm", 64));
 }
 
+TEST_CASE("auto stable keeps runtime candidate set small", "[socu][ordering]")
+{
+    const auto graph = sol::make_tet_block();
+    const auto run = sol::run_ordering(graph, "auto_stable", "auto");
+
+    REQUIRE(run.candidates.size() == 6);
+    REQUIRE_NOTHROW(require_candidate(run, "original", 32));
+    REQUIRE_NOTHROW(require_candidate(run, "rcm", 32));
+    REQUIRE_NOTHROW(require_candidate(run, "metis_kway_rcm", 32));
+    REQUIRE_NOTHROW(require_candidate(run, "original", 64));
+    REQUIRE_NOTHROW(require_candidate(run, "rcm", 64));
+    REQUIRE_NOTHROW(require_candidate(run, "metis_kway_rcm", 64));
+
+    const auto has_orderer = [&](std::string_view orderer)
+    {
+        return std::any_of(run.candidates.begin(),
+                           run.candidates.end(),
+                           [&](const sol::OrderingCandidate& candidate)
+                           { return candidate.orderer == orderer; });
+    };
+    REQUIRE_FALSE(has_orderer("nvidia_symrcm"));
+    REQUIRE_FALSE(has_orderer("metis_nd"));
+
+    const auto exhaustive = sol::run_ordering(graph, "auto_exhaustive", "32");
+    REQUIRE_NOTHROW(require_candidate(exhaustive, "nvidia_symrcm", 32));
+    REQUIRE_NOTHROW(require_candidate(exhaustive, "metis_nd", 32));
+}
+
 TEST_CASE("NVIDIA symrcm candidate reports valid permutation when available", "[socu][ordering][nvidia]")
 {
     const auto graph = sol::make_cloth_grid();

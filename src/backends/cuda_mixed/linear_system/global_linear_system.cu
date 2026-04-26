@@ -64,6 +64,7 @@ SubsystemTimerClass classify_subsystem(const OffDiagLinearSubsystem& subsystem)
         return SubsystemTimerClass::AbdFemCoupling;
     return SubsystemTimerClass::Unclassified;
 }
+
 }  // namespace
 
 REGISTER_SIM_SYSTEM(GlobalLinearSystem);
@@ -86,6 +87,14 @@ void GlobalLinearSystem::do_build()
         dump_linear_system_attr ? dump_linear_system_attr->view()[0] : false;
     m_impl.need_solution_x_dump =
         dump_solution_x_attr ? dump_solution_x_attr->view()[0] : false;
+
+    auto structured_scope_attr =
+        config.find<std::string>("linear_system/socu_approx/structured_scope");
+    const std::string structured_scope =
+        structured_scope_attr ? structured_scope_attr->view()[0]
+                              : std::string{"multi_provider_experimental"};
+    m_impl.socu_multi_provider_experimental =
+        structured_scope == "multi_provider_experimental";
 }
 
 void GlobalLinearSystem::_dump_A_b()
@@ -292,6 +301,9 @@ void GlobalLinearSystem::Impl::build_linear_system()
             "needs_full_sparse_A=false and needs_structured_chain=true"};
     }
 
+    if(requirements.needs_structured_chain)
+        _validate_structured_chain_subsystems();
+
     empty_system = !_update_subsystem_extent(requirements.needs_full_sparse_A);
 
     if(empty_system) [[unlikely]]
@@ -338,6 +350,40 @@ void GlobalLinearSystem::Impl::build_linear_system()
 
 }
 
+void GlobalLinearSystem::Impl::_validate_structured_chain_subsystems()
+{
+    auto diag_subsystem_view     = diag_subsystems.view();
+    auto off_diag_subsystem_view = off_diag_subsystems.view();
+
+    if(!off_diag_subsystem_view.empty())
+    {
+        if(!socu_multi_provider_experimental)
+        {
+            throw SimSystemException{
+                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider_experimental' to enable experimental offdiag assembly"};
+        }
+        for(auto& off_diag_subsystem : off_diag_subsystem_view)
+        {
+            if(!off_diag_subsystem->supports_structured_assembly())
+            {
+                throw SimSystemException{fmt::format(
+                    "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
+                    off_diag_subsystem->name())};
+            }
+        }
+    }
+
+    for(auto& diag_subsystem : diag_subsystem_view)
+    {
+        if(!diag_subsystem->supports_structured_assembly())
+        {
+            throw SimSystemException{fmt::format(
+                "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
+                diag_subsystem->name())};
+        }
+    }
+}
+
 void GlobalLinearSystem::Impl::_assemble_structured_chain()
 {
     if(!selected_linear_solver)
@@ -348,9 +394,11 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
     auto off_diag_subsystem_view = off_diag_subsystems.view();
     if(!off_diag_subsystem_view.empty())
     {
-        throw SimSystemException{
-            "socu_approx structured chain currently supports ABD-only diagonal subsystems; "
-            "off-diagonal linear subsystems are not supported yet"};
+        if(!socu_multi_provider_experimental)
+        {
+            throw SimSystemException{
+                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider_experimental' to enable experimental offdiag assembly"};
+        }
     }
 
     StructuredAssemblyInfo info{this};
@@ -381,6 +429,24 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
                                   diag_dof_counts[subsystem_info.local_index]);
         Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
         diag_subsystem->assemble_structured(info);
+    }
+
+    for(const auto& subsystem_info : subsystem_infos)
+    {
+        if(subsystem_info.is_diag)
+            continue;
+
+        auto& off_diag_subsystem =
+            off_diag_subsystem_view[subsystem_info.local_index];
+        if(!off_diag_subsystem->supports_structured_assembly())
+        {
+            throw SimSystemException{fmt::format(
+                "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
+                off_diag_subsystem->name())};
+        }
+
+        Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
+        off_diag_subsystem->assemble_structured(info);
     }
 
     selected_linear_solver->finalize_structured_chain(info);

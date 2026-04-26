@@ -21,6 +21,8 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         return m_impl.diag_hessian.view();
     }
 
+    SizeT body_count() const noexcept;
+
     class ComputeGradientHessianInfo
     {
       public:

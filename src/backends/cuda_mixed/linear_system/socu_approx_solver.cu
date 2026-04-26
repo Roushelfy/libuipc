@@ -1,9 +1,16 @@
 #include <linear_system/socu_approx_solver.h>
 
+#include <affine_body/abd_linear_subsystem.h>
+#include <finite_element/fem_linear_subsystem.h>
+#include <finite_element/finite_element_method.h>
 #include <linear_system/global_linear_system.h>
 #include <linear_system/structured_chain_provider.h>
 #include <mixed_precision/policy.h>
 #include <sim_engine.h>
+#include <uipc/builtin/attribute_name.h>
+#include <uipc/builtin/constitution_type.h>
+#include <uipc/builtin/constitution_uid_collection.h>
+#include <uipc/builtin/geometry_type.h>
 #include <uipc/common/exception.h>
 #include <uipc/common/json.h>
 #include <uipc/common/timer.h>
@@ -15,6 +22,9 @@
 #include <muda/launch/kernel.h>
 #include <muda/atomic.h>
 #include <cub/warp/warp_reduce.cuh>
+#include <sol/graph.h>
+#include <sol/io.h>
+#include <sol/ordering.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -289,6 +299,263 @@ fs::path absolute_workspace_path(std::string_view workspace, const std::string& 
     if(p.is_relative())
         p = fs::absolute(fs::path{workspace} / p);
     return p;
+}
+
+fs::path default_generated_ordering_report_path(std::string_view workspace)
+{
+    return fs::absolute(fs::path{workspace} / "socu_approx" / "ordering.json");
+}
+
+sol::AtomGraph make_abd_body_local_atom_graph(SizeT body_count)
+{
+    sol::AtomGraph graph;
+    graph.name = "cuda_mixed_abd_init_time";
+    for(SizeT body = 0; body < body_count; ++body)
+    {
+        for(SizeT local_atom = 0; local_atom < 4; ++local_atom)
+            sol::add_atom(graph, 3, "abd_body_local", body * 4 + local_atom);
+    }
+
+    for(SizeT body = 0; body < body_count; ++body)
+    {
+        const SizeT base = body * 4;
+        for(SizeT i = 0; i < 4; ++i)
+        {
+            for(SizeT j = i + 1; j < 4; ++j)
+                sol::add_edge(graph, base + i, base + j, 4.0, "abd_body");
+        }
+    }
+
+    for(SizeT body = 1; body < body_count; ++body)
+        sol::add_edge(graph, (body - 1) * 4, body * 4, 1.0, "abd_body_sequence");
+
+    return graph;
+}
+
+Json generate_abd_init_time_ordering_report(SizeT            body_count,
+                                            std::string_view orderer,
+                                            std::string_view block_size)
+{
+    auto graph  = make_abd_body_local_atom_graph(body_count);
+    auto run    = sol::run_ordering(graph, orderer, block_size);
+    Json report = sol::to_json(run);
+    report["graph"] = sol::to_json(graph);
+    report["generated_by"] = "cuda_mixed_socu_init_time";
+    report["ordering_source"] = "init_time";
+    return report;
+}
+
+struct FemOrderingGeometry
+{
+    SizeT geo_slot_index = 0;
+    SizeT dim            = 0;
+    U64   uid            = 0;
+    SizeT vertex_offset  = 0;
+    SizeT vertex_count   = 0;
+};
+
+std::vector<FemOrderingGeometry> collect_fem_ordering_geometries(WorldVisitor& world)
+{
+    std::vector<FemOrderingGeometry> geos;
+    for(auto&& [slot_index, geo_slot] : enumerate(world.scene().geometries()))
+    {
+        auto& geo = geo_slot->geometry();
+        if(geo.type() != builtin::SimplicialComplex)
+            continue;
+
+        auto uid_attr = geo.meta().find<U64>(builtin::constitution_uid);
+        if(!uid_attr)
+            continue;
+
+        const U64 uid = uid_attr->view()[0];
+        const auto& uid_info =
+            builtin::ConstitutionUIDCollection::instance().find(uid);
+        if(uid_info.type != builtin::FiniteElement)
+            continue;
+
+        auto* sc = geo.as<geometry::SimplicialComplex>();
+        if(!sc)
+            continue;
+
+        geos.push_back(FemOrderingGeometry{static_cast<SizeT>(slot_index),
+                                           static_cast<SizeT>(sc->dim()),
+                                           uid,
+                                           0,
+                                           sc->vertices().size()});
+    }
+
+    std::sort(geos.begin(),
+              geos.end(),
+              [](const FemOrderingGeometry& a, const FemOrderingGeometry& b)
+              {
+                  if(a.dim != b.dim)
+                      return a.dim < b.dim;
+                  if(a.uid != b.uid)
+                      return a.uid < b.uid;
+                  return a.geo_slot_index < b.geo_slot_index;
+              });
+
+    SizeT vertex_offset = 0;
+    for(auto& geo : geos)
+    {
+        geo.vertex_offset = vertex_offset;
+        vertex_offset += geo.vertex_count;
+    }
+    return geos;
+}
+
+SizeT fem_vertex_count_from_scene(WorldVisitor& world)
+{
+    SizeT count = 0;
+    for(const auto& geo : collect_fem_ordering_geometries(world))
+        count += geo.vertex_count;
+    return count;
+}
+
+template <typename Vec>
+void add_fem_simplex_edges(sol::AtomGraph& graph,
+                           const Vec&     simplex,
+                           SizeT          vertex_offset,
+                           int            count,
+                           double         weight,
+                           std::string_view label)
+{
+    for(int i = 0; i < count; ++i)
+    {
+        for(int j = i + 1; j < count; ++j)
+        {
+            sol::add_edge(graph,
+                          vertex_offset + static_cast<SizeT>(simplex(i)),
+                          vertex_offset + static_cast<SizeT>(simplex(j)),
+                          weight,
+                          label);
+        }
+    }
+}
+
+sol::AtomGraph make_fem_vertex_atom_graph(WorldVisitor& world)
+{
+    sol::AtomGraph graph;
+    graph.name = "cuda_mixed_fem_init_time";
+    auto geos = collect_fem_ordering_geometries(world);
+    for(const auto& ordered_geo : geos)
+    {
+        for(SizeT local_vertex = 0; local_vertex < ordered_geo.vertex_count;
+            ++local_vertex)
+        {
+            sol::add_atom(graph,
+                          3,
+                          "fem_vertex",
+                          ordered_geo.vertex_offset + local_vertex);
+        }
+    }
+
+    auto geo_slots = world.scene().geometries();
+    for(const auto& ordered_geo : geos)
+    {
+        auto& geo = geo_slots[ordered_geo.geo_slot_index]->geometry();
+        auto* sc  = geo.as<geometry::SimplicialComplex>();
+        if(!sc)
+            continue;
+
+        switch(sc->dim())
+        {
+            case 1: {
+                for(const auto& edge : sc->edges().topo().view())
+                    add_fem_simplex_edges(
+                        graph, edge, ordered_geo.vertex_offset, 2, 1.0, "fem_edge");
+            }
+            break;
+            case 2: {
+                for(const auto& tri : sc->triangles().topo().view())
+                    add_fem_simplex_edges(
+                        graph, tri, ordered_geo.vertex_offset, 3, 2.0, "fem_triangle");
+            }
+            break;
+            case 3: {
+                for(const auto& tet : sc->tetrahedra().topo().view())
+                    add_fem_simplex_edges(
+                        graph, tet, ordered_geo.vertex_offset, 4, 4.0, "fem_tet");
+            }
+            break;
+            default:
+                break;
+        }
+    }
+    return graph;
+}
+
+Json generate_fem_init_time_ordering_report(WorldVisitor&     world,
+                                            std::string_view orderer,
+                                            std::string_view block_size)
+{
+    auto graph  = make_fem_vertex_atom_graph(world);
+    auto run    = sol::run_ordering(graph, orderer, block_size);
+    Json report = sol::to_json(run);
+    report["graph"] = sol::to_json(graph);
+    report["generated_by"] = "cuda_mixed_socu_init_time";
+    report["ordering_source"] = "init_time";
+    report["provider_kind"] = "fem_only";
+    return report;
+}
+
+Json generate_mixed_abd_fem_init_time_ordering_report(WorldVisitor&     world,
+                                                      SizeT            body_count,
+                                                      std::string_view orderer,
+                                                      std::string_view block_size)
+{
+    auto graph = make_abd_body_local_atom_graph(body_count);
+    graph.name = "cuda_mixed_abd_fem_init_time";
+    const SizeT fem_atom_base = graph.atoms.size();
+    auto fem_graph = make_fem_vertex_atom_graph(world);
+    for(SizeT atom = 0; atom < fem_graph.atoms.size(); ++atom)
+        sol::add_atom(graph, 3, "fem_vertex", fem_atom_base + atom);
+    for(const auto& edge : fem_graph.edges)
+        sol::add_edge(graph,
+                      fem_atom_base + edge.a,
+                      fem_atom_base + edge.b,
+                      edge.weight,
+                      edge.kind);
+    if(body_count > 0 && !fem_graph.atoms.empty())
+        sol::add_edge(graph, 0, fem_atom_base, 0.25, "abd_fem_sequence");
+
+    auto run    = sol::run_ordering(graph, orderer, block_size);
+    Json report = sol::to_json(run);
+    report["graph"] = sol::to_json(graph);
+    report["generated_by"] = "cuda_mixed_socu_init_time";
+    report["ordering_source"] = "init_time";
+    report["provider_kind"] = "multi_provider_experimental";
+    return report;
+}
+
+void write_json_report(const fs::path& path, const Json& report)
+{
+    fs::create_directories(path.parent_path());
+    std::ofstream ofs{path};
+    if(!ofs)
+        throw Exception{fmt::format("failed to open '{}' for writing", path.string())};
+    ofs << report.dump(2);
+}
+
+SizeT count_abd_bodies_from_scene(WorldVisitor& world)
+{
+    SizeT body_count = 0;
+    for(auto&& geo_slot : world.scene().geometries())
+    {
+        auto& geo = geo_slot->geometry();
+        if(geo.type() != builtin::SimplicialComplex)
+            continue;
+
+        auto uid_attr = geo.meta().find<U64>(builtin::constitution_uid);
+        if(!uid_attr)
+            continue;
+
+        const auto& uid_info =
+            builtin::ConstitutionUIDCollection::instance().find(uid_attr->view()[0]);
+        if(uid_info.type == builtin::AffineBody)
+            body_count += geo.instances().size();
+    }
+    return body_count;
 }
 
 bool read_size_t_field(const Json& json, const char* key, SizeT& value)
@@ -1401,6 +1668,8 @@ Json to_json(const SocuApproxDryRunReport& report)
                 {"packed", report.packed},
                 {"ordering_report", report.ordering_report_path},
                 {"contact_report", report.contact_report_path},
+                {"provider_kind", report.provider_kind},
+                {"structured_scope", report.structured_scope},
                 {"block_size", report.block_size},
                 {"chain_atom_count", report.chain_atom_count},
                 {"ordering_dof_count", report.ordering_dof_count},
@@ -1598,41 +1867,157 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_report_each_solve =
         report_each_solve_attr && report_each_solve_attr->view()[0] != 0;
 
+    auto structured_scope_attr =
+        config.find<std::string>("linear_system/socu_approx/structured_scope");
+    const std::string structured_scope =
+        structured_scope_attr ? structured_scope_attr->view()[0]
+                              : std::string{"multi_provider_experimental"};
+    if(structured_scope != "single_provider"
+       && structured_scope != "multi_provider_experimental")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingReportInvalid,
+            fmt::format("linear_system/socu_approx/structured_scope must be "
+                        "'single_provider' or 'multi_provider_experimental', got '{}'",
+                        structured_scope));
+        throw_gate_failure(m_gate_report);
+    }
+
+    auto ordering_source_attr =
+        config.find<std::string>("linear_system/socu_approx/ordering_source");
+    const std::string ordering_source =
+        ordering_source_attr ? ordering_source_attr->view()[0] : std::string{"report"};
+    if(ordering_source != "report" && ordering_source != "init_time")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingReportInvalid,
+            fmt::format("linear_system/socu_approx/ordering_source must be 'report' or "
+                        "'init_time', got '{}'",
+                        ordering_source));
+        throw_gate_failure(m_gate_report);
+    }
+
     auto ordering_report_attr =
         config.find<std::string>("linear_system/socu_approx/ordering_report");
     std::string ordering_report =
         ordering_report_attr ? ordering_report_attr->view()[0] : std::string{};
+    auto generated_ordering_report_attr =
+        config.find<std::string>("linear_system/socu_approx/generated_ordering_report");
+    std::string generated_ordering_report =
+        generated_ordering_report_attr ? generated_ordering_report_attr->view()[0]
+                                       : std::string{};
 
-    if(ordering_report.empty())
+    fs::path ordering_report_path;
+    Json     report;
+    if(ordering_source == "report")
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingMissing,
-            "linear_system/socu_approx/ordering_report is empty");
-        throw_gate_failure(m_gate_report);
+        if(ordering_report.empty())
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::OrderingMissing,
+                "linear_system/socu_approx/ordering_report is empty");
+            throw_gate_failure(m_gate_report);
+        }
+
+        ordering_report_path = absolute_workspace_path(workspace(), ordering_report);
+        std::ifstream ifs{ordering_report_path};
+        if(!ifs)
+        {
+            m_gate_report = make_failure(SocuApproxGateReason::OrderingMissing,
+                                         fmt::format("ordering report '{}' cannot be opened",
+                                                     ordering_report_path.string()),
+                                         ordering_report_path.string());
+            throw_gate_failure(m_gate_report);
+        }
+
+        report = Json::parse(ifs, nullptr, false);
+        if(report.is_discarded() || !report.is_object())
+        {
+            m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
+                                         fmt::format("ordering report '{}' is not valid JSON",
+                                                     ordering_report_path.string()),
+                                         ordering_report_path.string());
+            throw_gate_failure(m_gate_report);
+        }
     }
-
-    fs::path ordering_report_path{ordering_report};
-    if(ordering_report_path.is_relative())
-        ordering_report_path = fs::absolute(fs::path{workspace()} / ordering_report_path);
-
-    std::ifstream ifs{ordering_report_path};
-    if(!ifs)
+    else
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingMissing,
-                                     fmt::format("ordering report '{}' cannot be opened",
-                                                 ordering_report_path.string()),
-                                     ordering_report_path.string());
-        throw_gate_failure(m_gate_report);
-    }
+        auto* abd = find<ABDLinearSubsystem>();
+        SizeT body_count = abd ? abd->body_count() : SizeT{0};
+        if(body_count == 0)
+            body_count = count_abd_bodies_from_scene(world());
+        const SizeT fem_vertex_count = fem_vertex_count_from_scene(world());
+        if(body_count == 0 && fem_vertex_count == 0)
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::StructuredSubsystemUnsupported,
+                "init-time socu_approx ordering requires at least one supported ABD body or FEM vertex");
+            throw_gate_failure(m_gate_report);
+        }
+        if(structured_scope == "single_provider" && body_count > 0
+           && fem_vertex_count > 0)
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::StructuredSubsystemUnsupported,
+                "multi_provider_required: init-time socu_approx ordering found both ABD and FEM providers; set linear_system/socu_approx/structured_scope='multi_provider_experimental' to enable experimental mixed-provider ordering");
+            throw_gate_failure(m_gate_report);
+        }
 
-    Json report = Json::parse(ifs, nullptr, false);
-    if(report.is_discarded() || !report.is_object())
-    {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
-                                     fmt::format("ordering report '{}' is not valid JSON",
-                                                 ordering_report_path.string()),
-                                     ordering_report_path.string());
-        throw_gate_failure(m_gate_report);
+        auto ordering_orderer_attr =
+            config.find<std::string>("linear_system/socu_approx/ordering_orderer");
+        auto ordering_block_size_attr =
+            config.find<std::string>("linear_system/socu_approx/ordering_block_size");
+        const std::string ordering_orderer =
+            ordering_orderer_attr ? ordering_orderer_attr->view()[0]
+                                  : std::string{"auto_stable"};
+        const std::string ordering_block_size =
+            ordering_block_size_attr ? ordering_block_size_attr->view()[0]
+                                     : std::string{"auto"};
+
+        try
+        {
+            if(body_count > 0 && fem_vertex_count > 0)
+            {
+                report = generate_mixed_abd_fem_init_time_ordering_report(
+                    world(),
+                    body_count,
+                    ordering_orderer,
+                    ordering_block_size);
+            }
+            else if(body_count > 0)
+            {
+                report = generate_abd_init_time_ordering_report(
+                    body_count,
+                    ordering_orderer,
+                    ordering_block_size);
+                report["provider_kind"] = "abd_only";
+            }
+            else
+            {
+                report = generate_fem_init_time_ordering_report(
+                    world(),
+                    ordering_orderer,
+                    ordering_block_size);
+            }
+        }
+        catch(const std::exception& e)
+        {
+            m_gate_report = make_failure(
+                SocuApproxGateReason::OrderingReportInvalid,
+                fmt::format("init-time ordering generation failed: {}", e.what()));
+            throw_gate_failure(m_gate_report);
+        }
+
+        if(!generated_ordering_report.empty())
+            ordering_report_path =
+                absolute_workspace_path(workspace(), generated_ordering_report);
+        else if(!ordering_report.empty())
+            ordering_report_path = absolute_workspace_path(workspace(), ordering_report);
+        else
+            ordering_report_path = default_generated_ordering_report_path(workspace());
+        write_json_report(ordering_report_path, report);
+        logger::info("Generated socu_approx init-time ordering report at {}",
+                     ordering_report_path.string());
     }
 
     const Json* candidate = selected_candidate_json(report);
@@ -1646,6 +2031,11 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     }
 
     m_gate_report.ordering_report_path = ordering_report_path.string();
+    m_gate_report.structured_scope = structured_scope;
+    if(report.contains("provider_kind") && report["provider_kind"].is_string())
+        m_gate_report.provider_kind = report["provider_kind"].get<std::string>();
+    else
+        m_gate_report.provider_kind = "ordering_report";
     m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
     if(m_gate_report.block_size != 32 && m_gate_report.block_size != 64)
     {
@@ -1825,6 +2215,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         m_mode == "solve" ? "structured_strict_solve" : "structured_dry_run";
     m_dry_run_report.report_path             = dry_run_report_path.string();
     m_dry_run_report.ordering_report_path    = ordering_report_path.string();
+    m_dry_run_report.provider_kind           = m_gate_report.provider_kind;
+    m_dry_run_report.structured_scope        = structured_scope;
     m_dry_run_report.contact_report_path =
         contact_report.empty() ? std::string{}
                                : absolute_workspace_path(workspace(), contact_report).string();
@@ -1855,7 +2247,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_gate_report.reason = SocuApproxGateReason::None;
     m_gate_report.detail =
         m_mode == "solve"
-            ? "M7 strict ABD-only structured solve gate passed"
+            ? fmt::format("strict structured solve gate passed for provider_kind={} scope={}",
+                          m_gate_report.provider_kind,
+                          structured_scope)
             : "M5 structured dry-run gate passed; solve direction is intentionally unavailable";
     m_gate_report.dtype = socu_dtype_name<GlobalLinearSystem::SolveScalar>();
     m_gate_report.coverage_active_dof_count =
@@ -1980,7 +2374,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     }
 
     logger::info("SocuApproxSolver {} enabled: block_size={}, blocks={}, report='{}'",
-                 m_mode == "solve" ? "M7 strict solve" : "M5 dry-run",
+                 m_mode == "solve" ? "strict structured solve" : "M5 dry-run",
                  m_dry_run_report.block_size,
                  m_dry_run_report.block_count,
                  m_dry_run_report.report_path);
@@ -2121,9 +2515,9 @@ void SocuApproxSolver::finalize_structured_chain(
     if(m_mode != "solve")
         return;
     m_dry_run_report.structured_diag_write_count =
-        info.contact_diag_write_count();
+        info.diag_write_count();
     m_dry_run_report.structured_first_offdiag_write_count =
-        info.contact_first_offdiag_write_count();
+        info.first_offdiag_write_count();
     m_dry_run_report.near_band_contact_count = info.near_band_contact_count();
     m_dry_run_report.off_band_contact_count = info.off_band_contact_count();
     m_dry_run_report.near_band_contribution_count =
@@ -2420,15 +2814,19 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
     m_dry_run_report.direction_available = true;
     m_dry_run_report.status_reason = std::string{to_string(SocuApproxGateReason::None)};
     m_dry_run_report.status_detail =
-        "M7 strict ABD-only structured direction solved and scattered";
+        fmt::format("strict structured direction solved and scattered: provider={}, scope={}",
+                    m_dry_run_report.provider_kind,
+                    m_dry_run_report.structured_scope);
     m_gate_report.reason = SocuApproxGateReason::None;
     m_gate_report.detail = m_dry_run_report.status_detail;
     if(m_report_each_solve || m_debug_validation || m_debug_timing)
         write_dry_run_report(m_dry_run_report);
 
     info.iter_count(1);
-    logger::info("SocuApproxSolver M7 strict solve launched on mixed backend stream: "
-                 "debug_validation={}, report='{}'",
+    logger::info("SocuApproxSolver strict structured solve launched on mixed backend "
+                 "stream: provider={}, scope={}, debug_validation={}, report='{}'",
+                 m_dry_run_report.provider_kind,
+                 m_dry_run_report.structured_scope,
                  m_debug_validation,
                  m_dry_run_report.report_path);
 #endif
