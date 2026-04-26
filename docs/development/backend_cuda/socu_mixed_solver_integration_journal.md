@@ -1424,9 +1424,9 @@ frame. The next checkpoint should connect the M5 dry-run packed
 the direction back into the solver-owned displacement buffer and validate the
 direction before line search.
 
-## M7 Checkpoint: Guarded Surrogate Solve Path
+## M7a Checkpoint: Guarded Surrogate Solve Path
 
-Milestone 7 now has the first guarded `SocuApproxSolver` solve path. The config
+Milestone 7a now has the first guarded `SocuApproxSolver` solve path. The config
 surface gained:
 
 ```text
@@ -1483,13 +1483,13 @@ ninja -C build/build_impl_fp64 -n uipc_test_sim_case
 # first steps include 228 ordinary cuda backend rebuild/link actions
 ```
 
-The current M7 boundary is important: this checkpoint connects the real
+The current M7a boundary is important: this checkpoint connects the real
 simulation gradient and the structured surrogate solve/scatter path, but the
 Hessian surrogate is still damping plus structured contributions supplied
 through the current report/sink path. Real FEM/ABD subsystem-native Hessian
 writes into `StructuredAssemblySink` are still future work; they should be the
-next strict checkpoint before claiming a production-quality FEM/ABD surrogate
-assembly path.
+next strict checkpoint before claiming a real structured `\hat H` assembly
+path.
 
 ### Verification
 
@@ -1526,9 +1526,9 @@ The whitespace check passed:
 git diff --check
 ```
 
-### 2026-04-25 Addendum: Mixed-Only M7 World Contract and Runtime Smokes
+### 2026-04-25 Addendum: Mixed-Only M7a World Contract and Runtime Smokes
 
-The M7 world smoke is now executable without rebuilding the ordinary `cuda`
+The M7a world smoke is now executable without rebuilding the ordinary `cuda`
 backend. A new test target was added under `apps/tests/sim_case`:
 
 ```text
@@ -1545,11 +1545,11 @@ sim_case_cuda_mixed_only_linear_solver
 The registered Catch filter is the exact test case
 `86_cuda_mixed_linear_solver_selection_smoke`, so it covers default
 `linear_fused_pcg`, explicit `linear_pcg`, invalid solver rejection, M5 dry-run
-packing, structured near/off-band contact writes, and the M7 surrogate solve
+packing, structured near/off-band contact writes, and the M7a surrogate solve
 world section without pulling unrelated sim-case files or the ordinary CUDA
 backend.
 
-The M7 optional-environment behavior was tightened. If `socu_native`, MathDx
+The M7a optional-environment behavior was tightened. If `socu_native`, MathDx
 artifacts, or `SOCU_NATIVE_WARP_SO` are unavailable, the M7 section now emits a
 Catch warning and returns instead of marking the entire CTest as skipped. This
 keeps the default contract runnable on machines without the optional native
@@ -1607,7 +1607,7 @@ Result:
 100% tests passed, 0 tests failed out of 3
 ```
 
-The generated M7 report for
+The generated M7a report for
 `linear_solver_socu_approx_m7_surrogate_solve` recorded:
 
 ```text
@@ -1624,9 +1624,11 @@ status.reason = none
 direction_available = true
 ```
 
-This completes a strict world-level M7 surrogate solve validation for the
+This completes a guarded world-level M7a surrogate solve validation for the
 current fp64 build while keeping the ordinary CUDA backend out of the targeted
-test cycle.
+test cycle. It does not complete strict M7b because the surrogate Hessian is
+not yet assembled by FEM/ABD/joint/constraint/coupling subsystem kernels
+through a structured device sink.
 
 Additional Python runtime smokes were run against the same fp64 build using
 `UIPC_MODULE_DIR=build/build_impl_fp64/Release/bin` and
@@ -1669,11 +1671,306 @@ produce cross-level regression rows. It still validates that the real asset
 runner, Python bindings, `cuda_mixed` backend load path, timer output,
 solution dumps, and report generation remain healthy after the M0-M7 changes.
 
-At this point, M0-M7 are complete for their documented checkpoint boundaries:
-M0-M2 remain experiment/lab artifacts, M3-M5 establish the no-regression
-solver abstraction and structured dry-run path, M6 validates direct
-`socu_native` synthetic solve calls, and M7 validates the guarded world-level
-surrogate solve/scatter path. The remaining gap is still the next milestone:
-replace the current damping/report-driven surrogate Hessian with real
-subsystem-native structured Hessian writes before treating `socu_approx` as a
-production solver.
+At this point, M0-M6 and M7a are complete for their documented checkpoint
+boundaries: M0-M2 remain experiment/lab artifacts, M3-M5 establish the
+no-regression solver abstraction and structured dry-run path, M6 validates
+direct `socu_native` synthetic solve calls, and M7a validates the guarded
+world-level surrogate solve/scatter path. Strict M7b remains open: replace the
+current damping/report-driven surrogate Hessian with real subsystem-native
+structured Hessian writes before treating `socu_approx` as a production
+solver.
+
+## 2026-04-25 Correction: Strict M7b Route
+
+The previous wording around M7 was too strong. The implementation should now
+be treated as a clean M7a baseline, not as strict M7 completion. In particular,
+the current `SocuApproxSolver` consumes the real global gradient and calls
+`socu_native`, but it does not yet receive real FEM/ABD/joint/constraint/
+coupling Hessian contributions through a device structured assembly sink.
+
+The strict M7b route should follow the main integration plan rather than a
+triplet-projection shortcut. `socu_approx` must keep `needs_full_sparse_A =
+false`; production solve must not build full sparse A, reverse-engineer BCOO,
+or expose triplet scratch as a structured side channel. A legacy sparse
+projection may exist only as a test oracle.
+
+The next implementation checkpoint is therefore:
+
+1. Introduce an explicit Newton assembly mode with at least `FullSparse` and
+   `GradientStructuredHessian`, and propagate the selected solver requirements
+   before linear subsystem, dytopo, and contact assembly.
+2. Add a zero-behavior `TripletAssemblySink` wrapper around the existing full
+   sparse path and verify no-regression before structured writes are enabled.
+3. Add a compile-time/static `StructuredDeviceAssemblySink` for a strict
+   first scene family, with device-side old-DoF-to-chain-slot mapping and
+   deterministic writes into `diag`, `first_offdiag`, and `rhs`.
+4. Gate unsupported active subsystem or contact Hessian contributions with an
+   explicit fatal reason such as `M8_contact_runtime_not_supported`; do not
+   silently fall back to gradient-only or full sparse.
+5. Keep pack time, solve time, write counts, dropped/off-band counts, and
+   strict gate reason in the report so tests can distinguish M7b success from
+   M7a fallback behavior.
+
+This correction also rules out the temporary idea of assembling triplets for
+`needs_structured_chain` inside `GlobalLinearSystem` and passing those triplets
+to `SocuApproxSolver`. That path would be useful only as an oracle/debug mode;
+it is not the strict runtime design.
+
+### First Corrective Patch
+
+The first code correction makes the Newton assembly mode explicit without yet
+claiming structured Hessian assembly support. `LinearSolver::AssemblyRequirements`
+now carries a `NewtonAssemblyMode`. The existing iterative solvers declare
+`FullSparse`, while `SocuApproxSolver` declares `GradientStructuredHessian`.
+`GlobalLinearSystem` validates that these mode declarations match the older
+boolean requirements, so an inconsistent solver cannot accidentally request a
+full sparse path while pretending to be structured, or vice versa.
+
+`advance_ipc` and `advance_al` now pass the selected linear solver assembly
+mode into `GlobalDyTopoEffectManager`. Because runtime contact/dytopo structured
+Hessian assembly is reserved for M8, any active dytopo/contact reporter under
+`GradientStructuredHessian` now fails explicitly with
+`M8_contact_runtime_not_supported`. This is intentionally conservative: it
+prevents `socu_approx` from silently running a gradient-only contact path and
+keeps strict M7b scoped to subsystem-native structured writes.
+
+The same M8 contact gate is also checked during `SocuApproxSolver::do_build()`
+when `contact/enable = true`, so ordinary scene initialization reports the
+unsupported state before the Newton loop reaches dytopo assembly. A focused
+sim-case section now asserts that `socu_approx` rejects runtime contact with
+the `M8_contact_runtime_not_supported` reason.
+
+Verification for this corrective patch:
+
+```bash
+cmake --build build/build_impl_fp64 --target sim_case_cuda_mixed_only -j2
+ctest --test-dir build/build_impl_fp64 \
+  -R '^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$' \
+  --output-on-failure
+```
+
+All three checks passed in the fp64 build. The full `cuda_mixed` target rebuild
+was triggered by the new assembly-mode header and completed with the existing
+non-fatal warnings only.
+
+### Second Corrective Patch: Sink Boundary Split
+
+The next correction removes the host-side virtual `StructuredAssemblySink` from
+the `StructuredChainProvider` runtime contract. That virtual sink was a useful
+M5 dry-run convenience, but it violated the strict plan's requirement that the
+hot assembly path use compile-time/static sinks and avoid device-side virtual
+dispatch or type erasure. The provider now exposes ordering metadata and an
+assembly entrypoint without taking a host virtual sink object.
+
+A new `src/backends/cuda_mixed/utils/assembly_sink.h` file introduces the Phase
+2A `TripletAssemblySink`. It is a thin compile-time wrapper around the existing
+`DoubletVectorAssembler` and `TripletMatrixAssembler`, with inline
+`write_gradient()` and `write_hessian_half()` helpers. This patch does not yet
+switch FEM/ABD kernels over to the sink; that migration must be done
+subsystem-by-subsystem with no-regression checks.
+
+The old CPU dry-run sink remains local to `SocuApproxSolver` as
+`HostStructuredDryRunSink`/`CpuStructuredDryRunSink`. It is now explicitly a
+report/test helper for M5/M7a, not the runtime structured assembly contract for
+strict M7b.
+
+Verification for this sink-boundary patch:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target uipc_test_backend_cuda_mixed sim_case_cuda_mixed_only -j2
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+```
+
+The focused backend and mixed-only sim-case checks passed. The compile emitted
+only the existing non-fatal virtual hiding warnings in the contract compile
+unit.
+
+### Phase 2A Initial FEM Triplet Sink Migration
+
+The first real `TripletAssemblySink` call site has been introduced on the FEM
+side. `FEM3DConstitution::ComputeGradientHessianInfo` and
+`FiniteElementElastics::ComputeGradientHessianInfo` now expose a `sink()`
+accessor that returns the static `TripletAssemblySink`. The
+`StableNeoHookean3D` constitution uses this sink for its gradient and
+upper-triangular Hessian writes instead of constructing
+`DoubletVectorAssembler` and `TripletMatrixAssembler` directly inside the
+kernel.
+
+This is intentionally narrow: it proves the sink can be captured in CUDA
+kernels and still writes through the existing triplet machinery, but it does
+not yet migrate every FEM constitution or introduce structured writes. The
+legacy sparse path remains the only production path for this constitution.
+
+Verification:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target uipc_test_backend_cuda_mixed sim_case_cuda_mixed_only -j2
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+```
+
+The focused checks passed. A Python FEM smoke was attempted with
+`python/examples/cuda_mixed_fem_mas_hybrid_viewer.py --smoke-frames 2`, but the
+system `python3` environment is missing `numpy`, so that smoke was not run in
+this pass.
+
+A follow-up run used the repository virtual environment and passed:
+
+```bash
+UIPC_MODULE_DIR=build/build_impl_fp64/Release/bin \
+PYTHONPATH=build/build_impl_fp64/python/src \
+python/.venv/bin/python python/examples/cuda_mixed_fem_mas_hybrid_viewer.py \
+  --smoke-frames 2
+```
+
+### Phase 2A Additional FEM Constitution Sink Migration
+
+The next sink migration pass extends the static `TripletAssemblySink` pattern to
+more FEM constitution writers that already followed the
+`DoubletVectorAssembler` + `TripletMatrixAssembler` shape. `ARAP3D`,
+`DiscreteShellBending`, and `KirchhoffRodBending` now write gradients and
+upper-triangular Hessians through `info.sink()` instead of constructing the
+assemblers directly in each kernel.
+
+`FiniteElementExtraConstitution::ComputeGradientHessianInfo` now forwards the
+same sink accessor from `FiniteElementElastics::ComputeGradientHessianInfo`, so
+extra FEM constitutions can use the common compile-time sink boundary without a
+separate adapter. This still preserves the legacy full sparse triplet path; it
+does not yet introduce the strict M7b structured device sink for `diag` and
+`first_offdiag`.
+
+Verification:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target uipc_test_backend_cuda_mixed sim_case_cuda_mixed_only -j2
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+build/build_impl_fp64/Release/bin/uipc_test_sim_case_cuda_mixed_only '[fem]'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case_cuda_mixed_only '[shell]'
+UIPC_MODULE_DIR=build/build_impl_fp64/Release/bin \
+PYTHONPATH=build/build_impl_fp64/python/src \
+python/.venv/bin/python python/examples/cuda_mixed_fem_mas_hybrid_viewer.py \
+  --smoke-frames 2
+```
+
+All checks passed. The `[fem]` filter covered the mixed FEM hybrid and rod
+contract cases, and the `[shell]` filter covered the shell contract case.
+
+### Phase 2A Remaining FEM Constitution Sink Migration
+
+The remaining FEM constitution writers that still constructed
+`DoubletVectorAssembler` or `TripletMatrixAssembler` directly have now been
+migrated to the same static `TripletAssemblySink` boundary. This pass covers
+the codimension and plastic shell family:
+
+```text
+HookeanSpring1D
+NeoHookeanShell2D
+StrainLimitingBaraffWitkinShell2D
+PlasticDiscreteShellBending
+StressPlasticDiscreteShellBending
+```
+
+`Codim1DConstitution::ComputeGradientHessianInfo` and
+`Codim2DConstitution::ComputeGradientHessianInfo` now expose `sink()` in the
+same style as the 3D and extra FEM paths. A source scan now finds no remaining
+direct `DoubletVectorAssembler` or `TripletMatrixAssembler` use under
+`src/backends/cuda_mixed/finite_element`.
+
+Verification:
+
+```bash
+cmake --build build/build_impl_fp64 \
+  --target uipc_test_backend_cuda_mixed sim_case_cuda_mixed_only -j2
+ctest --test-dir build/build_impl_fp64 \
+  -R '^backend_cuda_mixed_contract$|^backend_cuda_mixed_source_contract_scan$|^sim_case_cuda_mixed_only_linear_solver$' \
+  --output-on-failure
+build/build_impl_fp64/Release/bin/uipc_test_sim_case_cuda_mixed_only '[fem]'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case_cuda_mixed_only '[shell]'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case '20_spring_fixed_point'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case '19_shell_fixed_point'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case '33_discrete_shell_bending'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case \
+  '76_discrete_shell_bending_strain_plastic_open_strip'
+build/build_impl_fp64/Release/bin/uipc_test_sim_case \
+  '81_stress_plastic_discrete_shell_bending_open_strip'
+```
+
+All checks passed. The ordinary `uipc_test_sim_case` checks were limited to the
+smallest direct constitution coverage points and their output was redirected
+when needed to avoid excessive terminal output.
+
+## 2026-04-26
+
+### Strict M7 Alignment Repair Pass
+
+This pass fixes the strict-alignment gaps identified against
+`socu_mixed_solver_integration_plan.md` and narrows the active solve path to the
+planned Level 1 surface: ABD-only, complete DoF coverage, no runtime
+contact/dytopo/FEM/offdiag subsystems, equal store/solve scalar type, and block
+size `32` or `64`. The default `fused_pcg` solver remains unchanged.
+
+`GlobalLinearSystem` now routes solvers that request a structured chain through
+a separate structured assembly path after RHS assembly, instead of requiring the
+legacy sparse triplet/BCOO path. The new `LinearSolver` hooks let a solver
+prepare structured workspace, expose a device structured sink, finalize the
+chain, and receive line-search feedback. `DiagLinearSubsystem` now has explicit
+structured assembly capability hooks; unsupported subsystems fail with a clear
+reason instead of silently contributing nothing.
+
+`SocuApproxSolver` now owns device-side structured workspace for `diag`,
+`first_offdiag`, RHS, solution storage, mappings, validation sums, and pre-factor
+matrix snapshots. The production solve branch no longer loads `contact_report`
+JSON or uses the CPU dry-run sink. It uses the mixed backend stream, calls
+`socu_native::factor_and_solve_inplace_async`, validates residual and descent
+against the pre-factor `diag/offdiag` snapshot, and scatters the direction on
+device. The dry-run `contact_report` path remains debug-only.
+
+The structured provider contract now requires complete old-DoF to chain-DoF
+coverage and reports active/padding counts, duplicate/missing old DoFs,
+duplicate/missing chain DoFs, block utilization, near/off-band ratios, and
+drop-norm ratio. Any incomplete, duplicated, or padding-overlapping mapping is
+a gate failure. Default SOCU gate thresholds in the scene config were changed
+from permissive to strict: near-band ratio `0.90`, off-band ratio `0.10`, block
+utilization `0.65`, and off-band drop-norm ratio `0.05`.
+
+ABD now implements the first strict structured assembly path by reusing the ABD
+kinetic and constitution Hessian computation, writing full `12x12` body
+Hessians into the structured diagonal sink, and rejecting reporters/joints plus
+non-empty dytopo/contact effect buffers. Empty dytopo receivers do not block an
+ABD-only scene. FEM and runtime contact remain explicitly unsupported for this
+solve mode.
+
+The report schema now records the stricter gate fields requested by the plan,
+including dtype, backend policy, MathDx manifest/cache preflight status, RHS
+sign convention, stream source, direction norm, descent, residual, and
+line-search feedback. The MathDx preflight now checks the manifest path,
+runtime cache directory, artifact presence, dtype/block/nrhs/function match,
+and device-arch coverage before creating a plan.
+
+Verification:
+
+```bash
+cmake --build build/build_impl_fp64 --target cuda_mixed -- -j2
+cmake --build build/build_impl_fp64 --target backend_cuda_mixed -- -j2
+./build/build_impl_fp64/Release/bin/uipc_test_backend_cuda_mixed \
+  "[cuda_mixed][contract]"
+cmake --build build/build_impl_fp64 --target sim_case_cuda_mixed_only -- -j2
+./build/build_impl_fp64/Release/bin/uipc_test_sim_case_cuda_mixed_only \
+  "86_cuda_mixed_linear_solver_selection_smoke"
+```
+
+The focused backend contract and linear-solver smoke tests passed. The strict
+M7 solve and coverage-gate runtime sections were compiled and reached their
+availability checks, but were skipped on this machine because `warp.so` was not
+discoverable; the skip message recommends setting `SOCU_NATIVE_WARP_SO`.

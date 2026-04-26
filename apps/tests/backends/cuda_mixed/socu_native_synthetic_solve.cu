@@ -275,35 +275,6 @@ std::filesystem::path default_mathdx_manifest_path()
     return std::filesystem::path{SOCU_NATIVE_DEFAULT_MATHDX_MANIFEST_PATH};
 }
 
-std::filesystem::path discover_warp_so_for_test()
-{
-    if(const char* env = std::getenv("SOCU_NATIVE_WARP_SO"))
-    {
-        const std::filesystem::path candidate{env};
-        if(std::filesystem::is_regular_file(candidate))
-            return candidate;
-    }
-
-    const auto source_dir = std::filesystem::path{SOCU_NATIVE_SOURCE_DIR};
-    if(source_dir.empty())
-        return {};
-
-    const auto venv_root = source_dir / ".venv" / "lib";
-    if(!std::filesystem::is_directory(venv_root))
-        return {};
-
-    for(const auto& entry : std::filesystem::directory_iterator(venv_root))
-    {
-        if(!entry.is_directory())
-            continue;
-        if(entry.path().filename().string().rfind("python", 0) != 0)
-            continue;
-        const auto candidate = entry.path() / "site-packages" / "warp" / "bin" / "warp.so";
-        if(std::filesystem::is_regular_file(candidate))
-            return candidate;
-    }
-    return {};
-}
 #endif
 }  // namespace
 
@@ -334,10 +305,6 @@ TEST_CASE("cuda_mixed_socu_native_synthetic_solve_smoke",
         {
             SKIP("MathDx manifest is missing; expected " << manifest_path.string());
         }
-
-        const auto warp_so = discover_warp_so_for_test();
-        if(warp_so.empty())
-            SKIP("Warp native library is missing; set SOCU_NATIVE_WARP_SO");
 
         run_synthetic_solve_smoke<StoreScalar>(32);
         run_synthetic_solve_smoke<StoreScalar>(64);

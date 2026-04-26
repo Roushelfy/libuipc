@@ -5,6 +5,11 @@
 #include <linear_system/linear_solver.h>
 #include <linear_system/socu_approx_solver.h>
 #include <mixed_precision/policy.h>
+#include <utils/assembly_sink.h>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <type_traits>
 
 #ifndef UIPC_WITH_SOCU_NATIVE
@@ -145,4 +150,35 @@ static_assert(std::is_same_v<decltype(socu_native::ProblemShape{}.n), int>);
 TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")
 {
     SUCCEED();
+}
+
+TEST_CASE("cuda_mixed_socu_approx_source_contract",
+          "[cuda_mixed][contract][socu_approx]")
+{
+    const auto source_path =
+        std::filesystem::path{UIPC_PROJECT_DIR}
+        / "src/backends/cuda_mixed/linear_system/socu_approx_solver.cu";
+    std::ifstream ifs{source_path};
+    REQUIRE(ifs.good());
+
+    const std::string source{std::istreambuf_iterator<char>{ifs},
+                             std::istreambuf_iterator<char>{}};
+    const auto do_solve = source.find("void SocuApproxSolver::do_solve");
+    REQUIRE(do_solve != std::string::npos);
+    const auto production_begin =
+        source.find("const cudaStream_t stream = system().stream();", do_solve);
+    REQUIRE(production_begin != std::string::npos);
+    const auto production_end =
+        source.find("logger::info(\"SocuApproxSolver M7 strict solve completed",
+                    production_begin);
+    REQUIRE(production_end != std::string::npos);
+
+    const auto production =
+        source.substr(production_begin, production_end - production_begin);
+    CHECK(production.find("load_contact_report") == std::string::npos);
+    CHECK(production.find("CpuStructuredDryRunSink") == std::string::npos);
+    CHECK(production.find(".copy_to(") == std::string::npos);
+    CHECK(production.find(".copy_from(") == std::string::npos);
+    CHECK(production.find("cudaStream_t stream = nullptr") == std::string::npos);
+    CHECK(production.find("cudaStreamSynchronize") == std::string::npos);
 }
