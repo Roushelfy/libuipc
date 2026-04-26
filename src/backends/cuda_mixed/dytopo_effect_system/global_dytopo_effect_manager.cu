@@ -10,6 +10,7 @@
 #include <uipc/common/unit.h>
 #include <uipc/common/zip.h>
 #include <energy_component_flags.h>
+#include <fmt/format.h>
 
 namespace uipc::backend
 {
@@ -110,9 +111,10 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
     auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
     bool gradient_only            = info.m_gradient_only;
 
-    logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}",
+    logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}, AssemblyMode={}",
                  info.m_gradient_only,
-                 enum_flags_name(info.m_component_flags));
+                 enum_flags_name(info.m_component_flags),
+                 newton_assembly_mode_name(info.m_assembly_mode));
 
     for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
     {
@@ -121,6 +123,14 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
 
         if(!has_flags(info.m_component_flags, reporter->component_flags()))
             continue;
+
+        if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
+        {
+            throw SimSystemException{fmt::format(
+                "M8_contact_runtime_not_supported: reporter '{}' is active "
+                "while selected linear solver requires GradientStructuredHessian",
+                reporter->name())};
+        }
 
         GradientHessianExtentInfo extent_info;
         extent_info.m_gradient_only = gradient_only;

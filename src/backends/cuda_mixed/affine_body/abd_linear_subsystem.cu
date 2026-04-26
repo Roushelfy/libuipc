@@ -12,6 +12,8 @@
 #include <utils/report_extent_check.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
+#include <uipc/common/exception.h>
+#include <fmt/format.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -200,6 +202,77 @@ void ABDLinearSubsystem::Impl::assemble(GlobalLinearSystem::DiagInfo& info)
                 "Hessian size mismatch: expected {}, got {}",
                 info.hessians().triplet_count(),
                 hess_offset);
+}
+
+void ABDLinearSubsystem::Impl::assemble_structured(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    using namespace muda;
+    using Alu = ActivePolicy::AluScalar;
+
+    if(!reporters.view().empty())
+    {
+        throw Exception{
+            "structured_subsystem_not_supported: ABD reporters/joints are not supported by socu_approx strict structured assembly yet"};
+    }
+    const bool has_dytopo_effect =
+        dytopo_effect_receiver
+        && (dytopo_effect_receiver->gradients().doublet_count() != 0
+            || dytopo_effect_receiver->hessians().triplet_count() != 0);
+    if(has_dytopo_effect)
+    {
+        throw Exception{
+            "structured_subsystem_not_supported: ABD dytopo/contact effects are reserved for M8 structured assembly"};
+    }
+
+    ABDLinearSubsystem::ComputeGradientHessianInfo kinetic_info{
+        false, body_id_to_kinetic_gradient, body_id_to_kinetic_hessian, dt};
+    abd().kinetic->compute_gradient_hessian(kinetic_info);
+
+    for(auto&& [i, cst] : enumerate(abd().constitutions.view()))
+    {
+        ABDLinearSubsystem::ComputeGradientHessianInfo cst_info{
+            false,
+            abd().subview(body_id_to_shape_gradient, cst->m_index),
+            abd().subview(body_id_to_shape_hessian, cst->m_index),
+            dt};
+        cst->compute_gradient_hessian(cst_info);
+    }
+
+    const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
+    auto         sink           = info.sink();
+    ParallelFor(256, 0, info.stream())
+        .file_line(__FILE__, __LINE__)
+        .apply(abd().body_count(),
+               [sink,
+                old_dof_offset,
+                is_fixed = abd().body_id_to_is_fixed.cviewer().name("is_fixed"),
+                is_external_kinetic =
+                    abd().body_id_to_external_kinetic.cviewer().name("external_kinetic"),
+                shape_hessian = body_id_to_shape_hessian.cviewer().name("shape_hessian"),
+                kinetic_hessian =
+                    body_id_to_kinetic_hessian.cviewer().name("kinetic_hessian"),
+                diag_hessian =
+                    this->diag_hessian.viewer().name("diag_hessian")] __device__(int I) mutable
+               {
+                   Eigen::Matrix<Alu, 12, 12> H12x12_alu;
+                   if(is_fixed(I))
+                   {
+                       H12x12_alu.setIdentity();
+                   }
+                   else
+                   {
+                       H12x12_alu = shape_hessian(I).template cast<Alu>();
+                       if(!is_external_kinetic(I)) [[likely]]
+                           H12x12_alu += kinetic_hessian(I).template cast<Alu>();
+                   }
+
+                   diag_hessian(I) = downcast_hessian<StoreScalar>(H12x12_alu);
+                   const auto H12x12_store = downcast_hessian<StoreScalar>(H12x12_alu);
+                   sink.add_dense_block(old_dof_offset + I * 12, H12x12_store);
+               });
+
+    info.record_diag_writes(abd().body_count() * 12 * 12);
 }
 
 void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
@@ -601,6 +674,17 @@ void ABDLinearSubsystem::do_report_extent(GlobalLinearSystem::DiagExtentInfo& in
 void ABDLinearSubsystem::do_assemble(GlobalLinearSystem::DiagInfo& info)
 {
     m_impl.assemble(info);
+}
+
+bool ABDLinearSubsystem::do_supports_structured_assembly() const
+{
+    return true;
+}
+
+void ABDLinearSubsystem::do_assemble_structured(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    m_impl.assemble_structured(info);
 }
 
 void ABDLinearSubsystem::do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info)

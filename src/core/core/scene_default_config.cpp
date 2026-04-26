@@ -36,10 +36,15 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/dry_run_report", std::string{});
     config.create("linear_system/socu_approx/mode", std::string{"solve"});
     config.create("linear_system/socu_approx/damping_shift", Float{1.0});
-    config.create("linear_system/socu_approx/descent_eta", Float{1e-12});
+    config.create("linear_system/socu_approx/descent_eta", Float{1e-8});
     config.create("linear_system/socu_approx/max_relative_residual", Float{1e-4});
-    config.create("linear_system/socu_approx/min_near_band_ratio", Float{0.0});
-    config.create("linear_system/socu_approx/max_off_band_ratio", Float{1.0});
+    config.create("linear_system/socu_approx/p_min_abs", Float{0.0});
+    config.create("linear_system/socu_approx/p_min_rel", Float{1e-12});
+    config.create("linear_system/socu_approx/min_near_band_ratio", Float{0.90});
+    config.create("linear_system/socu_approx/max_off_band_ratio", Float{0.10});
+    config.create("linear_system/socu_approx/min_block_utilization", Float{0.65});
+    config.create("linear_system/socu_approx/max_off_band_drop_norm_ratio", Float{0.05});
+    config.create("linear_system/socu_approx/max_line_search_reject_streak", IndexT{1});
 
     config.create("line_search/max_iter", IndexT{8});
     config.create("line_search/report_energy", IndexT{0});

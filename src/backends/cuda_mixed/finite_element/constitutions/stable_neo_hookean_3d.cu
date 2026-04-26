@@ -6,7 +6,6 @@
 #include <Eigen/Dense>
 #include <muda/ext/eigen/evd.h>
 #include <utils/make_spd.h>
-#include <utils/matrix_assembler.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
 
@@ -136,11 +135,9 @@ class StableNeoHookean3D final : public FEM3DConstitution
                     indices = info.indices().viewer().name("indices"),
                     xs      = info.xs().viewer().name("xs"),
                     Dm_invs = info.Dm_invs().viewer().name("Dm_invs"),
-                    G3s     = info.gradients().viewer().name("gradients"),
-                    H3x3s   = info.hessians().viewer().name("hessians"),
+                    sink    = info.sink(),
                     volumes = info.rest_volumes().viewer().name("volumes"),
-                    dt      = info.dt(),
-                    gradient_only] __device__(int I) mutable
+                    dt      = info.dt()] __device__(int I) mutable
                    {
                        const Vector4i&  tet    = indices(I);
                        const Matrix3x3& Dm_inv = Dm_invs(I);
@@ -170,10 +167,12 @@ class StableNeoHookean3D final : public FEM3DConstitution
                        Eigen::Matrix<Alu, 12, 1> G_alu = dFdx.transpose() * VecdEdF;
                        auto G_store = downcast_gradient<Store>(G_alu);
 
-                       DoubletVectorAssembler DVA{G3s};
-                       DVA.segment<StencilSize>(I * StencilSize).write(tet, G_store);
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           tet,
+                           G_store);
 
-                       if(gradient_only)
+                       if(sink.gradient_only)
                            return;
 
                        Eigen::Matrix<Alu, 9, 9> ddEddF;
@@ -182,8 +181,10 @@ class StableNeoHookean3D final : public FEM3DConstitution
                        make_spd(ddEddF);
                        Eigen::Matrix<Alu, 12, 12> H_alu = dFdx.transpose() * ddEddF * dFdx;
                        auto H_store = downcast_hessian<Store>(H_alu);
-                       TripletMatrixAssembler TMA{H3x3s};
-                       TMA.half_block<StencilSize>(I * HalfHessianSize).write(tet, H_store);
+                       sink.template write_hessian_half<StencilSize>(
+                           I * HalfHessianSize,
+                           tet,
+                           H_store);
                    });
     }
 };

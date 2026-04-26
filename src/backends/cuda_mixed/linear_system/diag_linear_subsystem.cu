@@ -1,4 +1,6 @@
 #include <linear_system/diag_linear_subsystem.h>
+#include <uipc/common/exception.h>
+#include <fmt/format.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -72,6 +74,25 @@ void DiagLinearSubsystem::assemble(GlobalLinearSystem::DiagInfo& info)
                 enum_flags_name(info.component_flags()));
 
     do_assemble(info);
+}
+
+void DiagLinearSubsystem::do_assemble_structured(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    throw Exception{fmt::format(
+        "DiagLinearSubsystem '{}' does not support structured Hessian assembly",
+        name())};
+}
+
+bool DiagLinearSubsystem::supports_structured_assembly() const
+{
+    return do_supports_structured_assembly();
+}
+
+void DiagLinearSubsystem::assemble_structured(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    do_assemble_structured(info);
 }
 
 void DiagLinearSubsystem::accuracy_check(GlobalLinearSystem::AccuracyInfo& info)

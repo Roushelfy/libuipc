@@ -20,8 +20,12 @@ class SocuApproxSolver : public LinearSolver
         requirements.needs_dof_extent       = true;
         requirements.needs_gradient_b       = true;
         requirements.needs_full_sparse_A    = false;
-        requirements.needs_structured_chain = true;
+        requirements.needs_structured_chain = m_mode == "solve";
         requirements.needs_preconditioner   = false;
+        if(m_mode == "dry_run")
+            requirements.assembly_mode = NewtonAssemblyMode::GradientOnly;
+        else
+            requirements.assembly_mode = NewtonAssemblyMode::GradientStructuredHessian;
         return requirements;
     }
 
@@ -34,12 +38,23 @@ class SocuApproxSolver : public LinearSolver
   protected:
     virtual void do_build(BuildInfo& info) override;
     virtual void do_solve(GlobalLinearSystem::SolvingInfo& info) override;
+    virtual void prepare_structured_chain(
+        GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual void finalize_structured_chain(
+        GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual void notify_line_search_result(
+        const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 
   private:
     SocuApproxGateReport  m_gate_report;
     SocuApproxDryRunReport m_dry_run_report;
     std::vector<StructuredDofSlot> m_dof_slots;
+    std::vector<IndexT> m_host_old_to_chain;
+    std::vector<IndexT> m_host_chain_to_old;
     std::string m_mode = "solve";
+    SizeT       m_line_search_reject_streak = 0;
+    GlobalLinearSystem::LineSearchFeedback m_last_line_search_feedback;
+    bool        m_has_line_search_feedback = false;
 
     struct Runtime;
     std::unique_ptr<Runtime> m_runtime;

@@ -103,7 +103,10 @@ void SimEngine::advance_AL()
         if(m_global_dytopo_effect_manager)
         {
             Timer timer{"Compute DyTopo Effect"};
-            m_global_dytopo_effect_manager->compute_dytopo_effect();
+            GlobalDyTopoEffectManager::ComputeDyTopoEffectInfo info;
+            if(m_global_linear_system)
+                info.assembly_mode(m_global_linear_system->newton_assembly_mode());
+            m_global_dytopo_effect_manager->compute_dytopo_effect(info);
         }
     };
 
@@ -394,6 +397,14 @@ void SimEngine::advance_AL()
 
                         // Check Line Search Iteration
                         // report warnings or throw exceptions if needed
+                        bool line_search_hit_max =
+                            line_search_iter >= m_line_searcher->max_iter();
+                        m_global_linear_system->notify_line_search_result(
+                            GlobalLinearSystem::LineSearchFeedback{
+                                .accepted = !line_search_hit_max,
+                                .iteration_count = line_search_iter,
+                                .hit_max_iter = line_search_hit_max,
+                                .accepted_alpha = alpha});
                         check_line_search_iter(line_search_iter);
                     }
                 }

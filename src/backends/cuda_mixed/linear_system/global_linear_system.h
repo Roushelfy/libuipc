@@ -6,9 +6,13 @@
 #include <muda/ext/linear_system.h>
 #include <algorithm/matrix_converter.h>
 #include <linear_system/spmv.h>
+#include <linear_system/assembly_mode.h>
+#include <linear_system/structured_chain_provider.h>
+#include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
 #include <energy_component_flags.h>
 #include <mixed_precision/policy.h>
+#include <cuda_runtime_api.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -47,6 +51,14 @@ class GlobalLinearSystem : public SimSystem
     using ComponentFlags    = EnergyComponentFlags;
 
     class Impl;
+
+    struct LineSearchFeedback
+    {
+        bool  accepted       = true;
+        SizeT iteration_count = 0;
+        bool  hit_max_iter   = false;
+        Float accepted_alpha = 1.0;
+    };
 
     class InitDofExtentInfo
     {
@@ -127,6 +139,87 @@ class GlobalLinearSystem : public SimSystem
         ComponentFlags    m_component_flags = ComponentFlags::All;
 
         Impl* m_impl = nullptr;
+    };
+
+    class StructuredAssemblyInfo
+    {
+      public:
+        StructuredAssemblyInfo(Impl* impl) noexcept
+            : m_impl(impl)
+        {
+        }
+
+        StructuredChainShape shape() const noexcept { return m_shape; }
+        span<const StructuredDofSlot> dof_slots() const noexcept { return m_dof_slots; }
+        CDenseVectorView b() const noexcept { return m_b; }
+        cudaStream_t stream() const noexcept { return m_stream; }
+        SizeT old_dof_offset() const noexcept { return m_old_dof_offset; }
+        SizeT old_dof_count() const noexcept { return m_old_dof_count; }
+
+        muda::BufferView<SolveScalar> diag() const noexcept { return m_diag; }
+        muda::BufferView<SolveScalar> first_offdiag() const noexcept
+        {
+            return m_first_offdiag;
+        }
+        muda::BufferView<SolveScalar> rhs() const noexcept { return m_rhs; }
+        muda::CBufferView<IndexT> old_to_chain() const noexcept
+        {
+            return m_old_to_chain;
+        }
+        muda::CBufferView<IndexT> chain_to_old() const noexcept
+        {
+            return m_chain_to_old;
+        }
+
+        StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
+        {
+            return StructuredDeviceAssemblySink<StoreScalar, SolveScalar>{
+                m_diag,
+                m_first_offdiag,
+                m_old_to_chain,
+                m_shape.horizon,
+                m_shape.block_size};
+        }
+
+        void set_workspace(StructuredChainShape       shape,
+                           span<const StructuredDofSlot> dof_slots,
+                           muda::BufferView<SolveScalar> diag,
+                           muda::BufferView<SolveScalar> first_offdiag,
+                           muda::BufferView<SolveScalar> rhs,
+                           muda::CBufferView<IndexT> old_to_chain,
+                           muda::CBufferView<IndexT> chain_to_old,
+                           cudaStream_t             stream) noexcept;
+
+        void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
+        void record_diag_writes(SizeT count) noexcept { m_diag_write_count += count; }
+        void record_first_offdiag_writes(SizeT count) noexcept
+        {
+            m_first_offdiag_write_count += count;
+        }
+        SizeT diag_write_count() const noexcept { return m_diag_write_count; }
+        SizeT first_offdiag_write_count() const noexcept
+        {
+            return m_first_offdiag_write_count;
+        }
+        bool configured() const noexcept { return m_configured; }
+
+      private:
+        friend class Impl;
+        Impl* m_impl = nullptr;
+        StructuredChainShape       m_shape;
+        span<const StructuredDofSlot> m_dof_slots;
+        CDenseVectorView           m_b;
+        muda::BufferView<SolveScalar> m_diag;
+        muda::BufferView<SolveScalar> m_first_offdiag;
+        muda::BufferView<SolveScalar> m_rhs;
+        muda::CBufferView<IndexT>  m_old_to_chain;
+        muda::CBufferView<IndexT>  m_chain_to_old;
+        cudaStream_t               m_stream = cudaStreamLegacy;
+        SizeT                      m_old_dof_offset = 0;
+        SizeT                      m_old_dof_count  = 0;
+        SizeT                      m_diag_write_count = 0;
+        SizeT                      m_first_offdiag_write_count = 0;
+        bool                       m_configured = false;
     };
 
     class OffDiagExtentInfo
@@ -292,6 +385,7 @@ class GlobalLinearSystem : public SimSystem
         bool _update_subsystem_extent(bool needs_full_sparse_A);
         void _assemble_gradient_vector();
         void _assemble_linear_system();
+        void _assemble_structured_chain();
         void _assemble_preconditioner();
         void solve_linear_system();
         void distribute_solution();
@@ -344,6 +438,8 @@ class GlobalLinearSystem : public SimSystem
         bool accuracy_statisfied(PcgDenseVectorView r);
 
         void compute_gradient(ComputeGradientInfo& info);
+        void notify_line_search_result(const LineSearchFeedback& feedback);
+        cudaStream_t stream() const noexcept { return cudaStreamLegacy; }
 
         bool        need_debug_dump = false;
         bool        need_solution_x_dump = false;
@@ -358,8 +454,12 @@ class GlobalLinearSystem : public SimSystem
      * The size of the gradient buffer should be equal to `dof_count()`.
      */
     void compute_gradient(ComputeGradientInfo& info);
+    void notify_line_search_result(const LineSearchFeedback& feedback);
+    cudaStream_t stream() const noexcept { return m_impl.stream(); }
 
     muda::LinearSystemContext& ctx() noexcept { return m_impl.ctx; }
+
+    NewtonAssemblyMode newton_assembly_mode() const;
 
   protected:
     void do_build() override;

@@ -5,7 +5,6 @@
 #include <Eigen/Dense>
 #include <muda/ext/eigen/inverse.h>
 #include <utils/codim_thickness.h>
-#include <utils/matrix_assembler.h>
 #include <utils/make_spd.h>
 
 namespace uipc::backend::cuda_mixed
@@ -182,13 +181,11 @@ class StrainLimitingBaraffWitkinShell2D final : public Codim2DConstitution
                     indices     = info.indices().viewer().name("indices"),
                     xs          = info.xs().viewer().name("xs"),
                     thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                    G3s        = info.gradients().viewer().name("gradients"),
-                    H3x3s      = info.hessians().viewer().name("hessians"),
+                    sink       = info.sink(),
                     rest_areas = info.rest_areas().viewer().name("volumes"),
                     dt         = info.dt(),
                     IBs        = inv_B_matrices.cviewer().name("IBs"),
-                    half_hessian_size = HalfHessianSize,
-                    gradient_only = info.gradient_only()] __device__(int I) mutable
+                    half_hessian_size = HalfHessianSize] __device__(int I) mutable
                    {
                        Vector9  X;
                        Vector3i idx = indices(I);
@@ -227,10 +224,12 @@ class StrainLimitingBaraffWitkinShell2D final : public Codim2DConstitution
                        Vector9 G = dFdx.transpose() * VecdEdF;
 
                        G *= Vdt2;
-                       DoubletVectorAssembler DVA{G3s};
-                       DVA.segment<StencilSize>(I * StencilSize).write(idx, G);
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           idx,
+                           G);
 
-                       if(gradient_only)
+                       if(sink.gradient_only)
                            return;
 
                        Matrix6x6 ddEddF;
@@ -240,12 +239,13 @@ class StrainLimitingBaraffWitkinShell2D final : public Codim2DConstitution
 
                        Matrix9x9 H = dFdx.transpose() * ddEddF * dFdx;
 
-                       TripletMatrixAssembler TMA{H3x3s};
-                       TMA.half_block<StencilSize>(I * half_hessian_size).write(idx, H);
+                       sink.template write_hessian_half<StencilSize>(
+                           I * half_hessian_size,
+                           idx,
+                           H);
                    });
     }
 };
 
 REGISTER_SIM_SYSTEM(StrainLimitingBaraffWitkinShell2D);
 }  // namespace uipc::backend::cuda_mixed
-

@@ -3,7 +3,6 @@
 #include <finite_element/constitutions/kirchhoff_rod_bending_function.h>
 #include <numbers>
 #include <utils/make_spd.h>
-#include <utils/matrix_assembler.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
 
@@ -173,11 +172,9 @@ class KirchhoffRodBending final : public FiniteElementExtraConstitution
                     thicknesses = info.thicknesses().viewer().name("thickness"),
                     xs          = info.xs().viewer().name("xs"),
                     x_bars      = info.x_bars().viewer().name("x_bars"),
-                    G3s         = info.gradients().viewer().name("gradients"),
-                    H3x3s       = info.hessians().viewer().name("hessians"),
+                    sink        = info.sink(),
                     dt          = info.dt(),
-                    Pi,
-                    gradient_only = info.gradient_only()] __device__(int I) mutable
+                    Pi] __device__(int I) mutable
                    {
                        Vector3i hinge = hinges(I);
                        const Alu k = safe_cast<Alu>(bending_stiffnesses(I));
@@ -202,10 +199,12 @@ class KirchhoffRodBending final : public FiniteElementExtraConstitution
                        KRB::dEdX(G_alu, k, X, L0, r, pi);
                        G_alu *= dt2;
                        auto G_store = downcast_gradient<Store>(G_alu);
-                       DoubletVectorAssembler DVA{G3s};
-                       DVA.segment<StencilSize>(I * StencilSize).write(hinge, G_store);
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           hinge,
+                           G_store);
 
-                       if(gradient_only)
+                       if(sink.gradient_only)
                            return;
 
                        Eigen::Matrix<Alu, 9, 9> H_alu;
@@ -214,8 +213,10 @@ class KirchhoffRodBending final : public FiniteElementExtraConstitution
                        H_alu *= dt2;
                        make_spd(H_alu);
                        auto H_store = downcast_hessian<Store>(H_alu);
-                       TripletMatrixAssembler TMA{H3x3s};
-                       TMA.half_block<StencilSize>(I * HalfHessianSize).write(hinge, H_store);
+                       sink.template write_hessian_half<StencilSize>(
+                           I * HalfHessianSize,
+                           hinge,
+                           H_store);
                    });
     }
 };

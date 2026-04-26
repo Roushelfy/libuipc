@@ -35,33 +35,19 @@ struct StructuredContributionStats
 
 struct StructuredQualityReport
 {
-    double block_utilization = 0.0;
-    double near_band_ratio   = 0.0;
-    double off_band_ratio    = 0.0;
-    SizeT  max_block_distance = 0;
+    double block_utilization          = 0.0;
+    double near_band_ratio            = 0.0;
+    double off_band_ratio             = 0.0;
+    double off_band_drop_norm_ratio   = 0.0;
+    SizeT  max_block_distance         = 0;
+    SizeT  active_dof_count           = 0;
+    SizeT  padding_dof_count          = 0;
+    SizeT  duplicate_old_dof_count    = 0;
+    SizeT  duplicate_chain_dof_count  = 0;
+    SizeT  missing_old_dof_count      = 0;
+    SizeT  missing_chain_dof_count    = 0;
+    bool   complete_dof_coverage      = false;
     StructuredContributionStats contact_stats;
-};
-
-class StructuredAssemblySink
-{
-  public:
-    virtual ~StructuredAssemblySink() = default;
-
-    virtual void add_rhs(SizeT block, SizeT lane, double value) = 0;
-
-    virtual void add_hessian(SizeT block_i,
-                             SizeT lane_i,
-                             SizeT block_j,
-                             SizeT lane_j,
-                             double value,
-                             double weight) = 0;
-
-    virtual void mark_off_band_drop(SizeT block_i,
-                                    SizeT lane_i,
-                                    SizeT block_j,
-                                    SizeT lane_j,
-                                    double value,
-                                    double weight) = 0;
 };
 
 class StructuredChainProvider
@@ -73,6 +59,6 @@ class StructuredChainProvider
     virtual StructuredChainShape shape() const = 0;
     virtual span<const StructuredDofSlot> dof_slots() const = 0;
     virtual StructuredQualityReport quality_report() const = 0;
-    virtual void assemble_chain(StructuredAssemblySink& sink) = 0;
+    virtual void assemble_chain() = 0;
 };
 }  // namespace uipc::backend::cuda_mixed

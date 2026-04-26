@@ -277,6 +277,21 @@ void GlobalLinearSystem::Impl::build_linear_system()
         selected_linear_solver ? selected_linear_solver->assembly_requirements()
                                : LinearSolver::AssemblyRequirements{};
 
+    if(requirements.assembly_mode == NewtonAssemblyMode::FullSparse
+       && !requirements.needs_full_sparse_A)
+    {
+        throw SimSystemException{
+            "FullSparse assembly mode requires needs_full_sparse_A=true"};
+    }
+
+    if(requirements.assembly_mode == NewtonAssemblyMode::GradientStructuredHessian
+       && (requirements.needs_full_sparse_A || !requirements.needs_structured_chain))
+    {
+        throw SimSystemException{
+            "GradientStructuredHessian assembly mode requires "
+            "needs_full_sparse_A=false and needs_structured_chain=true"};
+    }
+
     empty_system = !_update_subsystem_extent(requirements.needs_full_sparse_A);
 
     if(empty_system) [[unlikely]]
@@ -302,6 +317,12 @@ void GlobalLinearSystem::Impl::build_linear_system()
         _assemble_linear_system();
     }
 
+    if(requirements.needs_structured_chain)
+    {
+        Timer timer{"Assemble Structured Chain"};
+        _assemble_structured_chain();
+    }
+
     if(requirements.needs_full_sparse_A)
     {
         Timer timer{"Convert Matrix"};
@@ -315,6 +336,54 @@ void GlobalLinearSystem::Impl::build_linear_system()
         _assemble_preconditioner();
     }
 
+}
+
+void GlobalLinearSystem::Impl::_assemble_structured_chain()
+{
+    if(!selected_linear_solver)
+        throw SimSystemException{
+            "Structured chain assembly requires a selected linear solver"};
+
+    auto diag_subsystem_view     = diag_subsystems.view();
+    auto off_diag_subsystem_view = off_diag_subsystems.view();
+    if(!off_diag_subsystem_view.empty())
+    {
+        throw SimSystemException{
+            "socu_approx structured chain currently supports ABD-only diagonal subsystems; "
+            "off-diagonal linear subsystems are not supported yet"};
+    }
+
+    StructuredAssemblyInfo info{this};
+    info.m_b = b.cview();
+    selected_linear_solver->prepare_structured_chain(info);
+    if(!info.configured())
+    {
+        throw SimSystemException{
+            "Selected solver requested structured chain assembly but did not configure a structured workspace"};
+    }
+
+    auto diag_dof_counts  = diag_dof_offsets_counts.counts();
+    auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
+    for(const auto& subsystem_info : subsystem_infos)
+    {
+        if(!subsystem_info.is_diag)
+            continue;
+
+        auto& diag_subsystem = diag_subsystem_view[subsystem_info.local_index];
+        if(!diag_subsystem->supports_structured_assembly())
+        {
+            throw SimSystemException{fmt::format(
+                "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
+                diag_subsystem->name())};
+        }
+
+        info.set_subsystem_extent(diag_dof_offsets[subsystem_info.local_index],
+                                  diag_dof_counts[subsystem_info.local_index]);
+        Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
+        diag_subsystem->assemble_structured(info);
+    }
+
+    selected_linear_solver->finalize_structured_chain(info);
 }
 
 bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A)
@@ -689,6 +758,13 @@ void GlobalLinearSystem::Impl::compute_gradient(ComputeGradientInfo& info)
     }
 }
 
+void GlobalLinearSystem::Impl::notify_line_search_result(
+    const LineSearchFeedback& feedback)
+{
+    if(selected_linear_solver)
+        selected_linear_solver->notify_line_search_result(feedback);
+}
+
 void GlobalLinearSystem::DiagExtentInfo::extent(SizeT hessian_count, SizeT dof_count) noexcept
 {
 
@@ -711,6 +787,36 @@ void GlobalLinearSystem::OffDiagExtentInfo::extent(SizeT lr_hessian_block_count,
     m_lr_block_count = lr_hessian_block_count;
     m_rl_block_count = rl_hassian_block_count;
 }
+
+void GlobalLinearSystem::StructuredAssemblyInfo::set_workspace(
+    StructuredChainShape          shape,
+    span<const StructuredDofSlot> dof_slots,
+    muda::BufferView<SolveScalar> diag,
+    muda::BufferView<SolveScalar> first_offdiag,
+    muda::BufferView<SolveScalar> rhs,
+    muda::CBufferView<IndexT>     old_to_chain,
+    muda::CBufferView<IndexT>     chain_to_old,
+    cudaStream_t                  stream) noexcept
+{
+    m_shape         = shape;
+    m_dof_slots     = dof_slots;
+    m_diag          = diag;
+    m_first_offdiag = first_offdiag;
+    m_rhs           = rhs;
+    m_old_to_chain  = old_to_chain;
+    m_chain_to_old  = chain_to_old;
+    m_stream        = stream;
+    m_configured    = true;
+}
+
+void GlobalLinearSystem::StructuredAssemblyInfo::set_subsystem_extent(
+    SizeT old_dof_offset,
+    SizeT old_dof_count) noexcept
+{
+    m_old_dof_offset = old_dof_offset;
+    m_old_dof_count  = old_dof_count;
+}
+
 auto GlobalLinearSystem::AssemblyInfo::A() const -> CBCOOMatrixView
 {
     return m_impl->bcoo_A.cview();
@@ -731,6 +837,20 @@ SizeT GlobalLinearSystem::LocalPreconditionerAssemblyInfo::dof_count() const
 void GlobalLinearSystem::compute_gradient(ComputeGradientInfo& info)
 {
     m_impl.compute_gradient(info);
+}
+
+void GlobalLinearSystem::notify_line_search_result(
+    const LineSearchFeedback& feedback)
+{
+    m_impl.notify_line_search_result(feedback);
+}
+
+NewtonAssemblyMode GlobalLinearSystem::newton_assembly_mode() const
+{
+    const auto* solver = m_impl.selected_linear_solver;
+    if(!solver)
+        return NewtonAssemblyMode::FullSparse;
+    return solver->assembly_requirements().assembly_mode;
 }
 }  // namespace uipc::backend::cuda_mixed
 

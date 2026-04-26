@@ -17,6 +17,7 @@ class IterativeSolver : public LinearSolver
         requirements.needs_full_sparse_A    = true;
         requirements.needs_structured_chain = false;
         requirements.needs_preconditioner   = true;
+        requirements.assembly_mode = NewtonAssemblyMode::FullSparse;
         return requirements;
     }
 

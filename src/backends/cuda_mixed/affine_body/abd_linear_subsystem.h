@@ -98,6 +98,7 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         void receive_init_dof_info(WorldVisitor& w, GlobalLinearSystem::InitDofInfo& info);
 
         void assemble(GlobalLinearSystem::DiagInfo& info);
+        void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
         void _assemble_kinetic_shape(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_reporters(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_dytopo_effect(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
@@ -140,6 +141,8 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
 
     virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) override;
     virtual void do_assemble(GlobalLinearSystem::DiagInfo& info) override;
+    virtual bool do_supports_structured_assembly() const override;
+    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info) override;
     virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) override;
 
@@ -151,4 +154,3 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
     Impl m_impl;
 };
 }  // namespace uipc::backend::cuda_mixed
-

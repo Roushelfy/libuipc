@@ -6,6 +6,7 @@
 #include <utils/offset_count_collection.h>
 #include <finite_element/fem_linear_subsystem.h>
 #include <finite_element/fem_line_search_reporter.h>
+#include <utils/assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -91,6 +92,13 @@ class FiniteElementElastics final : public SimSystem
         auto gradient_only() const noexcept { return m_gradient_only; }
         muda::DoubletVectorView<StoreScalar, 3> gradients() const noexcept;
         muda::TripletMatrixView<StoreScalar, 3> hessians() const noexcept;
+        auto sink() const noexcept
+        {
+            return TripletAssemblySink<StoreScalar, 3>{
+                gradients(),
+                hessians(),
+                m_gradient_only};
+        }
 
         auto dt() const noexcept { return m_dt; }
 

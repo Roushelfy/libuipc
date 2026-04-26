@@ -6,7 +6,6 @@
 #include <Eigen/Dense>
 #include <muda/ext/eigen/inverse.h>
 #include <utils/codim_thickness.h>
-#include <utils/matrix_assembler.h>
 #include <numbers>
 #include <utils/make_spd.h>
 
@@ -113,8 +112,7 @@ class HookeanSpring1D final : public Codim1DConstitution
         ParallelFor()
             .file_line(__FILE__, __LINE__)
             .apply(info.indices().size(),
-                   [G3s    = info.gradients().viewer().name("gradients"),
-                    H3x3s  = info.hessians().viewer().name("hessians"),
+                   [sink   = info.sink(),
                     kappas = kappas.cviewer().name("kappas"),
                     rest_lengths = info.rest_lengths().viewer().name("rest_lengths"),
                     thicknesses = info.thicknesses().viewer().name("thicknesses"),
@@ -122,8 +120,7 @@ class HookeanSpring1D final : public Codim1DConstitution
                     xs      = info.xs().viewer().name("xs"),
                     x_bars  = info.x_bars().viewer().name("x_bars"),
                     dt      = info.dt(),
-                    Pi      = std::numbers::pi,
-                    gradient_only] __device__(int I) mutable
+                    Pi      = std::numbers::pi] __device__(int I) mutable
                    {
                        Vector6  X;
                        Vector2i idx = indices(I);
@@ -140,17 +137,21 @@ class HookeanSpring1D final : public Codim1DConstitution
                        Vector6 G;
                        NS::dEdX(G, kappa, X, L0);
                        G *= Vdt2;
-                       DoubletVectorAssembler VA{G3s};
-                       VA.segment<StencilSize>(I * StencilSize).write(idx, G);
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           idx,
+                           G);
 
-                       if(!gradient_only)
+                       if(!sink.gradient_only)
                        {
                            Matrix6x6 H;
                            NS::ddEddX(H, kappa, X, L0);
                            H *= Vdt2;
                            make_spd(H);
-                           TripletMatrixAssembler MA{H3x3s};
-                           MA.half_block<StencilSize>(I * HalfHessianSize).write(idx, H);
+                           sink.template write_hessian_half<StencilSize>(
+                               I * HalfHessianSize,
+                               idx,
+                               H);
                        }
                    });
     }
@@ -158,4 +159,3 @@ class HookeanSpring1D final : public Codim1DConstitution
 
 REGISTER_SIM_SYSTEM(HookeanSpring1D);
 }  // namespace uipc::backend::cuda_mixed
-

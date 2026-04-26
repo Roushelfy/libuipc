@@ -4,7 +4,6 @@
 #include <uipc/builtin/attribute_name.h>
 #include <finite_element/constitutions/stress_plastic_discrete_shell_bending_function.h>
 #include <utils/make_spd.h>
-#include <utils/matrix_assembler.h>
 #include <utils/dump_utils.h>
 #include <algorithm>
 #include <mixed_precision/policy.h>
@@ -302,10 +301,8 @@ class StressPlasticDiscreteShellBending final : public FiniteElementExtraConstit
                     V_bars       = V_bars.viewer().name("V_bar"),
                     L0s          = rest_lengths.viewer().name("rest_lengths"),
                     xs           = info.xs().viewer().name("xs"),
-                    G3s          = info.gradients().viewer().name("gradients"),
-                    H3x3s        = info.hessians().viewer().name("hessians"),
-                    dt           = info.dt(),
-                    gradient_only = info.gradient_only()] __device__(int I) mutable
+                    sink         = info.sink(),
+                    dt           = info.dt()] __device__(int I) mutable
                    {
                        Vector4i stencil      = stencils(I);
                        Alu      kappa        = safe_cast<Alu>(bending_stiffnesses(I));
@@ -327,20 +324,22 @@ class StressPlasticDiscreteShellBending final : public FiniteElementExtraConstit
 
                        SPDSB::dEdx(G12, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa, yield_stress);
                        G12 *= Vdt2;
-                       DoubletVectorAssembler DVA{G3s};
-                       DVA.segment<StencilSize>(I * StencilSize)
-                           .write(stencil, downcast_gradient<Store>(G12));
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           stencil,
+                           downcast_gradient<Store>(G12));
 
-                       if(gradient_only)
+                       if(sink.gradient_only)
                            return;
 
                        SPDSB::ddEddx(H12x12, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa, yield_stress);
                        H12x12 *= Vdt2;
                        make_spd(H12x12);
 
-                       TripletMatrixAssembler TMA{H3x3s};
-                       TMA.half_block<StencilSize>(I * HalfHessianSize)
-                           .write(stencil, downcast_hessian<Store>(H12x12));
+                       sink.template write_hessian_half<StencilSize>(
+                           I * HalfHessianSize,
+                           stencil,
+                           downcast_hessian<Store>(H12x12));
                    });
     }
 };

@@ -6,6 +6,7 @@
 #include <utils/offset_count_collection.h>
 #include <algorithm/matrix_converter.h>
 #include <dytopo_effect_system/dytopo_classify_info.h>
+#include <linear_system/assembly_mode.h>
 #include <mixed_precision/policy.h>
 
 namespace uipc::backend::cuda_mixed
@@ -110,11 +111,13 @@ class GlobalDyTopoEffectManager final : public SimSystem
         {
             m_component_flags = v;
         }
+        void assembly_mode(NewtonAssemblyMode v) noexcept { m_assembly_mode = v; }
 
       private:
         friend class Impl;
         bool                 m_gradient_only   = false;
         EnergyComponentFlags m_component_flags = EnergyComponentFlags::All;
+        NewtonAssemblyMode   m_assembly_mode   = NewtonAssemblyMode::FullSparse;
     };
 
     class Impl

@@ -1,5 +1,6 @@
 #pragma once
 #include <finite_element/finite_element_constitution.h>
+#include <utils/assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -77,6 +78,13 @@ class Codim1DConstitution : public FiniteElementConstitution
         auto gradients() const noexcept { return m_gradients; }
         auto hessians() const noexcept { return m_hessians; }
         auto gradient_only() const noexcept { return m_gradient_only; }
+        auto sink() const noexcept
+        {
+            return TripletAssemblySink<StoreScalar, 3>{
+                m_gradients,
+                m_hessians,
+                m_gradient_only};
+        }
 
       private:
         muda::DoubletVectorView<StoreScalar, 3> m_gradients;

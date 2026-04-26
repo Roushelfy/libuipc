@@ -6,7 +6,6 @@
 #include <muda/ext/eigen/inverse.h>
 #include <utils/codim_thickness.h>
 #include <utils/make_spd.h>
-#include <utils/matrix_assembler.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
 
@@ -177,12 +176,10 @@ class NeoHookeanShell2D final : public Codim2DConstitution
                     xs      = info.xs().viewer().name("xs"),
                     IBs     = inv_B_matrices.cviewer().name("IBs"),
                     thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                    G3s        = info.gradients().viewer().name("gradients"),
-                    H3x3s      = info.hessians().viewer().name("hessians"),
+                    sink       = info.sink(),
                     rest_areas = info.rest_areas().viewer().name("volumes"),
                     dt         = info.dt(),
-                    half_hessian_size = HalfHessianSize,
-                    gradient_only = info.gradient_only()] __device__(int I) mutable
+                    half_hessian_size = HalfHessianSize] __device__(int I) mutable
                    {
                        Eigen::Matrix<Alu, 9, 1>  X;
                        Vector3i idx = indices(I);
@@ -207,10 +204,12 @@ class NeoHookeanShell2D final : public Codim2DConstitution
                        NH::dEdX(G_alu, lambda, mu, X, IB_alu);
                        G_alu *= Vdt2;
                        auto G_store = downcast_gradient<Store>(G_alu);
-                       DoubletVectorAssembler DVA{G3s};
-                       DVA.segment<StencilSize>(I * StencilSize).write(idx, G_store);
+                       sink.template write_gradient<StencilSize>(
+                           I * StencilSize,
+                           idx,
+                           G_store);
 
-                       if(gradient_only)
+                       if(sink.gradient_only)
                            return;
 
                        Eigen::Matrix<Alu, 9, 9> H_alu;
@@ -219,8 +218,10 @@ class NeoHookeanShell2D final : public Codim2DConstitution
                        H_alu *= Vdt2;
                        auto H_store = downcast_hessian<Store>(H_alu);
 
-                       TripletMatrixAssembler TMA{H3x3s};
-                       TMA.half_block<StencilSize>(I * half_hessian_size).write(idx, H_store);
+                       sink.template write_hessian_half<StencilSize>(
+                           I * half_hessian_size,
+                           idx,
+                           H_store);
                    });
     }
 };

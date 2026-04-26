@@ -35,6 +35,8 @@ class DiagLinearSubsystem : public SimSystem
 
     virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) = 0;
     virtual void do_assemble(GlobalLinearSystem::DiagInfo& info)            = 0;
+    virtual bool do_supports_structured_assembly() const { return false; }
+    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
     virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info)  = 0;
     virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) = 0;
 
@@ -51,6 +53,8 @@ class DiagLinearSubsystem : public SimSystem
 
     void report_extent(GlobalLinearSystem::DiagExtentInfo& info);
     void assemble(GlobalLinearSystem::DiagInfo& info);
+    bool supports_structured_assembly() const;
+    void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
     void accuracy_check(GlobalLinearSystem::AccuracyInfo& info);
     void retrieve_solution(GlobalLinearSystem::SolutionInfo& info);
 
@@ -59,4 +63,3 @@ class DiagLinearSubsystem : public SimSystem
     SimSystemSlot<GlobalLinearSystem> m_global_linear_system;
 };
 }  // namespace uipc::backend::cuda_mixed
-
