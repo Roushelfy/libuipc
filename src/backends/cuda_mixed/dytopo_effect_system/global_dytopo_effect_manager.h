@@ -126,7 +126,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
         void init(WorldVisitor& world);
         void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
         void _assemble(ComputeDyTopoEffectInfo& info);
-        void _convert_matrix();
+        void _convert_matrix(ComputeDyTopoEffectInfo& info);
         void _distribute(ComputeDyTopoEffectInfo& info);
 
         SimSystemSlot<GlobalVertexManager> global_vertex_manager;

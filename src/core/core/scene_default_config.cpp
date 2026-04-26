@@ -45,6 +45,9 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/min_block_utilization", Float{0.65});
     config.create("linear_system/socu_approx/max_off_band_drop_norm_ratio", Float{0.05});
     config.create("linear_system/socu_approx/max_line_search_reject_streak", IndexT{1});
+    config.create("linear_system/socu_approx/debug_validation", IndexT{0});
+    config.create("linear_system/socu_approx/debug_timing", IndexT{0});
+    config.create("linear_system/socu_approx/report_each_solve", IndexT{0});
 
     config.create("line_search/max_iter", IndexT{8});
     config.create("line_search/report_energy", IndexT{0});

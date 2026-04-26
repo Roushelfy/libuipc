@@ -196,10 +196,52 @@ class GlobalLinearSystem : public SimSystem
         {
             m_first_offdiag_write_count += count;
         }
+        void record_contact_diag_writes(SizeT count) noexcept
+        {
+            m_contact_diag_write_count += count;
+        }
+        void record_contact_first_offdiag_writes(SizeT count) noexcept
+        {
+            m_contact_first_offdiag_write_count += count;
+        }
+        void record_contact_band_stats(SizeT near_contact_count,
+                                       SizeT off_band_contact_count,
+                                       SizeT near_contribution_count,
+                                       SizeT off_band_contribution_count) noexcept
+        {
+            m_near_band_contact_count += near_contact_count;
+            m_off_band_contact_count += off_band_contact_count;
+            m_near_band_contribution_count += near_contribution_count;
+            m_off_band_contribution_count += off_band_contribution_count;
+        }
         SizeT diag_write_count() const noexcept { return m_diag_write_count; }
         SizeT first_offdiag_write_count() const noexcept
         {
             return m_first_offdiag_write_count;
+        }
+        SizeT contact_diag_write_count() const noexcept
+        {
+            return m_contact_diag_write_count;
+        }
+        SizeT contact_first_offdiag_write_count() const noexcept
+        {
+            return m_contact_first_offdiag_write_count;
+        }
+        SizeT near_band_contact_count() const noexcept
+        {
+            return m_near_band_contact_count;
+        }
+        SizeT off_band_contact_count() const noexcept
+        {
+            return m_off_band_contact_count;
+        }
+        SizeT near_band_contribution_count() const noexcept
+        {
+            return m_near_band_contribution_count;
+        }
+        SizeT off_band_contribution_count() const noexcept
+        {
+            return m_off_band_contribution_count;
         }
         bool configured() const noexcept { return m_configured; }
 
@@ -219,6 +261,12 @@ class GlobalLinearSystem : public SimSystem
         SizeT                      m_old_dof_count  = 0;
         SizeT                      m_diag_write_count = 0;
         SizeT                      m_first_offdiag_write_count = 0;
+        SizeT                      m_contact_diag_write_count = 0;
+        SizeT                      m_contact_first_offdiag_write_count = 0;
+        SizeT                      m_near_band_contact_count = 0;
+        SizeT                      m_off_band_contact_count = 0;
+        SizeT                      m_near_band_contribution_count = 0;
+        SizeT                      m_off_band_contribution_count = 0;
         bool                       m_configured = false;
     };
 

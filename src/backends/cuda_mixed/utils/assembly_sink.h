@@ -108,9 +108,9 @@ struct StructuredDeviceAssemblySink
                && block_size != 0;
     }
 
-    MUDA_DEVICE void add_hessian_scalar(IndexT old_i,
-                                        IndexT old_j,
-                                        StoreT value) const noexcept
+    MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
+                                                        IndexT old_j,
+                                                        StoreT value) const noexcept
     {
         if(old_i < 0 || old_j < 0)
             return;
@@ -154,7 +154,8 @@ struct StructuredDeviceAssemblySink
     }
 
     template <typename HMat>
-    MUDA_DEVICE void add_dense_block(IndexT old_dof_begin, const HMat& H) const noexcept
+    MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
+                                                     const HMat& H) const noexcept
     {
         for(IndexT row = 0; row < H.rows(); ++row)
         {
@@ -162,6 +163,43 @@ struct StructuredDeviceAssemblySink
             {
                 add_hessian_scalar(old_dof_begin + row,
                                    old_dof_begin + col,
+                                   static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+
+    template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row = 0; row < Rows; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < Cols; ++col)
+            {
+                add_hessian_scalar(old_dof_begin + row,
+                                   old_dof_begin + col,
+                                   static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+
+    template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_between_fixed(
+        IndexT old_row_dof_begin,
+        IndexT old_col_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row = 0; row < Rows; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < Cols; ++col)
+            {
+                add_hessian_scalar(old_row_dof_begin + row,
+                                   old_col_dof_begin + col,
                                    static_cast<StoreT>(H(row, col)));
             }
         }

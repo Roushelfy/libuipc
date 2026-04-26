@@ -14,6 +14,7 @@
 #include <mixed_precision/cast.h>
 #include <uipc/common/exception.h>
 #include <fmt/format.h>
+#include <array>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -215,16 +216,6 @@ void ABDLinearSubsystem::Impl::assemble_structured(
         throw Exception{
             "structured_subsystem_not_supported: ABD reporters/joints are not supported by socu_approx strict structured assembly yet"};
     }
-    const bool has_dytopo_effect =
-        dytopo_effect_receiver
-        && (dytopo_effect_receiver->gradients().doublet_count() != 0
-            || dytopo_effect_receiver->hessians().triplet_count() != 0);
-    if(has_dytopo_effect)
-    {
-        throw Exception{
-            "structured_subsystem_not_supported: ABD dytopo/contact effects are reserved for M8 structured assembly"};
-    }
-
     ABDLinearSubsystem::ComputeGradientHessianInfo kinetic_info{
         false, body_id_to_kinetic_gradient, body_id_to_kinetic_hessian, dt};
     abd().kinetic->compute_gradient_hessian(kinetic_info);
@@ -251,9 +242,8 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                     abd().body_id_to_external_kinetic.cviewer().name("external_kinetic"),
                 shape_hessian = body_id_to_shape_hessian.cviewer().name("shape_hessian"),
                 kinetic_hessian =
-                    body_id_to_kinetic_hessian.cviewer().name("kinetic_hessian"),
-                diag_hessian =
-                    this->diag_hessian.viewer().name("diag_hessian")] __device__(int I) mutable
+                    body_id_to_kinetic_hessian.cviewer().name("kinetic_hessian")] __device__(
+                   int I) mutable
                {
                    Eigen::Matrix<Alu, 12, 12> H12x12_alu;
                    if(is_fixed(I))
@@ -267,12 +257,148 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                            H12x12_alu += kinetic_hessian(I).template cast<Alu>();
                    }
 
-                   diag_hessian(I) = downcast_hessian<StoreScalar>(H12x12_alu);
                    const auto H12x12_store = downcast_hessian<StoreScalar>(H12x12_alu);
-                   sink.add_dense_block(old_dof_offset + I * 12, H12x12_store);
+                   sink.template add_dense_block_fixed<12, 12>(
+                       old_dof_offset + I * 12,
+                       H12x12_store);
                });
 
     info.record_diag_writes(abd().body_count() * 12 * 12);
+
+    SizeT dytopo_effect_hessian_count = 0;
+    if(dytopo_effect_receiver)
+        dytopo_effect_hessian_count = dytopo_effect_receiver->hessians().triplet_count();
+
+    if(dytopo_effect_hessian_count)
+    {
+        auto vertex_offset = affine_body_vertex_reporter->vertex_offset();
+        structured_contact_counts.resize(5);
+        muda::BufferLaunch(info.stream()).fill<IndexT>(structured_contact_counts.view(), 0);
+
+        ParallelFor(256, 0, info.stream())
+            .file_line(__FILE__, __LINE__)
+            .apply(dytopo_effect_hessian_count,
+                   [sink,
+                    old_dof_offset,
+                    dytopo_effect_hessian =
+                        dytopo_effect_receiver->hessians().cviewer().name("dytopo_effect_hessian"),
+                    v2b = abd().vertex_id_to_body_id.cviewer().name("v2b"),
+                    Js  = abd().vertex_id_to_J.cviewer().name("Js"),
+                    is_fixed = abd().body_id_to_is_fixed.cviewer().name("is_fixed"),
+                    old_to_chain = info.old_to_chain(),
+                    contact_counts = structured_contact_counts.view(),
+                    vertex_offset] __device__(int I) mutable
+                   {
+                       const auto& [g_i, g_j, H3x3] = dytopo_effect_hessian(I);
+
+                       const auto i = g_i - vertex_offset;
+                       const auto j = g_j - vertex_offset;
+
+                       const auto body_i = v2b(i);
+                       const auto body_j = v2b(j);
+
+                       if(is_fixed(body_i) || is_fixed(body_j))
+                           return;
+
+                       const auto& J_i = Js(i);
+                       const auto& J_j = Js(j);
+
+                       const Eigen::Matrix<Alu, 3, 12> J_i_mat = J_i.to_mat_t<Alu>();
+                       const Eigen::Matrix<Alu, 3, 12> J_j_mat = J_j.to_mat_t<Alu>();
+                       const Eigen::Matrix<Alu, 3, 3> H3x3_alu =
+                           H3x3.template cast<Alu>();
+
+                       Eigen::Matrix<Alu, 12, 12> H12x12_alu;
+                       IndexT                     L = body_i;
+                       IndexT                     R = body_j;
+                       bool                       first_offdiag = false;
+                       bool                       off_band      = false;
+
+                       if(body_i < body_j)
+                       {
+                           H12x12_alu =
+                               (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+                       }
+                       else if(body_i > body_j)
+                       {
+                           L = body_j;
+                           R = body_i;
+                           H12x12_alu =
+                               (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat).eval();
+                       }
+                       else
+                       {
+                           if(i != j)
+                           {
+                               H12x12_alu =
+                                   (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval()
+                                   + (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat)
+                                         .eval();
+                           }
+                           else
+                           {
+                               H12x12_alu =
+                                   (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+                           }
+                       }
+
+                       const auto H12x12_store = downcast_hessian<StoreScalar>(H12x12_alu);
+                       const IndexT old_L = old_dof_offset + L * 12;
+                       const IndexT old_R = old_dof_offset + R * 12;
+                       if(old_L >= 0 && old_R >= 0
+                          && static_cast<SizeT>(old_L) < old_to_chain.size()
+                          && static_cast<SizeT>(old_R) < old_to_chain.size())
+                       {
+                           const IndexT chain_L = old_to_chain[static_cast<SizeT>(old_L)];
+                           const IndexT chain_R = old_to_chain[static_cast<SizeT>(old_R)];
+                           if(chain_L >= 0 && chain_R >= 0)
+                           {
+                               const SizeT block_L =
+                                   static_cast<SizeT>(chain_L) / sink.block_size;
+                               const SizeT block_R =
+                                   static_cast<SizeT>(chain_R) / sink.block_size;
+                               const SizeT distance =
+                                   block_L > block_R ? block_L - block_R : block_R - block_L;
+                               first_offdiag = distance == 1;
+                               off_band      = distance > 1;
+                           }
+                       }
+
+                       if(!off_band)
+                       {
+                           sink.template add_dense_block_between_fixed<12, 12>(
+                               old_L,
+                               old_R,
+                               H12x12_store);
+                       }
+
+                       if(L == R)
+                       {
+                           muda::atomic_add(contact_counts.data(0), IndexT{12 * 12});
+                           muda::atomic_add(contact_counts.data(3), IndexT{1});
+                       }
+                       else if(first_offdiag)
+                       {
+                           muda::atomic_add(contact_counts.data(1), IndexT{12 * 12});
+                           muda::atomic_add(contact_counts.data(3), IndexT{1});
+                       }
+                       else
+                       {
+                           muda::atomic_add(contact_counts.data(2), IndexT{12 * 12});
+                           muda::atomic_add(contact_counts.data(4), IndexT{1});
+                       }
+                   });
+
+        std::array<IndexT, 5> contact_counts{};
+        structured_contact_counts.view().copy_to(contact_counts.data());
+        info.record_contact_diag_writes(static_cast<SizeT>(contact_counts[0]));
+        info.record_contact_first_offdiag_writes(static_cast<SizeT>(contact_counts[1]));
+        info.record_contact_band_stats(
+            static_cast<SizeT>(contact_counts[3]),
+            static_cast<SizeT>(contact_counts[4]),
+            static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
+            static_cast<SizeT>(contact_counts[2]));
+    }
 }
 
 void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,

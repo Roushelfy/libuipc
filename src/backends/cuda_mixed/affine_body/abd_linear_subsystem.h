@@ -128,6 +128,7 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
 
         // diag hessian for preconditioner
         muda::DeviceBuffer<StoreMat12x12> diag_hessian;
+        muda::DeviceBuffer<IndexT>        structured_contact_counts;
 
         Float dt = 0.0f;  // time step, used in assemble
     };

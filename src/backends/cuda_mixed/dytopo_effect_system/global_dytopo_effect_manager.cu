@@ -97,7 +97,7 @@ void GlobalDyTopoEffectManager::Impl::init(WorldVisitor& world)
 void GlobalDyTopoEffectManager::Impl::compute_dytopo_effect(ComputeDyTopoEffectInfo& info)
 {
     _assemble(info);
-    _convert_matrix();
+    _convert_matrix(info);
     _distribute(info);
 }
 
@@ -124,11 +124,13 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
         if(!has_flags(info.m_component_flags, reporter->component_flags()))
             continue;
 
-        if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
+        if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian
+           && reporter->component_flags() != EnergyComponentFlags::Contact)
         {
             throw SimSystemException{fmt::format(
-                "M8_contact_runtime_not_supported: reporter '{}' is active "
-                "while selected linear solver requires GradientStructuredHessian",
+                "structured_dytopo_reporter_not_supported: reporter '{}' is not contact; "
+                "socu_approx M8 currently accepts only runtime contact in "
+                "GradientStructuredHessian assembly",
                 reporter->name())};
         }
 
@@ -182,11 +184,20 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
     }
 }
 
-void GlobalDyTopoEffectManager::Impl::_convert_matrix()
+void GlobalDyTopoEffectManager::Impl::_convert_matrix(ComputeDyTopoEffectInfo& info)
 {
     Timer timer{"Convert Dytopo Matrix"};
 
-    matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
+    if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
+    {
+        loose_resize_entries(sorted_dytopo_effect_hessian, 0);
+        auto vertex_count = global_vertex_manager->positions().size();
+        sorted_dytopo_effect_hessian.reshape(vertex_count, vertex_count);
+    }
+    else
+    {
+        matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
+    }
     matrix_converter.convert(collected_dytopo_effect_gradient, sorted_dytopo_effect_gradient);
 }
 
@@ -293,75 +304,158 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
         // 2) report hessian
         if(!info.m_gradient_only && !classify_info.is_empty())
         {
-            const auto N = sorted_dytopo_effect_hessian.triplet_count();
-
-            // +1 for calculate the total count
-            loose_resize(selected_hessian, N + 1);
-            loose_resize(selected_hessian_offsets, N + 1);
-
-            // select
-            ParallelFor()
-                .file_line(__FILE__, __LINE__)
-                .apply(
-                    N,
-                    [selected_hessian = selected_hessian.view(0, N).viewer().name("selected_hessian"),
-                     last =
-                         VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
-                     dytopo_effect_hessian =
-                         sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
-                     i_range = classify_info.hessian_i_range(),
-                     j_range = classify_info.hessian_j_range()] __device__(int I) mutable
-                    {
-                        auto&& [i, j, H] = dytopo_effect_hessian(I);
-
-                        auto in_range = [](int i, const Vector2i& range)
-                        { return i >= range.x() && i < range.y(); };
-
-                        selected_hessian(I) =
-                            in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
-
-                        // fill the last one as 0, so that we can calculate the total count
-                        // during the exclusive scan
-                        if(I == 0)
-                            last = 0;
-                    });
-
-            // scan
-            DeviceScan().ExclusiveSum(selected_hessian.data(),
-                                      selected_hessian_offsets.data(),
-                                      selected_hessian.size());
-
-            IndexT h_total_count = 0;
-            VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
-
-            loose_resize_entries(classified_hessians, h_total_count);
-
-            // fill
-            if(h_total_count > 0)
+            if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
             {
+                const auto N = collected_dytopo_effect_hessian.triplet_count();
+
+                // +1 for calculate the total count
+                loose_resize(selected_hessian, N + 1);
+                loose_resize(selected_hessian_offsets, N + 1);
+
+                // select
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
-                    .apply(N,
-                           [selected_hessian = selected_hessian.cviewer().name("selected_hessian"),
-                            selected_hessian_offsets =
-                                selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
-                            dytopo_effect_hessian =
-                                sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
-                            classified_hessian = classified_hessians.viewer().name("classified_hessian"),
-                            i_range = classify_info.hessian_i_range(),
-                            j_range = classify_info.hessian_j_range()] __device__(int I) mutable
-                           {
-                               if(selected_hessian(I))
+                    .apply(
+                        N,
+                        [selected_hessian =
+                             selected_hessian.view(0, N).viewer().name("selected_hessian"),
+                         last =
+                             VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
+                         dytopo_effect_hessian = collected_dytopo_effect_hessian.cviewer().name(
+                             "dytopo_effect_hessian"),
+                         i_range = classify_info.hessian_i_range(),
+                         j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                        {
+                            auto&& [i, j, H] = dytopo_effect_hessian(I);
+
+                            auto in_range = [](int i, const Vector2i& range)
+                            { return i >= range.x() && i < range.y(); };
+
+                            selected_hessian(I) =
+                                in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
+
+                            // fill the last one as 0, so that we can calculate the total count
+                            // during the exclusive scan
+                            if(I == 0)
+                                last = 0;
+                        });
+
+                // scan
+                DeviceScan().ExclusiveSum(selected_hessian.data(),
+                                          selected_hessian_offsets.data(),
+                                          selected_hessian.size());
+
+                IndexT h_total_count = 0;
+                VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
+
+                loose_resize_entries(classified_hessians, h_total_count);
+
+                // fill
+                if(h_total_count > 0)
+                {
+                    ParallelFor()
+                        .file_line(__FILE__, __LINE__)
+                        .apply(N,
+                               [selected_hessian =
+                                    selected_hessian.cviewer().name("selected_hessian"),
+                                selected_hessian_offsets =
+                                    selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
+                                dytopo_effect_hessian =
+                                    collected_dytopo_effect_hessian.cviewer().name(
+                                        "dytopo_effect_hessian"),
+                                classified_hessian =
+                                    classified_hessians.viewer().name("classified_hessian"),
+                                i_range = classify_info.hessian_i_range(),
+                                j_range = classify_info.hessian_j_range()] __device__(int I) mutable
                                {
-                                   auto&& [i, j, H] = dytopo_effect_hessian(I);
-                                   auto offset = selected_hessian_offsets(I);
+                                   if(selected_hessian(I))
+                                   {
+                                       auto&& [i, j, H] = dytopo_effect_hessian(I);
+                                       auto offset = selected_hessian_offsets(I);
 
-                                   classified_hessian(offset).write(i, j, H);
-                               }
-                           });
+                                       classified_hessian(offset).write(i, j, H);
+                                   }
+                               });
+                }
+
+                classified_info.m_hessians = classified_hessians.view();
             }
+            else
+            {
+                const auto N = sorted_dytopo_effect_hessian.triplet_count();
 
-            classified_info.m_hessians = classified_hessians.view();
+                // +1 for calculate the total count
+                loose_resize(selected_hessian, N + 1);
+                loose_resize(selected_hessian_offsets, N + 1);
+
+                // select
+                ParallelFor()
+                    .file_line(__FILE__, __LINE__)
+                    .apply(
+                        N,
+                        [selected_hessian =
+                             selected_hessian.view(0, N).viewer().name("selected_hessian"),
+                         last =
+                             VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
+                         dytopo_effect_hessian =
+                             sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
+                         i_range = classify_info.hessian_i_range(),
+                         j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                        {
+                            auto&& [i, j, H] = dytopo_effect_hessian(I);
+
+                            auto in_range = [](int i, const Vector2i& range)
+                            { return i >= range.x() && i < range.y(); };
+
+                            selected_hessian(I) =
+                                in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
+
+                            // fill the last one as 0, so that we can calculate the total count
+                            // during the exclusive scan
+                            if(I == 0)
+                                last = 0;
+                        });
+
+                // scan
+                DeviceScan().ExclusiveSum(selected_hessian.data(),
+                                          selected_hessian_offsets.data(),
+                                          selected_hessian.size());
+
+                IndexT h_total_count = 0;
+                VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
+
+                loose_resize_entries(classified_hessians, h_total_count);
+
+                // fill
+                if(h_total_count > 0)
+                {
+                    ParallelFor()
+                        .file_line(__FILE__, __LINE__)
+                        .apply(N,
+                               [selected_hessian =
+                                    selected_hessian.cviewer().name("selected_hessian"),
+                                selected_hessian_offsets =
+                                    selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
+                                dytopo_effect_hessian =
+                                    sorted_dytopo_effect_hessian.cviewer().name(
+                                        "dytopo_effect_hessian"),
+                                classified_hessian =
+                                    classified_hessians.viewer().name("classified_hessian"),
+                                i_range = classify_info.hessian_i_range(),
+                                j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                               {
+                                   if(selected_hessian(I))
+                                   {
+                                       auto&& [i, j, H] = dytopo_effect_hessian(I);
+                                       auto offset = selected_hessian_offsets(I);
+
+                                       classified_hessian(offset).write(i, j, H);
+                                   }
+                               });
+                }
+
+                classified_info.m_hessians = classified_hessians.view();
+            }
         }
 
         receiver->receive(classified_info);

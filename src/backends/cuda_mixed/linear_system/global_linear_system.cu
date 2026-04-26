@@ -453,9 +453,10 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A
         b.reserve(reserve_count);
     }
     auto blocked_dof = total_dof / DoFBlockSize;
-    triplet_A.reshape(blocked_dof, blocked_dof);
     x.resize(total_dof);
     b.resize(total_dof);
+    if(needs_full_sparse_A)
+        triplet_A.reshape(blocked_dof, blocked_dof);
 
     if(triplet_count_changed) [[likely]]
     {
@@ -469,7 +470,8 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A
         triplet_A.reserve_triplets(reserve_count);
         bcoo_A.reserve_triplets(reserve_count);
     }
-    triplet_A.resize_triplets(total_triplet);
+    if(needs_full_sparse_A)
+        triplet_A.resize_triplets(total_triplet);
 
     if(total_dof == 0 || (needs_full_sparse_A && total_triplet == 0)) [[unlikely]]
     {

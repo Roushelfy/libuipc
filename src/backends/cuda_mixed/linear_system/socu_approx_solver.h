@@ -46,6 +46,8 @@ class SocuApproxSolver : public LinearSolver
         const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 
   private:
+    void debug_validate_direction(cudaStream_t stream);
+
     SocuApproxGateReport  m_gate_report;
     SocuApproxDryRunReport m_dry_run_report;
     std::vector<StructuredDofSlot> m_dof_slots;
@@ -55,6 +57,9 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_line_search_reject_streak = 0;
     GlobalLinearSystem::LineSearchFeedback m_last_line_search_feedback;
     bool        m_has_line_search_feedback = false;
+    bool        m_debug_validation = false;
+    bool        m_debug_timing = false;
+    bool        m_report_each_solve = false;
 
     struct Runtime;
     std::unique_ptr<Runtime> m_runtime;

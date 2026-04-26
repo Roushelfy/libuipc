@@ -54,7 +54,9 @@ struct SocuApproxGateReport
     std::string          mathdx_runtime_cache_dir;
     bool                 mathdx_manifest_ok = false;
     bool                 mathdx_artifacts_ok = false;
-    bool                 warp_so_ok = false;
+    bool                 mathdx_prebuilt_cubin_ok = false;
+    bool                 debug_validation_enabled = false;
+    bool                 debug_timing_enabled = false;
 };
 
 struct SocuApproxBlockLayout
@@ -97,6 +99,7 @@ struct SocuApproxDryRunReport
     SizeT first_offdiag_scalar_count = 0;
     SizeT diag_nonzero_count         = 0;
     SizeT first_offdiag_nonzero_count = 0;
+    SizeT first_offdiag_nonzero_index_sum = 0;
     SizeT rhs_nonzero_count          = 0;
 
     SizeT near_band_contact_count              = 0;
@@ -122,6 +125,9 @@ struct SocuApproxDryRunReport
     double scatter_time_ms = 0.0;
     std::string stream_source;
     bool plan_created_this_solve = false;
+    bool debug_validation_enabled = false;
+    bool debug_timing_enabled = false;
+    bool report_each_solve = false;
 
     double damping_shift = 0.0;
     double surrogate_residual = 0.0;
