@@ -70,7 +70,7 @@ muda::DoubletVectorView<FiniteElementElastics::StoreScalar, 3> FiniteElementElas
 
 muda::TripletMatrixView<FiniteElementElastics::StoreScalar, 3> FiniteElementElastics::ComputeGradientHessianInfo::hessians() const noexcept
 {
-    if(m_gradient_only)
+    if(m_gradient_only || structured_assembly())
         return muda::TripletMatrixView<StoreScalar, 3>{};
 
     auto [offset, count] = m_impl->constitution_hessian_offsets_counts[m_index];
@@ -87,7 +87,17 @@ void FiniteElementElastics::Impl::assemble(FEMLinearSubsystem::AssembleInfo& inf
     for(auto&& [I, c] : enumerate(constitutions))
     {
         ComputeGradientHessianInfo this_info{
-            this, I, info.gradient_only(), info.dt(), info.gradients(), info.hessians()};
+            this,
+            I,
+            info.gradient_only(),
+            info.dt(),
+            info.gradients(),
+            info.hessians(),
+            info.structured_sink(),
+            info.old_dof_offset(),
+            info.fixed_vertices(),
+            info.identity_fixed_diagonal(),
+            info.write_gradients()};
 
         c->compute_gradient_hessian(this_info);
     }
@@ -96,7 +106,17 @@ void FiniteElementElastics::Impl::assemble(FEMLinearSubsystem::AssembleInfo& inf
     for(auto&& [I, c] : enumerate(extras))
     {
         ComputeGradientHessianInfo this_info{
-            this, offset + I, info.gradient_only(), info.dt(), info.gradients(), info.hessians()};
+            this,
+            offset + I,
+            info.gradient_only(),
+            info.dt(),
+            info.gradients(),
+            info.hessians(),
+            info.structured_sink(),
+            info.old_dof_offset(),
+            info.fixed_vertices(),
+            info.identity_fixed_diagonal(),
+            info.write_gradients()};
         c->compute_gradient_hessian(this_info);
     }
     offset += extras.size();

@@ -377,191 +377,41 @@ void FEMLinearSubsystem::Impl::assemble_structured(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
     using namespace muda;
-    using Alu = ActivePolicy::AluScalar;
 
     auto reporter_view = reporters.view();
 
-    IndexT reporter_hess_count = 0;
-    auto   grad_counts         = reporter_gradient_offsets_counts.counts();
-    auto   hess_counts         = reporter_hessian_offsets_counts.counts();
-    for(auto& reporter : reporter_view)
-    {
-        ReportExtentInfo this_info;
-        this_info.m_gradient_only = false;
-        reporter->report_extent(this_info);
-        grad_counts[reporter->m_index] = this_info.m_gradient_count;
-        hess_counts[reporter->m_index] = this_info.m_hessian_count;
-    }
-    reporter_gradient_offsets_counts.scan();
-    reporter_hessian_offsets_counts.scan();
-    reporter_hess_count = reporter_hessian_offsets_counts.total_count();
-
-    const IndexT kinetic_hess_count = static_cast<IndexT>(fem().xs.size());
-    const IndexT dytopo_hess_count =
-        dytopo_effect_receiver
-            ? static_cast<IndexT>(dytopo_effect_receiver->hessians().triplet_count())
-            : IndexT{0};
-    const IndexT dytopo_hess_offset = kinetic_hess_count + reporter_hess_count;
-    const IndexT total_hess_count =
-        kinetic_hess_count + reporter_hess_count + dytopo_hess_count;
-    loose_resize_entries(structured_temp_hessians, total_hess_count);
-    structured_temp_hessians.reshape(fem().xs.size(), fem().xs.size());
-    structured_temp_hessians.values().fill(
-        Eigen::Matrix<StoreScalar, 3, 3>::Zero());
-    structured_temp_hessians.row_indices().fill(-1);
-    structured_temp_hessians.col_indices().fill(-1);
-
-    kinetic_gradients.resize_doublets(fem().xs.size());
-    kinetic_gradients.reshape(fem().xs.size());
-    loose_resize_entries(reporter_gradients,
-                         reporter_gradient_offsets_counts.total_count());
-    reporter_gradients.reshape(fem().xs.size());
+    const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
+    auto         structured_sink = info.sink();
+    auto         fixed_vertices  = fem().is_fixed.view();
+    auto         gradients       = muda::DoubletVectorView<StoreScalar, 3>{};
+    auto         hessians        = GlobalLinearSystem::TripletMatrixView{};
 
     {
-        auto hessian_view =
-            structured_temp_hessians.view().subview(0, kinetic_hess_count);
         FEMLinearSubsystem::ComputeGradientHessianInfo kinetic_info{
-            false, kinetic_gradients.view(), hessian_view, dt};
+            false,
+            gradients,
+            hessians,
+            dt,
+            structured_sink,
+            old_dof_offset,
+            fixed_vertices,
+            true,
+            false};
         kinetic->compute_gradient_hessian(kinetic_info);
     }
 
-    if(reporter_hess_count)
+    for(auto& R : reporter_view)
     {
-        auto reporter_hessian_view =
-            structured_temp_hessians.view().subview(kinetic_hess_count,
-                                                    reporter_hess_count);
-        for(auto& R : reporter_view)
-        {
-            AssembleInfo assemble_info{
-                this, R->m_index, reporter_hessian_view, false};
-            R->assemble(assemble_info);
-        }
-    }
-
-    if(dytopo_hess_count)
-    {
-        auto dytopo_hessian_view =
-            structured_temp_hessians.view().subview(dytopo_hess_offset,
-                                                    dytopo_hess_count);
-        ParallelFor(256, 0, info.stream())
-            .file_line(__FILE__, __LINE__)
-            .apply(dytopo_hess_count,
-                   [src = dytopo_effect_receiver->hessians().cviewer().name(
-                        "fem_dytopo_effect_hessian"),
-                    dst = dytopo_hessian_view.viewer().name(
-                        "fem_structured_dytopo_hessian"),
-                    vertex_offset =
-                        finite_element_vertex_reporter->vertex_offset()] __device__(
-                       int I) mutable
-                   {
-                       auto&& [g_i, g_j, H3] = src(I);
-                       const auto i = g_i - vertex_offset;
-                       const auto j = g_j - vertex_offset;
-                       Eigen::Matrix<Alu, 3, 3> H3_alu = H3.template cast<Alu>();
-                       dst(I).write(i,
-                                    j,
-                                    downcast_hessian<StoreScalar>(H3_alu));
-                   });
-    }
-
-    muda::BufferView<IndexT> structured_counts_view;
-    if(info.report_counters_enabled())
-    {
-        structured_write_counts.resize(5);
-        BufferLaunch(info.stream()).fill<IndexT>(structured_write_counts.view(), 0);
-        structured_counts_view = structured_write_counts.view();
-    }
-
-    const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
-    auto         sink           = info.sink();
-    ParallelFor(256, 0, info.stream())
-        .file_line(__FILE__, __LINE__)
-        .apply(total_hess_count,
-               [sink,
-                old_dof_offset,
-                is_fixed = fem().is_fixed.cviewer().name("is_fixed"),
-                hessians = structured_temp_hessians.cviewer().name("fem_temp_hessians"),
-                counts = structured_counts_view,
-                dytopo_hess_offset] __device__(
-                   int I) mutable
-               {
-                   auto&& [i, j, H3] = hessians(I);
-                   if(i < 0 || j < 0)
-                       return;
-
-                   Eigen::Matrix<Alu, 3, 3> H_alu = H3.template cast<Alu>();
-                   if(is_fixed(i) || is_fixed(j))
-                   {
-                       if(i != j)
-                           H_alu.setZero();
-                       else
-                           H_alu.setIdentity();
-                   }
-
-                   const IndexT old_i = old_dof_offset + i * 3;
-                   const IndexT old_j = old_dof_offset + j * 3;
-                   bool         off_band = false;
-                   bool         first_offdiag = false;
-                   if(static_cast<SizeT>(old_i) < sink.old_to_chain.size()
-                      && static_cast<SizeT>(old_j) < sink.old_to_chain.size())
-                   {
-                       const IndexT chain_i =
-                           sink.old_to_chain[static_cast<SizeT>(old_i)];
-                       const IndexT chain_j =
-                           sink.old_to_chain[static_cast<SizeT>(old_j)];
-                       if(chain_i >= 0 && chain_j >= 0)
-                       {
-                           const SizeT block_i =
-                               static_cast<SizeT>(chain_i) / sink.block_size;
-                           const SizeT block_j =
-                               static_cast<SizeT>(chain_j) / sink.block_size;
-                           const SizeT distance =
-                               block_i > block_j ? block_i - block_j
-                                                 : block_j - block_i;
-                           first_offdiag = distance == 1;
-                           off_band      = distance > 1;
-                       }
-                   }
-
-                   if(!off_band)
-                   {
-                       const auto H_store = downcast_hessian<StoreScalar>(H_alu);
-                       sink.template add_dense_block_between_fixed<3, 3>(
-                           old_i,
-                           old_j,
-                           H_store);
-                   }
-
-                   if(counts.data() != nullptr)
-                   {
-                       if(off_band)
-                           muda::atomic_add(counts.data(2), IndexT{9});
-                       else if(first_offdiag)
-                           muda::atomic_add(counts.data(1), IndexT{9});
-                       else
-                           muda::atomic_add(counts.data(0), IndexT{9});
-
-                       if(I >= dytopo_hess_offset)
-                       {
-                           if(off_band)
-                               muda::atomic_add(counts.data(4), IndexT{1});
-                           else
-                               muda::atomic_add(counts.data(3), IndexT{1});
-                       }
-                   }
-               });
-
-    if(info.report_counters_enabled())
-    {
-        std::array<IndexT, 5> write_counts{};
-        structured_write_counts.view().copy_to(write_counts.data());
-        info.record_diag_writes(static_cast<SizeT>(write_counts[0]));
-        info.record_first_offdiag_writes(static_cast<SizeT>(write_counts[1]));
-        info.record_contact_band_stats(static_cast<SizeT>(write_counts[3]),
-                                       static_cast<SizeT>(write_counts[4]),
-                                       static_cast<SizeT>(write_counts[0]
-                                                          + write_counts[1]),
-                                       static_cast<SizeT>(write_counts[2]));
+        AssembleInfo assemble_info{this,
+                                   R->m_index,
+                                   hessians,
+                                   false,
+                                   structured_sink,
+                                   old_dof_offset,
+                                   fixed_vertices,
+                                   true,
+                                   false};
+        R->assemble(assemble_info);
     }
 }
 
@@ -594,15 +444,6 @@ void FEMLinearSubsystem::Impl::loose_resize_entries(muda::DeviceDoubletVector<St
         v.reserve_doublets(size * reserve_ratio);
     }
     v.resize_doublets(size);
-}
-
-void FEMLinearSubsystem::Impl::loose_resize_entries(
-    muda::DeviceTripletMatrix<StoreScalar, 3>& m,
-    SizeT                                      size)
-{
-    if(size > m.triplet_capacity())
-        m.reserve_triplets(size * reserve_ratio);
-    m.resize_triplets(size);
 }
 
 void FEMLinearSubsystem::do_report_extent(GlobalLinearSystem::DiagExtentInfo& info)
@@ -648,12 +489,18 @@ void FEMLinearSubsystem::do_receive_init_dof_info(GlobalLinearSystem::InitDofInf
 
 muda::DoubletVectorView<FEMLinearSubsystem::StoreScalar, 3> FEMLinearSubsystem::AssembleInfo::gradients() const
 {
+    if(structured_assembly() && !write_gradients())
+        return {};
+
     auto [offset, count] = m_impl->reporter_gradient_offsets_counts[m_index];
     return m_impl->reporter_gradients.view().subview(offset, count);
 }
 
 GlobalLinearSystem::TripletMatrixView FEMLinearSubsystem::AssembleInfo::hessians() const
 {
+    if(structured_assembly())
+        return GlobalLinearSystem::TripletMatrixView{};
+
     auto [offset, count] = m_impl->reporter_hessian_offsets_counts[m_index];
     return m_hessians.subview(offset, count);
 }

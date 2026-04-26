@@ -56,8 +56,7 @@ class FiniteElementBDF1Kinetic final : public FiniteElementKinetic
                     xs       = info.xs().cviewer().name("xs"),
                     x_tildes = info.x_tildes().viewer().name("x_tildes"),
                     masses   = info.masses().cviewer().name("masses"),
-                    G3s      = info.gradients().viewer().name("G3s"),
-                    H3x3s    = info.hessians().viewer().name("H3x3s"),
+                    sink     = info.sink(),
                     gradient_only = info.gradient_only()] __device__(int i) mutable
                    {
                        auto& m       = masses(i);
@@ -75,13 +74,13 @@ class FiniteElementBDF1Kinetic final : public FiniteElementKinetic
                            G = m * (x - x_tilde);
                        }
 
-                       G3s(i).write(i, downcast_gradient<StoreScalar>(G));
+                       sink.write_gradient(i, i, downcast_gradient<StoreScalar>(G));
 
                        if(gradient_only)
                            return;
 
                        Matrix3x3 H = masses(i) * Matrix3x3::Identity();
-                       H3x3s(i).write(i, i, downcast_hessian<StoreScalar>(H));
+                       sink.write_hessian(i, i, downcast_hessian<StoreScalar>(H));
                    });
     }
 };

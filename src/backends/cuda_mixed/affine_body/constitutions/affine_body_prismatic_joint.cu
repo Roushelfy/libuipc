@@ -274,9 +274,8 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                     strength_ratio = strength_ratios.cviewer().name("strength_ratio"),
                     body_masses = info.body_masses().cviewer().name("body_masses"),
                     qs      = info.qs().viewer().name("qs"),
-                    G12s    = info.gradients().viewer().name("G12s"),
-                 H12x12s = info.hessians().viewer().name("H12x12s"),
-                 gradient_only] __device__(int I) mutable
+                    sink    = info.sink(),
+                    gradient_only] __device__(int I) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
                        using Store = InterAffineBodyConstitutionManager::StoreScalar;
@@ -328,9 +327,11 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
 
                        Eigen::Matrix<Alu, 24, 1> G = J01T_G01 + dE23dQ;
 
-                       DoubletVectorAssembler DVA{G12s};
                        Vector2i               indices = {bids(0), bids(1)};
-                       DVA.segment<2>(2 * I).write(indices, downcast_gradient<Store>(G));
+                       sink.template write_gradient<2>(
+                           2 * I,
+                           indices,
+                           downcast_gradient<Store>(G));
 
                        if(!gradient_only)
                        {
@@ -362,9 +363,10 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
 
                            Eigen::Matrix<Alu, 24, 24> H = J01T_H01_J01 + ddE23ddQ;
 
-                           TripletMatrixAssembler TMA{H12x12s};
-                           TMA.half_block<2>(HalfHessianSize * I)
-                               .write(indices, downcast_hessian<Store>(H));
+                           sink.template write_hessian_half<2>(
+                               HalfHessianSize * I,
+                               indices,
+                               downcast_hessian<Store>(H));
                    }
                });
     };

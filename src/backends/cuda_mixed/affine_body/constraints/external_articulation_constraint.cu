@@ -750,7 +750,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
             .file_line(__FILE__, __LINE__)
             .apply(
                 joint_id_to_G_theta.size(),
-                [gradients = info.gradients().viewer().name("gradients"),
+                [sink = info.sink(),
                  joint_id_to_G_theta = joint_id_to_G_theta.cviewer().name("G_theta"),
                  joint_id_to_body_ids = joint_id_to_body_ids.cviewer().name("joint_id_to_body_ids"),
                  joint_id_to_delta_theta = joint_id_to_delta_theta.cviewer().name("delta_theta"),
@@ -822,10 +822,10 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
 
                     G24 *= G_theta;
 
-                    DoubletVectorAssembler DVA{gradients};
-
-                    DVA.segment<2>(jointI * 2)
-                        .write(body_ids, downcast_gradient<Store>(G24));
+                    sink.template write_gradient<2>(
+                        jointI * 2,
+                        body_ids,
+                        downcast_gradient<Store>(G24));
                 });
 
         if(info.gradient_only())
@@ -836,7 +836,7 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
             .file_line(__FILE__, __LINE__)
             .apply(
                 joint_joint_id_to_mass.size(),
-                [hessians = info.hessians().viewer().name("hessians"),
+                [sink = info.sink(),
 
                  joint_id_to_G_theta = joint_id_to_G_theta.cviewer().name("joint_id_to_G_theta"),
                  joint_id_to_body_ids = joint_id_to_body_ids.cviewer().name("joint_id_to_body_ids"),
@@ -992,12 +992,11 @@ class ExternalArticulationConstraint final : public InterAffineBodyConstraint
                     Vector2i body_ids_i = joint_id_to_body_ids(ij[0]);
                     Vector2i body_ids_j = joint_id_to_body_ids(ij[1]);
 
-                    TripletMatrixAssembler TMA{hessians};
-
-                    TMA.half_block<2>(joint_joint_I * HalfHessianSize)
-                        .write(body_ids_i,
-                               body_ids_j,
-                               downcast_hessian<Store>(H24x24));
+                    sink.template write_hessian_half<2>(
+                        joint_joint_I * HalfHessianSize,
+                        body_ids_i,
+                        body_ids_j,
+                        downcast_hessian<Store>(H24x24));
                 });
     }
 

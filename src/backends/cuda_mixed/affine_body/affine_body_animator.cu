@@ -158,7 +158,11 @@ void AffineBodyAnimator::compute_gradient_hessian(ABDLinearSubsystem::AssembleIn
                                              m_impl.dt,
                                              info.gradients(),
                                              info.hessians(),
-                                             info.gradient_only()};
+                                             info.gradient_only(),
+                                             info.structured_sink(),
+                                             info.old_dof_offset(),
+                                             info.fixed_bodies(),
+                                             info.write_gradients()};
         constraint->compute_gradient_hessian(this_info);
     }
 }
@@ -210,6 +214,9 @@ muda::DoubletVectorView<AffineBodyAnimator::StoreScalar, 12> AffineBodyAnimator:
 
 muda::TripletMatrixView<AffineBodyAnimator::StoreScalar, 12> AffineBodyAnimator::ComputeGradientHessianInfo::hessians() const noexcept
 {
+    if(structured_assembly())
+        return muda::TripletMatrixView<StoreScalar, 12>{};
+
     auto [offset, count] = m_impl->constraint_hessian_offsets_counts[m_index];
     return m_hessians.subview(offset, count);
 }

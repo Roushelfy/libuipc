@@ -216,8 +216,7 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                     strength_ratio = strength_ratios.cviewer().name("strength_ratio"),
                     body_masses = info.body_masses().cviewer().name("body_masses"),
                     qs      = info.qs().viewer().name("qs"),
-                    G12s    = info.gradients().viewer().name("G12s"),
-                    H12x12s = info.hessians().viewer().name("H12x12s"),
+                    sink    = info.sink(),
                     gradient_only] __device__(int I) mutable
                    {
                        using Alu = ActivePolicy::AluScalar;
@@ -265,9 +264,8 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                        FJ::JtT_Gt<Alu>(JtT_Gt_val, dEdFt_val, ci0, cj0);
 
                        Vector24               G = downcast_gradient<Store>(JrT_Gr_val + JtT_Gt_val);
-                       DoubletVectorAssembler DVA{G12s};
                        Vector2i               indices = {bids(0), bids(1)};
-                       DVA.segment<2>(2 * I).write(indices, G);
+                       sink.template write_gradient<2>(2 * I, indices, G);
 
                        if(!gradient_only)
                        {
@@ -287,8 +285,10 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
                            FJ::JtT_Ht_Jt<Alu>(JtT_Ht_Jt_val, ddEdFt_val, ci0, cj0);
 
                            Matrix24x24            H = downcast_hessian<Store>(JrT_Hr_Jr_val + JtT_Ht_Jt_val);
-                           TripletMatrixAssembler TMA{H12x12s};
-                           TMA.half_block<2>(HalfHessianSize * I).write(indices, H);
+                           sink.template write_hessian_half<2>(
+                               HalfHessianSize * I,
+                               indices,
+                               H);
                        }
                    });
     };

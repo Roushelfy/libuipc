@@ -3,6 +3,7 @@
 #include <affine_body/affine_body_dynamics.h>
 #include <affine_body/abd_dytopo_effect_receiver.h>
 #include <affine_body/affine_body_vertex_reporter.h>
+#include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
 
 namespace uipc::backend::cuda_mixed
@@ -77,10 +78,41 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
     class AssembleInfo
     {
       public:
-        AssembleInfo(Impl* impl, IndexT index, bool gradient_only) noexcept;
+        AssembleInfo(Impl* impl,
+                     IndexT index,
+                     bool   gradient_only,
+                     StructuredDeviceAssemblySink<
+                         StoreScalar,
+                         GlobalLinearSystem::SolveScalar> structured_sink = {},
+                     IndexT old_dof_offset = 0,
+                     muda::CBufferView<IndexT> fixed_bodies = {},
+                     bool write_gradients = true) noexcept;
         muda::DoubletVectorView<StoreScalar, 12>     gradients() const;
         muda::TripletMatrixView<StoreScalar, 12, 12> hessians() const;
         bool                                   gradient_only() const noexcept;
+        bool structured_assembly() const noexcept
+        {
+            return m_structured_sink.valid();
+        }
+        auto structured_sink() const noexcept { return m_structured_sink; }
+        IndexT old_dof_offset() const noexcept { return m_old_dof_offset; }
+        auto fixed_bodies() const noexcept { return m_fixed_bodies; }
+        bool write_gradients() const noexcept { return m_write_gradients; }
+        auto sink() const noexcept
+        {
+            auto hessian_view =
+                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 12, 12>{}
+                                      : hessians();
+            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 12>{
+                gradients(),
+                hessian_view,
+                m_gradient_only,
+                m_structured_sink,
+                m_old_dof_offset,
+                m_fixed_bodies,
+                false,
+                m_write_gradients};
+        }
 
       private:
         friend class ABDLinearSubsystem;
@@ -88,6 +120,10 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         Impl*  m_impl          = nullptr;
         IndexT m_index         = ~0;
         bool   m_gradient_only = false;
+        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
+        IndexT m_old_dof_offset = 0;
+        muda::CBufferView<IndexT> m_fixed_bodies;
+        bool m_write_gradients = true;
     };
 
     class Impl

@@ -177,8 +177,7 @@ class SoftTransformConstraint final : public AffineBodyConstraint
                     aim_transforms = aim_transforms.viewer().name("aim_transforms"),
                     strength_ratios = strength_ratios.viewer().name("strength_ratios"),
                     body_masses = info.body_masses().viewer().name("body_masses"),
-                    gradients = info.gradients().viewer().name("gradients"),
-                    hessians  = info.hessians().viewer().name("hessians"),
+                    sink      = info.sink(),
                     is_fixed  = info.is_fixed().viewer().name("is_fixed"),
                     gradient_only = info.gradient_only()] __device__(int I) mutable
                    {
@@ -209,12 +208,12 @@ class SoftTransformConstraint final : public AffineBodyConstraint
                            G_alu = (M_alu * dq_alu).eval();
                        }
 
-                       gradients(I).write(i, downcast_gradient<Store>(G_alu));
+                       sink.write_gradient(I, i, downcast_gradient<Store>(G_alu));
 
                        if(gradient_only)
                            return;
 
-                       hessians(I).write(i, i, downcast_hessian<Store>(M_alu));
+                       sink.write_hessian(I, i, downcast_hessian<Store>(M_alu));
                    });
     }
 };

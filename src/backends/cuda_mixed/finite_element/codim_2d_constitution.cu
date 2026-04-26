@@ -18,7 +18,17 @@ void Codim2DConstitution::do_compute_energy(FiniteElementConstitution::ComputeEn
 void Codim2DConstitution::do_compute_gradient_hessian(FiniteElementConstitution::ComputeGradientHessianInfo& info)
 {
     Codim2DConstitution::ComputeGradientHessianInfo this_info{
-        this, m_index_in_dim, info.gradient_only(), info.dt(), info.gradients(), info.hessians()};
+        this,
+        m_index_in_dim,
+        info.gradient_only(),
+        info.dt(),
+        info.gradients(),
+        info.hessians(),
+        info.structured_sink(),
+        info.old_dof_offset(),
+        info.fixed_vertices(),
+        info.identity_fixed_diagonal(),
+        info.write_gradients()};
     do_compute_gradient_hessian(this_info);
 }
 
@@ -69,4 +79,3 @@ Float Codim2DConstitution::BaseInfo::dt() const noexcept
     return m_dt;
 }
 }  // namespace uipc::backend::cuda_mixed
-

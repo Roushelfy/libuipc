@@ -8,6 +8,7 @@
 #include <muda/ext/linear_system/device_triplet_matrix.h>
 #include <finite_element/fem_linear_subsystem_reporter.h>
 #include <finite_element/fem_line_search_subreporter.h>
+#include <utils/assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -89,20 +90,56 @@ class FiniteElementAnimator final : public Animator
                                    Float                             dt,
                                    muda::DoubletVectorView<StoreScalar, 3> gradients,
                                    muda::TripletMatrixView<StoreScalar, 3> hessians,
-                                   bool                              gradient_only)
+                                   bool                              gradient_only,
+                                   StructuredDeviceAssemblySink<
+                                       StoreScalar,
+                                       GlobalLinearSystem::SolveScalar> structured_sink = {},
+                                   IndexT old_dof_offset = 0,
+                                   muda::CBufferView<IndexT> fixed_vertices = {},
+                                   bool identity_fixed_diagonal = false,
+                                   bool write_gradients = true)
             : BaseInfo(impl, index, dt)
             , m_gradients(gradients)
             , m_hessians(hessians)
+            , m_structured_sink(structured_sink)
+            , m_old_dof_offset(old_dof_offset)
+            , m_fixed_vertices(fixed_vertices)
+            , m_identity_fixed_diagonal(identity_fixed_diagonal)
+            , m_write_gradients(write_gradients)
             , m_gradient_only(gradient_only)
         {
         }
         muda::DoubletVectorView<StoreScalar, 3> gradients() const noexcept;
         muda::TripletMatrixView<StoreScalar, 3> hessians() const noexcept;
         bool                              gradient_only() const noexcept;
+        bool structured_assembly() const noexcept
+        {
+            return m_structured_sink.valid();
+        }
+        auto sink() const noexcept
+        {
+            auto hessian_view =
+                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 3>{}
+                                      : hessians();
+            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 3>{
+                gradients(),
+                hessian_view,
+                m_gradient_only,
+                m_structured_sink,
+                m_old_dof_offset,
+                m_fixed_vertices,
+                m_identity_fixed_diagonal,
+                m_write_gradients};
+        }
 
       private:
         muda::DoubletVectorView<StoreScalar, 3> m_gradients;
         muda::TripletMatrixView<StoreScalar, 3> m_hessians;
+        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
+        IndexT                            m_old_dof_offset = 0;
+        muda::CBufferView<IndexT>         m_fixed_vertices;
+        bool                              m_identity_fixed_diagonal = false;
+        bool                              m_write_gradients = true;
         bool                              m_gradient_only = false;
     };
 

@@ -7,6 +7,7 @@
 #include <affine_body/abd_linear_subsystem_reporter.h>
 #include <affine_body/abd_line_search_subreporter.h>
 #include <affine_body/inter_affine_body_constitution_manager.h>
+#include <utils/assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -96,21 +97,54 @@ class AffineBodyAnimator final : public Animator
                             Float                              dt,
                             muda::DoubletVectorView<StoreScalar, 12> gradients,
                             muda::TripletMatrixView<StoreScalar, 12> hessians,
-                            bool                               gradient_only)
+                            bool                               gradient_only,
+                            StructuredDeviceAssemblySink<
+                                StoreScalar,
+                                GlobalLinearSystem::SolveScalar> structured_sink = {},
+                            IndexT old_dof_offset = 0,
+                            muda::CBufferView<IndexT> fixed_bodies = {},
+                            bool write_gradients = true)
             : BaseInfo(impl, index, dt)
             , m_gradients(gradients)
             , m_hessians(hessians)
+            , m_structured_sink(structured_sink)
+            , m_old_dof_offset(old_dof_offset)
+            , m_fixed_bodies(fixed_bodies)
+            , m_write_gradients(write_gradients)
             , m_gradient_only(gradient_only)
         {
         }
         muda::DoubletVectorView<StoreScalar, 12> gradients() const noexcept;
         muda::TripletMatrixView<StoreScalar, 12> hessians() const noexcept;
         bool                               gradient_only() const noexcept;
+        bool structured_assembly() const noexcept
+        {
+            return m_structured_sink.valid();
+        }
+        auto sink() const noexcept
+        {
+            auto hessian_view =
+                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 12>{}
+                                      : hessians();
+            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 12>{
+                gradients(),
+                hessian_view,
+                m_gradient_only,
+                m_structured_sink,
+                m_old_dof_offset,
+                m_fixed_bodies,
+                false,
+                m_write_gradients};
+        }
 
       private:
         friend class AffineBodyAnimator;
         muda::DoubletVectorView<StoreScalar, 12> m_gradients;
         muda::TripletMatrixView<StoreScalar, 12> m_hessians;
+        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
+        IndexT m_old_dof_offset = 0;
+        muda::CBufferView<IndexT> m_fixed_bodies;
+        bool m_write_gradients = true;
         bool                               m_gradient_only = false;
     };
 

@@ -144,8 +144,7 @@ class SoftPositionConstraint final : public FiniteElementConstraint
                     aim_positions = aim_positions.viewer().name("aim_positions"),
                     strength_ratio = strength_ratios.viewer().name("strength_ratio"),
                     masses    = info.masses().viewer().name("masses"),
-                    gradients = info.gradients().viewer().name("gradients"),
-                    hessians  = info.hessians().viewer().name("hessians"),
+                    sink      = info.sink(),
                     is_fixed  = info.is_fixed().viewer().name("is_fixed"),
                     gradient_only = info.gradient_only()] __device__(int I) mutable
                    {
@@ -169,7 +168,7 @@ class SoftPositionConstraint final : public FiniteElementConstraint
                            G = s * m * dx;
                        }
 
-                       gradients(I).write(i, downcast_gradient<StoreScalar>(G));
+                       sink.write_gradient(I, i, downcast_gradient<StoreScalar>(G));
 
                        if(gradient_only)
                            return;
@@ -177,7 +176,7 @@ class SoftPositionConstraint final : public FiniteElementConstraint
                        Matrix3x3 H = s * m * Matrix3x3::Identity();
                        if(is_fixed(i))
                            H = Matrix3x3::Zero();
-                       hessians(I).write(i, i, downcast_hessian<StoreScalar>(H));
+                       sink.write_hessian(I, i, downcast_hessian<StoreScalar>(H));
                    });
     }
 };

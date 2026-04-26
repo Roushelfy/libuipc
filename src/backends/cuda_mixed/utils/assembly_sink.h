@@ -77,6 +77,21 @@ struct TripletAssemblySink
     template <int StencilSize, typename HMat>
     MUDA_DEVICE __forceinline__ void write_hessian_half(
         IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& row_indices,
+        const Eigen::Vector<IndexT, StencilSize>& col_indices,
+        const HMat&                               H) const
+    {
+        if(gradient_only)
+            return;
+
+        TripletMatrixAssembler tma{hessians};
+        tma.template half_block<StencilSize>(event_offset)
+            .write(row_indices, col_indices, H);
+    }
+
+    template <int StencilSize, typename HMat>
+    MUDA_DEVICE __forceinline__ void write_hessian_half(
+        IndexT event_offset,
         const Eigen::Vector<IndexT, StencilSize>& indices,
         const Eigen::Vector<int8_t, StencilSize>& ignore,
         const HMat&                               H) const
@@ -221,6 +236,262 @@ struct StructuredDeviceAssemblySink
                                    static_cast<StoreT>(H(row, col)));
             }
         }
+    }
+};
+
+template <typename StoreT, typename SolveT, int BlockDim>
+struct LocalAssemblySink
+{
+    muda::DoubletVectorViewer<StoreT, BlockDim> gradients;
+    muda::TripletMatrixViewer<StoreT, BlockDim> hessians;
+    StructuredDeviceAssemblySink<StoreT, SolveT> structured;
+    muda::CBufferView<IndexT> fixed_blocks;
+    IndexT old_dof_offset = 0;
+    bool   gradient_only  = false;
+    bool   write_gradients = true;
+    bool   identity_fixed_diagonal = false;
+
+    LocalAssemblySink(muda::DoubletVectorView<StoreT, BlockDim> gradients_view,
+                      muda::TripletMatrixView<StoreT, BlockDim> hessians_view,
+                      bool gradient_only) noexcept
+        : gradients(gradients_view.viewer())
+        , hessians(hessians_view.viewer())
+        , gradient_only(gradient_only)
+    {
+    }
+
+    LocalAssemblySink(muda::DoubletVectorView<StoreT, BlockDim> gradients_view,
+                      muda::TripletMatrixView<StoreT, BlockDim> hessians_view,
+                      bool gradient_only,
+                      StructuredDeviceAssemblySink<StoreT, SolveT> structured,
+                      IndexT old_dof_offset,
+                      muda::CBufferView<IndexT> fixed_blocks = {},
+                      bool identity_fixed_diagonal = false,
+                      bool write_gradients = true) noexcept
+        : gradients(gradients_view.viewer())
+        , hessians(hessians_view.viewer())
+        , structured(structured)
+        , fixed_blocks(fixed_blocks)
+        , old_dof_offset(old_dof_offset)
+        , gradient_only(gradient_only)
+        , write_gradients(write_gradients)
+        , identity_fixed_diagonal(identity_fixed_diagonal)
+    {
+    }
+
+    MUDA_GENERIC bool structured_enabled() const noexcept
+    {
+        return structured.valid();
+    }
+
+    MUDA_DEVICE __forceinline__ bool fixed(IndexT block) const noexcept
+    {
+        return fixed_blocks.data() != nullptr && block >= 0
+               && static_cast<SizeT>(block) < fixed_blocks.size()
+               && fixed_blocks[static_cast<SizeT>(block)] != 0;
+    }
+
+    template <int StencilSize, typename GVec>
+    MUDA_DEVICE __forceinline__ void write_gradient(
+        IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        const GVec&                               G) const
+    {
+        if(!write_gradients)
+            return;
+
+        DoubletVectorAssembler dva{gradients};
+        dva.template segment<StencilSize>(event_offset).write(indices, G);
+    }
+
+    template <int StencilSize, typename GVec>
+    MUDA_DEVICE __forceinline__ void write_gradient(
+        IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        const Eigen::Vector<int8_t, StencilSize>& ignore,
+        const GVec&                               G) const
+    {
+        if(!write_gradients)
+            return;
+
+        DoubletVectorAssembler dva{gradients};
+        dva.template segment<StencilSize>(event_offset).write(indices, ignore, G);
+    }
+
+    template <typename GVec>
+    MUDA_DEVICE __forceinline__ void write_gradient(IndexT     event_offset,
+                                                    IndexT     index,
+                                                    const GVec& G) const
+    {
+        if(!write_gradients)
+            return;
+
+        DoubletVectorAssembler dva{gradients};
+        dva(event_offset).write(index, G);
+    }
+
+    template <typename HBlock>
+    MUDA_DEVICE __forceinline__ void add_structured_block(IndexT block_i,
+                                                          IndexT block_j,
+                                                          const HBlock& H) const noexcept
+    {
+        const bool i_fixed = fixed(block_i);
+        const bool j_fixed = fixed(block_j);
+        if(i_fixed || j_fixed)
+        {
+            if(!(identity_fixed_diagonal && block_i == block_j))
+                return;
+
+#pragma unroll
+            for(IndexT d = 0; d < BlockDim; ++d)
+            {
+                structured.add_hessian_scalar(old_dof_offset + block_i * BlockDim + d,
+                                              old_dof_offset + block_j * BlockDim + d,
+                                              StoreT{1});
+            }
+            return;
+        }
+
+#pragma unroll
+        for(IndexT row = 0; row < BlockDim; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < BlockDim; ++col)
+            {
+                structured.add_hessian_scalar(old_dof_offset + block_i * BlockDim + row,
+                                              old_dof_offset + block_j * BlockDim + col,
+                                              static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+
+    template <int StencilSize, typename HMat>
+    MUDA_DEVICE __forceinline__ void write_hessian_half(
+        IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        const HMat&                               H) const
+    {
+        if(gradient_only)
+            return;
+
+        if(structured_enabled())
+        {
+            (void)event_offset;
+#pragma unroll
+            for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+            {
+#pragma unroll
+                for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+                {
+                    add_structured_block(
+                        indices(row_block),
+                        indices(col_block),
+                        H.template block<BlockDim, BlockDim>(row_block * BlockDim,
+                                                             col_block * BlockDim));
+                }
+            }
+            return;
+        }
+
+        TripletMatrixAssembler tma{hessians};
+        tma.template half_block<StencilSize>(event_offset).write(indices, H);
+    }
+
+    template <int StencilSize, typename HMat>
+    MUDA_DEVICE __forceinline__ void write_hessian_half(
+        IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& row_indices,
+        const Eigen::Vector<IndexT, StencilSize>& col_indices,
+        const HMat&                               H) const
+    {
+        if(gradient_only)
+            return;
+
+        if(structured_enabled())
+        {
+            (void)event_offset;
+#pragma unroll
+            for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+            {
+#pragma unroll
+                for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+                {
+                    IndexT L = row_block;
+                    IndexT R = col_block;
+                    if(row_indices(row_block) >= col_indices(col_block))
+                    {
+                        L = col_block;
+                        R = row_block;
+                    }
+                    add_structured_block(
+                        row_indices(L),
+                        col_indices(R),
+                        H.template block<BlockDim, BlockDim>(L * BlockDim,
+                                                             R * BlockDim));
+                }
+            }
+            return;
+        }
+
+        TripletMatrixAssembler tma{hessians};
+        tma.template half_block<StencilSize>(event_offset)
+            .write(row_indices, col_indices, H);
+    }
+
+    template <int StencilSize, typename HMat>
+    MUDA_DEVICE __forceinline__ void write_hessian_half(
+        IndexT event_offset,
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        const Eigen::Vector<int8_t, StencilSize>& ignore,
+        const HMat&                               H) const
+    {
+        if(gradient_only)
+            return;
+
+        if(structured_enabled())
+        {
+            (void)event_offset;
+#pragma unroll
+            for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+            {
+                if(ignore(row_block))
+                    continue;
+#pragma unroll
+                for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+                {
+                    if(ignore(col_block))
+                        continue;
+                    add_structured_block(
+                        indices(row_block),
+                        indices(col_block),
+                        H.template block<BlockDim, BlockDim>(row_block * BlockDim,
+                                                             col_block * BlockDim));
+                }
+            }
+            return;
+        }
+
+        TripletMatrixAssembler tma{hessians};
+        tma.template half_block<StencilSize>(event_offset).write(indices, ignore, H);
+    }
+
+    template <typename HMat>
+    MUDA_DEVICE __forceinline__ void write_hessian(IndexT     event_offset,
+                                                   IndexT     index,
+                                                   const HMat& H) const
+    {
+        if(gradient_only)
+            return;
+
+        if(structured_enabled())
+        {
+            (void)event_offset;
+            add_structured_block(index, index, H);
+            return;
+        }
+
+        TripletMatrixAssembler tma{hessians};
+        tma(event_offset).write(index, H);
     }
 };
 }  // namespace uipc::backend::cuda_mixed

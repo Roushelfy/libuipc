@@ -294,8 +294,7 @@ class AffineBodyRevoluteJointLimit final : public InterAffineBodyConstitution
                  strengths = strengths.cviewer().name("strengths"),
                  qs      = info.qs().cviewer().name("qs"),
                  q_prevs = info.q_prevs().cviewer().name("q_prevs"),
-                 G12s    = info.gradients().viewer().name("G12s"),
-                 H12x12s = info.hessians().viewer().name("H12x12s"),
+                 sink    = info.sink(),
                  gradient_only] __device__(int I) mutable
                 {
                     using Alu = ActivePolicy::AluScalar;
@@ -348,8 +347,10 @@ class AffineBodyRevoluteJointLimit final : public InterAffineBodyConstitution
                     ERJ::dDeltaTheta_dQ<Alu>(dx_dq, lb, qk, q_prevk, rb, ql, q_prevl);
 
                     Eigen::Matrix<Alu, 24, 1> G = dE_dx * dx_dq;
-                    DoubletVectorAssembler DVA{G12s};
-                    DVA.segment<2>(2 * I).write(bid, downcast_gradient<Store>(G));
+                    sink.template write_gradient<2>(
+                        2 * I,
+                        bid,
+                        downcast_gradient<Store>(G));
 
                     if(gradient_only)
                         return;
@@ -373,9 +374,10 @@ class AffineBodyRevoluteJointLimit final : public InterAffineBodyConstitution
                         H += JT_H_J;
                     }
 
-                    TripletMatrixAssembler TMA{H12x12s};
-                    TMA.half_block<2>(HalfHessianSize * I)
-                        .write(bid, downcast_hessian<Store>(H));
+                    sink.template write_hessian_half<2>(
+                        HalfHessianSize * I,
+                        bid,
+                        downcast_hessian<Store>(H));
                 });
     }
 
