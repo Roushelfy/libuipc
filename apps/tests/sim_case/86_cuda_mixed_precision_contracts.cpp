@@ -716,7 +716,7 @@ void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
     Json          report = Json::parse(ifs);
     REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
     REQUIRE(report["status"]["reason"].get<std::string>()
-            == "socu_approx_stub_no_direction");
+            == "dry_run_no_direction");
     REQUIRE(report["status"]["direction_available"].get<bool>() == false);
     REQUIRE(report["block_size"].get<SizeT>() == block_size);
     REQUIRE(report["structured_slot_count"].get<SizeT>() == block_size);
@@ -794,7 +794,7 @@ void require_socu_approx_inter_primitive_structured_dry_run(std::string_view nam
     REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
     REQUIRE(report["structured_scope"].get<std::string>() == "multi_provider");
     REQUIRE(report["status"]["reason"].get<std::string>()
-            == "socu_approx_stub_no_direction");
+            == "dry_run_no_direction");
     REQUIRE(report["status"]["direction_available"].get<bool>() == false);
     REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
     const SizeT absorbed =
@@ -877,7 +877,7 @@ void require_socu_approx_structured_sink_dry_run(std::string_view name,
 void require_socu_approx_m7_strict_solve(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
-    WARN("socu_native is not enabled in this build; M7 surrogate solve smoke was not run");
+    WARN("socu_native is not enabled in this build; structured direct solve smoke was not run");
     return;
 #else
     std::string skip_reason;
@@ -947,7 +947,7 @@ void require_socu_approx_m7_strict_solve_multi_abd(std::string_view name,
                                                    SizeT            body_count)
 {
 #if !UIPC_WITH_SOCU_NATIVE
-    WARN("socu_native is not enabled in this build; M7 multi-ABD strict solve was not run");
+    WARN("socu_native is not enabled in this build; multi-ABD structured direct solve was not run");
     return;
 #else
     std::string skip_reason;
@@ -1307,7 +1307,7 @@ void require_socu_approx_old_to_chain_failure(std::string_view name)
 void require_socu_approx_m8_runtime_contact_smoke(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
-    WARN("socu_native is not enabled in this build; M8 runtime contact smoke was not run");
+    WARN("socu_native is not enabled in this build; runtime contact structured solve smoke was not run");
     return;
 #else
     std::string skip_reason;
@@ -1371,7 +1371,7 @@ void require_socu_approx_m8_runtime_contact_smoke(std::string_view name)
 void require_socu_approx_m8_fem_runtime_contact_smoke(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
-    WARN("socu_native is not enabled in this build; M8 FEM runtime contact smoke was not run");
+    WARN("socu_native is not enabled in this build; FEM runtime contact structured solve smoke was not run");
     return;
 #else
     std::string skip_reason;
@@ -1500,21 +1500,48 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "unsupported_block_size");
     }
 
-    SECTION("socu_approx_rejects_low_ordering_quality")
+    SECTION("socu_approx_records_low_ordering_quality")
     {
         auto config                       = linear_solver_selection_config();
         config["linear_system"]["solver"] = "socu_approx";
+        config["linear_system"]["socu_approx"]["mode"] = "dry_run";
         config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.9;
+        config["linear_system"]["socu_approx"]["max_off_band_ratio"] = 0.1;
+        config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.65;
         auto output_path = contract_workspace("linear_solver_socu_approx_low_quality");
         fs::create_directories(output_path);
-        auto report_path = output_path / "ordering.json";
-        write_socu_ordering_report(report_path, 32, 0.5, 0.5);
+        auto ordering_path = output_path / "ordering.json";
+        auto dry_run_path  = output_path / "dry_run.json";
+        write_socu_ordering_report(ordering_path, 32, 0.5, 0.5);
         config["linear_system"]["socu_approx"]["ordering_report"] =
-            report_path.string();
-        require_socu_approx_init_failure(
-            "linear_solver_socu_approx_low_quality",
-            config,
-            "ordering_quality_too_low");
+            ordering_path.string();
+        config["linear_system"]["socu_approx"]["dry_run_report"] =
+            dry_run_path.string();
+        test::Scene::dump_config(config, output_path.string());
+
+        Engine engine{"cuda_mixed", output_path.string()};
+        World  world{engine};
+        Scene  scene{config};
+        build_single_abd_tet(scene);
+
+        world.init(scene);
+        REQUIRE(world.is_valid());
+
+        world.advance();
+        REQUIRE(world.is_valid());
+        world.retrieve();
+        require_cuda_sync();
+        REQUIRE(fs::exists(dry_run_path));
+
+        std::ifstream ifs{dry_run_path};
+        Json          report = Json::parse(ifs);
+        REQUIRE(report["status"]["reason"].get<std::string>()
+                == "dry_run_no_direction");
+        REQUIRE(report["gates"]["near_band_ratio"].get<double>() == 0.5);
+        REQUIRE(report["gates"]["off_band_ratio"].get<double>() == 0.5);
+        REQUIRE(report["gates"]["min_near_band_ratio"].get<double>() == 0.9);
+        REQUIRE(report["gates"]["max_off_band_ratio"].get<double>() == 0.1);
+        REQUIRE(report["gates"]["min_block_utilization"].get<double>() == 0.65);
     }
 
     SECTION("socu_approx_valid_report_runs_m5_dry_run_32")

@@ -17,17 +17,13 @@ enum class SocuApproxGateReason
     UnsupportedBlockSize,
     SocuMathDxUnsupported,
     SocuRuntimeArtifactUnavailable,
-    OrderingQualityTooLow,
-    ContactOffBandRatioTooHigh,
     StructuredProviderMissing,
     StructuredCoverageInvalid,
     StructuredSubsystemUnsupported,
-    StubNoDirection,
+    DryRunNoDirection,
     DirectionInvalid,
     SocuRuntimeError,
-    M8ContactRuntimeNotSupported,
     LineSearchRejected,
-    StructuredOffBandContribution,
 };
 
 std::string_view to_string(SocuApproxGateReason reason) noexcept;
@@ -90,6 +86,9 @@ struct SocuApproxDryRunReport
     SizeT active_rhs_scalar_count = 0;
     SizeT rhs_scalar_count      = 0;
     double block_utilization    = 0.0;
+    double near_band_ratio = 0.0;
+    double off_band_ratio = 0.0;
+    double off_band_drop_norm_ratio = 0.0;
     double min_block_utilization = 0.0;
     double min_near_band_ratio = 0.0;
     double max_off_band_ratio = 1.0;
@@ -143,7 +142,6 @@ struct SocuApproxDryRunReport
     double direction_min_abs_threshold = 0.0;
     double direction_min_rel_threshold = 0.0;
     std::string rhs_sign_convention = "rhs_is_global_b";
-    std::string pre_factor_matrix_summary;
 
     bool line_search_feedback_available = false;
     bool line_search_accepted = true;

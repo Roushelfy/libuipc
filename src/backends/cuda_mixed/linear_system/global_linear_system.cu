@@ -95,8 +95,6 @@ void GlobalLinearSystem::do_build()
     std::string structured_scope =
         structured_scope_attr ? structured_scope_attr->view()[0]
                               : std::string{"multi_provider"};
-    if(structured_scope == "multi_provider_experimental")
-        structured_scope = "multi_provider";
     m_impl.socu_multi_provider_enabled = structured_scope == "multi_provider";
 }
 

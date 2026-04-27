@@ -17,7 +17,6 @@
 
 #include <cuda_runtime.h>
 #include <fmt/format.h>
-#include <Eigen/Eigenvalues>
 #include <muda/buffer/device_buffer.h>
 #include <muda/launch/parallel_for.h>
 #include <muda/launch/kernel.h>
@@ -35,7 +34,6 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
-#include <limits>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -214,117 +212,6 @@ struct SocuApproxSolver::Runtime
                                                    cudaMemcpyDeviceToDevice,
                                                    stream));
         }
-    }
-
-    std::string matrix_debug_summary(cudaStream_t stream)
-    {
-        std::vector<Scalar> host_diag(layout.diag_element_count);
-        std::vector<Scalar> host_off_diag(layout.off_diag_element_count);
-        const auto          diag_bytes = host_diag.size() * sizeof(Scalar);
-        const auto          off_bytes  = host_off_diag.size() * sizeof(Scalar);
-        if(diag_bytes)
-            SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_diag.data(),
-                                                   device_diag_original.data(),
-                                                   diag_bytes,
-                                                   cudaMemcpyDeviceToHost,
-                                                   stream));
-        if(off_bytes)
-            SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_off_diag.data(),
-                                                   device_off_diag_original.data(),
-                                                   off_bytes,
-                                                   cudaMemcpyDeviceToHost,
-                                                   stream));
-        SOCU_NATIVE_CHECK_CUDA(cudaStreamSynchronize(stream));
-
-        const int total_dof = shape.horizon * shape.n;
-        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(total_dof, total_dof);
-
-        SizeT nonfinite_count = 0;
-        double min_diag = std::numeric_limits<double>::infinity();
-        double max_diag = -std::numeric_limits<double>::infinity();
-        double max_abs = 0.0;
-
-        auto observe = [&](double value)
-        {
-            if(!std::isfinite(value))
-            {
-                ++nonfinite_count;
-                return;
-            }
-            max_abs = std::max(max_abs, std::abs(value));
-        };
-
-        for(int block = 0; block < shape.horizon; ++block)
-        {
-            for(int row = 0; row < shape.n; ++row)
-            {
-                for(int col = 0; col < shape.n; ++col)
-                {
-                    const SizeT index =
-                        (static_cast<SizeT>(block) * shape.n + row) * shape.n + col;
-                    const double value = static_cast<double>(host_diag[index]);
-                    observe(value);
-                    A(block * shape.n + row, block * shape.n + col) = value;
-                    if(row == col && std::isfinite(value))
-                    {
-                        min_diag = std::min(min_diag, value);
-                        max_diag = std::max(max_diag, value);
-                    }
-                }
-            }
-        }
-
-        const SizeT first_offdiag_blocks =
-            shape.horizon > 1 ? static_cast<SizeT>(shape.horizon - 1) : 0;
-        for(SizeT block = 0; block < first_offdiag_blocks; ++block)
-        {
-            for(int row = 0; row < shape.n; ++row)
-            {
-                for(int col = 0; col < shape.n; ++col)
-                {
-                    const SizeT index = (block * shape.n + row) * shape.n + col;
-                    if(index >= host_off_diag.size())
-                        continue;
-                    const double value = static_cast<double>(host_off_diag[index]);
-                    observe(value);
-                    const int lower = static_cast<int>(block + 1) * shape.n + row;
-                    const int upper = static_cast<int>(block) * shape.n + col;
-                    A(lower, upper) = value;
-                    A(upper, lower) = value;
-                }
-            }
-        }
-
-        const double matrix_norm = A.norm();
-        const double symmetry_abs = (A - A.transpose()).norm();
-        const double symmetry_rel = symmetry_abs / std::max(1.0, matrix_norm);
-
-        double min_eigen = std::numeric_limits<double>::quiet_NaN();
-        double max_eigen = std::numeric_limits<double>::quiet_NaN();
-        bool eig_ok = false;
-        if(nonfinite_count == 0)
-        {
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(A, Eigen::EigenvaluesOnly);
-            eig_ok = eig.info() == Eigen::Success;
-            if(eig_ok && eig.eigenvalues().size() > 0)
-            {
-                min_eigen = eig.eigenvalues()(0);
-                max_eigen = eig.eigenvalues()(eig.eigenvalues().size() - 1);
-            }
-        }
-
-        return fmt::format("total_dof={}, nonfinite={}, max_abs={}, min_diag={}, "
-                           "max_diag={}, symmetry_rel={}, eig_ok={}, min_eigen={}, "
-                           "max_eigen={}",
-                           total_dof,
-                           nonfinite_count,
-                           max_abs,
-                           min_diag,
-                           max_diag,
-                           symmetry_rel,
-                           eig_ok,
-                           min_eigen,
-                           max_eigen);
     }
 
   private:
@@ -1864,8 +1751,6 @@ Json to_json(const SocuApproxDryRunReport& report)
     }
 
     return Json{{"solver", "socu_approx"},
-                {"milestone",
-                 report.mode == "structured_strict_solve" ? 7 : 5},
                 {"mode", report.mode},
                 {"packed", report.packed},
                 {"ordering_report", report.ordering_report_path},
@@ -1879,7 +1764,10 @@ Json to_json(const SocuApproxDryRunReport& report)
                 {"padding_slot_count", report.padding_slot_count},
                 {"block_utilization", report.block_utilization},
                 {"gates",
-                 {{"min_block_utilization", report.min_block_utilization},
+                 {{"near_band_ratio", report.near_band_ratio},
+                  {"off_band_ratio", report.off_band_ratio},
+                  {"off_band_drop_norm_ratio", report.off_band_drop_norm_ratio},
+                  {"min_block_utilization", report.min_block_utilization},
                   {"min_near_band_ratio", report.min_near_band_ratio},
                   {"max_off_band_ratio", report.max_off_band_ratio},
                   {"max_off_band_drop_norm_ratio",
@@ -1952,8 +1840,6 @@ Json to_json(const SocuApproxDryRunReport& report)
                   {"direction_min_rel_threshold",
                    report.direction_min_rel_threshold},
                   {"rhs_sign_convention", report.rhs_sign_convention},
-                  {"pre_factor_matrix_summary",
-                   report.pre_factor_matrix_summary},
                   {"debug_validation_enabled", report.debug_validation_enabled},
                   {"report_each_solve", report.report_each_solve}}},
                 {"line_search",
@@ -2001,28 +1887,20 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept
         return "socu_mathdx_unsupported";
     case SocuApproxGateReason::SocuRuntimeArtifactUnavailable:
         return "socu_runtime_artifact_unavailable";
-    case SocuApproxGateReason::OrderingQualityTooLow:
-        return "ordering_quality_too_low";
-    case SocuApproxGateReason::ContactOffBandRatioTooHigh:
-        return "contact_off_band_ratio_too_high";
     case SocuApproxGateReason::StructuredProviderMissing:
         return "structured_provider_missing";
     case SocuApproxGateReason::StructuredCoverageInvalid:
         return "structured_coverage_invalid";
     case SocuApproxGateReason::StructuredSubsystemUnsupported:
         return "structured_subsystem_not_supported";
-    case SocuApproxGateReason::StubNoDirection:
-        return "socu_approx_stub_no_direction";
+    case SocuApproxGateReason::DryRunNoDirection:
+        return "dry_run_no_direction";
     case SocuApproxGateReason::DirectionInvalid:
         return "direction_invalid";
     case SocuApproxGateReason::SocuRuntimeError:
         return "socu_runtime_error";
-    case SocuApproxGateReason::M8ContactRuntimeNotSupported:
-        return "M8_contact_runtime_not_supported";
     case SocuApproxGateReason::LineSearchRejected:
         return "line_search_rejected";
-    case SocuApproxGateReason::StructuredOffBandContribution:
-        return "structured_off_band_contribution";
     }
     return "unknown";
 }
@@ -2078,8 +1956,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     std::string structured_scope =
         structured_scope_attr ? structured_scope_attr->view()[0]
                               : std::string{"multi_provider"};
-    if(structured_scope == "multi_provider_experimental")
-        structured_scope = "multi_provider";
     if(structured_scope != "single_provider"
        && structured_scope != "multi_provider")
     {
@@ -2365,38 +2241,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         min_util_attr ? static_cast<double>(min_util_attr->view()[0]) : 0.65;
     const double max_off_band_drop_norm_ratio =
         max_drop_attr ? static_cast<double>(max_drop_attr->view()[0]) : 0.05;
-    if(m_gate_report.near_band_ratio < min_near_band_ratio
-       || m_gate_report.off_band_ratio > max_off_band_ratio
-       || m_gate_report.off_band_drop_norm_ratio > max_off_band_drop_norm_ratio)
-    {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingQualityTooLow,
-            fmt::format("ordering quality rejected: near_band_ratio={}, off_band_ratio={}, "
-                        "off_band_drop_norm_ratio={}, min_near_band_ratio={}, "
-                        "max_off_band_ratio={}, max_off_band_drop_norm_ratio={}",
-                        m_gate_report.near_band_ratio,
-                        m_gate_report.off_band_ratio,
-                        m_gate_report.off_band_drop_norm_ratio,
-                        min_near_band_ratio,
-                        max_off_band_ratio,
-                        max_off_band_drop_norm_ratio),
-            ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
-    }
-    if(m_gate_report.block_utilization < min_block_utilization)
-    {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingQualityTooLow,
-            fmt::format("ordering block utilization rejected: block_utilization={}, "
-                        "min_block_utilization={}",
-                        m_gate_report.block_utilization,
-                        min_block_utilization),
-            ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
-    }
-
     auto dry_run_report_attr =
         config.find<std::string>("linear_system/socu_approx/dry_run_report");
     std::string dry_run_report =
@@ -2439,6 +2283,10 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_dry_run_report.padding_slot_count = padding_slot_count;
     m_dry_run_report.block_utilization =
         provider->quality_report().block_utilization;
+    m_dry_run_report.near_band_ratio = m_gate_report.near_band_ratio;
+    m_dry_run_report.off_band_ratio = m_gate_report.off_band_ratio;
+    m_dry_run_report.off_band_drop_norm_ratio =
+        m_gate_report.off_band_drop_norm_ratio;
     m_dry_run_report.min_block_utilization = min_block_utilization;
     m_dry_run_report.min_near_band_ratio = min_near_band_ratio;
     m_dry_run_report.max_off_band_ratio = max_off_band_ratio;
@@ -2459,10 +2307,10 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_gate_report.reason = SocuApproxGateReason::None;
     m_gate_report.detail =
         m_mode == "solve"
-            ? fmt::format("strict structured solve gate passed for provider_kind={} scope={}",
+            ? fmt::format("structured band direct solve enabled for provider_kind={} scope={}",
                           m_gate_report.provider_kind,
                           structured_scope)
-            : "M5 structured dry-run gate passed; solve direction is intentionally unavailable";
+            : "structured dry-run gate passed; solve direction is intentionally unavailable";
     m_gate_report.dtype = socu_dtype_name<GlobalLinearSystem::SolveScalar>();
     m_gate_report.coverage_active_dof_count =
         build_coverage.active_dof_count;
@@ -2618,7 +2466,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     logger::info("SocuApproxSolver {} enabled: block_size={}, blocks={}, report='{}'",
                  m_mode == "solve" ? "strict structured solve"
                                     : (m_dry_run_uses_contact_report
-                                           ? "M5 dry-run"
+                                           ? "contact-report dry-run"
                                            : "structured assembly dry-run"),
                  m_dry_run_report.block_size,
                  m_dry_run_report.block_count,
@@ -2636,6 +2484,10 @@ void SocuApproxSolver::prepare_structured_chain(
 #else
     UIPC_ASSERT(m_runtime != nullptr,
                 "SocuApproxSolver structured assembly requires initialized runtime.");
+
+    m_dry_run_report.direction_available = false;
+    m_dry_run_report.status_reason.clear();
+    m_dry_run_report.status_detail.clear();
 
     if(m_mode == "solve")
     {
@@ -2814,25 +2666,16 @@ void SocuApproxSolver::finalize_structured_chain(
 
     if(m_mode == "solve" && info.off_band_contribution_count() > 0)
     {
-        m_gate_report =
-            make_failure(SocuApproxGateReason::StructuredOffBandContribution,
-                         fmt::format("structured assembly generated {} off-band "
-                                     "contribution(s); strict socu_approx solve "
-                                     "only absorbs diagonal and first-offdiagonal "
-                                     "Hessian blocks",
-                                     info.off_band_contribution_count()),
-                         m_gate_report.ordering_report_path);
-        m_gate_report.block_size = m_dry_run_report.block_size;
         m_gate_report.near_band_ratio =
             m_dry_run_report.weighted_near_band_ratio;
         m_gate_report.off_band_ratio =
             m_dry_run_report.weighted_off_band_ratio;
-        m_dry_run_report.direction_available = false;
-        m_dry_run_report.status_reason =
-            std::string{to_string(SocuApproxGateReason::StructuredOffBandContribution)};
+        m_gate_report.detail =
+            fmt::format("structured assembly recorded {} off-band contribution(s); "
+                        "socu_approx continues with the in-band structured matrix "
+                        "(diagonal and first-offdiagonal blocks)",
+                        info.off_band_contribution_count());
         m_dry_run_report.status_detail = m_gate_report.detail;
-        write_dry_run_report(m_dry_run_report);
-        throw_gate_failure(m_gate_report);
     }
 #if UIPC_WITH_SOCU_NATIVE
     UIPC_ASSERT(m_runtime != nullptr,
@@ -3140,14 +2983,14 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
 
         m_dry_run_report.direction_available = false;
         m_dry_run_report.status_reason =
-            std::string{to_string(SocuApproxGateReason::StubNoDirection)};
+            std::string{to_string(SocuApproxGateReason::DryRunNoDirection)};
         m_dry_run_report.status_detail =
             m_dry_run_uses_contact_report
-                ? "M5 structured dry-run pack completed, but no socu solve direction is available"
+                ? "structured contact dry-run completed without a solve direction"
                 : "structured dry-run assembly completed, but no socu solve direction is available";
         write_dry_run_report(m_dry_run_report);
 
-        m_gate_report.reason = SocuApproxGateReason::StubNoDirection;
+        m_gate_report.reason = SocuApproxGateReason::DryRunNoDirection;
         m_gate_report.detail = m_dry_run_report.status_detail;
         info.x().buffer_view().fill(static_cast<SolveScalar>(0));
         info.iter_count(0);
@@ -3196,13 +3039,6 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
 
     try
     {
-        if(m_debug_validation)
-        {
-            m_dry_run_report.pre_factor_matrix_summary =
-                m_runtime->matrix_debug_summary(stream);
-            logger::info("SocuApproxSolver matrix pre-factor stats: {}",
-                         m_dry_run_report.pre_factor_matrix_summary);
-        }
         m_dry_run_report.plan_created_this_solve =
             m_runtime->factor_and_solve(stream);
         if(m_debug_timing)
@@ -3259,10 +3095,13 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
 
     m_dry_run_report.direction_available = true;
     m_dry_run_report.status_reason = std::string{to_string(SocuApproxGateReason::None)};
-    m_dry_run_report.status_detail =
-        fmt::format("strict structured direction solved and scattered: provider={}, scope={}",
-                    m_dry_run_report.provider_kind,
-                    m_dry_run_report.structured_scope);
+    if(m_dry_run_report.status_detail.empty())
+    {
+        m_dry_run_report.status_detail =
+            fmt::format("structured band direction solved and scattered: provider={}, scope={}",
+                        m_dry_run_report.provider_kind,
+                        m_dry_run_report.structured_scope);
+    }
     m_gate_report.reason = SocuApproxGateReason::None;
     m_gate_report.detail = m_dry_run_report.status_detail;
     if(m_report_each_solve || m_debug_validation || m_debug_timing)
