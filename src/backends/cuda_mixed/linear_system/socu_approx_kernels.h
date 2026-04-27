@@ -18,6 +18,25 @@
 namespace uipc::backend::cuda_mixed::socu_approx
 {
 #if UIPC_WITH_SOCU_NATIVE
+MUDA_DEVICE __forceinline__ void atomic_add_double(double* address,
+                                                   double  value) noexcept
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
+    auto address_as_ull = reinterpret_cast<unsigned long long int*>(address);
+    auto old            = *address_as_ull;
+    unsigned long long int assumed;
+    do
+    {
+        assumed = old;
+        old = atomicCAS(address_as_ull,
+                        assumed,
+                        __double_as_longlong(value + __longlong_as_double(assumed)));
+    } while(assumed != old);
+#else
+    atomicAdd(address, value);
+#endif
+}
+
 template <typename StoreScalar, typename SolveScalar>
 void initialize_structured_workspace(
     cudaStream_t                         stream,
@@ -108,21 +127,21 @@ void validate_structured_direction_light(cudaStream_t                  stream,
                    const double x_i   = static_cast<double>(x(chain));
                    if(!isfinite(rhs_i))
                    {
-                       muda::atomic_add(sums.data() + 3, 1.0);
-                       muda::atomic_add(sums.data() + 4, 1.0);
+                       atomic_add_double(sums.data() + 3, 1.0);
+                       atomic_add_double(sums.data() + 4, 1.0);
                        return;
                    }
 
-                   muda::atomic_add(sums.data() + 0, rhs_i * rhs_i);
+                   atomic_add_double(sums.data() + 0, rhs_i * rhs_i);
 
                    if(!isfinite(x_i))
                    {
-                       muda::atomic_add(sums.data() + 4, 1.0);
+                       atomic_add_double(sums.data() + 4, 1.0);
                        return;
                    }
 
-                   muda::atomic_add(sums.data() + 1, x_i * x_i);
-                   muda::atomic_add(sums.data() + 2, rhs_i * x_i);
+                   atomic_add_double(sums.data() + 1, x_i * x_i);
+                   atomic_add_double(sums.data() + 2, rhs_i * x_i);
                });
 }
 
@@ -200,10 +219,10 @@ void validate_structured_direction(cudaStream_t                  stream,
                    const double rhs_i = static_cast<double>(rhs(chain));
                    const double x_i   = static_cast<double>(x(chain));
                    const double res   = Ax - rhs_i;
-                   muda::atomic_add(sums.data() + 0, rhs_i * rhs_i);
-                   muda::atomic_add(sums.data() + 1, x_i * x_i);
-                   muda::atomic_add(sums.data() + 2, rhs_i * x_i);
-                   muda::atomic_add(sums.data() + 3, res * res);
+                   atomic_add_double(sums.data() + 0, rhs_i * rhs_i);
+                   atomic_add_double(sums.data() + 1, x_i * x_i);
+                   atomic_add_double(sums.data() + 2, rhs_i * x_i);
+                   atomic_add_double(sums.data() + 3, res * res);
                });
 }
 

@@ -104,6 +104,60 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_timing = debug_timing_attr && debug_timing_attr->view()[0] != 0;
     m_report_each_solve =
         report_each_solve_attr && report_each_solve_attr->view()[0] != 0;
+    m_report_counters_enabled =
+        m_report_each_solve || m_debug_validation || m_debug_timing;
+
+    auto damping_attr =
+        config.find<Float>("linear_system/socu_approx/damping_shift");
+    auto descent_eta_attr =
+        config.find<Float>("linear_system/socu_approx/descent_eta");
+    auto max_relative_residual_attr =
+        config.find<Float>("linear_system/socu_approx/max_relative_residual");
+    auto p_min_abs_attr =
+        config.find<Float>("linear_system/socu_approx/p_min_abs");
+    auto p_min_rel_attr =
+        config.find<Float>("linear_system/socu_approx/p_min_rel");
+    auto rhs_zero_abs_attr =
+        config.find<Float>("linear_system/socu_approx/rhs_zero_abs");
+    auto reject_streak_attr =
+        config.find<IndexT>("linear_system/socu_approx/max_line_search_reject_streak");
+
+    using SolveScalar = GlobalLinearSystem::SolveScalar;
+    const double p_min_abs_default =
+        sizeof(SolveScalar) == sizeof(float) ? 1e-10 : 1e-14;
+    const double rhs_zero_abs_default =
+        sizeof(SolveScalar) == sizeof(float) ? 1e-7 : 1e-12;
+    const double configured_p_min_abs =
+        p_min_abs_attr ? static_cast<double>(p_min_abs_attr->view()[0])
+                       : p_min_abs_default;
+    const double configured_rhs_zero_abs =
+        rhs_zero_abs_attr ? static_cast<double>(rhs_zero_abs_attr->view()[0])
+                          : rhs_zero_abs_default;
+
+    m_damping_shift =
+        damping_attr ? static_cast<double>(damping_attr->view()[0]) : 1e-6;
+    m_descent_eta =
+        descent_eta_attr ? static_cast<double>(descent_eta_attr->view()[0]) : 1e-8;
+    m_max_relative_residual =
+        max_relative_residual_attr
+            ? static_cast<double>(max_relative_residual_attr->view()[0])
+            : 1e-4;
+    m_direction_min_abs =
+        configured_p_min_abs > 0.0 ? configured_p_min_abs : p_min_abs_default;
+    m_direction_min_rel =
+        p_min_rel_attr ? static_cast<double>(p_min_rel_attr->view()[0]) : 1e-12;
+    m_rhs_zero_abs =
+        configured_rhs_zero_abs > 0.0 ? configured_rhs_zero_abs
+                                      : rhs_zero_abs_default;
+    m_max_line_search_reject_streak =
+        reject_streak_attr ? reject_streak_attr->view()[0] : 1;
+    if(m_damping_shift < 0.0)
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::DirectionInvalid,
+            "linear_system/socu_approx/damping_shift must be non-negative");
+        throw_gate_failure(m_gate_report);
+    }
 
     auto structured_scope_attr =
         config.find<std::string>("linear_system/socu_approx/structured_scope");
@@ -400,6 +454,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_report.debug_validation_enabled = m_debug_validation;
     m_report.debug_timing_enabled = m_debug_timing;
     m_report.report_each_solve = m_report_each_solve;
+    m_report.damping_shift = m_damping_shift;
+    m_report.direction_min_abs_threshold = m_direction_min_abs;
+    m_report.direction_min_rel_threshold = m_direction_min_rel;
     m_report.coverage_active_dof_count =
         build_coverage.active_dof_count;
     m_report.coverage_padding_dof_count =
@@ -517,7 +574,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     try
     {
         m_runtime = std::make_unique<Runtime>(shape, options);
-        m_runtime->reserve(m_debug_validation, true);
+        m_runtime->reserve(m_debug_validation, m_report_counters_enabled);
         m_runtime->upload_mappings_once(m_host_old_to_chain, m_host_chain_to_old);
         m_runtime->create_plan();
     }
@@ -556,20 +613,16 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.status_reason.clear();
     m_report.status_detail.clear();
 
-    auto reject_streak_attr =
-        world().scene().config().find<IndexT>(
-            "linear_system/socu_approx/max_line_search_reject_streak");
-    const IndexT reject_streak_threshold =
-        reject_streak_attr ? reject_streak_attr->view()[0] : 1;
-    if(reject_streak_threshold > 0
-       && static_cast<IndexT>(m_line_search_reject_streak) >= reject_streak_threshold)
+    if(m_max_line_search_reject_streak > 0
+       && static_cast<IndexT>(m_line_search_reject_streak)
+              >= m_max_line_search_reject_streak)
     {
         m_gate_report = make_failure(
             SocuApproxGateReason::LineSearchRejected,
             fmt::format("previous socu_approx direction hit line-search max_iter "
                         "{} consecutive time(s); threshold={}",
                         m_line_search_reject_streak,
-                        reject_streak_threshold),
+                        m_max_line_search_reject_streak),
             m_gate_report.ordering_report_path);
         m_gate_report.block_size = m_report.block_size;
         m_report.status_reason =
@@ -607,23 +660,10 @@ void SocuApproxSolver::prepare_structured_chain(
     m_gate_report.complete_dof_coverage = true;
     m_report.complete_dof_coverage = true;
 
-    auto damping_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/damping_shift");
-    m_report.damping_shift =
-        damping_attr ? static_cast<double>(damping_attr->view()[0]) : 1e-6;
-    if(m_report.damping_shift < 0.0)
-    {
-        m_report.status_reason =
-            std::string{to_string(SocuApproxGateReason::DirectionInvalid)};
-        m_report.status_detail =
-            "linear_system/socu_approx/damping_shift must be non-negative";
-        write_solve_report(m_report);
-        throw Exception{fmt::format("SocuApproxSolver direction invalid: {}",
-                                    m_report.status_detail)};
-    }
+    m_report.damping_shift = m_damping_shift;
 
     const cudaStream_t stream = system().stream();
-    if(m_runtime->report_counters.size() == 5)
+    if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         muda::BufferLaunch(stream).fill<IndexT>(m_runtime->report_counters.view(), 0);
 
     initialize_structured_workspace<GlobalLinearSystem::StoreScalar, Runtime::Scalar>(
@@ -652,7 +692,7 @@ void SocuApproxSolver::prepare_structured_chain(
         m_runtime->device_old_to_chain.view(),
         m_runtime->device_chain_to_old.view(),
         stream);
-    if(m_runtime->report_counters.size() == 5)
+    if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         info.set_contact_counters(m_runtime->report_counters.view());
 
     m_report.packed = true;
@@ -772,7 +812,6 @@ void SocuApproxSolver::notify_line_search_result(
 void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
 {
 #if UIPC_WITH_SOCU_NATIVE
-    using SolveScalar = GlobalLinearSystem::SolveScalar;
     UIPC_ASSERT(m_runtime != nullptr,
                 "SocuApproxSolver solve mode requires initialized runtime.");
 
@@ -794,43 +833,16 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
     m_report.descent_dot = -validation_sums[2];
     m_report.rhs_sign_convention = "rhs_is_global_b";
 
-    auto eta_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/descent_eta");
-    auto p_min_abs_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/p_min_abs");
-    auto p_min_rel_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/p_min_rel");
-    auto rhs_zero_abs_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/rhs_zero_abs");
-    const double descent_eta =
-        eta_attr ? static_cast<double>(eta_attr->view()[0]) : 1e-8;
-    const double p_min_abs_default =
-        sizeof(SolveScalar) == sizeof(float) ? 1e-10 : 1e-14;
-    const double configured_p_min_abs =
-        p_min_abs_attr ? static_cast<double>(p_min_abs_attr->view()[0])
-                       : p_min_abs_default;
-    const double p_min_abs =
-        configured_p_min_abs > 0.0 ? configured_p_min_abs : p_min_abs_default;
-    const double p_min_rel =
-        p_min_rel_attr ? static_cast<double>(p_min_rel_attr->view()[0]) : 1e-12;
-    const double rhs_zero_abs_default =
-        sizeof(SolveScalar) == sizeof(float) ? 1e-7 : 1e-12;
-    const double configured_rhs_zero_abs =
-        rhs_zero_abs_attr ? static_cast<double>(rhs_zero_abs_attr->view()[0])
-                          : rhs_zero_abs_default;
-    const double rhs_zero_abs =
-        configured_rhs_zero_abs > 0.0 ? configured_rhs_zero_abs
-                                      : rhs_zero_abs_default;
-    m_report.direction_min_abs_threshold = p_min_abs;
-    m_report.direction_min_rel_threshold = p_min_rel;
+    m_report.direction_min_abs_threshold = m_direction_min_abs;
+    m_report.direction_min_rel_threshold = m_direction_min_rel;
 
     const double p_threshold =
-        std::max(p_min_abs, p_min_rel * m_report.gradient_norm);
+        std::max(m_direction_min_abs, m_direction_min_rel * m_report.gradient_norm);
     const bool rhs_finite =
         validation_sums[3] == 0.0
         && std::isfinite(m_report.gradient_norm);
     const bool zero_rhs = rhs_finite
-        && m_report.gradient_norm <= rhs_zero_abs;
+        && m_report.gradient_norm <= m_rhs_zero_abs;
     if(zero_rhs)
     {
         const auto rhs_bytes =
@@ -853,7 +865,7 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
         && m_report.direction_norm > p_threshold;
     const bool descent =
         m_report.descent_dot
-        < -descent_eta * m_report.gradient_norm
+        < -m_descent_eta * m_report.gradient_norm
                * m_report.direction_norm;
     if(!finite || !nonzero || !descent)
     {
@@ -884,7 +896,6 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
 void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
 {
 #if UIPC_WITH_SOCU_NATIVE
-    using SolveScalar = GlobalLinearSystem::SolveScalar;
     UIPC_ASSERT(m_runtime != nullptr,
                 "SocuApproxSolver solve mode requires initialized runtime.");
 
@@ -911,43 +922,12 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
         m_report.surrogate_residual
         / std::max(1.0, m_report.gradient_norm);
 
-    auto eta_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/descent_eta");
-    auto residual_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/max_relative_residual");
-    auto p_min_abs_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/p_min_abs");
-    auto p_min_rel_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/p_min_rel");
-    auto rhs_zero_abs_attr =
-        world().scene().config().find<Float>("linear_system/socu_approx/rhs_zero_abs");
-    const double descent_eta =
-        eta_attr ? static_cast<double>(eta_attr->view()[0]) : 1e-8;
-    const double max_relative_residual =
-        residual_attr ? static_cast<double>(residual_attr->view()[0]) : 1e-3;
-    const double p_min_abs_default =
-        sizeof(SolveScalar) == sizeof(float) ? 1e-10 : 1e-14;
-    const double configured_p_min_abs =
-        p_min_abs_attr ? static_cast<double>(p_min_abs_attr->view()[0])
-                       : p_min_abs_default;
-    const double p_min_abs =
-        configured_p_min_abs > 0.0 ? configured_p_min_abs : p_min_abs_default;
-    const double p_min_rel =
-        p_min_rel_attr ? static_cast<double>(p_min_rel_attr->view()[0]) : 1e-12;
-    const double rhs_zero_abs_default =
-        sizeof(SolveScalar) == sizeof(float) ? 1e-7 : 1e-12;
-    const double configured_rhs_zero_abs =
-        rhs_zero_abs_attr ? static_cast<double>(rhs_zero_abs_attr->view()[0])
-                          : rhs_zero_abs_default;
-    const double rhs_zero_abs =
-        configured_rhs_zero_abs > 0.0 ? configured_rhs_zero_abs
-                                      : rhs_zero_abs_default;
-    m_report.direction_min_abs_threshold = p_min_abs;
-    m_report.direction_min_rel_threshold = p_min_rel;
+    m_report.direction_min_abs_threshold = m_direction_min_abs;
+    m_report.direction_min_rel_threshold = m_direction_min_rel;
     m_report.rhs_sign_convention = "rhs_is_global_b";
 
     const double p_threshold =
-        std::max(p_min_abs, p_min_rel * m_report.gradient_norm);
+        std::max(m_direction_min_abs, m_direction_min_rel * m_report.gradient_norm);
     const bool finite =
         std::isfinite(m_report.surrogate_residual)
         && std::isfinite(m_report.surrogate_relative_residual)
@@ -959,13 +939,13 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
         && m_report.direction_norm > p_threshold;
     const bool descent =
         m_report.descent_dot
-        < -descent_eta * m_report.gradient_norm
+        < -m_descent_eta * m_report.gradient_norm
                * m_report.direction_norm;
     const bool residual_ok =
-        m_report.surrogate_relative_residual <= max_relative_residual;
+        m_report.surrogate_relative_residual <= m_max_relative_residual;
     const bool zero_rhs_converged =
         finite
-        && m_report.gradient_norm <= rhs_zero_abs
+        && m_report.gradient_norm <= m_rhs_zero_abs
         && m_report.direction_norm <= p_threshold
         && residual_ok;
 
@@ -987,7 +967,7 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
                         m_report.direction_norm,
                         p_threshold,
                         m_report.surrogate_relative_residual,
-                        max_relative_residual);
+                        m_max_relative_residual);
         write_solve_report(m_report);
         throw Exception{fmt::format("SocuApproxSolver direction invalid: {}",
                                     m_report.status_detail)};
