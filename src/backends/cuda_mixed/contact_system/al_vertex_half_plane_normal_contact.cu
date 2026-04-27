@@ -147,6 +147,58 @@ void ALVertexHalfPlaneNormalContact::Impl::do_assemble(GlobalContactManager::Gra
                });
 }
 
+void ALVertexHalfPlaneNormalContact::Impl::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    using namespace muda;
+    using namespace sym::al_vertex_half_plane_contact;
+    using Alu   = ActivePolicy::AluScalar;
+    using Vec3A = Eigen::Matrix<Alu, 3, 1>;
+    using Mat3A = Eigen::Matrix<Alu, 3, 3>;
+    auto& active_set = global_active_set_manager;
+
+    if(!active_set->is_enabled())
+        return;
+
+    auto PH_size = active_set->PHs().size();
+    auto x       = global_vertex_manager->positions();
+    auto PHs     = active_set->PHs();
+    auto PH_d0   = active_set->PH_d0();
+    auto PH_cnt  = active_set->PH_cnt();
+    auto PH_d_grad = active_set->PH_d_grad();
+    auto structured_sink = info.contact_sink();
+
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(PH_size,
+               [mu_v   = active_set->mu_vertices().cviewer().name("mu_v"),
+                decay  = active_set->decay_factor(),
+                PHs    = PHs.cviewer().name("PHs"),
+                cnt    = PH_cnt.cviewer().name("cnt"),
+                d0     = PH_d0.cviewer().name("d0"),
+                d_grad = PH_d_grad.cviewer().name("d_grad"),
+                x      = x.cviewer().name("x"),
+                structured_sink] __device__(int idx) mutable
+               {
+                   auto  vI   = PHs(idx);
+                   Alu   mu   = safe_cast<Alu>(mu_v(vI));
+                   Vec3A grad = d_grad(idx).template cast<Alu>();
+                   Vec3A pos  = x(vI).template cast<Alu>();
+                   Vec3A G;
+                   Mat3A H;
+                   auto c = cnt(idx) >= 0 ? cnt(idx) : max(-cnt(idx) - 6, 0);
+                   half_plane_penalty_gradient_hessian(
+                       safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu,
+                       safe_cast<Alu>(d0(idx)),
+                       grad,
+                       pos,
+                       G,
+                       H);
+
+                   structured_sink.write_hessian(vI, H);
+               });
+}
+
 void ALVertexHalfPlaneNormalContact::do_compute_energy(GlobalContactManager::EnergyInfo& info)
 {
     m_impl.do_compute_energy(info);
@@ -155,6 +207,17 @@ void ALVertexHalfPlaneNormalContact::do_compute_energy(GlobalContactManager::Ene
 void ALVertexHalfPlaneNormalContact::do_assemble(GlobalContactManager::GradientHessianInfo& info)
 {
     m_impl.do_assemble(info);
+}
+
+bool ALVertexHalfPlaneNormalContact::do_supports_structured_hessian() const
+{
+    return true;
+}
+
+void ALVertexHalfPlaneNormalContact::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    m_impl.do_assemble_structured_hessian(info);
 }
 
 REGISTER_SIM_SYSTEM(ALVertexHalfPlaneNormalContact);

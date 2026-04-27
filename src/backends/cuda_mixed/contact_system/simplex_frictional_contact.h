@@ -3,6 +3,7 @@
 #include <line_search/line_searcher.h>
 #include <contact_system/contact_coeff.h>
 #include <collision_detection/simplex_trajectory_filter.h>
+#include <utils/structured_contact_assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -63,6 +64,9 @@ class SimplexFrictionalContact : public ContactReporter
         auto friction_PP_gradients() const noexcept { return m_PP_gradients; }
         auto friction_PP_hessians() const noexcept { return m_PP_hessians; }
         bool gradient_only() const noexcept { return m_gradient_only; }
+        bool hessian_only() const noexcept { return m_hessian_only; }
+        bool structured_hessian() const noexcept { return m_structured_hessian; }
+        auto structured_hessian_sink() const noexcept { return m_structured_sink; }
 
       private:
         friend class SimplexFrictionalContact;
@@ -78,6 +82,9 @@ class SimplexFrictionalContact : public ContactReporter
         muda::DoubletVectorView<StoreScalar, 3> m_PP_gradients;
         muda::TripletMatrixView<StoreScalar, 3> m_PP_hessians;
         bool                              m_gradient_only = false;
+        bool                              m_hessian_only = false;
+        bool                              m_structured_hessian = false;
+        StructuredContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar> m_structured_sink;
     };
 
 
@@ -182,9 +189,11 @@ class SimplexFrictionalContact : public ContactReporter
     virtual void do_report_gradient_hessian_extent(
         GlobalContactManager::GradientHessianExtentInfo& info) override final;
     virtual void do_assemble(GlobalContactManager::GradientHessianInfo& info) override final;
+    virtual bool do_supports_structured_hessian() const override final;
+    virtual void do_assemble_structured_hessian(
+        GlobalDyTopoEffectManager::StructuredHessianInfo& info) override final;
     virtual void do_build(ContactReporter::BuildInfo& info) override final;
 
     Impl m_impl;
 };
 }  // namespace uipc::backend::cuda_mixed
-

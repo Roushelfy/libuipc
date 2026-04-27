@@ -187,7 +187,8 @@ class GlobalLinearSystem : public SimSystem
                 m_first_offdiag,
                 m_old_to_chain,
                 m_shape.horizon,
-                m_shape.block_size};
+                m_shape.block_size,
+                m_contact_counters};
         }
 
         void set_workspace(StructuredChainShape       shape,
@@ -489,7 +490,7 @@ class GlobalLinearSystem : public SimSystem
         MatrixConverter<StoreScalar, 3> converter;
 
         bool empty_system = true;
-        bool socu_multi_provider_experimental = false;
+        bool socu_multi_provider_enabled = false;
 
         void apply_preconditioner(PcgDenseVectorView z,
                                   CPcgDenseVectorView r,

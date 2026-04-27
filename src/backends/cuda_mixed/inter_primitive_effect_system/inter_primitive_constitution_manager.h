@@ -14,6 +14,8 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
     using DyTopoEffectReporter::DyTopoEffectReporter;
     using StoreScalar = GlobalDyTopoEffectManager::StoreScalar;
     using EnergyScalar = GlobalDyTopoEffectManager::EnergyScalar;
+    using StructuredSink =
+        GlobalDyTopoEffectManager::StructuredHessianInfo::ContactSink;
 
     class Impl;
 
@@ -123,6 +125,25 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
         bool                              m_gradient_only = false;
     };
 
+    class StructuredHessianInfo : public BaseInfo
+    {
+      public:
+        StructuredHessianInfo(Impl*          impl,
+                              IndexT         index,
+                              Float          dt,
+                              StructuredSink sink)
+            : BaseInfo(impl, index, dt)
+            , m_sink(sink)
+        {
+        }
+
+        StructuredSink structured_sink() const noexcept;
+
+      private:
+        friend class InterPrimitiveConstitutionManager;
+        StructuredSink m_sink;
+    };
+
     class GradientHessianExtentInfo
     {
       public:
@@ -154,6 +175,8 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
         void init(SceneVisitor& scene);
         void compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info);
         void compute_gradient_hessian(GlobalDyTopoEffectManager::GradientHessianInfo& info);
+        void compute_structured_hessian(
+            GlobalDyTopoEffectManager::StructuredHessianInfo& info);
 
         Float dt = 0.0;
 
@@ -182,6 +205,9 @@ class InterPrimitiveConstitutionManager final : public DyTopoEffectReporter
     void do_report_gradient_hessian_extent(
         GlobalDyTopoEffectManager::GradientHessianExtentInfo& info) override final;
     void do_assemble(GlobalDyTopoEffectManager::GradientHessianInfo& info) override;
+    bool do_supports_structured_hessian() const override final;
+    void do_assemble_structured_hessian(
+        GlobalDyTopoEffectManager::StructuredHessianInfo& info) override final;
     void do_compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info) override;
 
     virtual EnergyComponentFlags component_flags() override final

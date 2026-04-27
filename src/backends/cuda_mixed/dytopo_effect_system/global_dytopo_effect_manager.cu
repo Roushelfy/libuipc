@@ -138,19 +138,10 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
         if(!has_flags(info.m_component_flags, reporter->component_flags()))
             continue;
 
-        if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian
-           && reporter->component_flags() != EnergyComponentFlags::Contact)
-        {
-            throw SimSystemException{fmt::format(
-                "structured_dytopo_reporter_not_supported: reporter '{}' is not contact; "
-                "socu_approx M8 currently accepts only runtime contact in "
-                "GradientStructuredHessian assembly",
-                reporter->name())};
-        }
         if(structured_hessian_direct && !reporter->supports_structured_hessian())
         {
             throw SimSystemException{fmt::format(
-                "structured_contact_reporter_not_supported: reporter '{}' does not "
+                "structured_dytopo_reporter_not_supported: reporter '{}' does not "
                 "support direct StructuredAssemblySink Hessian writes",
                 reporter->name())};
         }
@@ -489,7 +480,7 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
 void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     GlobalLinearSystem::StructuredAssemblyInfo& structured_info)
 {
-    if(contact_reporters.view().empty())
+    if(dytopo_effect_reporters.view().empty())
         return;
 
     StructuredHessianInfo info;
@@ -526,12 +517,12 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             finite_element_method->is_fixed();
     }
 
-    for(auto&& reporter : contact_reporters.view())
+    for(auto&& reporter : dytopo_effect_reporters.view())
     {
         if(!reporter->supports_structured_hessian())
         {
             throw SimSystemException{fmt::format(
-                "structured_contact_reporter_not_supported: reporter '{}' does not "
+                "structured_dytopo_reporter_not_supported: reporter '{}' does not "
                 "support direct StructuredAssemblySink Hessian writes",
                 reporter->name())};
         }

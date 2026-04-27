@@ -128,6 +128,18 @@ void InterPrimitiveConstitutionManager::Impl::compute_gradient_hessian(
     }
 }
 
+void InterPrimitiveConstitutionManager::Impl::compute_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    auto constitution_view = constitutions.view();
+    for(auto&& [i, c] : enumerate(constitution_view))
+    {
+        StructuredHessianInfo this_info{
+            this, c->m_index, dt, info.contact_sink()};
+        c->compute_structured_hessian(this_info);
+    }
+}
+
 void InterPrimitiveConstitutionManager::do_init(DyTopoEffectReporter::InitInfo& info)
 {
     auto scene = world().scene();
@@ -178,6 +190,22 @@ void InterPrimitiveConstitutionManager::do_assemble(GlobalDyTopoEffectManager::G
     m_impl.compute_gradient_hessian(info);
 }
 
+bool InterPrimitiveConstitutionManager::do_supports_structured_hessian() const
+{
+    for(auto&& constitution : m_impl.constitutions.view())
+    {
+        if(!constitution->supports_structured_hessian())
+            return false;
+    }
+    return true;
+}
+
+void InterPrimitiveConstitutionManager::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    m_impl.compute_structured_hessian(info);
+}
+
 void InterPrimitiveConstitutionManager::do_compute_energy(GlobalDyTopoEffectManager::EnergyInfo& info)
 {
     m_impl.compute_energy(info);
@@ -224,6 +252,12 @@ InterPrimitiveConstitutionManager::GradientHessianInfo::hessians() const noexcep
 bool InterPrimitiveConstitutionManager::GradientHessianInfo::gradient_only() const noexcept
 {
     return m_gradient_only;
+}
+
+InterPrimitiveConstitutionManager::StructuredSink
+InterPrimitiveConstitutionManager::StructuredHessianInfo::structured_sink() const noexcept
+{
+    return m_sink;
 }
 
 span<const InterPrimitiveConstitutionManager::InterGeoInfo> InterPrimitiveConstitutionManager::FilteredInfo::inter_geo_infos() const noexcept

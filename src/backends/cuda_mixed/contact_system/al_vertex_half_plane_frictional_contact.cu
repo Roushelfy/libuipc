@@ -177,6 +177,69 @@ void ALVertexHalfPlaneFrictionalContact::Impl::do_assemble(GlobalContactManager:
                });
 }
 
+void ALVertexHalfPlaneFrictionalContact::Impl::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    using namespace muda;
+    using namespace sym::al_vertex_half_plane_contact;
+    using Alu   = ActivePolicy::AluScalar;
+    using Vec3A = Eigen::Matrix<Alu, 3, 1>;
+    using Mat3A = Eigen::Matrix<Alu, 3, 3>;
+    auto& active_set = global_active_set_manager;
+
+    if(!active_set->is_enabled())
+        return;
+
+    auto PH_size = active_set->PHs_friction().size();
+    auto x       = global_vertex_manager->positions();
+    auto prev_x  = global_vertex_manager->prev_positions();
+    auto PHs     = active_set->PHs_friction();
+    auto PH_lambda = active_set->PH_lambda_friction();
+    auto structured_sink = info.contact_sink();
+
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(PH_size,
+               [table = global_contact_manager->contact_tabular().cviewer().name("contact_tabular"),
+                contact_ids =
+                    global_vertex_manager->contact_element_ids().cviewer().name("contact_element_ids"),
+                half_plane_vertex_offset = half_plane_vertex_reporter->vertex_offset(),
+                eps_v  = global_contact_manager->eps_velocity(),
+                dt     = dt,
+                PHs    = PHs.cviewer().name("PHs"),
+                lambda = PH_lambda.cviewer().name("lambda"),
+                x      = x.cviewer().name("x"),
+                prev_x = prev_x.cviewer().name("prev_x"),
+                plane_normals = half_plane->normals().viewer().name("plane_normals"),
+                structured_sink] __device__(int idx) mutable
+               {
+                   auto vI = PHs(idx)(0), HI = PHs(idx)(1);
+
+                   ContactCoeff coeff =
+                       table(contact_ids(vI), contact_ids(HI + half_plane_vertex_offset));
+                   Alu mu = safe_cast<Alu>(coeff.mu);
+
+                   auto normal_force = safe_cast<Alu>(lambda(idx));
+                   Vec3A v           = x(vI).template cast<Alu>();
+                   Vec3A prev_v      = prev_x(vI).template cast<Alu>();
+                   Vec3A normal      = plane_normals(HI).template cast<Alu>();
+
+                   Vec3A G;
+                   Mat3A H;
+                   half_plane_frictional_gradient_hessian(
+                       G,
+                       H,
+                       mu,
+                       safe_cast<Alu>(eps_v * dt),
+                       normal_force,
+                       v,
+                       prev_v,
+                       normal);
+
+                   structured_sink.write_hessian(vI, H);
+               });
+}
+
 void ALVertexHalfPlaneFrictionalContact::do_compute_energy(GlobalContactManager::EnergyInfo& info)
 {
     m_impl.do_compute_energy(info);
@@ -185,6 +248,17 @@ void ALVertexHalfPlaneFrictionalContact::do_compute_energy(GlobalContactManager:
 void ALVertexHalfPlaneFrictionalContact::do_assemble(GlobalContactManager::GradientHessianInfo& info)
 {
     m_impl.do_assemble(info);
+}
+
+bool ALVertexHalfPlaneFrictionalContact::do_supports_structured_hessian() const
+{
+    return true;
+}
+
+void ALVertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    m_impl.do_assemble_structured_hessian(info);
 }
 
 REGISTER_SIM_SYSTEM(ALVertexHalfPlaneFrictionalContact);

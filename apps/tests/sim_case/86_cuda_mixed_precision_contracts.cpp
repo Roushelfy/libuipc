@@ -243,6 +243,50 @@ void build_multi_abd_tets(Scene& scene, SizeT body_count)
     obj->geometries().create(tet);
 }
 
+void build_soft_vertex_triangle_stitch_scene(Scene& scene)
+{
+    Empty    empty;
+    Particle particle;
+
+    Float Y = 1.0;
+    vector<Vector3> vert_pos = {{0.25, Y - 0.5, 0.25},
+                                {0.5, Y - 0.3, 0.1},
+                                {0.1, Y - 0.4, 0.5},
+                                {0.3, Y, 0.3}};
+    auto vertex_mesh = pointcloud(vert_pos);
+    particle.apply_to(vertex_mesh);
+    label_surface(vertex_mesh);
+
+    vector<Vector3>  tri_pos = {{0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}, {0.0, 1.0, 1.0}};
+    vector<Vector3i> tri_faces = {{0, 1, 2}};
+    auto             triangle_mesh = trimesh(tri_pos, tri_faces);
+    empty.apply_to(triangle_mesh);
+    label_surface(triangle_mesh);
+    auto is_fixed = triangle_mesh.vertices().find<IndexT>(builtin::is_fixed);
+    std::ranges::fill(view(*is_fixed), 1);
+
+    auto vert_obj = scene.objects().create("vertex_provider");
+    auto [vert_geo_slot, vert_rest_slot] =
+        vert_obj->geometries().create(vertex_mesh);
+
+    auto tri_obj = scene.objects().create("triangle_provider");
+    auto [tri_geo_slot, tri_rest_slot] =
+        tri_obj->geometries().create(triangle_mesh);
+
+    auto pairs_geo = closest_vertex_triangle_pairs(vertex_mesh, triangle_mesh, 1.0);
+    REQUIRE(pairs_geo.instances().size() == 4);
+
+    SoftVertexTriangleStitch stitch;
+    auto stitch_geo = stitch.create_geometry({vert_geo_slot, tri_geo_slot},
+                                             {vert_rest_slot, tri_rest_slot},
+                                             pairs_geo,
+                                             ElasticModuli::youngs_poisson(120.0_kPa, 0.49),
+                                             0.1);
+
+    auto stitch_obj = scene.objects().create("stitch");
+    stitch_obj->geometries().create(stitch_geo);
+}
+
 Json linear_solver_selection_config()
 {
     auto config                 = test::Scene::default_config();
@@ -706,6 +750,60 @@ void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
     CHECK(report["timing"]["dry_run_pack_time_ms"].get<double>() >= 0.0);
 }
 
+void require_socu_approx_inter_primitive_structured_dry_run(std::string_view name)
+{
+    auto config                       = linear_solver_selection_config();
+    config["linear_system"]["solver"] = "socu_approx";
+    config["linear_system"]["socu_approx"]["mode"] = "dry_run";
+    config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
+    config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
+    config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
+    config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
+    config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.0;
+    config["linear_system"]["socu_approx"]["max_off_band_ratio"] = 1.0;
+    config["linear_system"]["socu_approx"]["max_off_band_drop_norm_ratio"] = 1.0;
+
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    auto ordering_path = output_path / "generated_ordering.json";
+    auto dry_run_path  = output_path / "dry_run.json";
+    config["linear_system"]["socu_approx"]["generated_ordering_report"] =
+        ordering_path.string();
+    config["linear_system"]["socu_approx"]["dry_run_report"] =
+        dry_run_path.string();
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_soft_vertex_triangle_stitch_scene(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+    REQUIRE(fs::exists(ordering_path));
+
+    world.advance();
+    REQUIRE(world.is_valid());
+    world.retrieve();
+    require_cuda_sync();
+    REQUIRE(fs::exists(dry_run_path));
+
+    std::ifstream ifs{dry_run_path};
+    Json          report = Json::parse(ifs);
+    REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
+    REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
+    REQUIRE(report["structured_scope"].get<std::string>() == "multi_provider");
+    REQUIRE(report["status"]["reason"].get<std::string>()
+            == "socu_approx_stub_no_direction");
+    REQUIRE(report["status"]["direction_available"].get<bool>() == false);
+    REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
+    const SizeT absorbed =
+        report["contact"]["absorbed_hessian_contribution_count"].get<SizeT>();
+    const SizeT dropped =
+        report["contact"]["dropped_hessian_contribution_count"].get<SizeT>();
+    CHECK(absorbed + dropped > 0);
+}
+
 void require_socu_approx_structured_sink_dry_run(std::string_view name,
                                                  SizeT            block_size)
 {
@@ -772,7 +870,7 @@ void require_socu_approx_structured_sink_dry_run(std::string_view name,
           < 1e-12);
     CHECK(report["layout"]["first_offdiag_nonzero_count"].get<SizeT>() == 1);
     CHECK(report["layout"]["first_offdiag_nonzero_index_sum"].get<SizeT>()
-          == 2 * block_size + 3);
+          == 3 * block_size + 2);
     CHECK(report["layout"]["diag_nonzero_count"].get<SizeT>() == 3 * block_size - 12 + 1);
 }
 
@@ -1054,8 +1152,7 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
     Json          report = Json::parse(report_ifs);
     REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
-    REQUIRE(report["structured_scope"].get<std::string>()
-            == "multi_provider_experimental");
+    REQUIRE(report["structured_scope"].get<std::string>() == "multi_provider");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
     REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
@@ -1063,7 +1160,7 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
 #endif
 }
 
-void require_socu_approx_init_time_mixed_default_scope_solve(std::string_view name)
+void require_socu_approx_init_time_mixed_explicit_scope_solve(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
     WARN("socu_native is not enabled in this build; mixed default scope solve was not run");
@@ -1082,6 +1179,8 @@ void require_socu_approx_init_time_mixed_default_scope_solve(std::string_view na
     config["linear_system"]["solver"] = "socu_approx";
     config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
+    config["linear_system"]["socu_approx"]["structured_scope"] =
+        "multi_provider";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["damping_shift"] = 1.0;
     config["linear_system"]["socu_approx"]["max_relative_residual"] = 1e-3;
@@ -1113,9 +1212,9 @@ void require_socu_approx_init_time_mixed_default_scope_solve(std::string_view na
     Json          report = Json::parse(report_ifs);
     REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["provider_kind"].get<std::string>()
-            == "multi_provider_experimental");
+            == "multi_provider");
     REQUIRE(report["structured_scope"].get<std::string>()
-            == "multi_provider_experimental");
+            == "multi_provider");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
 #endif
@@ -1465,10 +1564,10 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "linear_solver_socu_approx_fem_init_time_ordering");
     }
 
-    SECTION("socu_approx_init_time_mixed_default_scope_solves")
+    SECTION("socu_approx_init_time_mixed_explicit_scope_solves")
     {
-        require_socu_approx_init_time_mixed_default_scope_solve(
-            "linear_solver_socu_approx_mixed_default_scope_solves");
+        require_socu_approx_init_time_mixed_explicit_scope_solve(
+            "linear_solver_socu_approx_mixed_explicit_scope_solves");
     }
 
     SECTION("socu_approx_m7_strict_coverage_gate")
@@ -1511,6 +1610,12 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
     {
         require_socu_approx_m8_fem_runtime_contact_smoke(
             "linear_solver_socu_approx_m8_fem_runtime_contact");
+    }
+
+    SECTION("socu_approx_inter_primitive_reporter_structured_dry_run")
+    {
+        require_socu_approx_inter_primitive_structured_dry_run(
+            "linear_solver_socu_approx_inter_primitive_structured");
     }
 }
 
@@ -1916,47 +2021,7 @@ TEST_CASE("86_cuda_mixed_contract_stitch_zero_alloc",
     run_zero_alloc_case(
         "stitch_zero_alloc",
         config,
-        [](Scene& scene)
-        {
-            Empty    empty;
-            Particle particle;
-
-            Float Y = 1.0;
-            vector<Vector3> vert_pos = {{0.25, Y - 0.5, 0.25},
-                                        {0.5, Y - 0.3, 0.1},
-                                        {0.1, Y - 0.4, 0.5},
-                                        {0.3, Y, 0.3}};
-            auto vertex_mesh = pointcloud(vert_pos);
-            particle.apply_to(vertex_mesh);
-            label_surface(vertex_mesh);
-
-            vector<Vector3>  tri_pos = {{0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}, {0.0, 1.0, 1.0}};
-            vector<Vector3i> tri_faces = {{0, 1, 2}};
-            auto             triangle_mesh = trimesh(tri_pos, tri_faces);
-            empty.apply_to(triangle_mesh);
-            label_surface(triangle_mesh);
-            auto is_fixed = triangle_mesh.vertices().find<IndexT>(builtin::is_fixed);
-            std::ranges::fill(view(*is_fixed), 1);
-
-            auto vert_obj = scene.objects().create("vertex_provider");
-            auto [vert_geo_slot, vert_rest_slot] = vert_obj->geometries().create(vertex_mesh);
-
-            auto tri_obj = scene.objects().create("triangle_provider");
-            auto [tri_geo_slot, tri_rest_slot] = tri_obj->geometries().create(triangle_mesh);
-
-            auto pairs_geo = closest_vertex_triangle_pairs(vertex_mesh, triangle_mesh, 1.0);
-            REQUIRE(pairs_geo.instances().size() == 4);
-
-            SoftVertexTriangleStitch stitch;
-            auto stitch_geo = stitch.create_geometry({vert_geo_slot, tri_geo_slot},
-                                                     {vert_rest_slot, tri_rest_slot},
-                                                     pairs_geo,
-                                                     ElasticModuli::youngs_poisson(120.0_kPa, 0.49),
-                                                     0.1);
-
-            auto stitch_obj = scene.objects().create("stitch");
-            stitch_obj->geometries().create(stitch_geo);
-        });
+        build_soft_vertex_triangle_stitch_scene);
 }
 
 TEST_CASE("86_cuda_mixed_external_articulation_multijoints_smoke",

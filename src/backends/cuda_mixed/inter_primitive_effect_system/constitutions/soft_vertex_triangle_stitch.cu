@@ -286,8 +286,47 @@ class SoftVertexTriangleStitch : public InterPrimitiveConstitution
                        MA.half_block<StencilSize>(I * HalfHessianSize).write(tet, H);
                    });
     }
+
+    bool do_supports_structured_hessian() const override { return true; }
+
+    void do_compute_structured_hessian(StructuredHessianInfo& info) override
+    {
+        using namespace muda;
+        namespace SVTS = sym::soft_vertex_triangle_stitch;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(topos.size(),
+                   [topos     = topos.cviewer().name("topos"),
+                    xs        = info.positions().cviewer().name("xs"),
+                    mus       = mus.cviewer().name("mus"),
+                    lambdas   = lambdas.cviewer().name("lambdas"),
+                    Dm_invs   = Dm_invs.cviewer().name("Dm_invs"),
+                    rest_vols = rest_volumes.cviewer().name("rest_volumes"),
+                    sink      = info.structured_sink(),
+                    dt        = info.dt()] __device__(int I)
+                   {
+                       const Vector4i& tet = topos(I);
+                       Vector3         x0  = xs(tet(0));
+                       Vector3         x1  = xs(tet(1));
+                       Vector3         x2  = xs(tet(2));
+                       Vector3         x3  = xs(tet(3));
+
+                       Matrix3x3 F    = fem::F(x0, x1, x2, x3, Dm_invs(I));
+                       Vector9   VecF = flatten(F);
+
+                       Float Vdt2 = rest_vols(I) * dt * dt;
+
+                       Matrix9x9 ddEddVecF;
+                       SVTS::ddEddVecF(ddEddVecF, mus(I), lambdas(I), VecF);
+                       ddEddVecF *= Vdt2;
+                       make_spd(ddEddVecF);
+                       Matrix9x12 dFdx = fem::dFdx(Dm_invs(I));
+                       Matrix12x12 H = dFdx.transpose() * ddEddVecF * dFdx;
+                       sink.template write_hessian_half<StencilSize>(tet, H);
+                   });
+    }
 };
 
 REGISTER_SIM_SYSTEM(SoftVertexTriangleStitch);
 }  // namespace uipc::backend::cuda_mixed
-

@@ -1,4 +1,5 @@
 #include <inter_primitive_effect_system/inter_primitive_constitution.h>
+#include <fmt/format.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -49,6 +50,29 @@ void InterPrimitiveConstitution::report_gradient_hessian_extent(GradientHessianE
 void InterPrimitiveConstitution::compute_gradient_hessian(ComputeGradientHessianInfo& info)
 {
     do_compute_gradient_hessian(info);
+}
+
+bool InterPrimitiveConstitution::do_supports_structured_hessian() const
+{
+    return false;
+}
+
+void InterPrimitiveConstitution::do_compute_structured_hessian(StructuredHessianInfo&)
+{
+    throw SimSystemException{fmt::format(
+        "structured_inter_primitive_constitution_not_supported: constitution '{}' cannot write "
+        "GradientStructuredHessian directly to the structured sink",
+        name())};
+}
+
+bool InterPrimitiveConstitution::supports_structured_hessian() const
+{
+    return do_supports_structured_hessian();
+}
+
+void InterPrimitiveConstitution::compute_structured_hessian(StructuredHessianInfo& info)
+{
+    do_compute_structured_hessian(info);
 }
 
 U64 InterPrimitiveConstitution::uid() const noexcept

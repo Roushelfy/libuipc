@@ -27,6 +27,7 @@ enum class SocuApproxGateReason
     SocuRuntimeError,
     M8ContactRuntimeNotSupported,
     LineSearchRejected,
+    StructuredOffBandContribution,
 };
 
 std::string_view to_string(SocuApproxGateReason reason) noexcept;
@@ -38,7 +39,7 @@ struct SocuApproxGateReport
     std::string          detail;
     std::string          ordering_report_path;
     std::string          provider_kind;
-    std::string          structured_scope = "multi_provider_experimental";
+    std::string          structured_scope = "multi_provider";
     SizeT                block_size = 0;
     double               near_band_ratio = 0.0;
     double               off_band_ratio  = 0.0;
@@ -78,7 +79,7 @@ struct SocuApproxDryRunReport
     std::string ordering_report_path;
     std::string contact_report_path;
     std::string provider_kind;
-    std::string structured_scope = "multi_provider_experimental";
+    std::string structured_scope = "multi_provider";
 
     SizeT block_size            = 0;
     SizeT block_count           = 0;
@@ -133,7 +134,7 @@ struct SocuApproxDryRunReport
     bool debug_timing_enabled = false;
     bool report_each_solve = false;
 
-    double damping_shift = 0.0;
+    double damping_shift = 1e-6;
     double surrogate_residual = 0.0;
     double surrogate_relative_residual = 0.0;
     double descent_dot = 0.0;
@@ -142,6 +143,7 @@ struct SocuApproxDryRunReport
     double direction_min_abs_threshold = 0.0;
     double direction_min_rel_threshold = 0.0;
     std::string rhs_sign_convention = "rhs_is_global_b";
+    std::string pre_factor_matrix_summary;
 
     bool line_search_feedback_available = false;
     bool line_search_accepted = true;

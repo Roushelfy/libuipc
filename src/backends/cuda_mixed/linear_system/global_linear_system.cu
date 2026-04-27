@@ -92,11 +92,12 @@ void GlobalLinearSystem::do_build()
 
     auto structured_scope_attr =
         config.find<std::string>("linear_system/socu_approx/structured_scope");
-    const std::string structured_scope =
+    std::string structured_scope =
         structured_scope_attr ? structured_scope_attr->view()[0]
-                              : std::string{"multi_provider_experimental"};
-    m_impl.socu_multi_provider_experimental =
-        structured_scope == "multi_provider_experimental";
+                              : std::string{"multi_provider"};
+    if(structured_scope == "multi_provider_experimental")
+        structured_scope = "multi_provider";
+    m_impl.socu_multi_provider_enabled = structured_scope == "multi_provider";
 }
 
 void GlobalLinearSystem::_dump_A_b()
@@ -359,10 +360,10 @@ void GlobalLinearSystem::Impl::_validate_structured_chain_subsystems()
 
     if(!off_diag_subsystem_view.empty())
     {
-        if(!socu_multi_provider_experimental)
+        if(!socu_multi_provider_enabled)
         {
             throw SimSystemException{
-                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider_experimental' to enable experimental offdiag assembly"};
+                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider' to enable multi-provider assembly"};
         }
         for(auto& off_diag_subsystem : off_diag_subsystem_view)
         {
@@ -396,10 +397,10 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
     auto off_diag_subsystem_view = off_diag_subsystems.view();
     if(!off_diag_subsystem_view.empty())
     {
-        if(!socu_multi_provider_experimental)
+        if(!socu_multi_provider_enabled)
         {
             throw SimSystemException{
-                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider_experimental' to enable experimental offdiag assembly"};
+                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider' to enable multi-provider assembly"};
         }
     }
 

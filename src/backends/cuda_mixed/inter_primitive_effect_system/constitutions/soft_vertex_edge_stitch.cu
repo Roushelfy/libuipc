@@ -317,8 +317,43 @@ class SoftVertexEdgeStitch : public InterPrimitiveConstitution
                            .write(tri, H);
                    });
     }
+
+    bool do_supports_structured_hessian() const override { return true; }
+
+    void do_compute_structured_hessian(StructuredHessianInfo& info) override
+    {
+        using namespace muda;
+        namespace NH = sym::soft_vertex_edge_stitch;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(topos.size(),
+                   [topos       = topos.cviewer().name("topos"),
+                    xs          = info.positions().cviewer().name("xs"),
+                    mus         = mus.cviewer().name("mus"),
+                    lambdas     = lambdas.cviewer().name("lambdas"),
+                    IBs         = inv_Bs.cviewer().name("IBs"),
+                    rest_areas  = rest_areas.cviewer().name("rest_areas"),
+                    thick       = thicknesses.cviewer().name("thicknesses"),
+                    sink        = info.structured_sink(),
+                    dt          = info.dt()] __device__(int I) mutable
+                   {
+                       const Vector3i& tri = topos(I);
+                       Vector9         X;
+                       for(int k = 0; k < 3; ++k)
+                           X.segment<3>(3 * k) = xs(tri(k));
+
+                       Float Vdt2 = rest_areas(I) * 2 * thick(I) * dt * dt;
+
+                       Matrix9x9 H;
+                       NH::ddEddX(H, lambdas(I), mus(I), X, IBs(I));
+                       make_spd(H);
+                       H *= Vdt2;
+
+                       sink.template write_hessian_half<StencilSize>(tri, H);
+                   });
+    }
 };
 
 REGISTER_SIM_SYSTEM(SoftVertexEdgeStitch);
 }  // namespace uipc::backend::cuda_mixed
-

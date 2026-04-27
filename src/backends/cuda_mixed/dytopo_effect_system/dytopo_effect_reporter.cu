@@ -55,7 +55,7 @@ void DyTopoEffectReporter::do_assemble_structured_hessian(
     GlobalDyTopoEffectManager::StructuredHessianInfo&)
 {
     throw Exception{fmt::format(
-        "structured_contact_reporter_not_supported: reporter '{}' cannot write "
+        "structured_dytopo_reporter_not_supported: reporter '{}' cannot write "
         "GradientStructuredHessian directly to the structured sink",
         name())};
 }

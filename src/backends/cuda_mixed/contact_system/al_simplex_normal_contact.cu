@@ -245,6 +245,108 @@ void ALSimplexNormalContact::Impl::do_assemble(GlobalContactManager::GradientHes
                });
 }
 
+void ALSimplexNormalContact::Impl::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    using namespace muda;
+    using namespace sym::al_simplex_contact;
+    using Alu    = ActivePolicy::AluScalar;
+    using Vec3A  = Eigen::Matrix<Alu, 3, 1>;
+    using Vec12A = Eigen::Matrix<Alu, 12, 1>;
+    using Mat12A = Eigen::Matrix<Alu, 12, 12>;
+    auto& active_set = global_active_set_manager;
+
+    if(!active_set->is_enabled())
+        return;
+
+    auto PT_size = active_set->PTs().size();
+    auto EE_size = active_set->EEs().size();
+    auto x       = global_vertex_manager->positions();
+    auto PTs     = active_set->PTs();
+    auto EEs     = active_set->EEs();
+    auto PT_d0   = active_set->PT_d0();
+    auto EE_d0   = active_set->EE_d0();
+    auto PT_cnt  = active_set->PT_cnt();
+    auto EE_cnt  = active_set->EE_cnt();
+    auto PT_d_grad = active_set->PT_d_grad();
+    auto EE_d_grad = active_set->EE_d_grad();
+    auto structured_sink = info.contact_sink();
+
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(PT_size,
+               [mu_v   = active_set->mu_vertices().cviewer().name("mu_v"),
+                decay  = active_set->decay_factor(),
+                PTs    = PTs.cviewer().name("PTs"),
+                cnt    = PT_cnt.cviewer().name("cnt"),
+                d0     = PT_d0.cviewer().name("d0"),
+                d_grad = PT_d_grad.cviewer().name("d_grad"),
+                x      = x.cviewer().name("x"),
+                structured_sink] __device__(int idx) mutable
+               {
+                   auto   PT = PTs(idx);
+                   Vec12A d_grad_alu = d_grad(idx).template cast<Alu>();
+                   Vec3A  P0         = x(PT(0)).template cast<Alu>();
+                   Vec3A  P1         = x(PT(1)).template cast<Alu>();
+                   Vec3A  P2         = x(PT(2)).template cast<Alu>();
+                   Vec3A  P3         = x(PT(3)).template cast<Alu>();
+                   Alu    mu = safe_cast<Alu>(min(min(mu_v(PT(0)), mu_v(PT(1))),
+                                                  min(mu_v(PT(2)), mu_v(PT(3)))));
+                   Vec12A G;
+                   Mat12A H;
+                   auto c = cnt(idx) >= 0 ? cnt(idx) : max(-cnt(idx) - 6, 0);
+                   Alu scale = safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu;
+                   penalty_gradient_hessian(scale,
+                                            safe_cast<Alu>(d0(idx)),
+                                            d_grad_alu,
+                                            P0,
+                                            P1,
+                                            P2,
+                                            P3,
+                                            G,
+                                            H);
+
+                   structured_sink.template write_hessian_half<4>(PT, H);
+               });
+
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(EE_size,
+               [mu_v   = active_set->mu_vertices().cviewer().name("mu_v"),
+                decay  = active_set->decay_factor(),
+                EEs    = EEs.cviewer().name("EEs"),
+                cnt    = EE_cnt.cviewer().name("cnt"),
+                d0     = EE_d0.cviewer().name("d0"),
+                d_grad = EE_d_grad.cviewer().name("d_grad"),
+                x      = x.cviewer().name("x"),
+                structured_sink] __device__(int idx) mutable
+               {
+                   auto   EE = EEs(idx);
+                   Vec12A d_grad_alu = d_grad(idx).template cast<Alu>();
+                   Vec3A  P0         = x(EE(0)).template cast<Alu>();
+                   Vec3A  P1         = x(EE(1)).template cast<Alu>();
+                   Vec3A  P2         = x(EE(2)).template cast<Alu>();
+                   Vec3A  P3         = x(EE(3)).template cast<Alu>();
+                   Alu    mu = safe_cast<Alu>(min(min(mu_v(EE(0)), mu_v(EE(1))),
+                                                  min(mu_v(EE(2)), mu_v(EE(3)))));
+                   Vec12A G;
+                   Mat12A H;
+                   auto c = cnt(idx) >= 0 ? cnt(idx) : max(-cnt(idx) - 6, 0);
+                   Alu scale = safe_cast<Alu>(pow(safe_cast<Alu>(decay), c)) * mu;
+                   penalty_gradient_hessian(scale,
+                                            safe_cast<Alu>(d0(idx)),
+                                            d_grad_alu,
+                                            P0,
+                                            P1,
+                                            P2,
+                                            P3,
+                                            G,
+                                            H);
+
+                   structured_sink.template write_hessian_half<4>(EE, H);
+               });
+}
+
 void ALSimplexNormalContact::do_compute_energy(GlobalContactManager::EnergyInfo& info)
 {
     m_impl.do_compute_energy(info);
@@ -253,6 +355,17 @@ void ALSimplexNormalContact::do_compute_energy(GlobalContactManager::EnergyInfo&
 void ALSimplexNormalContact::do_assemble(GlobalContactManager::GradientHessianInfo& info)
 {
     m_impl.do_assemble(info);
+}
+
+bool ALSimplexNormalContact::do_supports_structured_hessian() const
+{
+    return true;
+}
+
+void ALSimplexNormalContact::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    m_impl.do_assemble_structured_hessian(info);
 }
 
 REGISTER_SIM_SYSTEM(ALSimplexNormalContact);

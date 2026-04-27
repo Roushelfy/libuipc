@@ -17,6 +17,7 @@ class InterPrimitiveConstitution : public SimSystem
     using ComputeEnergyInfo = InterPrimitiveConstitutionManager::EnergyInfo;
     using GradientHessianExtentInfo = InterPrimitiveConstitutionManager::GradientHessianExtentInfo;
     using ComputeGradientHessianInfo = InterPrimitiveConstitutionManager::GradientHessianInfo;
+    using StructuredHessianInfo = InterPrimitiveConstitutionManager::StructuredHessianInfo;
 
     U64 uid() const noexcept;
 
@@ -29,6 +30,8 @@ class InterPrimitiveConstitution : public SimSystem
 
     virtual void do_report_gradient_hessian_extent(GradientHessianExtentInfo& info) = 0;
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) = 0;
+    virtual bool do_supports_structured_hessian() const;
+    virtual void do_compute_structured_hessian(StructuredHessianInfo& info);
 
     virtual U64 get_uid() const noexcept = 0;  // unique identifier for this constitution
 
@@ -43,6 +46,8 @@ class InterPrimitiveConstitution : public SimSystem
 
     void report_gradient_hessian_extent(GradientHessianExtentInfo& info);
     void compute_gradient_hessian(ComputeGradientHessianInfo& info);
+    bool supports_structured_hessian() const;
+    void compute_structured_hessian(StructuredHessianInfo& info);
 
     IndexT m_index = -1;  // index in the InterPrimitiveConstitutionManager
 };

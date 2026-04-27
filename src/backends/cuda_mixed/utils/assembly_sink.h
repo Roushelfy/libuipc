@@ -124,6 +124,7 @@ struct StructuredDeviceAssemblySink
     muda::CBufferView<IndexT> old_to_chain;
     SizeT                     horizon    = 0;
     SizeT                     block_size = 0;
+    muda::BufferView<IndexT>  counters;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -168,8 +169,8 @@ struct StructuredDeviceAssemblySink
 
         const bool  ij_is_forward = bi < bj;
         const SizeT left_block    = ij_is_forward ? bi : bj;
-        const SizeT row           = ij_is_forward ? li : lj;
-        const SizeT col           = ij_is_forward ? lj : li;
+        const SizeT row           = ij_is_forward ? lj : li;
+        const SizeT col           = ij_is_forward ? li : lj;
         const SizeT index = (left_block * block_size + row) * block_size + col;
         if(index < first_offdiag.size())
         {
@@ -186,17 +187,28 @@ struct StructuredDeviceAssemblySink
         (void)add_hessian_scalar_status(old_i, old_j, value);
     }
 
+    MUDA_DEVICE __forceinline__ void record_off_band_drop() const noexcept
+    {
+        if(counters.data() != nullptr && counters.size() > 2)
+            muda::atomic_add(counters.data(2), IndexT{1});
+    }
+
     template <typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
                                                      const HMat& H) const noexcept
     {
         for(IndexT row = 0; row < H.rows(); ++row)
         {
-            for(IndexT col = 0; col < H.cols(); ++col)
+            for(IndexT col = row; col < H.cols(); ++col)
             {
-                add_hessian_scalar(old_dof_begin + row,
-                                   old_dof_begin + col,
-                                   static_cast<StoreT>(H(row, col)));
+                const IndexT old_i = old_dof_begin + row;
+                const IndexT old_j = old_dof_begin + col;
+                const auto cls = add_hessian_scalar_status(
+                    old_i,
+                    old_j,
+                    static_cast<StoreT>(H(row, col)));
+                if(cls == StructuredSinkWriteClass::Diag && old_i != old_j)
+                    add_hessian_scalar(old_j, old_i, static_cast<StoreT>(H(row, col)));
             }
         }
     }
@@ -210,11 +222,16 @@ struct StructuredDeviceAssemblySink
         for(IndexT row = 0; row < Rows; ++row)
         {
 #pragma unroll
-            for(IndexT col = 0; col < Cols; ++col)
+            for(IndexT col = row; col < Cols; ++col)
             {
-                add_hessian_scalar(old_dof_begin + row,
-                                   old_dof_begin + col,
-                                   static_cast<StoreT>(H(row, col)));
+                const IndexT old_i = old_dof_begin + row;
+                const IndexT old_j = old_dof_begin + col;
+                const auto cls = add_hessian_scalar_status(
+                    old_i,
+                    old_j,
+                    static_cast<StoreT>(H(row, col)));
+                if(cls == StructuredSinkWriteClass::Diag && old_i != old_j)
+                    add_hessian_scalar(old_j, old_i, static_cast<StoreT>(H(row, col)));
             }
         }
     }
@@ -330,10 +347,19 @@ struct LocalAssemblySink
         dva(event_offset).write(index, G);
     }
 
+    MUDA_DEVICE __forceinline__ void record_write_class(
+        StructuredSinkWriteClass cls) const noexcept
+    {
+        if(cls == StructuredSinkWriteClass::OffBand)
+            structured.record_off_band_drop();
+    }
+
     template <typename HBlock>
-    MUDA_DEVICE __forceinline__ void add_structured_block(IndexT block_i,
-                                                          IndexT block_j,
-                                                          const HBlock& H) const noexcept
+    MUDA_DEVICE __forceinline__ void add_structured_block(
+        IndexT        block_i,
+        IndexT        block_j,
+        const HBlock& H,
+        bool          mirror_when_same_structured_block = false) const noexcept
     {
         const bool i_fixed = fixed(block_i);
         const bool j_fixed = fixed(block_j);
@@ -345,9 +371,11 @@ struct LocalAssemblySink
 #pragma unroll
             for(IndexT d = 0; d < BlockDim; ++d)
             {
-                structured.add_hessian_scalar(old_dof_offset + block_i * BlockDim + d,
-                                              old_dof_offset + block_j * BlockDim + d,
-                                              StoreT{1});
+                const auto cls = structured.add_hessian_scalar_status(
+                    old_dof_offset + block_i * BlockDim + d,
+                    old_dof_offset + block_j * BlockDim + d,
+                    StoreT{1});
+                record_write_class(cls);
             }
             return;
         }
@@ -358,11 +386,43 @@ struct LocalAssemblySink
 #pragma unroll
             for(IndexT col = 0; col < BlockDim; ++col)
             {
-                structured.add_hessian_scalar(old_dof_offset + block_i * BlockDim + row,
-                                              old_dof_offset + block_j * BlockDim + col,
-                                              static_cast<StoreT>(H(row, col)));
+                const IndexT old_i = old_dof_offset + block_i * BlockDim + row;
+                const IndexT old_j = old_dof_offset + block_j * BlockDim + col;
+                const auto cls = structured.add_hessian_scalar_status(
+                    old_i,
+                    old_j,
+                    static_cast<StoreT>(H(row, col)));
+                record_write_class(cls);
+
+                if(mirror_when_same_structured_block
+                   && cls == StructuredSinkWriteClass::Diag && old_i != old_j)
+                {
+                    record_write_class(structured.add_hessian_scalar_status(
+                        old_j,
+                        old_i,
+                        static_cast<StoreT>(H(row, col))));
+                }
             }
         }
+    }
+
+    MUDA_DEVICE __forceinline__ bool upper_lr(IndexT left_value,
+                                              IndexT right_value,
+                                              IndexT left_slot,
+                                              IndexT right_slot,
+                                              IndexT& L,
+                                              IndexT& R) const noexcept
+    {
+        if(left_value < right_value)
+        {
+            L = left_slot;
+            R = right_slot;
+            return false;
+        }
+
+        L = right_slot;
+        R = left_slot;
+        return left_slot != right_slot;
     }
 
     template <int StencilSize, typename HMat>
@@ -383,11 +443,20 @@ struct LocalAssemblySink
 #pragma unroll
                 for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
                 {
+                    IndexT L = row_block;
+                    IndexT R = col_block;
+                    const bool swapped = upper_lr(indices(row_block),
+                                                  indices(col_block),
+                                                  row_block,
+                                                  col_block,
+                                                  L,
+                                                  R);
                     add_structured_block(
-                        indices(row_block),
-                        indices(col_block),
-                        H.template block<BlockDim, BlockDim>(row_block * BlockDim,
-                                                             col_block * BlockDim));
+                        indices(L),
+                        indices(R),
+                        H.template block<BlockDim, BlockDim>(L * BlockDim,
+                                                             R * BlockDim),
+                        indices(L) != indices(R) || swapped);
                 }
             }
             return;
@@ -418,16 +487,18 @@ struct LocalAssemblySink
                 {
                     IndexT L = row_block;
                     IndexT R = col_block;
-                    if(row_indices(row_block) >= col_indices(col_block))
-                    {
-                        L = col_block;
-                        R = row_block;
-                    }
+                    const bool swapped = upper_lr(row_indices(row_block),
+                                                  col_indices(col_block),
+                                                  row_block,
+                                                  col_block,
+                                                  L,
+                                                  R);
                     add_structured_block(
                         row_indices(L),
                         col_indices(R),
                         H.template block<BlockDim, BlockDim>(L * BlockDim,
-                                                             R * BlockDim));
+                                                             R * BlockDim),
+                        row_indices(L) != col_indices(R) || swapped);
                 }
             }
             return;
@@ -461,11 +532,20 @@ struct LocalAssemblySink
                 {
                     if(ignore(col_block))
                         continue;
+                    IndexT L = row_block;
+                    IndexT R = col_block;
+                    const bool swapped = upper_lr(indices(row_block),
+                                                  indices(col_block),
+                                                  row_block,
+                                                  col_block,
+                                                  L,
+                                                  R);
                     add_structured_block(
-                        indices(row_block),
-                        indices(col_block),
-                        H.template block<BlockDim, BlockDim>(row_block * BlockDim,
-                                                             col_block * BlockDim));
+                        indices(L),
+                        indices(R),
+                        H.template block<BlockDim, BlockDim>(L * BlockDim,
+                                                             R * BlockDim),
+                        indices(L) != indices(R) || swapped);
                 }
             }
             return;

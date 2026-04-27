@@ -204,6 +204,40 @@ class SoftVertexStitch : public InterPrimitiveConstitution
                        MA.half_block<StencilSize>(I * HalfHessianSize).write(PP, H_store);
                    });
     }
+
+    bool do_supports_structured_hessian() const override { return true; }
+
+    void do_compute_structured_hessian(StructuredHessianInfo& info) override
+    {
+        using namespace muda;
+        namespace SVS = sym::soft_vertex_stitch;
+        using Alu      = ActivePolicy::AluScalar;
+        using Store    = ActivePolicy::StoreScalar;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(topos.size(),
+                   [topos         = topos.cviewer().name("topos"),
+                    xs            = info.positions().cviewer().name("xs"),
+                    kappas        = kappas.cviewer().name("kappas"),
+                    rest_lengths  = rest_lengths.cviewer().name("rest_lengths"),
+                    sink          = info.structured_sink(),
+                    dt            = info.dt()] __device__(int I)
+                   {
+                       Eigen::Matrix<Alu, 6, 1> X;
+                       const Vector2i& PP = topos(I);
+                       for(int i = 0; i < 2; ++i)
+                           X.segment<3>(3 * i) = xs(PP[i]).template cast<Alu>();
+
+                       const Alu L0  = safe_cast<Alu>(rest_lengths(I));
+                       const Alu Kt2 = safe_cast<Alu>(kappas(I) * dt * dt);
+                       Eigen::Matrix<Alu, 6, 6> H_alu;
+                       SVS::ddEddX(H_alu, Kt2, X, L0);
+                       make_spd(H_alu);
+                       auto H_store = downcast_hessian<Store>(H_alu);
+                       sink.template write_hessian_half<StencilSize>(PP, H_store);
+                   });
+    }
 };
 
 REGISTER_SIM_SYSTEM(SoftVertexStitch);

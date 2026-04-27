@@ -174,6 +174,28 @@ void SimplexFrictionalContact::do_assemble(GlobalContactManager::GradientHessian
     do_assemble(this_info);
 }
 
+bool SimplexFrictionalContact::do_supports_structured_hessian() const
+{
+    return true;
+}
+
+void SimplexFrictionalContact::do_assemble_structured_hessian(
+    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
+{
+    ContactInfo this_info{&m_impl};
+    this_info.m_gradient_only      = false;
+    this_info.m_hessian_only       = true;
+    this_info.m_structured_hessian = true;
+    this_info.m_structured_sink    = info.contact_sink();
+
+    m_impl.PT_hessians = {};
+    m_impl.EE_hessians = {};
+    m_impl.PE_hessians = {};
+    m_impl.PP_hessians = {};
+
+    do_assemble(this_info);
+}
+
 muda::CBufferView<Vector4i> SimplexFrictionalContact::PTs() const
 {
     return m_impl.simplex_trajectory_filter->friction_PTs();

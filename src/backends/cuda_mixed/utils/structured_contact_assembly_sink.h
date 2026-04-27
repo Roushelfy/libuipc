@@ -134,7 +134,8 @@ struct StructuredContactAssemblySink
     template <typename H3>
     MUDA_DEVICE void add_fem_fem(IndexT old_row,
                                  IndexT old_col,
-                                 const H3& H) const noexcept
+                                 const H3& H,
+                                 bool mirror_diag_block = false) const noexcept
     {
         bool saw_near     = false;
         bool saw_off_band = false;
@@ -144,8 +145,13 @@ struct StructuredContactAssemblySink
 #pragma unroll
             for(IndexT c = 0; c < 3; ++c)
             {
-                const auto cls = add_scalar_counted(
-                    old_row + r, old_col + c, static_cast<StoreT>(H(r, c)));
+                const IndexT row = old_row + r;
+                const IndexT col = old_col + c;
+                const StoreT value = static_cast<StoreT>(H(r, c));
+                const auto cls = add_scalar_counted(row, col, value);
+                if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
+                   && row != col)
+                    add_scalar_counted(col, row, value);
                 saw_near |= cls == StructuredSinkWriteClass::Diag
                             || cls == StructuredSinkWriteClass::FirstOffdiag;
                 saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
@@ -157,7 +163,8 @@ struct StructuredContactAssemblySink
     template <typename H3>
     MUDA_DEVICE void add_abd_fem(const VertexMap& lhs,
                                  const VertexMap& rhs,
-                                 const H3&        H) const noexcept
+                                 const H3&        H,
+                                 bool mirror_diag_block = false) const noexcept
     {
         using Alu       = ActivePolicy::AluScalar;
         bool saw_near     = false;
@@ -171,8 +178,12 @@ struct StructuredContactAssemblySink
             for(IndexT c = 0; c < 3; ++c)
             {
                 const StoreT value = static_cast<StoreT>(wr * static_cast<Alu>(H(comp, c)));
-                const auto   cls =
-                    add_scalar_counted(lhs.old_dof + r, rhs.old_dof + c, value);
+                const IndexT row = lhs.old_dof + r;
+                const IndexT col = rhs.old_dof + c;
+                const auto   cls = add_scalar_counted(row, col, value);
+                if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
+                   && row != col)
+                    add_scalar_counted(col, row, value);
                 saw_near |= cls == StructuredSinkWriteClass::Diag
                             || cls == StructuredSinkWriteClass::FirstOffdiag;
                 saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
@@ -184,7 +195,8 @@ struct StructuredContactAssemblySink
     template <typename H3>
     MUDA_DEVICE void add_fem_abd(const VertexMap& lhs,
                                  const VertexMap& rhs,
-                                 const H3&        H) const noexcept
+                                 const H3&        H,
+                                 bool mirror_diag_block = false) const noexcept
     {
         using Alu       = ActivePolicy::AluScalar;
         bool saw_near     = false;
@@ -199,8 +211,12 @@ struct StructuredContactAssemblySink
                 const Alu    wc   = abd_weight(rhs.J, c);
                 const StoreT value =
                     static_cast<StoreT>(static_cast<Alu>(H(r, comp)) * wc);
-                const auto cls =
-                    add_scalar_counted(lhs.old_dof + r, rhs.old_dof + c, value);
+                const IndexT row = lhs.old_dof + r;
+                const IndexT col = rhs.old_dof + c;
+                const auto cls = add_scalar_counted(row, col, value);
+                if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
+                   && row != col)
+                    add_scalar_counted(col, row, value);
                 saw_near |= cls == StructuredSinkWriteClass::Diag
                             || cls == StructuredSinkWriteClass::FirstOffdiag;
                 saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
@@ -214,7 +230,8 @@ struct StructuredContactAssemblySink
                                  const VertexMap& rhs,
                                  IndexT           global_i,
                                  IndexT           global_j,
-                                 const H3&        H) const noexcept
+                                 const H3&        H,
+                                 bool mirror_diag_block = false) const noexcept
     {
         using Alu       = ActivePolicy::AluScalar;
         bool saw_near     = false;
@@ -237,8 +254,13 @@ struct StructuredContactAssemblySink
                     value += wr_sym * static_cast<Alu>(H(comp_c, comp_r)) * wc_sym;
                 }
 
-                const auto cls = add_scalar_counted(
-                    lhs.old_dof + r, rhs.old_dof + c, static_cast<StoreT>(value));
+                const IndexT row = lhs.old_dof + r;
+                const IndexT col = rhs.old_dof + c;
+                const StoreT value_store = static_cast<StoreT>(value);
+                const auto cls = add_scalar_counted(row, col, value_store);
+                if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
+                   && row != col)
+                    add_scalar_counted(col, row, value_store);
                 saw_near |= cls == StructuredSinkWriteClass::Diag
                             || cls == StructuredSinkWriteClass::FirstOffdiag;
                 saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
@@ -253,6 +275,25 @@ struct StructuredContactAssemblySink
         write_hessian_block(global_vertex, global_vertex, H);
     }
 
+    MUDA_DEVICE bool upper_lr(IndexT left_value,
+                              IndexT right_value,
+                              IndexT left_slot,
+                              IndexT right_slot,
+                              IndexT& L,
+                              IndexT& R) const noexcept
+    {
+        if(left_value < right_value)
+        {
+            L = left_slot;
+            R = right_slot;
+            return false;
+        }
+
+        L = right_slot;
+        R = left_slot;
+        return left_slot != right_slot;
+    }
+
     template <int StencilSize, typename HMat>
     MUDA_DEVICE void write_hessian_half(
         const Eigen::Vector<IndexT, StencilSize>& indices,
@@ -264,10 +305,19 @@ struct StructuredContactAssemblySink
 #pragma unroll
             for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
             {
+                IndexT L = row_block;
+                IndexT R = col_block;
+                const bool swapped = upper_lr(indices(row_block),
+                                              indices(col_block),
+                                              row_block,
+                                              col_block,
+                                              L,
+                                              R);
                 write_hessian_block(
-                    indices(row_block),
-                    indices(col_block),
-                    H.template block<3, 3>(row_block * 3, col_block * 3));
+                    indices(L),
+                    indices(R),
+                    H.template block<3, 3>(L * 3, R * 3),
+                    indices(L) != indices(R) || swapped);
             }
         }
     }
@@ -275,7 +325,8 @@ struct StructuredContactAssemblySink
     template <typename H3>
     MUDA_DEVICE void write_hessian_block(IndexT global_i,
                                          IndexT global_j,
-                                         const H3& H3x3) const noexcept
+                                         const H3& H3x3,
+                                         bool mirror_diag_block = false) const noexcept
     {
         if(!valid())
             return;
@@ -289,23 +340,23 @@ struct StructuredContactAssemblySink
 
         if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Fem)
         {
-            add_fem_fem(lhs.old_dof, rhs.old_dof, H3x3);
+            add_fem_fem(lhs.old_dof, rhs.old_dof, H3x3, mirror_diag_block);
             return;
         }
 
         if(lhs.kind == VertexMap::Abd && rhs.kind == VertexMap::Fem)
         {
-            add_abd_fem(lhs, rhs, H3x3);
+            add_abd_fem(lhs, rhs, H3x3, mirror_diag_block);
             return;
         }
 
         if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Abd)
         {
-            add_fem_abd(lhs, rhs, H3x3);
+            add_fem_abd(lhs, rhs, H3x3, mirror_diag_block);
             return;
         }
 
-        add_abd_abd(lhs, rhs, global_i, global_j, H3x3);
+        add_abd_abd(lhs, rhs, global_i, global_j, H3x3, mirror_diag_block);
     }
 };
 }  // namespace uipc::backend::cuda_mixed
