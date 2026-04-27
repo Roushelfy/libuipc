@@ -792,208 +792,6 @@ class OrderingStructuredChainProvider final : public StructuredChainProvider
     std::vector<StructuredDofSlot> m_slots;
 };
 
-class HostStructuredDryRunSink
-{
-  public:
-    virtual ~HostStructuredDryRunSink() = default;
-
-    virtual void add_rhs(SizeT block, SizeT lane, double value) = 0;
-
-    virtual void add_hessian(SizeT block_i,
-                             SizeT lane_i,
-                             SizeT block_j,
-                             SizeT lane_j,
-                             double value,
-                             double weight) = 0;
-
-    virtual void mark_off_band_drop(SizeT block_i,
-                                    SizeT lane_i,
-                                    SizeT block_j,
-                                    SizeT lane_j,
-                                    double value,
-                                    double weight) = 0;
-};
-
-class CpuStructuredDryRunSink final : public HostStructuredDryRunSink
-{
-  public:
-    CpuStructuredDryRunSink(SizeT block_size, std::vector<SocuApproxBlockLayout> blocks)
-        : m_block_size(block_size)
-        , m_blocks(std::move(blocks))
-        , m_rhs(m_blocks.size() * block_size, 0.0)
-        , m_diag(m_blocks.size() * block_size * block_size, 0.0)
-        , m_first_offdiag(m_blocks.size() > 1
-                              ? (m_blocks.size() - 1) * block_size * block_size
-                              : 0,
-                          0.0)
-    {
-        for(const auto& block : m_blocks)
-        {
-            if(block.block >= m_blocks.size())
-                continue;
-            for(SizeT lane = block.dof_count; lane < m_block_size; ++lane)
-                m_diag[diag_index(block.block, lane, lane)] = 1.0;
-        }
-    }
-
-    void add_rhs(SizeT block, SizeT lane, double value) override
-    {
-        if(!valid_lane(block, lane))
-            return;
-        m_rhs[block * m_block_size + lane] += value;
-        m_rhs_abs_sum += std::abs(value);
-    }
-
-    void add_hessian(SizeT block_i,
-                     SizeT lane_i,
-                     SizeT block_j,
-                     SizeT lane_j,
-                     double value,
-                     double weight) override
-    {
-        if(!valid_lane(block_i, lane_i) || !valid_lane(block_j, lane_j))
-        {
-            mark_off_band_drop(block_i, lane_i, block_j, lane_j, value, weight);
-            return;
-        }
-
-        const SizeT distance =
-            block_i > block_j ? block_i - block_j : block_j - block_i;
-        if(distance > 1)
-        {
-            mark_off_band_drop(block_i, lane_i, block_j, lane_j, value, weight);
-            return;
-        }
-
-        if(distance == 0)
-        {
-            m_diag[diag_index(block_i, lane_i, lane_j)] += value;
-            ++m_diag_write_count;
-            m_diag_contact_abs_sum += std::abs(value);
-            return;
-        }
-
-        const bool ij_is_forward = block_i < block_j;
-        const SizeT left_block   = ij_is_forward ? block_i : block_j;
-        const SizeT row          = ij_is_forward ? lane_j : lane_i;
-        const SizeT col          = ij_is_forward ? lane_i : lane_j;
-        m_first_offdiag[offdiag_index(left_block, row, col)] += value;
-        ++m_first_offdiag_write_count;
-        m_first_offdiag_contact_abs_sum += std::abs(value);
-    }
-
-    void mark_off_band_drop(SizeT,
-                            SizeT,
-                            SizeT,
-                            SizeT,
-                            double value,
-                            double weight) override
-    {
-        ++m_off_band_drop_count;
-        m_off_band_drop_abs_sum += std::abs(value) * std::max(1.0, std::abs(weight));
-    }
-
-    void finalize(SocuApproxDryRunReport& report) const
-    {
-        report.rhs_scalar_count = m_rhs.size();
-        report.diag_scalar_count = m_diag.size();
-        report.first_offdiag_scalar_count = m_first_offdiag.size();
-        report.rhs_nonzero_count = nonzero_count(m_rhs);
-        report.diag_nonzero_count = nonzero_count(m_diag);
-        report.first_offdiag_nonzero_count = nonzero_count(m_first_offdiag);
-        report.first_offdiag_nonzero_index_sum = nonzero_index_sum(m_first_offdiag);
-        report.structured_diag_write_count = m_diag_write_count;
-        report.structured_first_offdiag_write_count = m_first_offdiag_write_count;
-        report.structured_off_band_drop_count = m_off_band_drop_count;
-        report.structured_diag_contact_abs_sum = m_diag_contact_abs_sum;
-        report.structured_first_offdiag_contact_abs_sum =
-            m_first_offdiag_contact_abs_sum;
-        report.structured_off_band_drop_abs_sum = m_off_band_drop_abs_sum;
-        report.rhs_abs_sum = m_rhs_abs_sum;
-    }
-
-    template <typename T>
-    std::vector<T> rhs_as() const
-    {
-        return convert<T>(m_rhs);
-    }
-
-    template <typename T>
-    std::vector<T> diag_as() const
-    {
-        return convert<T>(m_diag);
-    }
-
-    template <typename T>
-    std::vector<T> off_diag_as(std::size_t full_scalar_count) const
-    {
-        std::vector<T> values(full_scalar_count, T{0});
-        const std::size_t copy_count =
-            std::min<std::size_t>(values.size(), m_first_offdiag.size());
-        for(std::size_t i = 0; i < copy_count; ++i)
-            values[i] = static_cast<T>(m_first_offdiag[i]);
-        return values;
-    }
-
-  private:
-    bool valid_lane(SizeT block, SizeT lane) const
-    {
-        return block < m_blocks.size() && lane < m_block_size;
-    }
-
-    SizeT diag_index(SizeT block, SizeT row, SizeT col) const
-    {
-        return (block * m_block_size + row) * m_block_size + col;
-    }
-
-    SizeT offdiag_index(SizeT left_block, SizeT row, SizeT col) const
-    {
-        return (left_block * m_block_size + row) * m_block_size + col;
-    }
-
-    static SizeT nonzero_count(const std::vector<double>& values)
-    {
-        return static_cast<SizeT>(
-            std::count_if(values.begin(), values.end(), [](double v)
-                          { return v != 0.0; }));
-    }
-
-    static SizeT nonzero_index_sum(const std::vector<double>& values)
-    {
-        SizeT sum = 0;
-        for(SizeT i = 0; i < values.size(); ++i)
-        {
-            if(values[i] != 0.0)
-                sum += i;
-        }
-        return sum;
-    }
-
-    template <typename T>
-    static std::vector<T> convert(const std::vector<double>& values)
-    {
-        std::vector<T> converted(values.size());
-        std::transform(values.begin(),
-                       values.end(),
-                       converted.begin(),
-                       [](double value) { return static_cast<T>(value); });
-        return converted;
-    }
-
-    SizeT m_block_size = 0;
-    std::vector<SocuApproxBlockLayout> m_blocks;
-    std::vector<double> m_rhs;
-    std::vector<double> m_diag;
-    std::vector<double> m_first_offdiag;
-    SizeT m_diag_write_count = 0;
-    SizeT m_first_offdiag_write_count = 0;
-    SizeT m_off_band_drop_count = 0;
-    double m_diag_contact_abs_sum = 0.0;
-    double m_first_offdiag_contact_abs_sum = 0.0;
-    double m_off_band_drop_abs_sum = 0.0;
-    double m_rhs_abs_sum = 0.0;
-};
-
 bool build_ordering_provider(const Json&                         ordering,
                              SizeT                               block_size,
                              const std::vector<SocuApproxBlockLayout>& blocks,
@@ -1405,22 +1203,6 @@ void scatter_structured_solution(cudaStream_t                       stream,
 }
 #endif
 
-SizeT optional_size_t(const Json& json, const char* key)
-{
-    SizeT value = 0;
-    if(read_size_t_field(json, key, value))
-        return value;
-    return 0;
-}
-
-double optional_double(const Json& json, const char* key, double fallback = 0.0)
-{
-    auto it = json.find(key);
-    if(it == json.end() || !it->is_number())
-        return fallback;
-    return it->get<double>();
-}
-
 template <typename T>
 std::string socu_dtype_name()
 {
@@ -1666,78 +1448,6 @@ bool validate_mathdx_manifest(const fs::path& manifest_path,
 }
 #endif
 
-void apply_structured_contributions(const Json& contact, HostStructuredDryRunSink& sink)
-{
-    auto it = contact.find("structured_hessian_contributions");
-    if(it == contact.end())
-        it = contact.find("hessian_contributions");
-    if(it == contact.end() || !it->is_array())
-        return;
-
-    for(const Json& entry : *it)
-    {
-        if(!entry.is_object())
-            continue;
-
-        SizeT block_i = 0;
-        SizeT lane_i  = 0;
-        SizeT block_j = 0;
-        SizeT lane_j  = 0;
-        if(!read_size_t_field(entry, "block_i", block_i)
-           || !read_size_t_field(entry, "lane_i", lane_i)
-           || !read_size_t_field(entry, "block_j", block_j)
-           || !read_size_t_field(entry, "lane_j", lane_j))
-        {
-            continue;
-        }
-
-        const double value  = optional_double(entry, "value", 1.0);
-        const double weight = optional_double(entry, "weight", 1.0);
-        sink.add_hessian(block_i, lane_i, block_j, lane_j, value, weight);
-    }
-}
-
-void load_contact_report(SocuApproxDryRunReport& dry_run, HostStructuredDryRunSink& sink)
-{
-    if(dry_run.contact_report_path.empty())
-        return;
-
-    std::ifstream ifs{dry_run.contact_report_path};
-    if(!ifs)
-        throw Exception{fmt::format("SocuApproxSolver contact report '{}' cannot be opened",
-                                    dry_run.contact_report_path)};
-
-    Json report = Json::parse(ifs, nullptr, false);
-    if(report.is_discarded() || !report.is_object())
-        throw Exception{fmt::format("SocuApproxSolver contact report '{}' is not valid JSON",
-                                    dry_run.contact_report_path)};
-
-    const Json& contact =
-        report.contains("contact") && report["contact"].is_object() ? report["contact"] : report;
-    dry_run.near_band_contact_count =
-        optional_size_t(contact, "near_band_contact_count");
-    dry_run.off_band_contact_count =
-        optional_size_t(contact, "off_band_contact_count");
-    dry_run.near_band_contribution_count =
-        optional_size_t(contact, "near_band_contribution_count");
-    dry_run.off_band_contribution_count =
-        optional_size_t(contact, "off_band_contribution_count");
-    dry_run.absorbed_hessian_contribution_count =
-        optional_size_t(contact, "estimated_absorbed_hessian_contribution_count");
-    dry_run.dropped_hessian_contribution_count =
-        optional_size_t(contact, "estimated_dropped_contribution_count");
-    dry_run.contribution_near_band_ratio =
-        optional_double(contact, "contribution_near_band_ratio");
-    dry_run.contribution_off_band_ratio =
-        optional_double(contact, "contribution_off_band_ratio");
-    dry_run.weighted_near_band_ratio =
-        optional_double(contact, "weighted_near_band_ratio");
-    dry_run.weighted_off_band_ratio =
-        optional_double(contact, "weighted_off_band_ratio");
-
-    apply_structured_contributions(contact, sink);
-}
-
 Json to_json(const SocuApproxDryRunReport& report)
 {
     Json blocks = Json::array();
@@ -1754,7 +1464,6 @@ Json to_json(const SocuApproxDryRunReport& report)
                 {"mode", report.mode},
                 {"packed", report.packed},
                 {"ordering_report", report.ordering_report_path},
-                {"contact_report", report.contact_report_path},
                 {"provider_kind", report.provider_kind},
                 {"structured_scope", report.structured_scope},
                 {"block_size", report.block_size},
@@ -1875,10 +1584,8 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept
         return "none";
     case SocuApproxGateReason::SocuDisabled:
         return "socu_disabled";
-    case SocuApproxGateReason::OrderingMissing:
-        return "ordering_missing";
-    case SocuApproxGateReason::OrderingReportInvalid:
-        return "ordering_report_invalid";
+    case SocuApproxGateReason::OrderingInvalid:
+        return "ordering_invalid";
     case SocuApproxGateReason::UnsupportedPrecisionContract:
         return "unsupported_precision_contract";
     case SocuApproxGateReason::UnsupportedBlockSize:
@@ -1933,7 +1640,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     if(m_mode != "dry_run" && m_mode != "solve")
     {
         m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingReportInvalid,
+            SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/mode must be 'dry_run' or 'solve', got '{}'",
                         m_mode));
         throw_gate_failure(m_gate_report);
@@ -1960,7 +1667,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
        && structured_scope != "multi_provider")
     {
         m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingReportInvalid,
+            SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/structured_scope must be "
                         "'single_provider' or 'multi_provider', got '{}'",
                         structured_scope));
@@ -1970,21 +1677,17 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     auto ordering_source_attr =
         config.find<std::string>("linear_system/socu_approx/ordering_source");
     const std::string ordering_source =
-        ordering_source_attr ? ordering_source_attr->view()[0] : std::string{"report"};
-    if(ordering_source != "report" && ordering_source != "init_time")
+        ordering_source_attr ? ordering_source_attr->view()[0] : std::string{"init_time"};
+    if(ordering_source != "init_time")
     {
         m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingReportInvalid,
-            fmt::format("linear_system/socu_approx/ordering_source must be 'report' or "
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/ordering_source only supports "
                         "'init_time', got '{}'",
                         ordering_source));
         throw_gate_failure(m_gate_report);
     }
 
-    auto ordering_report_attr =
-        config.find<std::string>("linear_system/socu_approx/ordering_report");
-    std::string ordering_report =
-        ordering_report_attr ? ordering_report_attr->view()[0] : std::string{};
     auto generated_ordering_report_attr =
         config.find<std::string>("linear_system/socu_approx/generated_ordering_report");
     std::string generated_ordering_report =
@@ -1993,122 +1696,96 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 
     fs::path ordering_report_path;
     Json     report;
-    if(ordering_source == "report")
+
+    auto* abd = find<ABDLinearSubsystem>();
+    SizeT body_count = abd ? abd->body_count() : SizeT{0};
+    if(body_count == 0)
+        body_count = count_abd_bodies_from_scene(world());
+    const SizeT fem_vertex_count = fem_vertex_count_from_scene(world());
+    if(body_count == 0 && fem_vertex_count == 0)
     {
-        if(ordering_report.empty())
-        {
-            m_gate_report = make_failure(
-                SocuApproxGateReason::OrderingMissing,
-                "linear_system/socu_approx/ordering_report is empty");
-            throw_gate_failure(m_gate_report);
-        }
-
-        ordering_report_path = absolute_workspace_path(workspace(), ordering_report);
-        std::ifstream ifs{ordering_report_path};
-        if(!ifs)
-        {
-            m_gate_report = make_failure(SocuApproxGateReason::OrderingMissing,
-                                         fmt::format("ordering report '{}' cannot be opened",
-                                                     ordering_report_path.string()),
-                                         ordering_report_path.string());
-            throw_gate_failure(m_gate_report);
-        }
-
-        report = Json::parse(ifs, nullptr, false);
-        if(report.is_discarded() || !report.is_object())
-        {
-            m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
-                                         fmt::format("ordering report '{}' is not valid JSON",
-                                                     ordering_report_path.string()),
-                                         ordering_report_path.string());
-            throw_gate_failure(m_gate_report);
-        }
+        m_gate_report = make_failure(
+            SocuApproxGateReason::StructuredSubsystemUnsupported,
+            "init-time socu_approx ordering requires at least one supported ABD body or FEM vertex");
+        throw_gate_failure(m_gate_report);
     }
-    else
+    if(structured_scope == "single_provider" && body_count > 0
+       && fem_vertex_count > 0)
     {
-        auto* abd = find<ABDLinearSubsystem>();
-        SizeT body_count = abd ? abd->body_count() : SizeT{0};
-        if(body_count == 0)
-            body_count = count_abd_bodies_from_scene(world());
-        const SizeT fem_vertex_count = fem_vertex_count_from_scene(world());
-        if(body_count == 0 && fem_vertex_count == 0)
-        {
-            m_gate_report = make_failure(
-                SocuApproxGateReason::StructuredSubsystemUnsupported,
-                "init-time socu_approx ordering requires at least one supported ABD body or FEM vertex");
-            throw_gate_failure(m_gate_report);
-        }
-        if(structured_scope == "single_provider" && body_count > 0
-           && fem_vertex_count > 0)
-        {
-            m_gate_report = make_failure(
-                SocuApproxGateReason::StructuredSubsystemUnsupported,
-                "multi_provider_required: init-time socu_approx ordering found both ABD and FEM providers; set linear_system/socu_approx/structured_scope='multi_provider' to enable mixed-provider ordering");
-            throw_gate_failure(m_gate_report);
-        }
+        m_gate_report = make_failure(
+            SocuApproxGateReason::StructuredSubsystemUnsupported,
+            "multi_provider_required: init-time socu_approx ordering found both ABD and FEM providers; set linear_system/socu_approx/structured_scope='multi_provider' to enable mixed-provider ordering");
+        throw_gate_failure(m_gate_report);
+    }
 
-        auto ordering_orderer_attr =
-            config.find<std::string>("linear_system/socu_approx/ordering_orderer");
-        auto ordering_block_size_attr =
-            config.find<std::string>("linear_system/socu_approx/ordering_block_size");
-        const std::string ordering_orderer =
-            ordering_orderer_attr ? ordering_orderer_attr->view()[0]
-                                  : std::string{"auto_stable"};
-        const std::string ordering_block_size =
-            ordering_block_size_attr ? ordering_block_size_attr->view()[0]
-                                     : std::string{"auto"};
+    auto ordering_orderer_attr =
+        config.find<std::string>("linear_system/socu_approx/ordering_orderer");
+    auto ordering_block_size_attr =
+        config.find<std::string>("linear_system/socu_approx/ordering_block_size");
+    const std::string ordering_orderer =
+        ordering_orderer_attr ? ordering_orderer_attr->view()[0]
+                              : std::string{"auto_stable"};
+    const std::string ordering_block_size =
+        ordering_block_size_attr ? ordering_block_size_attr->view()[0]
+                                 : std::string{"auto"};
+    if(ordering_block_size != "auto" && ordering_block_size != "32"
+       && ordering_block_size != "64")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::UnsupportedBlockSize,
+            fmt::format("linear_system/socu_approx/ordering_block_size must be "
+                        "'auto', '32', or '64', got '{}'",
+                        ordering_block_size));
+        throw_gate_failure(m_gate_report);
+    }
 
-        try
+    try
+    {
+        if(body_count > 0 && fem_vertex_count > 0)
         {
-            if(body_count > 0 && fem_vertex_count > 0)
-            {
-                report = generate_mixed_abd_fem_init_time_ordering_report(
-                    world(),
-                    body_count,
-                    ordering_orderer,
-                    ordering_block_size);
-            }
-            else if(body_count > 0)
-            {
-                report = generate_abd_init_time_ordering_report(
-                    body_count,
-                    ordering_orderer,
-                    ordering_block_size);
-                report["provider_kind"] = "abd_only";
-            }
-            else
-            {
-                report = generate_fem_init_time_ordering_report(
-                    world(),
-                    ordering_orderer,
-                    ordering_block_size);
-            }
+            report = generate_mixed_abd_fem_init_time_ordering_report(
+                world(),
+                body_count,
+                ordering_orderer,
+                ordering_block_size);
         }
-        catch(const std::exception& e)
+        else if(body_count > 0)
         {
-            m_gate_report = make_failure(
-                SocuApproxGateReason::OrderingReportInvalid,
-                fmt::format("init-time ordering generation failed: {}", e.what()));
-            throw_gate_failure(m_gate_report);
+            report = generate_abd_init_time_ordering_report(
+                body_count,
+                ordering_orderer,
+                ordering_block_size);
+            report["provider_kind"] = "abd_only";
         }
-
-        if(!generated_ordering_report.empty())
-            ordering_report_path =
-                absolute_workspace_path(workspace(), generated_ordering_report);
-        else if(!ordering_report.empty())
-            ordering_report_path = absolute_workspace_path(workspace(), ordering_report);
         else
-            ordering_report_path = default_generated_ordering_report_path(workspace());
-        write_json_report(ordering_report_path, report);
-        logger::info("Generated socu_approx init-time ordering report at {}",
-                     ordering_report_path.string());
+        {
+            report = generate_fem_init_time_ordering_report(
+                world(),
+                ordering_orderer,
+                ordering_block_size);
+        }
     }
+    catch(const std::exception& e)
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("init-time ordering generation failed: {}", e.what()));
+        throw_gate_failure(m_gate_report);
+    }
+
+    ordering_report_path =
+        generated_ordering_report.empty()
+            ? default_generated_ordering_report_path(workspace())
+            : absolute_workspace_path(workspace(), generated_ordering_report);
+    write_json_report(ordering_report_path, report);
+    logger::info("Generated socu_approx init-time ordering report at {}",
+                 ordering_report_path.string());
 
     const Json* candidate = selected_candidate_json(report);
     const Json* ordering  = ordering_json(*candidate);
     if(!ordering || !has_basic_ordering_schema(*ordering))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
+        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
                                      "ordering report is missing the required ordering mapping schema",
                                      ordering_report_path.string());
         throw_gate_failure(m_gate_report);
@@ -2119,7 +1796,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     if(report.contains("provider_kind") && report["provider_kind"].is_string())
         m_gate_report.provider_kind = report["provider_kind"].get<std::string>();
     else
-        m_gate_report.provider_kind = "ordering_report";
+        m_gate_report.provider_kind = "init_time";
     m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
     if(m_gate_report.block_size != 32 && m_gate_report.block_size != 64)
     {
@@ -2148,7 +1825,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     if(!parse_atom_dof_count(*ordering, ordering_dof_count, ordering_detail)
        || !parse_block_layouts(*ordering, block_layouts, ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
+        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
                                      ordering_detail.empty()
                                          ? "ordering report has an empty block layout"
                                          : ordering_detail,
@@ -2166,7 +1843,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                                 padding_slot_count,
                                 ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
+        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
                                      ordering_detail.empty()
                                          ? "ordering report cannot build a structured provider"
                                          : ordering_detail,
@@ -2204,7 +1881,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 
     if(!validate_atom_inverse_mapping(*ordering, ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingReportInvalid,
+        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
                                      ordering_detail,
                                      ordering_report_path.string());
         m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
@@ -2250,21 +1927,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             ? fs::absolute(fs::path{workspace()} / "socu_approx_dry_run_report.json")
             : absolute_workspace_path(workspace(), dry_run_report);
 
-    auto contact_report_attr =
-        config.find<std::string>("linear_system/socu_approx/contact_report");
-    std::string contact_report =
-        contact_report_attr ? contact_report_attr->view()[0] : std::string{};
-    m_dry_run_uses_contact_report = m_mode == "dry_run" && !contact_report.empty();
-    if(m_mode == "solve" && !contact_report.empty())
-    {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::OrderingReportInvalid,
-            "linear_system/socu_approx/contact_report is dry-run/debug only and is not accepted in solve mode",
-            ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
-    }
-
     m_dry_run_report                         = SocuApproxDryRunReport{};
     m_dry_run_report.mode =
         m_mode == "solve" ? "structured_strict_solve" : "structured_dry_run";
@@ -2272,9 +1934,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_dry_run_report.ordering_report_path    = ordering_report_path.string();
     m_dry_run_report.provider_kind           = m_gate_report.provider_kind;
     m_dry_run_report.structured_scope        = structured_scope;
-    m_dry_run_report.contact_report_path =
-        contact_report.empty() ? std::string{}
-                               : absolute_workspace_path(workspace(), contact_report).string();
     m_dry_run_report.block_size         = m_gate_report.block_size;
     m_dry_run_report.block_count        = block_layouts.size();
     m_dry_run_report.chain_atom_count   = ordering->at("chain_to_old").size();
@@ -2436,7 +2095,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         throw_gate_failure(m_gate_report);
 #endif
     }
-    else if(!m_dry_run_uses_contact_report)
+    else
     {
 #if UIPC_WITH_SOCU_NATIVE
         socu_native::ProblemShape shape{
@@ -2465,9 +2124,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 
     logger::info("SocuApproxSolver {} enabled: block_size={}, blocks={}, report='{}'",
                  m_mode == "solve" ? "strict structured solve"
-                                    : (m_dry_run_uses_contact_report
-                                           ? "contact-report dry-run"
-                                           : "structured assembly dry-run"),
+                                    : "structured assembly dry-run",
                  m_dry_run_report.block_size,
                  m_dry_run_report.block_count,
                  m_dry_run_report.report_path);
@@ -2476,9 +2133,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
 void SocuApproxSolver::prepare_structured_chain(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
-    if(m_mode == "dry_run" && m_dry_run_uses_contact_report)
-        return;
-
 #if !UIPC_WITH_SOCU_NATIVE
     throw Exception{"SocuApproxSolver structured solve reached without socu_native support"};
 #else
@@ -2607,8 +2261,6 @@ void SocuApproxSolver::prepare_structured_chain(
 void SocuApproxSolver::finalize_structured_chain(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
-    if(m_mode == "dry_run" && m_dry_run_uses_contact_report)
-        return;
     if(info.report_counters_enabled())
     {
         std::array<IndexT, 5> contact_counts{};
@@ -2937,57 +2589,15 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
 
 void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
 {
-    using StoreScalar = GlobalLinearSystem::StoreScalar;
     using SolveScalar = GlobalLinearSystem::SolveScalar;
 
     if(m_mode == "dry_run")
     {
-        if(m_dry_run_uses_contact_report)
-        {
-            CpuStructuredDryRunSink sink{m_dry_run_report.block_size,
-                                         m_dry_run_report.blocks};
-            std::vector<StoreScalar> host_rhs(info.b().size());
-
-            {
-                Timer timer{"SocuApprox Dry Run Pack"};
-                auto  start = std::chrono::steady_clock::now();
-
-                m_dry_run_report.packed = true;
-                m_dry_run_report.active_rhs_scalar_count = info.b().size();
-                m_dry_run_report.diag_block_count = m_dry_run_report.blocks.size();
-                m_dry_run_report.first_offdiag_block_count =
-                    m_dry_run_report.blocks.empty() ? 0 : m_dry_run_report.blocks.size() - 1;
-
-                if(!host_rhs.empty())
-                    info.b().buffer_view().copy_to(host_rhs.data());
-
-                for(const StructuredDofSlot& slot : m_dof_slots)
-                {
-                    if(slot.is_padding || slot.old_dof < 0)
-                        continue;
-                    const auto old_dof = static_cast<SizeT>(slot.old_dof);
-                    if(old_dof < host_rhs.size())
-                        sink.add_rhs(slot.block,
-                                     slot.lane,
-                                     static_cast<double>(host_rhs[old_dof]));
-                }
-
-                load_contact_report(m_dry_run_report, sink);
-                sink.finalize(m_dry_run_report);
-
-                auto stop = std::chrono::steady_clock::now();
-                m_dry_run_report.dry_run_pack_time_ms =
-                    std::chrono::duration<double, std::milli>(stop - start).count();
-            }
-        }
-
         m_dry_run_report.direction_available = false;
         m_dry_run_report.status_reason =
             std::string{to_string(SocuApproxGateReason::DryRunNoDirection)};
         m_dry_run_report.status_detail =
-            m_dry_run_uses_contact_report
-                ? "structured contact dry-run completed without a solve direction"
-                : "structured dry-run assembly completed, but no socu solve direction is available";
+            "structured dry-run assembly completed, but no socu solve direction is available";
         write_dry_run_report(m_dry_run_report);
 
         m_gate_report.reason = SocuApproxGateReason::DryRunNoDirection;

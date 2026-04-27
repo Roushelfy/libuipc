@@ -31,14 +31,12 @@ geometry::AttributeCollection default_scene_config() noexcept
     // or:
     //  - linear_pcg (30% slower)
     config.create("linear_system/solver", std::string{"fused_pcg"});
-    config.create("linear_system/socu_approx/ordering_source", std::string{"report"});
+    config.create("linear_system/socu_approx/ordering_source", std::string{"init_time"});
     config.create("linear_system/socu_approx/ordering_orderer", std::string{"auto_stable"});
     config.create("linear_system/socu_approx/ordering_block_size", std::string{"auto"});
     config.create("linear_system/socu_approx/structured_scope",
                   std::string{"multi_provider"});
     config.create("linear_system/socu_approx/generated_ordering_report", std::string{});
-    config.create("linear_system/socu_approx/ordering_report", std::string{});
-    config.create("linear_system/socu_approx/contact_report", std::string{});
     config.create("linear_system/socu_approx/dry_run_report", std::string{});
     config.create("linear_system/socu_approx/mode", std::string{"solve"});
     config.create("linear_system/socu_approx/damping_shift", Float{1e-6});

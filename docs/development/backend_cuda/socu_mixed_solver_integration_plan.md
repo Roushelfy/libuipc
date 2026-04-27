@@ -91,6 +91,10 @@ Typical strict structured solve configuration:
 
 `damping_shift = 0.0` is supported. The default remains `1e-6`.
 
+`ordering_source` only supports `init_time`; external ordering report mode has
+been removed from the solver path. `generated_ordering_report` may still be set
+to write the init-time ordering diagnostics for inspection.
+
 `mode = dry_run` is retained for assembly/report validation. Dry-run reports
 use `status.reason = dry_run_no_direction` because no direction is produced.
 

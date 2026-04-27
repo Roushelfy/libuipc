@@ -11,8 +11,7 @@ enum class SocuApproxGateReason
 {
     None,
     SocuDisabled,
-    OrderingMissing,
-    OrderingReportInvalid,
+    OrderingInvalid,
     UnsupportedPrecisionContract,
     UnsupportedBlockSize,
     SocuMathDxUnsupported,
@@ -73,7 +72,6 @@ struct SocuApproxDryRunReport
     std::string mode = "structured_dry_run";
     std::string report_path;
     std::string ordering_report_path;
-    std::string contact_report_path;
     std::string provider_kind;
     std::string structured_scope = "multi_provider";
 

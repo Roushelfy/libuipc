@@ -20,13 +20,9 @@ class SocuApproxSolver : public LinearSolver
         requirements.needs_dof_extent       = true;
         requirements.needs_gradient_b       = true;
         requirements.needs_full_sparse_A    = false;
-        requirements.needs_structured_chain =
-            m_mode == "solve" || (m_mode == "dry_run" && !m_dry_run_uses_contact_report);
+        requirements.needs_structured_chain = true;
         requirements.needs_preconditioner   = false;
-        if(m_mode == "dry_run" && m_dry_run_uses_contact_report)
-            requirements.assembly_mode = NewtonAssemblyMode::GradientOnly;
-        else
-            requirements.assembly_mode = NewtonAssemblyMode::GradientStructuredHessian;
+        requirements.assembly_mode = NewtonAssemblyMode::GradientStructuredHessian;
         return requirements;
     }
 
@@ -62,7 +58,6 @@ class SocuApproxSolver : public LinearSolver
     bool        m_debug_validation = false;
     bool        m_debug_timing = false;
     bool        m_report_each_solve = false;
-    bool        m_dry_run_uses_contact_report = false;
 
     struct Runtime;
     std::unique_ptr<Runtime> m_runtime;
