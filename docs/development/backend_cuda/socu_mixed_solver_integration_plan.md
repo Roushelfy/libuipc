@@ -78,7 +78,6 @@ Typical strict structured solve configuration:
   "linear_system": {
     "solver": "socu_approx",
     "socu_approx": {
-      "mode": "solve",
       "structured_scope": "multi_provider",
       "ordering_source": "init_time",
       "ordering_orderer": "auto_stable",
@@ -95,12 +94,14 @@ Typical strict structured solve configuration:
 been removed from the solver path. `generated_ordering_report` may still be set
 to write the init-time ordering diagnostics for inspection.
 
-`mode = dry_run` is retained for assembly/report validation. Dry-run reports
-use `status.reason = dry_run_no_direction` because no direction is produced.
+SOCU approx now exposes only the strict structured direct solve path. The
+previous assembly-only validation path has been removed; structured assembly
+diagnostics are reported from the real solve path through
+`linear_system/socu_approx/report`.
 
 ## Report Fields
 
-The dry-run/solve report records:
+The solve report records:
 
 - layout size, block utilization, active and padding DoF counts
 - ordering quality diagnostics and configured thresholds

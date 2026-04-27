@@ -19,7 +19,6 @@ enum class SocuApproxGateReason
     StructuredProviderMissing,
     StructuredCoverageInvalid,
     StructuredSubsystemUnsupported,
-    DryRunNoDirection,
     DirectionInvalid,
     SocuRuntimeError,
     LineSearchRejected,
@@ -66,10 +65,9 @@ struct SocuApproxBlockLayout
     SizeT dof_count   = 0;
 };
 
-struct SocuApproxDryRunReport
+struct SocuApproxSolveReport
 {
     bool        packed = false;
-    std::string mode = "structured_dry_run";
     std::string report_path;
     std::string ordering_report_path;
     std::string provider_kind;
@@ -122,7 +120,6 @@ struct SocuApproxDryRunReport
     double structured_off_band_drop_abs_sum     = 0.0;
     double rhs_abs_sum                         = 0.0;
 
-    double dry_run_pack_time_ms = 0.0;
     double socu_factor_solve_time_ms = 0.0;
     double scatter_time_ms = 0.0;
     std::string stream_source;
@@ -154,4 +151,6 @@ struct SocuApproxDryRunReport
 
     std::vector<SocuApproxBlockLayout> blocks;
 };
+
+void write_solve_report(const SocuApproxSolveReport& report);
 }  // namespace uipc::backend::cuda_mixed

@@ -365,123 +365,6 @@ void require_socu_approx_init_failure(std::string_view name,
     REQUIRE(message.find(expected_reason) != std::string::npos);
 }
 
-void require_socu_approx_dry_run(std::string_view name, SizeT block_size)
-{
-    auto config                       = linear_solver_selection_config();
-    config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "dry_run";
-    config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
-    config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.0;
-    config["linear_system"]["socu_approx"]["max_off_band_ratio"] = 1.0;
-    config["linear_system"]["socu_approx"]["max_off_band_drop_norm_ratio"] = 1.0;
-    config["linear_system"]["socu_approx"]["ordering_block_size"] =
-        std::to_string(block_size);
-
-    auto output_path = contract_workspace(name);
-    fs::create_directories(output_path);
-    auto ordering_path = output_path / "generated_ordering.json";
-    auto dry_run_path  = output_path / "dry_run.json";
-    config["linear_system"]["socu_approx"]["generated_ordering_report"] =
-        ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
-        dry_run_path.string();
-    test::Scene::dump_config(config, output_path.string());
-
-    Engine engine{"cuda_mixed", output_path.string()};
-    World  world{engine};
-    Scene  scene{config};
-    build_single_abd_tet(scene);
-
-    world.init(scene);
-    REQUIRE(world.is_valid());
-
-    world.advance();
-    REQUIRE(world.is_valid());
-    world.retrieve();
-    require_cuda_sync();
-    REQUIRE(fs::exists(ordering_path));
-    REQUIRE(fs::exists(dry_run_path));
-
-    std::ifstream ifs{dry_run_path};
-    Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
-    REQUIRE(report["status"]["reason"].get<std::string>()
-            == "dry_run_no_direction");
-    REQUIRE(report["status"]["direction_available"].get<bool>() == false);
-    REQUIRE(report["block_size"].get<SizeT>() == block_size);
-    REQUIRE(report["structured_slot_count"].get<SizeT>() == block_size);
-    REQUIRE(report["padding_slot_count"].get<SizeT>() == block_size - 12);
-    CHECK(std::abs(report["block_utilization"].get<double>()
-                   - static_cast<double>(12) / static_cast<double>(block_size))
-          < 1e-12);
-    REQUIRE(report["layout"]["block_count"].get<SizeT>() == 1);
-    REQUIRE(report["layout"]["diag_block_count"].get<SizeT>() == 1);
-    REQUIRE(report["layout"]["first_offdiag_block_count"].get<SizeT>() == 0);
-    REQUIRE(report["layout"]["active_rhs_scalar_count"].get<SizeT>() == 12);
-    REQUIRE(report["layout"]["rhs_scalar_count"].get<SizeT>() == block_size);
-    REQUIRE(report["layout"]["diag_scalar_count"].get<SizeT>() == block_size * block_size);
-    REQUIRE(report["layout"]["first_offdiag_scalar_count"].get<SizeT>() == 0);
-    REQUIRE(report["layout"]["blocks"].size() == 1);
-    REQUIRE(report["layout"]["blocks"][0]["dof_offset"].get<SizeT>() == 0);
-    REQUIRE(report["layout"]["blocks"][0]["dof_count"].get<SizeT>() == 12);
-    REQUIRE(report["contact"]["off_band_contribution_count"].get<SizeT>() == 0);
-    CHECK(report["timing"]["dry_run_pack_time_ms"].get<double>() >= 0.0);
-}
-
-void require_socu_approx_inter_primitive_structured_dry_run(std::string_view name)
-{
-    auto config                       = linear_solver_selection_config();
-    config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "dry_run";
-    config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
-    config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
-    config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
-    config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
-    config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.0;
-    config["linear_system"]["socu_approx"]["max_off_band_ratio"] = 1.0;
-    config["linear_system"]["socu_approx"]["max_off_band_drop_norm_ratio"] = 1.0;
-
-    auto output_path = contract_workspace(name);
-    fs::create_directories(output_path);
-    auto ordering_path = output_path / "generated_ordering.json";
-    auto dry_run_path  = output_path / "dry_run.json";
-    config["linear_system"]["socu_approx"]["generated_ordering_report"] =
-        ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
-        dry_run_path.string();
-    test::Scene::dump_config(config, output_path.string());
-
-    Engine engine{"cuda_mixed", output_path.string()};
-    World  world{engine};
-    Scene  scene{config};
-    build_soft_vertex_triangle_stitch_scene(scene);
-
-    world.init(scene);
-    REQUIRE(world.is_valid());
-    REQUIRE(fs::exists(ordering_path));
-
-    world.advance();
-    REQUIRE(world.is_valid());
-    world.retrieve();
-    require_cuda_sync();
-    REQUIRE(fs::exists(dry_run_path));
-
-    std::ifstream ifs{dry_run_path};
-    Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_dry_run");
-    REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
-    REQUIRE(report["structured_scope"].get<std::string>() == "multi_provider");
-    REQUIRE(report["status"]["reason"].get<std::string>()
-            == "dry_run_no_direction");
-    REQUIRE(report["status"]["direction_available"].get<bool>() == false);
-    REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
-    const SizeT absorbed =
-        report["contact"]["absorbed_hessian_contribution_count"].get<SizeT>();
-    const SizeT dropped =
-        report["contact"]["dropped_hessian_contribution_count"].get<SizeT>();
-    CHECK(absorbed + dropped > 0);
-}
-
 void require_socu_approx_strict_solve(std::string_view name)
 {
 #if !UIPC_WITH_SOCU_NATIVE
@@ -499,7 +382,6 @@ void require_socu_approx_strict_solve(std::string_view name)
     config["dt"]                      = 0.001;
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "32";
     config["linear_system"]["socu_approx"]["damping_shift"] = 0.0;
@@ -510,10 +392,10 @@ void require_socu_approx_strict_solve(std::string_view name)
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
     auto ordering_path = output_path / "generated_ordering.json";
-    auto report_path   = output_path / "surrogate_report.json";
+    auto report_path   = output_path / "solve_report.json";
     config["linear_system"]["socu_approx"]["generated_ordering_report"] =
         ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -533,7 +415,6 @@ void require_socu_approx_strict_solve(std::string_view name)
     REQUIRE(fs::exists(report_path));
     std::ifstream ifs{report_path};
     Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
     REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
@@ -568,7 +449,6 @@ void require_socu_approx_strict_solve_multi_abd(std::string_view name,
     config["dt"]                      = 0.001;
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_block_size"] =
         std::to_string(block_size);
     config["linear_system"]["socu_approx"]["damping_shift"] = 0.0;
@@ -579,10 +459,10 @@ void require_socu_approx_strict_solve_multi_abd(std::string_view name,
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
     auto ordering_path = output_path / "generated_ordering.json";
-    auto report_path   = output_path / "surrogate_report.json";
+    auto report_path   = output_path / "solve_report.json";
     config["linear_system"]["socu_approx"]["generated_ordering_report"] =
         ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -602,7 +482,6 @@ void require_socu_approx_strict_solve_multi_abd(std::string_view name,
     REQUIRE(fs::exists(report_path));
     std::ifstream ifs{report_path};
     Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
     REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
@@ -630,7 +509,6 @@ void require_socu_approx_init_time_ordering_strict_solve(std::string_view name)
     config["dt"]                      = 0.001;
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
     config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
@@ -643,11 +521,11 @@ void require_socu_approx_init_time_ordering_strict_solve(std::string_view name)
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
     auto ordering_path = output_path / "generated_ordering.json";
-    auto report_path   = output_path / "surrogate_report.json";
+    auto report_path   = output_path / "solve_report.json";
 
     config["linear_system"]["socu_approx"]["generated_ordering_report"] =
         ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -689,7 +567,6 @@ void require_socu_approx_init_time_ordering_strict_solve(std::string_view name)
     REQUIRE(fs::exists(report_path));
     std::ifstream report_ifs{report_path};
     Json          report = Json::parse(report_ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
     REQUIRE(report["ordering_report"].get<std::string>() == ordering_path.string());
@@ -715,7 +592,6 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
     config["dt"]                      = 0.001;
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
     config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
@@ -728,10 +604,10 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
     auto ordering_path = output_path / "generated_ordering.json";
-    auto report_path   = output_path / "surrogate_report.json";
+    auto report_path   = output_path / "solve_report.json";
     config["linear_system"]["socu_approx"]["generated_ordering_report"] =
         ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -757,7 +633,6 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
     REQUIRE(fs::exists(report_path));
     std::ifstream report_ifs{report_path};
     Json          report = Json::parse(report_ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
     REQUIRE(report["structured_scope"].get<std::string>() == "multi_provider");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
@@ -784,7 +659,6 @@ void require_socu_approx_init_time_mixed_explicit_scope_solve(std::string_view n
     config["dt"]                      = 0.001;
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
     config["linear_system"]["socu_approx"]["structured_scope"] =
         "multi_provider";
@@ -796,8 +670,8 @@ void require_socu_approx_init_time_mixed_explicit_scope_solve(std::string_view n
 
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
-    auto report_path = output_path / "surrogate_report.json";
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    auto report_path = output_path / "solve_report.json";
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -817,7 +691,6 @@ void require_socu_approx_init_time_mixed_explicit_scope_solve(std::string_view n
     REQUIRE(fs::exists(report_path));
     std::ifstream report_ifs{report_path};
     Json          report = Json::parse(report_ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["provider_kind"].get<std::string>()
             == "multi_provider");
     REQUIRE(report["structured_scope"].get<std::string>()
@@ -845,7 +718,6 @@ void require_socu_approx_runtime_contact_smoke(std::string_view name)
     config["contact"]["friction"]["enable"] = false;
     config["contact"]["constitution"] = "ipc";
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "32";
     config["linear_system"]["socu_approx"]["damping_shift"] = 0.0;
@@ -856,10 +728,10 @@ void require_socu_approx_runtime_contact_smoke(std::string_view name)
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
     auto ordering_path = output_path / "generated_ordering.json";
-    auto report_path   = output_path / "surrogate_report.json";
+    auto report_path   = output_path / "solve_report.json";
     config["linear_system"]["socu_approx"]["generated_ordering_report"] =
         ordering_path.string();
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -879,7 +751,6 @@ void require_socu_approx_runtime_contact_smoke(std::string_view name)
     REQUIRE(fs::exists(report_path));
     std::ifstream ifs{report_path};
     Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
     REQUIRE(report["gates"]["complete_dof_coverage"].get<bool>() == true);
@@ -909,7 +780,6 @@ void require_socu_approx_fem_runtime_contact_smoke(std::string_view name)
     config["contact"]["friction"]["enable"] = false;
     config["contact"]["constitution"] = "ipc";
     config["linear_system"]["solver"] = "socu_approx";
-    config["linear_system"]["socu_approx"]["mode"] = "solve";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["damping_shift"] = 1.0;
@@ -919,8 +789,8 @@ void require_socu_approx_fem_runtime_contact_smoke(std::string_view name)
 
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
-    auto report_path = output_path / "surrogate_report.json";
-    config["linear_system"]["socu_approx"]["dry_run_report"] =
+    auto report_path = output_path / "solve_report.json";
+    config["linear_system"]["socu_approx"]["report"] =
         report_path.string();
     test::Scene::dump_config(config, output_path.string());
 
@@ -940,7 +810,6 @@ void require_socu_approx_fem_runtime_contact_smoke(std::string_view name)
     REQUIRE(fs::exists(report_path));
     std::ifstream ifs{report_path};
     Json          report = Json::parse(ifs);
-    REQUIRE(report["mode"].get<std::string>() == "structured_strict_solve");
     REQUIRE(report["provider_kind"].get<std::string>() == "fem_only");
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["status"]["reason"].get<std::string>() == "none");
@@ -1021,22 +890,34 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
 
     SECTION("socu_approx_reports_diagnostic_thresholds")
     {
+#if !UIPC_WITH_SOCU_NATIVE
+        WARN("socu_native is not enabled in this build; SOCU diagnostic threshold solve was not run");
+#else
+        std::string skip_reason;
+        if(!can_run_socu_strict_contract(skip_reason))
+        {
+            WARN(skip_reason);
+            return;
+        }
+
         auto config                       = linear_solver_selection_config();
+        config["dt"]                      = 0.001;
+        config["gravity"]                 = Vector3{0, -0.1, 0};
         config["linear_system"]["solver"] = "socu_approx";
-        config["linear_system"]["socu_approx"]["mode"] = "dry_run";
         config["linear_system"]["socu_approx"]["min_near_band_ratio"] = 0.9;
         config["linear_system"]["socu_approx"]["max_off_band_ratio"] = 0.1;
         config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.65;
         config["linear_system"]["socu_approx"]["ordering_block_size"] = "32";
+        config["linear_system"]["socu_approx"]["damping_shift"] = 0.0;
+        config["linear_system"]["socu_approx"]["report_each_solve"] = 1;
         auto output_path =
             contract_workspace("linear_solver_socu_approx_threshold_diagnostics");
         fs::create_directories(output_path);
         auto ordering_path = output_path / "generated_ordering.json";
-        auto dry_run_path  = output_path / "dry_run.json";
+        auto report_path   = output_path / "report.json";
         config["linear_system"]["socu_approx"]["generated_ordering_report"] =
             ordering_path.string();
-        config["linear_system"]["socu_approx"]["dry_run_report"] =
-            dry_run_path.string();
+        config["linear_system"]["socu_approx"]["report"] = report_path.string();
         test::Scene::dump_config(config, output_path.string());
 
         Engine engine{"cuda_mixed", output_path.string()};
@@ -1051,28 +932,18 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
         REQUIRE(world.is_valid());
         world.retrieve();
         require_cuda_sync();
-        REQUIRE(fs::exists(dry_run_path));
+        REQUIRE(fs::exists(report_path));
 
-        std::ifstream ifs{dry_run_path};
+        std::ifstream ifs{report_path};
         Json          report = Json::parse(ifs);
-        REQUIRE(report["status"]["reason"].get<std::string>()
-                == "dry_run_no_direction");
+        REQUIRE(report["status"]["reason"].get<std::string>() == "none");
         REQUIRE(report["gates"]["near_band_ratio"].get<double>() == 1.0);
         REQUIRE(report["gates"]["off_band_ratio"].get<double>() == 0.0);
         REQUIRE(report["gates"]["min_near_band_ratio"].get<double>() == 0.9);
         REQUIRE(report["gates"]["max_off_band_ratio"].get<double>() == 0.1);
         REQUIRE(report["gates"]["min_block_utilization"].get<double>() == 0.65);
         CHECK(report["block_utilization"].get<double>() < 0.65);
-    }
-
-    SECTION("socu_approx_init_time_dry_run_32")
-    {
-        require_socu_approx_dry_run("linear_solver_socu_approx_dry_run_32", 32);
-    }
-
-    SECTION("socu_approx_init_time_dry_run_64")
-    {
-        require_socu_approx_dry_run("linear_solver_socu_approx_dry_run_64", 64);
+#endif
     }
 
     SECTION("socu_approx_strict_solve_world_smoke")
@@ -1123,11 +994,6 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "linear_solver_socu_approx_fem_runtime_contact");
     }
 
-    SECTION("socu_approx_inter_primitive_reporter_structured_dry_run")
-    {
-        require_socu_approx_inter_primitive_structured_dry_run(
-            "linear_solver_socu_approx_inter_primitive_structured");
-    }
 }
 
 TEST_CASE("86_cuda_mixed_contract_abd_fixed_joint_zero_alloc",

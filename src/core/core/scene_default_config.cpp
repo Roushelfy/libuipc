@@ -37,8 +37,7 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/structured_scope",
                   std::string{"multi_provider"});
     config.create("linear_system/socu_approx/generated_ordering_report", std::string{});
-    config.create("linear_system/socu_approx/dry_run_report", std::string{});
-    config.create("linear_system/socu_approx/mode", std::string{"solve"});
+    config.create("linear_system/socu_approx/report", std::string{});
     config.create("linear_system/socu_approx/damping_shift", Float{1e-6});
     config.create("linear_system/socu_approx/descent_eta", Float{1e-8});
     config.create("linear_system/socu_approx/max_relative_residual", Float{1e-4});

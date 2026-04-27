@@ -90,12 +90,6 @@ void GlobalLinearSystem::do_build()
         dump_solution_x_attr ? dump_solution_x_attr->view()[0] : false;
     m_impl.global_dytopo_effect_manager = find<GlobalDyTopoEffectManager>();
 
-    auto structured_scope_attr =
-        config.find<std::string>("linear_system/socu_approx/structured_scope");
-    std::string structured_scope =
-        structured_scope_attr ? structured_scope_attr->view()[0]
-                              : std::string{"multi_provider"};
-    m_impl.socu_multi_provider_enabled = structured_scope == "multi_provider";
 }
 
 void GlobalLinearSystem::_dump_A_b()
@@ -355,13 +349,16 @@ void GlobalLinearSystem::Impl::_validate_structured_chain_subsystems()
 {
     auto diag_subsystem_view     = diag_subsystems.view();
     auto off_diag_subsystem_view = off_diag_subsystems.view();
+    const auto requirements =
+        selected_linear_solver ? selected_linear_solver->assembly_requirements()
+                               : LinearSolver::AssemblyRequirements{};
 
     if(!off_diag_subsystem_view.empty())
     {
-        if(!socu_multi_provider_enabled)
+        if(!requirements.allows_structured_offdiag)
         {
             throw SimSystemException{
-                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider' to enable multi-provider assembly"};
+                "structured_offdiag_not_allowed: selected solver does not allow structured off-diagonal assembly"};
         }
         for(auto& off_diag_subsystem : off_diag_subsystem_view)
         {
@@ -393,12 +390,13 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
 
     auto diag_subsystem_view     = diag_subsystems.view();
     auto off_diag_subsystem_view = off_diag_subsystems.view();
+    const auto requirements = selected_linear_solver->assembly_requirements();
     if(!off_diag_subsystem_view.empty())
     {
-        if(!socu_multi_provider_enabled)
+        if(!requirements.allows_structured_offdiag)
         {
             throw SimSystemException{
-                "multi_provider_required: socu_approx structured chain found off-diagonal linear subsystems; set linear_system/socu_approx/structured_scope='multi_provider' to enable multi-provider assembly"};
+                "structured_offdiag_not_allowed: selected solver does not allow structured off-diagonal assembly"};
         }
     }
 

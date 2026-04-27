@@ -490,8 +490,6 @@ class GlobalLinearSystem : public SimSystem
         MatrixConverter<StoreScalar, 3> converter;
 
         bool empty_system = true;
-        bool socu_multi_provider_enabled = false;
-
         void apply_preconditioner(PcgDenseVectorView z,
                                   CPcgDenseVectorView r,
                                   muda::CVarView<IndexT> converged);
