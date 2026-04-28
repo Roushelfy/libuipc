@@ -234,6 +234,60 @@ struct StructuredContactAssemblySink
                                  bool mirror_diag_block = false) const noexcept
     {
         using Alu       = ActivePolicy::AluScalar;
+        if(lhs.body == rhs.body)
+        {
+            auto H12 = ABDJacobi::JT_H_J_t<Alu>(
+                lhs.J.T(),
+                H.template cast<Alu>(),
+                rhs.J);
+            if(global_i != global_j)
+            {
+                H12 += ABDJacobi::JT_H_J_t<Alu>(
+                    rhs.J.T(),
+                    H.template cast<Alu>().transpose(),
+                    lhs.J);
+            }
+
+            bool saw_near     = false;
+            bool saw_off_band = false;
+#pragma unroll
+            for(IndexT row_block = 0; row_block < 4; ++row_block)
+            {
+#pragma unroll
+                for(IndexT col_block = row_block; col_block < 4; ++col_block)
+                {
+#pragma unroll
+                    for(IndexT row = 0; row < 3; ++row)
+                    {
+#pragma unroll
+                        for(IndexT col = 0; col < 3; ++col)
+                        {
+                            const IndexT local_i = row_block * 3 + row;
+                            const IndexT local_j = col_block * 3 + col;
+                            const IndexT old_i = lhs.old_dof + local_i;
+                            const IndexT old_j = lhs.old_dof + local_j;
+                            const StoreT value_store =
+                                static_cast<StoreT>(H12(local_i, local_j));
+                            const auto cls = add_scalar_counted(
+                                old_i,
+                                old_j,
+                                value_store);
+                            if(row_block != col_block
+                               && cls == StructuredSinkWriteClass::Diag)
+                            {
+                                add_scalar_counted(old_j, old_i, value_store);
+                            }
+                            saw_near |= cls == StructuredSinkWriteClass::Diag
+                                        || cls == StructuredSinkWriteClass::FirstOffdiag;
+                            saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
+                        }
+                    }
+                }
+            }
+            add_pair_counter(saw_near, saw_off_band);
+            return;
+        }
+
         bool saw_near     = false;
         bool saw_off_band = false;
 #pragma unroll 1
@@ -247,12 +301,6 @@ struct StructuredContactAssemblySink
                 const IndexT comp_c = abd_component(c);
                 const Alu    wc     = abd_weight(rhs.J, c);
                 Alu value = wr * static_cast<Alu>(H(comp_r, comp_c)) * wc;
-                if(lhs.body == rhs.body && global_i != global_j)
-                {
-                    const Alu wr_sym = abd_weight(rhs.J, r);
-                    const Alu wc_sym = abd_weight(lhs.J, c);
-                    value += wr_sym * static_cast<Alu>(H(comp_c, comp_r)) * wc_sym;
-                }
 
                 const IndexT row = lhs.old_dof + r;
                 const IndexT col = rhs.old_dof + c;

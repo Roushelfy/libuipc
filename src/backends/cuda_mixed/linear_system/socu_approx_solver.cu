@@ -30,6 +30,10 @@
 #define UIPC_WITH_SOCU_NATIVE 0
 #endif
 
+#if UIPC_WITH_SOCU_NATIVE
+#include <socu_native/problem_io.h>
+#endif
+
 namespace uipc::backend::cuda_mixed
 {
 REGISTER_SIM_SYSTEM(SocuApproxSolver);
@@ -65,11 +69,14 @@ auto SocuApproxSolver::assembly_requirements() const -> AssemblyRequirements
     AssemblyRequirements requirements;
     requirements.needs_dof_extent       = true;
     requirements.needs_gradient_b       = true;
-    requirements.needs_full_sparse_A    = false;
+    requirements.needs_full_sparse_A    = m_debug_compare_full_sparse;
     requirements.needs_structured_chain = true;
     requirements.needs_preconditioner   = false;
     requirements.allows_structured_offdiag = m_allows_structured_offdiag;
-    requirements.assembly_mode = NewtonAssemblyMode::GradientStructuredHessian;
+    requirements.assembly_mode =
+        m_debug_compare_full_sparse
+            ? NewtonAssemblyMode::FullSparseAndStructuredHessian
+            : NewtonAssemblyMode::GradientStructuredHessian;
     return requirements;
 }
 
@@ -114,6 +121,17 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_dump_structured_matrix =
         debug_dump_structured_matrix_attr
         && debug_dump_structured_matrix_attr->view()[0] != 0;
+
+    auto debug_dump_problem_file_attr =
+        config.find<IndexT>("linear_system/socu_approx/debug_dump_problem_file");
+    m_debug_dump_problem_file =
+        debug_dump_problem_file_attr
+        && debug_dump_problem_file_attr->view()[0] != 0;
+    auto debug_compare_full_sparse_attr =
+        config.find<IndexT>("linear_system/socu_approx/debug_compare_full_sparse");
+    m_debug_compare_full_sparse =
+        debug_compare_full_sparse_attr
+        && debug_compare_full_sparse_attr->view()[0] != 0;
 
     auto damping_attr =
         config.find<Float>("linear_system/socu_approx/damping_shift");
@@ -801,10 +819,13 @@ void SocuApproxSolver::finalize_structured_chain(
                 "SocuApproxSolver structured assembly requires initialized runtime.");
     if(m_debug_validation)
         m_runtime->snapshot_matrix(info.stream());
-    if(m_debug_dump_structured_matrix) [[unlikely]]
+    if(m_debug_dump_structured_matrix || m_debug_dump_problem_file) [[unlikely]]
     {
         cudaStreamSynchronize(info.stream());
-        dump_structured_matrix(info);
+        if(m_debug_dump_structured_matrix)
+            dump_structured_matrix(info);
+        if(m_debug_dump_problem_file)
+            dump_problem_file(info);
     }
 #endif
 }
@@ -928,6 +949,55 @@ void SocuApproxSolver::dump_structured_matrix(
         fmt::fprintf(fp, "%d %d %.17g\n", e.row + 1, e.col + 1, e.val);
     std::fclose(fp);
     logger::info("SocuApproxSolver: dumped structured matrix ({} entries) to {}", triplets.size(), path);
+#endif
+}
+
+void SocuApproxSolver::dump_problem_file(
+    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/)
+{
+#if UIPC_WITH_SOCU_NATIVE
+    UIPC_ASSERT(m_runtime != nullptr,
+                "SocuApproxSolver dump_problem_file requires initialized runtime.");
+
+    using Scalar = Runtime::Scalar;
+    const auto& layout = m_runtime->layout;
+
+    // Download diag, off_diag, rhs from GPU
+    std::vector<Scalar> host_diag(layout.diag_element_count, Scalar{0});
+    std::vector<Scalar> host_off_diag(layout.off_diag_element_count, Scalar{0});
+    std::vector<Scalar> host_rhs(layout.rhs_element_count, Scalar{0});
+
+    if(!host_diag.empty())
+        cudaMemcpy(host_diag.data(),
+                   m_runtime->device_diag.data(),
+                   layout.diag_element_count * sizeof(Scalar),
+                   cudaMemcpyDeviceToHost);
+    if(!host_off_diag.empty())
+        cudaMemcpy(host_off_diag.data(),
+                   m_runtime->device_off_diag.data(),
+                   layout.off_diag_element_count * sizeof(Scalar),
+                   cudaMemcpyDeviceToHost);
+    if(!host_rhs.empty())
+        cudaMemcpy(host_rhs.data(),
+                   m_runtime->device_rhs.data(),
+                   layout.rhs_element_count * sizeof(Scalar),
+                   cudaMemcpyDeviceToHost);
+
+    socu_native::HostProblem<Scalar> problem;
+    problem.shape    = m_runtime->shape;
+    problem.diag     = std::move(host_diag);
+    problem.off_diag = std::move(host_off_diag);
+    problem.rhs      = std::move(host_rhs);
+
+    auto path_tool = BackendPathTool(workspace());
+    auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
+    auto path = fmt::format("{}problem.{}.{}.bin",
+                            output_folder.string(),
+                            engine().frame(),
+                            engine().newton_iter());
+
+    socu_native::write_problem_file(path, problem);
+    logger::info("SocuApproxSolver: dumped problem file to {}", path);
 #endif
 }
 

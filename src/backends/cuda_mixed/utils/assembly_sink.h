@@ -236,6 +236,41 @@ struct StructuredDeviceAssemblySink
         }
     }
 
+    template <int SubBlockDim, int SubBlockCount, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_upper_subblocks_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row_block = 0; row_block < SubBlockCount; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < SubBlockCount; ++col_block)
+            {
+#pragma unroll
+                for(IndexT row = 0; row < SubBlockDim; ++row)
+                {
+#pragma unroll
+                    for(IndexT col = 0; col < SubBlockDim; ++col)
+                    {
+                        const IndexT local_i = row_block * SubBlockDim + row;
+                        const IndexT local_j = col_block * SubBlockDim + col;
+                        const IndexT old_i   = old_dof_begin + local_i;
+                        const IndexT old_j   = old_dof_begin + local_j;
+                        const auto   value   = static_cast<StoreT>(H(local_i, local_j));
+                        const auto cls =
+                            add_hessian_scalar_status(old_i, old_j, value);
+                        if(row_block != col_block
+                           && cls == StructuredSinkWriteClass::Diag)
+                        {
+                            add_hessian_scalar(old_j, old_i, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     template <int Rows, int Cols, typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block_between_fixed(
         IndexT old_row_dof_begin,

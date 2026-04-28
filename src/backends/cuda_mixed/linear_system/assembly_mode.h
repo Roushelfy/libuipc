@@ -7,6 +7,7 @@ enum class NewtonAssemblyMode
     FullSparse,
     GradientOnly,
     GradientStructuredHessian,
+    FullSparseAndStructuredHessian,
 };
 
 constexpr const char* newton_assembly_mode_name(NewtonAssemblyMode mode) noexcept
@@ -19,6 +20,8 @@ constexpr const char* newton_assembly_mode_name(NewtonAssemblyMode mode) noexcep
             return "GradientOnly";
         case NewtonAssemblyMode::GradientStructuredHessian:
             return "GradientStructuredHessian";
+        case NewtonAssemblyMode::FullSparseAndStructuredHessian:
+            return "FullSparseAndStructuredHessian";
         default:
             return "Unknown";
     }

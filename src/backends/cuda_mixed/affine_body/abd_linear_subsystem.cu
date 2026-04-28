@@ -258,7 +258,7 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                    }
 
                    const auto H12x12_store = downcast_hessian<StoreScalar>(H12x12_alu);
-                   sink.template add_dense_block_fixed<12, 12>(
+                   sink.template add_dense_block_upper_subblocks_fixed<3, 4>(
                        old_dof_offset + I * 12,
                        H12x12_store);
                });

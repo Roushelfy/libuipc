@@ -302,6 +302,13 @@ void GlobalLinearSystem::Impl::build_linear_system()
             "GradientStructuredHessian assembly mode requires "
             "needs_full_sparse_A=false and needs_structured_chain=true"};
     }
+    if(requirements.assembly_mode == NewtonAssemblyMode::FullSparseAndStructuredHessian
+       && (!requirements.needs_full_sparse_A || !requirements.needs_structured_chain))
+    {
+        throw SimSystemException{
+            "FullSparseAndStructuredHessian assembly mode requires "
+            "needs_full_sparse_A=true and needs_structured_chain=true"};
+    }
 
     if(requirements.needs_structured_chain)
         _validate_structured_chain_subsystems();
