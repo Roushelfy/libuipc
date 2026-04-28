@@ -1,4 +1,5 @@
 #include <linear_system/socu_approx_ordering.h>
+#include <linear_system/socu_rcm_ordering.h>
 
 #include <finite_element/finite_element_method.h>
 #include <uipc/builtin/attribute_name.h>
@@ -8,9 +9,6 @@
 #include <uipc/common/exception.h>
 
 #include <fmt/format.h>
-#include <sol/graph.h>
-#include <sol/io.h>
-#include <sol/ordering.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -20,6 +18,7 @@
 namespace uipc::backend::cuda_mixed::socu_approx
 {
 namespace fs = std::filesystem;
+namespace ordering = rcm;
 
 const Json* selected_candidate_json(const Json& report)
 {
@@ -84,14 +83,14 @@ fs::path default_generated_ordering_report_path(std::string_view workspace)
     return fs::absolute(fs::path{workspace} / "socu_approx" / "ordering.json");
 }
 
-sol::AtomGraph make_abd_body_local_atom_graph(SizeT body_count)
+ordering::AtomGraph make_abd_body_local_atom_graph(SizeT body_count)
 {
-    sol::AtomGraph graph;
+    ordering::AtomGraph graph;
     graph.name = "cuda_mixed_abd_init_time";
     for(SizeT body = 0; body < body_count; ++body)
     {
         for(SizeT local_atom = 0; local_atom < 4; ++local_atom)
-            sol::add_atom(graph, 3, "abd_body_local", body * 4 + local_atom);
+            ordering::add_atom(graph, 3, "abd_body_local", body * 4 + local_atom);
     }
 
     for(SizeT body = 0; body < body_count; ++body)
@@ -100,12 +99,13 @@ sol::AtomGraph make_abd_body_local_atom_graph(SizeT body_count)
         for(SizeT i = 0; i < 4; ++i)
         {
             for(SizeT j = i + 1; j < 4; ++j)
-                sol::add_edge(graph, base + i, base + j, 4.0, "abd_body");
+                ordering::add_edge(graph, base + i, base + j, 4.0, "abd_body");
         }
     }
 
     for(SizeT body = 1; body < body_count; ++body)
-        sol::add_edge(graph, (body - 1) * 4, body * 4, 1.0, "abd_body_sequence");
+        ordering::add_edge(
+            graph, (body - 1) * 4, body * 4, 1.0, "abd_body_sequence");
 
     return graph;
 }
@@ -115,9 +115,9 @@ Json generate_abd_init_time_ordering_report(SizeT            body_count,
                                             std::string_view block_size)
 {
     auto graph  = make_abd_body_local_atom_graph(body_count);
-    auto run    = sol::run_ordering(graph, orderer, block_size);
-    Json report = sol::to_json(run);
-    report["graph"] = sol::to_json(graph);
+    auto run    = ordering::run_ordering(graph, orderer, block_size);
+    Json report = ordering::to_json(run);
+    report["graph"] = ordering::to_json(graph);
     report["generated_by"] = "cuda_mixed_socu_init_time";
     report["ordering_source"] = "init_time";
     return report;
@@ -191,8 +191,8 @@ SizeT fem_vertex_count_from_scene(WorldVisitor& world)
 }
 
 template <typename Vec>
-void add_fem_simplex_edges(sol::AtomGraph& graph,
-                           const Vec&     simplex,
+void add_fem_simplex_edges(ordering::AtomGraph& graph,
+                           const Vec&          simplex,
                            SizeT          vertex_offset,
                            int            count,
                            double         weight,
@@ -202,18 +202,18 @@ void add_fem_simplex_edges(sol::AtomGraph& graph,
     {
         for(int j = i + 1; j < count; ++j)
         {
-            sol::add_edge(graph,
-                          vertex_offset + static_cast<SizeT>(simplex(i)),
-                          vertex_offset + static_cast<SizeT>(simplex(j)),
-                          weight,
-                          label);
+            ordering::add_edge(graph,
+                               vertex_offset + static_cast<SizeT>(simplex(i)),
+                               vertex_offset + static_cast<SizeT>(simplex(j)),
+                               weight,
+                               label);
         }
     }
 }
 
-sol::AtomGraph make_fem_vertex_atom_graph(WorldVisitor& world)
+ordering::AtomGraph make_fem_vertex_atom_graph(WorldVisitor& world)
 {
-    sol::AtomGraph graph;
+    ordering::AtomGraph graph;
     graph.name = "cuda_mixed_fem_init_time";
     auto geos = collect_fem_ordering_geometries(world);
     for(const auto& ordered_geo : geos)
@@ -221,10 +221,10 @@ sol::AtomGraph make_fem_vertex_atom_graph(WorldVisitor& world)
         for(SizeT local_vertex = 0; local_vertex < ordered_geo.vertex_count;
             ++local_vertex)
         {
-            sol::add_atom(graph,
-                          3,
-                          "fem_vertex",
-                          ordered_geo.vertex_offset + local_vertex);
+            ordering::add_atom(graph,
+                               3,
+                               "fem_vertex",
+                               ordered_geo.vertex_offset + local_vertex);
         }
     }
 
@@ -268,9 +268,9 @@ Json generate_fem_init_time_ordering_report(WorldVisitor&     world,
                                             std::string_view block_size)
 {
     auto graph  = make_fem_vertex_atom_graph(world);
-    auto run    = sol::run_ordering(graph, orderer, block_size);
-    Json report = sol::to_json(run);
-    report["graph"] = sol::to_json(graph);
+    auto run    = ordering::run_ordering(graph, orderer, block_size);
+    Json report = ordering::to_json(run);
+    report["graph"] = ordering::to_json(graph);
     report["generated_by"] = "cuda_mixed_socu_init_time";
     report["ordering_source"] = "init_time";
     report["provider_kind"] = "fem_only";
@@ -287,19 +287,19 @@ Json generate_mixed_abd_fem_init_time_ordering_report(WorldVisitor&     world,
     const SizeT fem_atom_base = graph.atoms.size();
     auto fem_graph = make_fem_vertex_atom_graph(world);
     for(SizeT atom = 0; atom < fem_graph.atoms.size(); ++atom)
-        sol::add_atom(graph, 3, "fem_vertex", fem_atom_base + atom);
+        ordering::add_atom(graph, 3, "fem_vertex", fem_atom_base + atom);
     for(const auto& edge : fem_graph.edges)
-        sol::add_edge(graph,
-                      fem_atom_base + edge.a,
-                      fem_atom_base + edge.b,
-                      edge.weight,
-                      edge.kind);
+        ordering::add_edge(graph,
+                           fem_atom_base + edge.a,
+                           fem_atom_base + edge.b,
+                           edge.weight,
+                           edge.kind);
     if(body_count > 0 && !fem_graph.atoms.empty())
-        sol::add_edge(graph, 0, fem_atom_base, 0.25, "abd_fem_sequence");
+        ordering::add_edge(graph, 0, fem_atom_base, 0.25, "abd_fem_sequence");
 
-    auto run    = sol::run_ordering(graph, orderer, block_size);
-    Json report = sol::to_json(run);
-    report["graph"] = sol::to_json(graph);
+    auto run    = ordering::run_ordering(graph, orderer, block_size);
+    Json report = ordering::to_json(run);
+    report["graph"] = ordering::to_json(graph);
     report["generated_by"] = "cuda_mixed_socu_init_time";
     report["ordering_source"] = "init_time";
     report["provider_kind"] = "multi_provider";

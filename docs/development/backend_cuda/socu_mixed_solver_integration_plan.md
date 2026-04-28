@@ -80,7 +80,7 @@ Typical strict structured solve configuration:
     "socu_approx": {
       "structured_scope": "multi_provider",
       "ordering_source": "init_time",
-      "ordering_orderer": "auto_stable",
+      "ordering_orderer": "rcm",
       "ordering_block_size": "auto",
       "damping_shift": 1e-6
     }
@@ -91,8 +91,9 @@ Typical strict structured solve configuration:
 `damping_shift = 0.0` is supported. The default remains `1e-6`.
 
 `ordering_source` only supports `init_time`; external ordering report mode has
-been removed from the solver path. `generated_ordering_report` may still be set
-to write the init-time ordering diagnostics for inspection.
+been removed from the solver path. `ordering_orderer` only supports `rcm` in
+the runtime solver. `generated_ordering_report` may still be set to write the
+init-time ordering diagnostics for inspection.
 
 SOCU approx now exposes only the strict structured direct solve path. The
 previous assembly-only validation path has been removed; structured assembly

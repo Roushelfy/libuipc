@@ -510,7 +510,7 @@ void require_socu_approx_init_time_ordering_strict_solve(std::string_view name)
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
-    config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
+    config["linear_system"]["socu_approx"]["ordering_orderer"] = "rcm";
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["damping_shift"] = 0.0;
@@ -549,20 +549,10 @@ void require_socu_approx_init_time_ordering_strict_solve(std::string_view name)
     REQUIRE(ordering.contains("candidates"));
     REQUIRE(ordering.contains("selected"));
 
-    auto has_orderer = [&](std::string_view orderer)
-    {
-        for(const auto& candidate : ordering["candidates"])
-        {
-            if(candidate.value("orderer", std::string{}) == orderer)
-                return true;
-        }
-        return false;
-    };
-    CHECK(has_orderer("original"));
-    CHECK(has_orderer("rcm"));
-    CHECK(has_orderer("metis_kway_rcm"));
-    CHECK_FALSE(has_orderer("nvidia_symrcm"));
-    CHECK_FALSE(has_orderer("metis_nd"));
+    REQUIRE(ordering["candidates"].size() == 2);
+    for(const auto& candidate : ordering["candidates"])
+        CHECK(candidate.value("orderer", std::string{}) == "rcm");
+    REQUIRE(ordering["selected"].value("orderer", std::string{}) == "rcm");
 
     REQUIRE(fs::exists(report_path));
     std::ifstream report_ifs{report_path};
@@ -593,7 +583,7 @@ void require_socu_approx_fem_init_time_ordering_strict_solve(std::string_view na
     config["gravity"]                 = Vector3{0, -0.1, 0};
     config["linear_system"]["solver"] = "socu_approx";
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
-    config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable";
+    config["linear_system"]["socu_approx"]["ordering_orderer"] = "rcm";
     config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto";
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
     config["linear_system"]["socu_approx"]["damping_shift"] = 1.0;
@@ -886,6 +876,19 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "linear_solver_socu_approx_bad_block",
             config,
             "unsupported_block_size");
+    }
+
+    SECTION("socu_approx_rejects_legacy_orderer")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        config["linear_system"]["socu_approx"]["ordering_orderer"] =
+            "metis_"
+            "kway_rcm";
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_legacy_orderer",
+            config,
+            "ordering_orderer only supports 'rcm'");
     }
 
     SECTION("socu_approx_reports_diagnostic_thresholds")

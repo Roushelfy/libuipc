@@ -226,7 +226,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         config.find<std::string>("linear_system/socu_approx/ordering_block_size");
     const std::string ordering_orderer =
         ordering_orderer_attr ? ordering_orderer_attr->view()[0]
-                              : std::string{"auto_stable"};
+                              : std::string{"rcm"};
     const std::string ordering_block_size =
         ordering_block_size_attr ? ordering_block_size_attr->view()[0]
                                  : std::string{"auto"};
@@ -238,6 +238,15 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             fmt::format("linear_system/socu_approx/ordering_block_size must be "
                         "'auto', '32', or '64', got '{}'",
                         ordering_block_size));
+        throw_gate_failure(m_gate_report);
+    }
+    if(ordering_orderer != "rcm")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format(
+                "linear_system/socu_approx/ordering_orderer only supports 'rcm', got '{}'",
+                ordering_orderer));
         throw_gate_failure(m_gate_report);
     }
 
