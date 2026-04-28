@@ -39,6 +39,7 @@ class SocuApproxSolver : public LinearSolver
 
     void validate_direction_light(cudaStream_t stream);
     void debug_validate_direction(cudaStream_t stream);
+    void dump_structured_matrix(const GlobalLinearSystem::StructuredAssemblyInfo& info);
 
     SocuApproxGateReport  m_gate_report;
     SocuApproxSolveReport m_report;
@@ -50,6 +51,7 @@ class SocuApproxSolver : public LinearSolver
     bool        m_has_line_search_feedback = false;
     bool        m_debug_validation = false;
     bool        m_debug_timing = false;
+    bool        m_debug_dump_structured_matrix = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
     bool        m_allows_structured_offdiag = true;

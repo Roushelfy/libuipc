@@ -554,7 +554,8 @@ class GlobalLinearSystem : public SimSystem
     Impl m_impl;
 
     // local debug dump functions
-    void _dump_A_b();
+    void _dump_A();
+    void _dump_b();
     void _dump_x();
 };
 }  // namespace uipc::backend::cuda_mixed

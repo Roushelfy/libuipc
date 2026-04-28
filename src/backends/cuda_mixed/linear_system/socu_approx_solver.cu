@@ -10,6 +10,8 @@
 #include <uipc/common/exception.h>
 #include <uipc/common/json.h>
 #include <uipc/common/timer.h>
+#include <backends/common/backend_path_tool.h>
+#include <utils/matrix_market.h>
 
 #include <cuda_runtime.h>
 #include <fmt/format.h>
@@ -106,6 +108,12 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         report_each_solve_attr && report_each_solve_attr->view()[0] != 0;
     m_report_counters_enabled =
         m_report_each_solve || m_debug_validation || m_debug_timing;
+
+    auto debug_dump_structured_matrix_attr =
+        config.find<IndexT>("linear_system/socu_approx/debug_dump_structured_matrix");
+    m_debug_dump_structured_matrix =
+        debug_dump_structured_matrix_attr
+        && debug_dump_structured_matrix_attr->view()[0] != 0;
 
     auto damping_attr =
         config.find<Float>("linear_system/socu_approx/damping_shift");
@@ -793,6 +801,133 @@ void SocuApproxSolver::finalize_structured_chain(
                 "SocuApproxSolver structured assembly requires initialized runtime.");
     if(m_debug_validation)
         m_runtime->snapshot_matrix(info.stream());
+    if(m_debug_dump_structured_matrix) [[unlikely]]
+    {
+        cudaStreamSynchronize(info.stream());
+        dump_structured_matrix(info);
+    }
+#endif
+}
+
+void SocuApproxSolver::dump_structured_matrix(
+    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/)
+{
+#if UIPC_WITH_SOCU_NATIVE
+    UIPC_ASSERT(m_runtime != nullptr,
+                "SocuApproxSolver dump_structured_matrix requires initialized runtime.");
+
+    using Scalar = Runtime::Scalar;
+    const auto& shape  = m_runtime->shape;
+    const auto& layout = m_runtime->layout;
+    const SizeT n      = static_cast<SizeT>(shape.n);
+    const SizeT H      = static_cast<SizeT>(shape.horizon);
+
+    // Download diag, off_diag, and chain_to_old to host
+    std::vector<Scalar> host_diag(layout.diag_element_count, Scalar{0});
+    std::vector<Scalar> host_off_diag(layout.off_diag_element_count, Scalar{0});
+    const auto& host_chain_to_old = m_host_chain_to_old;
+
+    if(!host_diag.empty())
+        cudaMemcpy(host_diag.data(),
+                   m_runtime->device_diag.data(),
+                   layout.diag_element_count * sizeof(Scalar),
+                   cudaMemcpyDeviceToHost);
+    if(!host_off_diag.empty())
+        cudaMemcpy(host_off_diag.data(),
+                   m_runtime->device_off_diag.data(),
+                   layout.off_diag_element_count * sizeof(Scalar),
+                   cudaMemcpyDeviceToHost);
+
+    // Build COO triplets in global DoF order
+    // Off-diag layout: element at off_diag[b*n*n + r*n + c] represents
+    //   the assembled value for chain pair (b*n+c, (b+1)*n+r).
+    // For symmetric Hessians assembled with both (i,j) and (j,i),
+    //   the value accumulates A[chain_i, chain_j] + A[chain_j, chain_i] = 2*A[...].
+    // This is noted in the exported file header for reference.
+    struct Entry { int row; int col; double val; };
+    std::vector<Entry> triplets;
+    triplets.reserve(layout.diag_element_count + 2 * layout.off_diag_element_count);
+
+    auto chain_to_global = [&](SizeT chain) -> int {
+        if(chain >= host_chain_to_old.size()) return -1;
+        return host_chain_to_old[chain];
+    };
+
+    // Diagonal blocks: diag[b*n*n + li*n + lj] = A[b*n+li, b*n+lj]
+    for(SizeT b = 0; b < H; ++b)
+    {
+        for(SizeT li = 0; li < n; ++li)
+        {
+            const int row = chain_to_global(b * n + li);
+            if(row < 0)
+                continue;
+            for(SizeT lj = 0; lj < n; ++lj)
+            {
+                const int col = chain_to_global(b * n + lj);
+                if(col < 0)
+                    continue;
+                const double val = static_cast<double>(host_diag[b * n * n + li * n + lj]);
+                if(val != 0.0)
+                    triplets.push_back({row, col, val});
+            }
+        }
+    }
+
+    // Off-diagonal blocks: off_diag[b*n*n + r*n + c] = A[b*n+c, (b+1)*n+r]
+    // (accumulated, may be 2x for symmetric assemblies)
+    const SizeT off_blocks = H > 0 ? H - 1 : 0;
+    for(SizeT b = 0; b < off_blocks; ++b)
+    {
+        for(SizeT r = 0; r < n; ++r)
+        {
+            const int col = chain_to_global((b + 1) * n + r);
+            if(col < 0)
+                continue;
+            for(SizeT c = 0; c < n; ++c)
+            {
+                const int row = chain_to_global(b * n + c);
+                if(row < 0)
+                    continue;
+                const double val = static_cast<double>(host_off_diag[b * n * n + r * n + c]);
+                if(val != 0.0)
+                {
+                    triplets.push_back({row, col, val});
+                    triplets.push_back({col, row, val});
+                }
+            }
+        }
+    }
+
+    // Compute global dimension from the mapping
+    int global_dim = 0;
+    for(const auto& old : host_chain_to_old)
+    {
+        if(old >= 0 && old + 1 > global_dim)
+            global_dim = old + 1;
+    }
+
+    // Write Matrix Market file
+    auto path_tool = BackendPathTool(workspace());
+    auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
+    const auto path = fmt::format("{}A_structured.{}.{}.mtx",
+                                  output_folder.string(),
+                                  engine().frame(),
+                                  engine().newton_iter());
+    FILE* fp = std::fopen(path.c_str(), "w");
+    if(!fp)
+    {
+        logger::warn("SocuApproxSolver: failed to open {} for structured matrix dump", path);
+        return;
+    }
+    fmt::fprintf(fp, "%%%%MatrixMarket matrix coordinate real general\n");
+    fmt::fprintf(fp, "%% SocuApprox structured band matrix (diagonal + first off-diagonal)\n");
+    fmt::fprintf(fp, "%% horizon=%zu, block_size=%zu\n", H, n);
+    fmt::fprintf(fp, "%% off_diag values may be 2x actual if assembler writes both (i,j) and (j,i)\n");
+    fmt::fprintf(fp, "%d %d %zu\n", global_dim, global_dim, triplets.size());
+    for(const auto& e : triplets)
+        fmt::fprintf(fp, "%d %d %.17g\n", e.row + 1, e.col + 1, e.val);
+    std::fclose(fp);
+    logger::info("SocuApproxSolver: dumped structured matrix ({} entries) to {}", triplets.size(), path);
 #endif
 }
 

@@ -92,9 +92,9 @@ void GlobalLinearSystem::do_build()
 
 }
 
-void GlobalLinearSystem::_dump_A_b()
+void GlobalLinearSystem::_dump_A()
 {
-    auto path_tool = BackendPathTool(workspace());
+    auto path_tool    = BackendPathTool(workspace());
     auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
     auto output_path_A = fmt::format("{}A.{}.{}.mtx",
                                      output_folder.string(),
@@ -102,7 +102,12 @@ void GlobalLinearSystem::_dump_A_b()
                                      engine().newton_iter());
     export_matrix_market(output_path_A, m_impl.bcoo_A.cview());
     logger::info("Dumped global linear system matrix A to {}", output_path_A);
+}
 
+void GlobalLinearSystem::_dump_b()
+{
+    auto path_tool    = BackendPathTool(workspace());
+    auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
     auto output_path_b = fmt::format("{}b.{}.{}.mtx",
                                      output_folder.string(),
                                      engine().frame(),
@@ -146,8 +151,10 @@ void GlobalLinearSystem::solve()
                      m_impl.b.size());
     }
 
+    if(m_impl.need_debug_dump && requirements.needs_gradient_b) [[unlikely]]
+        _dump_b();
     if(m_impl.need_debug_dump && requirements.needs_full_sparse_A) [[unlikely]]
-        _dump_A_b();
+        _dump_A();
 
     m_impl.solve_linear_system();
 

@@ -277,7 +277,7 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                                        sink,
                                        old_dof_offset,
                                        fixed_bodies,
-                                       false};
+                                       /* write_gradients */ false};
             R->assemble(assemble_info);
         }
     }
