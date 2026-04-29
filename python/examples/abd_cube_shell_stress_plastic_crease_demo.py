@@ -7,15 +7,8 @@ ECI shell bending model `StressPlasticDiscreteShellBending`.
 
 import os
 import sys
+import argparse
 import numpy as np
-
-try:
-    import polyscope as ps
-    import polyscope.imgui as psim
-except ModuleNotFoundError as exc:
-    raise SystemExit(
-        "This example requires `polyscope`. Install it with `pip install polyscope`."
-    ) from exc
 
 try:
     from uipc import Logger, Matrix4x4, Engine, World, Scene, SceneIO, Animation, view
@@ -45,6 +38,8 @@ except ImportError as exc:
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "tests"))
 from asset import AssetDir
+
+from cuda_mixed_runtime import init_cuda_mixed_module_dir
 
 
 SHEET_RESOLUTION = 21
@@ -163,11 +158,45 @@ def upper_arc_point(start: np.ndarray, end: np.ndarray, alpha: float) -> np.ndar
     return center + radius * (np.cos(theta) * u + np.sin(theta) * v)
 
 
-def build_demo():
+def configure_solver(
+    config,
+    solver: str,
+    workspace: str,
+    runtime_reorder_interval: int = 0,
+    damping_shift: float = 0.0,
+) -> None:
+    config["linear_system"]["solver"] = solver
+    config["linear_system"]["tol_rate"] = 1.0e-3
+
+    if solver != "socu_approx":
+        return
+
+    socu = config["linear_system"]["socu_approx"]
+    socu["ordering_source"] = "init_time"
+    socu["ordering_orderer"] = "rcm"
+    socu["ordering_block_size"] = "64"
+    socu["damping_shift"] = float(damping_shift)
+    socu["runtime_reorder_frame_interval"] = int(runtime_reorder_interval)
+    socu["debug_validation"] = 1
+    socu["debug_timing"] = 1
+    socu["report_each_solve"] = 1
+    socu["generated_ordering_report"] = os.path.join(workspace, "socu_approx_ordering.json")
+    socu["dry_run_report"] = os.path.join(workspace, "socu_approx_report.json")
+
+
+def build_demo(
+    backend: str = "cuda",
+    solver: str = "fused_pcg",
+    runtime_reorder_interval: int = 0,
+    damping_shift: float = 0.0,
+):
     Logger.set_level(Logger.Level.Warn)
 
     workspace = AssetDir.output_path(__file__)
-    engine = Engine("cuda", workspace)
+    os.makedirs(workspace, exist_ok=True)
+    if backend == "cuda_mixed":
+        init_cuda_mixed_module_dir()
+    engine = Engine(backend, workspace)
     world = World(engine)
 
     config = Scene.default_config()
@@ -176,7 +205,7 @@ def build_demo():
     config["contact"]["enable"] = True
     config["contact"]["friction"]["enable"] = False
     config["line_search"]["max_iter"] = 12
-    config["linear_system"]["tol_rate"] = 1.0e-3
+    configure_solver(config, solver, workspace, runtime_reorder_interval, damping_shift)
     scene = Scene(config)
 
     scene.contact_tabular().default_model(0.2, 1.0e9)
@@ -190,6 +219,11 @@ def build_demo():
     abd = AffineBodyConstitution()
     stc = SoftTransformConstraint()
     spc = SoftPositionConstraint()
+    scene.constitution_tabular().insert(shell)
+    scene.constitution_tabular().insert(stress_plastic_bending)
+    scene.constitution_tabular().insert(abd)
+    scene.constitution_tabular().insert(stc)
+    scene.constitution_tabular().insert(spc)
 
     sheet = make_sheet_mesh(SHEET_RESOLUTION, SHEET_SIZE)
     moduli = ElasticModuli2D.youngs_poisson(SHELL_YOUNG, SHELL_POISSON)
@@ -285,8 +319,42 @@ def build_demo():
     }
 
 
-def run_demo():
-    state = build_demo()
+def run_smoke(
+    backend: str,
+    solver: str,
+    frames: int,
+    runtime_reorder_interval: int,
+    damping_shift: float,
+) -> None:
+    state = build_demo(backend, solver, runtime_reorder_interval, damping_shift)
+    world = state["world"]
+
+    for _ in range(frames):
+        world.advance()
+        if not world.is_valid():
+            raise RuntimeError(
+                f"abd cube shell stress plastic crease failed at frame {world.frame()}"
+            )
+        world.retrieve()
+        print(f"frame={world.frame()} valid={world.is_valid()}")
+
+
+def run_demo(
+    backend: str = "cuda",
+    solver: str = "fused_pcg",
+    runtime_reorder_interval: int = 0,
+    damping_shift: float = 0.0,
+):
+    try:
+        import polyscope as ps
+        import polyscope.imgui as psim
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "This example requires `polyscope`. Install it with `pip install polyscope`, "
+            "or use --smoke-frames for headless smoke runs."
+        ) from exc
+
+    state = build_demo(backend, solver, runtime_reorder_interval, damping_shift)
     world = state["world"]
     scene_io = state["scene_io"]
     sheet_slot = state["sheet_slot"]
@@ -361,5 +429,26 @@ def run_demo():
     ps.show()
 
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", default="cuda")
+    parser.add_argument("--solver", default="fused_pcg", choices=["fused_pcg", "socu_approx"])
+    parser.add_argument("--runtime-reorder-interval", type=int, default=0)
+    parser.add_argument("--damping-shift", type=float, default=0.0)
+    parser.add_argument("--smoke-frames", type=int, default=0)
+    args = parser.parse_args()
+
+    if args.smoke_frames > 0:
+        run_smoke(
+            args.backend,
+            args.solver,
+            args.smoke_frames,
+            args.runtime_reorder_interval,
+            args.damping_shift,
+        )
+    else:
+        run_demo(args.backend, args.solver, args.runtime_reorder_interval, args.damping_shift)
+
+
 if __name__ == "__main__":
-    run_demo()
+    main()
