@@ -837,6 +837,8 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     config["linear_system"]["socu_approx"]["debug_validation"] = 1;
     config["linear_system"]["socu_approx"]["report_each_solve"] = 1;
     config["linear_system"]["socu_approx"]["runtime_reorder_frame_interval"] = 1;
+    config["linear_system"]["socu_approx"]["runtime_reorder_graph_source"] =
+        "topology";
 
     auto output_path = contract_workspace(name);
     fs::create_directories(output_path);
@@ -866,10 +868,11 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["runtime_reorder"]["enabled"].get<bool>() == true);
     REQUIRE(report["runtime_reorder"]["interval"].get<SizeT>() == 1);
-    CHECK(report["runtime_reorder"]["edge_count"].get<SizeT>() > 0);
+    CHECK(report["runtime_reorder"]["graph_source"].get<std::string>() == "topology");
     CHECK(report["runtime_reorder"]["overflow_count"].get<SizeT>() == 0);
     CHECK(report["runtime_reorder"]["failure_detail"].get<std::string>().empty());
     CHECK(report["runtime_reorder"]["applied"].get<bool>() == true);
+    CHECK(fs::exists(output_path / "socu_approx" / "runtime_ordering.1.json"));
 #endif
 }
 }  // namespace
@@ -951,6 +954,19 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "linear_solver_socu_approx_legacy_orderer",
             config,
             "ordering_orderer only supports 'rcm'");
+    }
+
+    SECTION("socu_approx_rejects_bad_runtime_reorder_graph_source")
+    {
+        auto config                       = linear_solver_selection_config();
+        config["linear_system"]["solver"] = "socu_approx";
+        config["linear_system"]["socu_approx"]["runtime_reorder_frame_interval"] = 1;
+        config["linear_system"]["socu_approx"]["runtime_reorder_graph_source"] =
+            "previous_frame";
+        require_socu_approx_init_failure(
+            "linear_solver_socu_approx_bad_runtime_reorder_graph_source",
+            config,
+            "runtime_reorder_graph_source must be");
     }
 
     SECTION("socu_approx_reports_diagnostic_thresholds")

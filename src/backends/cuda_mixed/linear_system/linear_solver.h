@@ -46,6 +46,25 @@ class LinearSolver : public SimSystem
     {
     }
 
+    enum class StructuredProbeAssembly
+    {
+        None,
+        ContactOnly,
+        Full,
+    };
+
+    virtual StructuredProbeAssembly prepare_structured_probe(
+        GlobalLinearSystem::StructuredAssemblyInfo& info)
+    {
+        return StructuredProbeAssembly::None;
+    }
+
+    virtual bool finalize_structured_probe(
+        GlobalLinearSystem::StructuredAssemblyInfo& info)
+    {
+        return false;
+    }
+
     virtual void notify_line_search_result(
         const GlobalLinearSystem::LineSearchFeedback& feedback)
     {

@@ -33,6 +33,10 @@ class SocuApproxSolver : public LinearSolver
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void finalize_structured_chain(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual StructuredProbeAssembly prepare_structured_probe(
+        GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual bool finalize_structured_probe(
+        GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void notify_line_search_result(
         const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 
@@ -50,6 +54,7 @@ class SocuApproxSolver : public LinearSolver
     void apply_pending_runtime_reorder();
     void begin_runtime_reorder_collection(cudaStream_t stream);
     void finalize_runtime_reorder_collection();
+    bool install_runtime_reorder_from_collector(SizeT collected_frame);
 
     SocuApproxGateReport  m_gate_report;
     SocuApproxSolveReport m_report;
@@ -71,14 +76,17 @@ class SocuApproxSolver : public LinearSolver
     bool        m_allows_structured_offdiag = true;
     bool        m_runtime_reorder_collecting = false;
     bool        m_runtime_reorder_pending = false;
+    bool        m_runtime_reorder_probe_active = false;
     SizeT       m_runtime_reorder_frame_interval = 0;
     SizeT       m_runtime_reorder_edge_capacity_config = 0;
     SizeT       m_runtime_reorder_edge_capacity = 0;
     SizeT       m_runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_prepared_frame = static_cast<SizeT>(-1);
+    SizeT       m_runtime_reorder_last_probe_frame = static_cast<SizeT>(-1);
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
+    std::string m_runtime_reorder_graph_source = "topology";
     std::string m_structured_scope = "multi_provider";
     double      m_damping_shift = 0.0;
     double      m_descent_eta = 1e-8;
@@ -89,5 +97,6 @@ class SocuApproxSolver : public LinearSolver
     IndexT      m_max_line_search_reject_streak = 0;
 
     std::unique_ptr<Runtime> m_runtime;
+    Json                     m_runtime_reorder_base_graph;
 };
 }  // namespace uipc::backend::cuda_mixed

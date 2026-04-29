@@ -92,7 +92,8 @@ Typical strict structured solve configuration:
       "ordering_block_size": "64",
       "damping_shift": 0.0,
       "runtime_reorder_frame_interval": 0,
-      "runtime_reorder_edge_capacity": 0
+      "runtime_reorder_edge_capacity": 0,
+      "runtime_reorder_graph_source": "topology"
     }
   }
 }
@@ -106,10 +107,16 @@ the runtime solver. `generated_ordering_report` may still be set to write the
 init-time ordering diagnostics for inspection.
 
 `runtime_reorder_frame_interval = 0` means init-time ordering only. A positive
-interval samples frames satisfying `frame % interval == 0` and applies the
-resulting `runtime_hessian` ordering on the next frame. The collector capacity
-defaults to an automatic value; setting `runtime_reorder_edge_capacity > 0`
-overrides it. Collector overflow, empty graphs, invalid mappings, or
+interval rebuilds ordering on frames satisfying `frame % interval == 0` before
+that frame's first structured solve, then assembles once with the new ordering.
+`runtime_reorder_graph_source` selects the graph source: `topology` uses cached
+base topology plus current contact topology with unit weights,
+`contact_hessian` keeps base topology at weight 1 and weights current contacts
+by accumulated absolute contact Hessian contribution, and `full_hessian` uses a
+graph-only full Hessian probe for diagnostics. Runtime reorder always installs a
+64-wide block layout. The collector capacity defaults to an automatic value;
+setting `runtime_reorder_edge_capacity > 0` overrides it. Collector overflow,
+empty graphs, invalid mappings, or
 `socu_native` plan creation failures do not abort the solve; they are reported
 and the previous ordering remains active.
 

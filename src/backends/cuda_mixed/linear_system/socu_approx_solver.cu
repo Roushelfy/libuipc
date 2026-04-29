@@ -66,6 +66,49 @@ SocuApproxGateReport make_failure(SocuApproxGateReason reason,
     report.dtype = socu_dtype_name<GlobalLinearSystem::SolveScalar>();
     return report;
 }
+
+socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
+                                            bool normalize_edge_weight)
+{
+    socu_approx::rcm::AtomGraph graph;
+    graph.name = json.value("name", std::string{"cuda_mixed_socu_runtime_base"});
+    if(!json.contains("atoms") || !json["atoms"].is_array())
+        return graph;
+
+    for(const auto& atom : json["atoms"])
+    {
+        const SizeT dof_count =
+            atom.contains("dof_count") ? atom["dof_count"].get<SizeT>() : SizeT{3};
+        const std::string source_kind =
+            atom.contains("source_kind") && atom["source_kind"].is_string()
+                ? atom["source_kind"].get<std::string>()
+                : std::string{"runtime_atom"};
+        const SizeT source_id =
+            atom.contains("source_id") ? atom["source_id"].get<SizeT>()
+                                       : static_cast<SizeT>(-1);
+        socu_approx::rcm::add_atom(graph, dof_count, source_kind, source_id);
+    }
+
+    if(json.contains("edges") && json["edges"].is_array())
+    {
+        for(const auto& edge : json["edges"])
+        {
+            if(!edge.contains("a") || !edge.contains("b"))
+                continue;
+            const SizeT a = edge["a"].get<SizeT>();
+            const SizeT b = edge["b"].get<SizeT>();
+            const double weight =
+                normalize_edge_weight ? 1.0
+                                      : edge.value("weight", 1.0);
+            const std::string kind =
+                edge.contains("kind") && edge["kind"].is_string()
+                    ? edge["kind"].get<std::string>()
+                    : std::string{"base"};
+            socu_approx::rcm::add_edge(graph, a, b, weight, kind);
+        }
+    }
+    return graph;
+}
 }  // namespace
 
 auto SocuApproxSolver::assembly_requirements() const -> AssemblyRequirements
@@ -211,6 +254,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         config.find<IndexT>("linear_system/socu_approx/runtime_reorder_frame_interval");
     auto runtime_reorder_capacity_attr =
         config.find<IndexT>("linear_system/socu_approx/runtime_reorder_edge_capacity");
+    auto runtime_reorder_graph_source_attr =
+        config.find<std::string>("linear_system/socu_approx/runtime_reorder_graph_source");
     m_runtime_reorder_frame_interval =
         runtime_reorder_interval_attr
             ? static_cast<SizeT>(std::max<IndexT>(0, runtime_reorder_interval_attr->view()[0]))
@@ -219,6 +264,21 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         runtime_reorder_capacity_attr
             ? static_cast<SizeT>(std::max<IndexT>(0, runtime_reorder_capacity_attr->view()[0]))
             : SizeT{0};
+    m_runtime_reorder_graph_source =
+        runtime_reorder_graph_source_attr
+            ? runtime_reorder_graph_source_attr->view()[0]
+            : std::string{"topology"};
+    if(m_runtime_reorder_graph_source != "topology"
+       && m_runtime_reorder_graph_source != "contact_hessian"
+       && m_runtime_reorder_graph_source != "full_hessian")
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/runtime_reorder_graph_source "
+                        "must be 'topology', 'contact_hessian', or 'full_hessian', got '{}'",
+                        m_runtime_reorder_graph_source));
+        throw_gate_failure(m_gate_report);
+    }
 
     auto ordering_source_attr =
         config.find<std::string>("linear_system/socu_approx/ordering_source");
@@ -335,6 +395,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             ? default_generated_ordering_report_path(workspace())
             : absolute_workspace_path(workspace(), generated_ordering_report);
     write_json_report(ordering_report_path, report);
+    if(report.contains("graph") && report["graph"].is_object())
+        m_runtime_reorder_base_graph = report["graph"];
     logger::info("Generated socu_approx init-time ordering report at {}",
                  ordering_report_path.string());
 
@@ -641,6 +703,7 @@ bool SocuApproxSolver::install_ordering_report(
     next_report.runtime_reorder_enabled = m_runtime_reorder_frame_interval > 0;
     next_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
     next_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+    next_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
 
     m_gate_report = std::move(next_gate);
     m_gate_report.passed = true;
@@ -672,6 +735,14 @@ void SocuApproxSolver::apply_pending_runtime_reorder()
     if(engine().frame() == m_runtime_reorder_collecting_frame)
         return;
 
+    (void)install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
+}
+
+bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_frame)
+{
+    if(!m_runtime || m_runtime_reorder_edge_capacity == 0)
+        return false;
+
     std::array<IndexT, 2> cursor{};
     m_runtime->runtime_ordering_cursor.view().copy_to(cursor.data());
     const SizeT raw_count =
@@ -687,21 +758,22 @@ void SocuApproxSolver::apply_pending_runtime_reorder()
     if(overflow_count != 0)
     {
         m_report.runtime_reorder_failure_detail =
-            fmt::format("runtime Hessian edge collector overflowed by {} entries",
+            fmt::format("runtime reorder edge collector overflowed by {} entries",
                         overflow_count);
         m_runtime_reorder_pending = false;
-        return;
+        return false;
     }
-    if(raw_count == 0)
+    if(raw_count == 0 && m_runtime_reorder_graph_source == "full_hessian")
     {
         m_report.runtime_reorder_failure_detail =
-            "runtime Hessian edge collector produced no edges";
+            "runtime reorder edge collector produced no edges";
         m_runtime_reorder_pending = false;
-        return;
+        return false;
     }
 
     std::vector<RuntimeOrderingEdge> edges(raw_count);
-    m_runtime->runtime_ordering_edges.view(0, raw_count).copy_to(edges.data());
+    if(raw_count != 0)
+        m_runtime->runtime_ordering_edges.view(0, raw_count).copy_to(edges.data());
 
     struct PairKey
     {
@@ -735,46 +807,80 @@ void SocuApproxSolver::apply_pending_runtime_reorder()
         merged[key] += edge.abs_weight;
     }
     m_report.runtime_reorder_unique_edge_count = merged.size();
-    if(merged.empty())
+    if(merged.empty() && m_runtime_reorder_graph_source == "full_hessian")
     {
         m_report.runtime_reorder_failure_detail =
-            "runtime Hessian edge collector produced no valid off-diagonal atom edges";
+            "runtime reorder edge collector produced no valid off-diagonal atom edges";
         m_runtime_reorder_pending = false;
-        return;
+        return false;
     }
 
     socu_approx::rcm::AtomGraph graph;
-    graph.name = "cuda_mixed_runtime_hessian";
-    for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
-        socu_approx::rcm::add_atom(graph,
-                                   static_cast<SizeT>(m_host_atom_dof_count[atom]),
-                                   "runtime_atom",
-                                   atom);
+    if(m_runtime_reorder_graph_source == "full_hessian")
+    {
+        graph.name = "cuda_mixed_runtime_full_hessian";
+        for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
+            socu_approx::rcm::add_atom(graph,
+                                       static_cast<SizeT>(m_host_atom_dof_count[atom]),
+                                       "runtime_atom",
+                                       atom);
+    }
+    else
+    {
+        graph = graph_from_json(m_runtime_reorder_base_graph, true);
+        graph.name = m_runtime_reorder_graph_source == "topology"
+                         ? "cuda_mixed_runtime_topology"
+                         : "cuda_mixed_runtime_contact_hessian";
+        if(graph.atoms.empty())
+        {
+            for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
+                socu_approx::rcm::add_atom(
+                    graph,
+                    static_cast<SizeT>(m_host_atom_dof_count[atom]),
+                    "runtime_atom",
+                    atom);
+        }
+    }
+    if(graph.edges.empty() && merged.empty())
+    {
+        m_report.runtime_reorder_failure_detail =
+            "runtime reorder graph has no off-diagonal atom edges";
+        m_runtime_reorder_pending = false;
+        return false;
+    }
     for(const auto& [key, weight] : merged)
-        socu_approx::rcm::add_edge(graph,
-                                   static_cast<SizeT>(key.a),
-                                   static_cast<SizeT>(key.b),
-                                   weight,
-                                   "runtime_hessian");
+    {
+        const double runtime_weight =
+            m_runtime_reorder_graph_source == "topology" ? 1.0 : weight;
+        socu_approx::rcm::add_edge(
+            graph,
+            static_cast<SizeT>(key.a),
+            static_cast<SizeT>(key.b),
+            runtime_weight,
+            m_runtime_reorder_graph_source == "topology"
+                ? "runtime_contact_topology"
+                : "runtime_hessian");
+    }
 
     try
     {
         auto run = socu_approx::rcm::run_ordering(
             graph,
             m_ordering_orderer,
-            m_ordering_block_size);
+            "64");
         Json report = socu_approx::rcm::to_json(run);
         report["graph"] = socu_approx::rcm::to_json(graph);
-        report["generated_by"] = "cuda_mixed_socu_runtime_hessian";
-        report["ordering_source"] = "runtime_hessian";
+        report["generated_by"] = "cuda_mixed_socu_runtime_current_frame";
+        report["ordering_source"] = "runtime_current_frame";
+        report["runtime_reorder_graph_source"] = m_runtime_reorder_graph_source;
         report["provider_kind"] = m_gate_report.provider_kind.empty()
-                                      ? std::string{"runtime_hessian"}
+                                      ? std::string{"runtime_current_frame"}
                                       : m_gate_report.provider_kind;
 
         const auto path =
             fs::absolute(fs::path{workspace()} / "socu_approx"
                          / fmt::format("runtime_ordering.{}.json",
-                                       m_runtime_reorder_collecting_frame));
+                                       collected_frame));
         write_json_report(path, report);
 
         std::string detail;
@@ -802,6 +908,8 @@ void SocuApproxSolver::apply_pending_runtime_reorder()
     }
 
     m_runtime_reorder_pending = false;
+    return m_report.runtime_reorder_applied
+           && m_report.runtime_reorder_failure_detail.empty();
 }
 
 void SocuApproxSolver::begin_runtime_reorder_collection(cudaStream_t stream)
@@ -868,7 +976,6 @@ void SocuApproxSolver::prepare_structured_chain(
     const bool  new_frame = frame != m_runtime_reorder_last_prepared_frame;
     if(new_frame)
     {
-        apply_pending_runtime_reorder();
         m_runtime_reorder_last_prepared_frame = frame;
     }
 
@@ -926,8 +1033,6 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.damping_shift = m_damping_shift;
 
     const cudaStream_t stream = system().stream();
-    if(new_frame)
-        begin_runtime_reorder_collection(stream);
     if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         muda::BufferLaunch(stream).fill<IndexT>(m_runtime->report_counters.view(), 0);
 
@@ -959,11 +1064,7 @@ void SocuApproxSolver::prepare_structured_chain(
         stream);
     if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         info.set_contact_counters(m_runtime->report_counters.view());
-    if(m_runtime_reorder_collecting)
-        info.set_runtime_ordering_collector(
-            m_runtime->runtime_ordering_collector(true));
-    else
-        info.set_runtime_ordering_collector({});
+    info.set_runtime_ordering_collector({});
 
     m_report.packed = true;
     m_report.active_rhs_scalar_count = info.b().size();
@@ -975,6 +1076,86 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.first_offdiag_block_count =
         m_runtime->layout.off_diag_block_count;
     m_report.stream_source = "mixed_backend_current_stream";
+#endif
+}
+
+auto SocuApproxSolver::prepare_structured_probe(
+    GlobalLinearSystem::StructuredAssemblyInfo& info) -> StructuredProbeAssembly
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    (void)info;
+    return StructuredProbeAssembly::None;
+#else
+    if(!m_runtime || m_runtime_reorder_frame_interval == 0
+       || m_runtime_reorder_edge_capacity == 0)
+        return StructuredProbeAssembly::None;
+
+    const SizeT frame = engine().frame();
+    if((frame % m_runtime_reorder_frame_interval) != 0
+       || m_runtime_reorder_last_probe_frame == frame)
+        return StructuredProbeAssembly::None;
+
+    m_runtime_reorder_last_probe_frame = frame;
+    m_runtime_reorder_collecting_frame = frame;
+    m_runtime_reorder_collecting = true;
+    m_runtime_reorder_probe_active = true;
+    m_runtime_reorder_pending = false;
+    m_report.runtime_reorder_enabled = true;
+    m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
+    m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+    m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+    m_report.runtime_reorder_collecting_frame = frame;
+    m_report.runtime_reorder_applied = false;
+    m_report.runtime_reorder_failure_detail.clear();
+
+    const cudaStream_t stream = system().stream();
+    if(m_runtime->runtime_ordering_cursor.size() >= 2)
+    {
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(m_runtime->runtime_ordering_cursor.data(),
+                                               0,
+                                               2 * sizeof(IndexT),
+                                               stream));
+    }
+
+    info.set_workspace(
+        StructuredChainShape{static_cast<SizeT>(m_runtime->shape.horizon),
+                             static_cast<SizeT>(m_runtime->shape.n),
+                             static_cast<SizeT>(m_runtime->shape.nrhs),
+                             true},
+        span<const StructuredDofSlot>{m_dof_slots},
+        m_runtime->device_diag.view(),
+        m_runtime->device_off_diag.view(),
+        m_runtime->device_rhs.view(),
+        m_runtime->device_old_to_chain.view(),
+        m_runtime->device_chain_to_old.view(),
+        stream);
+    info.set_runtime_ordering_collector(
+        m_runtime->runtime_ordering_collector(true, true));
+
+    return m_runtime_reorder_graph_source == "full_hessian"
+               ? StructuredProbeAssembly::Full
+               : StructuredProbeAssembly::ContactOnly;
+#endif
+}
+
+bool SocuApproxSolver::finalize_structured_probe(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    (void)info;
+    return false;
+#else
+    if(!m_runtime_reorder_probe_active)
+        return false;
+
+    m_runtime_reorder_probe_active = false;
+    m_runtime_reorder_collecting = false;
+    const bool installed =
+        install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
+    m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting_frame;
+    m_report.runtime_reorder_last_applied_frame =
+        m_runtime_reorder_last_applied_frame;
+    return installed;
 #endif
 }
 
@@ -1054,7 +1235,12 @@ void SocuApproxSolver::finalize_structured_chain(
                 "SocuApproxSolver structured assembly requires initialized runtime.");
     if(m_debug_validation)
         m_runtime->snapshot_matrix(info.stream());
-    finalize_runtime_reorder_collection();
+    m_report.runtime_reorder_enabled = m_runtime_reorder_frame_interval > 0;
+    m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
+    m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+    m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+    m_report.runtime_reorder_last_applied_frame =
+        m_runtime_reorder_last_applied_frame;
     if(m_debug_dump_structured_matrix || m_debug_dump_problem_file) [[unlikely]]
     {
         cudaStreamSynchronize(info.stream());

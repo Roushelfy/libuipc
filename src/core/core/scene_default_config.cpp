@@ -49,6 +49,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/max_off_band_drop_norm_ratio", Float{0.05});
     config.create("linear_system/socu_approx/runtime_reorder_frame_interval", IndexT{0});
     config.create("linear_system/socu_approx/runtime_reorder_edge_capacity", IndexT{0});
+    config.create("linear_system/socu_approx/runtime_reorder_graph_source",
+                  std::string{"topology"});
     config.create("linear_system/socu_approx/max_line_search_reject_streak", IndexT{0});
     config.create("linear_system/socu_approx/debug_validation", IndexT{0});
     config.create("linear_system/socu_approx/debug_timing", IndexT{0});

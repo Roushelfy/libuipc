@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utils/matrix_assembler.h>
+#include <utils/runtime_ordering_collector.h>
 #include <linear_system/structured_chain_provider.h>
 #include <muda/atomic.h>
 #include <muda/buffer/buffer_view.h>
@@ -13,27 +14,6 @@ enum class StructuredSinkWriteClass : unsigned char
     Diag,
     FirstOffdiag,
     OffBand,
-};
-
-struct RuntimeOrderingEdge
-{
-    IndexT atom_a = -1;
-    IndexT atom_b = -1;
-    double abs_weight = 0.0;
-};
-
-struct RuntimeOrderingCollector
-{
-    muda::BufferView<RuntimeOrderingEdge> edges;
-    muda::BufferView<IndexT>              cursor;
-    muda::CBufferView<IndexT>             old_dof_to_atom;
-    bool                                  enabled = false;
-
-    MUDA_GENERIC bool valid() const noexcept
-    {
-        return enabled && edges.data() != nullptr && cursor.data() != nullptr
-               && cursor.size() >= 2 && old_dof_to_atom.data() != nullptr;
-    }
 };
 
 template <typename StoreT, int BlockDim>
@@ -138,7 +118,7 @@ struct TripletAssemblySink
 };
 
 template <typename StoreT, typename SolveT>
-struct StructuredDeviceAssemblySink
+struct StructuredDeviceMatrixSink
 {
     muda::BufferView<SolveT>  diag;
     muda::BufferView<SolveT>  first_offdiag;
@@ -146,7 +126,6 @@ struct StructuredDeviceAssemblySink
     SizeT                     horizon    = 0;
     SizeT                     block_size = 0;
     muda::BufferView<IndexT>  counters;
-    RuntimeOrderingCollector  runtime_ordering;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -157,8 +136,6 @@ struct StructuredDeviceAssemblySink
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
     add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
     {
-        record_runtime_ordering_edge(old_i, old_j, value);
-
         if(old_i < 0 || old_j < 0)
             return StructuredSinkWriteClass::Skipped;
         if(static_cast<SizeT>(old_i) >= old_to_chain.size()
@@ -206,6 +183,139 @@ struct StructuredDeviceAssemblySink
         return StructuredSinkWriteClass::Skipped;
     }
 
+    MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
+                                                        IndexT old_j,
+                                                        StoreT value) const noexcept
+    {
+        (void)add_hessian_scalar_status(old_i, old_j, value);
+    }
+
+    MUDA_DEVICE __forceinline__ void record_off_band_drop() const noexcept
+    {
+        if(counters.data() != nullptr && counters.size() > 2)
+            muda::atomic_add(counters.data(2), IndexT{1});
+    }
+
+    template <typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
+                                                     const HMat& H) const noexcept
+    {
+        for(IndexT row = 0; row < H.rows(); ++row)
+        {
+            for(IndexT col = row; col < H.cols(); ++col)
+            {
+                const IndexT old_i = old_dof_begin + row;
+                const IndexT old_j = old_dof_begin + col;
+                const auto cls = add_hessian_scalar_status(
+                    old_i,
+                    old_j,
+                    static_cast<StoreT>(H(row, col)));
+                if(cls == StructuredSinkWriteClass::Diag && old_i != old_j)
+                    add_hessian_scalar(old_j, old_i, static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+
+    template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row = 0; row < Rows; ++row)
+        {
+#pragma unroll
+            for(IndexT col = row; col < Cols; ++col)
+            {
+                const IndexT old_i = old_dof_begin + row;
+                const IndexT old_j = old_dof_begin + col;
+                const auto cls = add_hessian_scalar_status(
+                    old_i,
+                    old_j,
+                    static_cast<StoreT>(H(row, col)));
+                if(cls == StructuredSinkWriteClass::Diag && old_i != old_j)
+                    add_hessian_scalar(old_j, old_i, static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+
+    template <int SubBlockDim, int SubBlockCount, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_upper_subblocks_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row_block = 0; row_block < SubBlockCount; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < SubBlockCount; ++col_block)
+            {
+#pragma unroll
+                for(IndexT row = 0; row < SubBlockDim; ++row)
+                {
+#pragma unroll
+                    for(IndexT col = 0; col < SubBlockDim; ++col)
+                    {
+                        const IndexT local_i = row_block * SubBlockDim + row;
+                        const IndexT local_j = col_block * SubBlockDim + col;
+                        const IndexT old_i   = old_dof_begin + local_i;
+                        const IndexT old_j   = old_dof_begin + local_j;
+                        const auto   value   = static_cast<StoreT>(H(local_i, local_j));
+                        const auto cls =
+                            add_hessian_scalar_status(old_i, old_j, value);
+                        if(row_block != col_block
+                           && cls == StructuredSinkWriteClass::Diag)
+                        {
+                            add_hessian_scalar(old_j, old_i, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ void add_dense_block_between_fixed(
+        IndexT old_row_dof_begin,
+        IndexT old_col_dof_begin,
+        const HMat& H) const noexcept
+    {
+#pragma unroll
+        for(IndexT row = 0; row < Rows; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < Cols; ++col)
+            {
+                add_hessian_scalar(old_row_dof_begin + row,
+                                   old_col_dof_begin + col,
+                                   static_cast<StoreT>(H(row, col)));
+            }
+        }
+    }
+};
+
+template <typename StoreT, typename SolveT>
+struct StructuredDeviceAssemblySink
+{
+    StructuredDeviceMatrixSink<StoreT, SolveT> matrix;
+    RuntimeOrderingCollector                  runtime_ordering;
+
+    StructuredDeviceAssemblySink() = default;
+
+    StructuredDeviceAssemblySink(muda::BufferView<SolveT>  diag,
+                                 muda::BufferView<SolveT>  first_offdiag,
+                                 muda::CBufferView<IndexT> old_to_chain,
+                                 SizeT                     horizon,
+                                 SizeT                     block_size,
+                                 muda::BufferView<IndexT>  counters,
+                                 RuntimeOrderingCollector  collector = {}) noexcept
+        : matrix{diag, first_offdiag, old_to_chain, horizon, block_size, counters}
+        , runtime_ordering(collector)
+    {
+    }
+
+    MUDA_GENERIC bool valid() const noexcept { return matrix.valid(); }
+
     MUDA_DEVICE __forceinline__ void record_runtime_ordering_edge(
         IndexT old_i,
         IndexT old_j,
@@ -241,6 +351,15 @@ struct StructuredDeviceAssemblySink
         runtime_ordering.edges.data(slot)->abs_weight = v < 0.0 ? -v : v;
     }
 
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
+    {
+        record_runtime_ordering_edge(old_i, old_j, value);
+        if(runtime_ordering.graph_only)
+            return StructuredSinkWriteClass::Skipped;
+        return matrix.add_hessian_scalar_status(old_i, old_j, value);
+    }
+
     MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
                                                         IndexT old_j,
                                                         StoreT value) const noexcept
@@ -250,8 +369,7 @@ struct StructuredDeviceAssemblySink
 
     MUDA_DEVICE __forceinline__ void record_off_band_drop() const noexcept
     {
-        if(counters.data() != nullptr && counters.size() > 2)
-            muda::atomic_add(counters.data(2), IndexT{1});
+        matrix.record_off_band_drop();
     }
 
     template <typename HMat>

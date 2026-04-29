@@ -148,6 +148,7 @@ struct SocuApproxSolveReport
     bool        runtime_reorder_enabled = false;
     SizeT       runtime_reorder_interval = 0;
     SizeT       runtime_reorder_edge_capacity = 0;
+    std::string runtime_reorder_graph_source = "topology";
     SizeT       runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
     SizeT       runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       runtime_reorder_edge_count = 0;

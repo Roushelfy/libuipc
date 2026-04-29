@@ -126,6 +126,7 @@ Json to_json(const SocuApproxSolveReport& report)
                  {{"enabled", report.runtime_reorder_enabled},
                   {"interval", report.runtime_reorder_interval},
                   {"edge_capacity", report.runtime_reorder_edge_capacity},
+                  {"graph_source", report.runtime_reorder_graph_source},
                   {"collecting_frame", report.runtime_reorder_collecting_frame},
                   {"last_applied_frame", report.runtime_reorder_last_applied_frame},
                   {"edge_count", report.runtime_reorder_edge_count},

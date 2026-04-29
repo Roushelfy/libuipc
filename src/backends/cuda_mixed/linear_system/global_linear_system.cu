@@ -414,61 +414,110 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
         }
     }
 
-    StructuredAssemblyInfo info{this};
-    info.m_b = b.cview();
-    selected_linear_solver->prepare_structured_chain(info);
-    if(!info.configured())
-    {
-        throw SimSystemException{
-            "Selected solver requested structured chain assembly but did not configure a structured workspace"};
-    }
-
     auto diag_dof_counts  = diag_dof_offsets_counts.counts();
     auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
-    for(const auto& subsystem_info : subsystem_infos)
-    {
-        if(!subsystem_info.is_diag)
-            continue;
 
-        auto& diag_subsystem = diag_subsystem_view[subsystem_info.local_index];
-        if(!diag_subsystem->supports_structured_assembly())
+    auto assemble_into = [&](StructuredAssemblyInfo& info,
+                             LinearSolver::StructuredProbeAssembly probe)
+    {
+        const bool contact_only =
+            probe == LinearSolver::StructuredProbeAssembly::ContactOnly;
+
+        if(!contact_only)
         {
-            throw SimSystemException{fmt::format(
-                "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
-                diag_subsystem->name())};
+            for(const auto& subsystem_info : subsystem_infos)
+            {
+                if(!subsystem_info.is_diag)
+                    continue;
+
+                auto& diag_subsystem =
+                    diag_subsystem_view[subsystem_info.local_index];
+                if(!diag_subsystem->supports_structured_assembly())
+                {
+                    throw SimSystemException{fmt::format(
+                        "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
+                        diag_subsystem->name())};
+                }
+
+                info.set_subsystem_extent(
+                    diag_dof_offsets[subsystem_info.local_index],
+                    diag_dof_counts[subsystem_info.local_index]);
+                Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
+                diag_subsystem->assemble_structured(info);
+            }
+
+            for(const auto& subsystem_info : subsystem_infos)
+            {
+                if(subsystem_info.is_diag)
+                    continue;
+
+                auto& off_diag_subsystem =
+                    off_diag_subsystem_view[subsystem_info.local_index];
+                if(!off_diag_subsystem->supports_structured_assembly())
+                {
+                    throw SimSystemException{fmt::format(
+                        "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
+                        off_diag_subsystem->name())};
+                }
+
+                Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
+                off_diag_subsystem->assemble_structured(info);
+            }
         }
 
-        info.set_subsystem_extent(diag_dof_offsets[subsystem_info.local_index],
-                                  diag_dof_counts[subsystem_info.local_index]);
-        Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
-        diag_subsystem->assemble_structured(info);
+        if(global_dytopo_effect_manager)
+        {
+            Timer timer{contact_only ? "Probe Structured DyTopo Hessian Graph"
+                                      : "Assemble Structured DyTopo Hessian"};
+            global_dytopo_effect_manager->assemble_structured_hessian(info);
+        }
+    };
+
+    {
+        StructuredAssemblyInfo probe_info{this};
+        probe_info.m_b = b.cview();
+        const auto probe =
+            selected_linear_solver->prepare_structured_probe(probe_info);
+        if(probe != LinearSolver::StructuredProbeAssembly::None)
+        {
+            if(!probe_info.configured())
+            {
+                throw SimSystemException{
+                    "Selected solver requested structured probe but did not configure a structured workspace"};
+            }
+            assemble_into(probe_info, probe);
+            const bool installed =
+                selected_linear_solver->finalize_structured_probe(probe_info);
+            if(installed)
+            {
+                StructuredAssemblyInfo info{this};
+                info.m_b = b.cview();
+                selected_linear_solver->prepare_structured_chain(info);
+                if(!info.configured())
+                {
+                    throw SimSystemException{
+                        "Selected solver requested structured chain assembly but did not configure a structured workspace"};
+                }
+                assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
+                selected_linear_solver->finalize_structured_chain(info);
+                return;
+            }
+        }
     }
 
-    for(const auto& subsystem_info : subsystem_infos)
     {
-        if(subsystem_info.is_diag)
-            continue;
-
-        auto& off_diag_subsystem =
-            off_diag_subsystem_view[subsystem_info.local_index];
-        if(!off_diag_subsystem->supports_structured_assembly())
+        StructuredAssemblyInfo info{this};
+        info.m_b = b.cview();
+        selected_linear_solver->prepare_structured_chain(info);
+        if(!info.configured())
         {
-            throw SimSystemException{fmt::format(
-                "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
-                off_diag_subsystem->name())};
+            throw SimSystemException{
+                "Selected solver requested structured chain assembly but did not configure a structured workspace"};
         }
 
-        Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
-        off_diag_subsystem->assemble_structured(info);
+        assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
+        selected_linear_solver->finalize_structured_chain(info);
     }
-
-    if(global_dytopo_effect_manager)
-    {
-        Timer timer{"Assemble Structured DyTopo Hessian"};
-        global_dytopo_effect_manager->assemble_structured_hessian(info);
-    }
-
-    selected_linear_solver->finalize_structured_chain(info);
 }
 
 bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A)
