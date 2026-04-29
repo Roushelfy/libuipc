@@ -2,6 +2,7 @@
 
 #include <linear_system/socu_approx_report.h>
 #include <mixed_precision/policy.h>
+#include <utils/assembly_sink.h>
 
 #include <cuda_runtime.h>
 #include <muda/buffer/device_buffer.h>
@@ -57,6 +58,9 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<Scalar> device_rhs_original;
     muda::DeviceBuffer<IndexT> device_old_to_chain;
     muda::DeviceBuffer<IndexT> device_chain_to_old;
+    muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
+    muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
+    muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
     muda::DeviceBuffer<double> validation_sums;
     muda::DeviceBuffer<IndexT> report_counters;
     double*                    host_validation_sums = nullptr;
@@ -156,6 +160,34 @@ struct SocuApproxRuntime
         if(!chain_to_old.empty())
             device_chain_to_old.view().copy_from(chain_to_old.data());
         mappings_uploaded = true;
+    }
+
+    void upload_old_dof_to_atom(const std::vector<IndexT>& old_dof_to_atom)
+    {
+        device_old_dof_to_atom.resize(old_dof_to_atom.size());
+        if(!old_dof_to_atom.empty())
+            device_old_dof_to_atom.view().copy_from(old_dof_to_atom.data());
+    }
+
+    void reserve_runtime_ordering(SizeT edge_capacity)
+    {
+        if(edge_capacity == 0)
+            return;
+        if(runtime_ordering_edges.capacity() < edge_capacity)
+            runtime_ordering_edges.reserve(edge_capacity);
+        runtime_ordering_edges.resize(edge_capacity);
+        if(runtime_ordering_cursor.capacity() < 2)
+            runtime_ordering_cursor.reserve(2);
+        runtime_ordering_cursor.resize(2);
+    }
+
+    RuntimeOrderingCollector runtime_ordering_collector(bool enabled) noexcept
+    {
+        return RuntimeOrderingCollector{
+            runtime_ordering_edges.view(),
+            runtime_ordering_cursor.view(),
+            device_old_dof_to_atom.view(),
+            enabled};
     }
 
     bool factor_and_solve(cudaStream_t stream)

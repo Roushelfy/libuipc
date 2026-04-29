@@ -5,6 +5,7 @@
 #include <linear_system/socu_approx_kernels.h>
 #include <linear_system/socu_approx_ordering.h>
 #include <linear_system/socu_approx_runtime.h>
+#include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
 #include <sim_engine.h>
 #include <uipc/common/exception.h>
@@ -17,6 +18,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -24,6 +26,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -201,7 +204,21 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                         structured_scope));
         throw_gate_failure(m_gate_report);
     }
+    m_structured_scope = structured_scope;
     m_allows_structured_offdiag = structured_scope == "multi_provider";
+
+    auto runtime_reorder_interval_attr =
+        config.find<IndexT>("linear_system/socu_approx/runtime_reorder_frame_interval");
+    auto runtime_reorder_capacity_attr =
+        config.find<IndexT>("linear_system/socu_approx/runtime_reorder_edge_capacity");
+    m_runtime_reorder_frame_interval =
+        runtime_reorder_interval_attr
+            ? static_cast<SizeT>(std::max<IndexT>(0, runtime_reorder_interval_attr->view()[0]))
+            : SizeT{0};
+    m_runtime_reorder_edge_capacity_config =
+        runtime_reorder_capacity_attr
+            ? static_cast<SizeT>(std::max<IndexT>(0, runtime_reorder_capacity_attr->view()[0]))
+            : SizeT{0};
 
     auto ordering_source_attr =
         config.find<std::string>("linear_system/socu_approx/ordering_source");
@@ -257,6 +274,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     const std::string ordering_block_size =
         ordering_block_size_attr ? ordering_block_size_attr->view()[0]
                                  : std::string{"64"};
+    m_ordering_orderer = ordering_orderer;
+    m_ordering_block_size = ordering_block_size;
     if(ordering_block_size != "auto" && ordering_block_size != "32"
        && ordering_block_size != "64")
     {
@@ -319,42 +338,53 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     logger::info("Generated socu_approx init-time ordering report at {}",
                  ordering_report_path.string());
 
-    const Json* candidate = selected_candidate_json(report);
-    const Json* ordering  = ordering_json(*candidate);
-    if(!ordering || !has_basic_ordering_schema(*ordering))
-    {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
-                                     "ordering report is missing the required ordering mapping schema",
-                                     ordering_report_path.string());
-        throw_gate_failure(m_gate_report);
-    }
+    std::string install_detail;
+    if(!install_ordering_report(report, ordering_report_path, true, &install_detail))
+        throw Exception{install_detail};
+    logger::info("SocuApproxSolver strict structured solve enabled: block_size={}, blocks={}, report='{}'",
+                 m_report.block_size,
+                 m_report.block_count,
+                 m_report.report_path);
+}
 
-    m_gate_report.ordering_report_path = ordering_report_path.string();
-    m_gate_report.structured_scope = structured_scope;
-    if(report.contains("provider_kind") && report["provider_kind"].is_string())
-        m_gate_report.provider_kind = report["provider_kind"].get<std::string>();
-    else
-        m_gate_report.provider_kind = "init_time";
-    m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-    if(m_gate_report.block_size != 32 && m_gate_report.block_size != 64)
+bool SocuApproxSolver::install_ordering_report(
+    const Json&                  report,
+    const std::filesystem::path& ordering_report_path,
+    bool                         throw_on_failure,
+    std::string*                 failure_detail)
+{
+    auto fail = [&](SocuApproxGateReason reason, std::string detail) -> bool
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::UnsupportedBlockSize,
-            fmt::format("ordering block_size must be 32 or 64, got {}",
-                        m_gate_report.block_size),
-            ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
-    }
+        auto failure = make_failure(reason, std::move(detail), ordering_report_path.string());
+        if(failure_detail)
+            *failure_detail = failure.detail;
+        if(throw_on_failure)
+        {
+            m_gate_report = std::move(failure);
+            throw_gate_failure(m_gate_report);
+        }
+        return false;
+    };
+
+    const Json* candidate = selected_candidate_json(report);
+    if(!candidate)
+        return fail(SocuApproxGateReason::OrderingInvalid,
+                    "ordering report is missing selected candidate");
+    const Json* ordering = ordering_json(*candidate);
+    if(!ordering || !has_basic_ordering_schema(*ordering))
+        return fail(SocuApproxGateReason::OrderingInvalid,
+                    "ordering report is missing the required ordering mapping schema");
+
+    const SizeT block_size = ordering->at("block_size").get<SizeT>();
+    if(block_size != 32 && block_size != 64)
+        return fail(SocuApproxGateReason::UnsupportedBlockSize,
+                    fmt::format("ordering block_size must be 32 or 64, got {}",
+                                block_size));
 
     if constexpr(!std::is_same_v<ActivePolicy::StoreScalar, ActivePolicy::SolveScalar>)
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::UnsupportedPrecisionContract,
-            "socu_approx strict structured solve only accepts StoreScalar == SolveScalar",
-            ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::UnsupportedPrecisionContract,
+                    "socu_approx strict structured solve only accepts StoreScalar == SolveScalar");
     }
 
     std::string                       ordering_detail;
@@ -363,39 +393,32 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     if(!parse_atom_dof_count(*ordering, ordering_dof_count, ordering_detail)
        || !parse_block_layouts(*ordering, block_layouts, ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
-                                     ordering_detail.empty()
-                                         ? "ordering report has an empty block layout"
-                                         : ordering_detail,
-                                     ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::OrderingInvalid,
+                    ordering_detail.empty()
+                        ? "ordering report has an empty block layout"
+                        : ordering_detail);
     }
 
     std::unique_ptr<StructuredChainProvider> provider;
     SizeT                                    padding_slot_count = 0;
     if(!build_ordering_provider(*ordering,
-                                m_gate_report.block_size,
+                                block_size,
                                 block_layouts,
                                 provider,
                                 padding_slot_count,
                                 ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
-                                     ordering_detail.empty()
-                                         ? "ordering report cannot build a structured provider"
-                                         : ordering_detail,
-                                     ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::OrderingInvalid,
+                    ordering_detail.empty()
+                        ? "ordering report cannot build a structured provider"
+                        : ordering_detail);
     }
 
     StructuredQualityReport build_coverage = {};
     build_coverage.block_utilization = provider->quality_report().block_utilization;
     std::vector<IndexT> build_old_to_chain;
     std::vector<IndexT> build_chain_to_old;
-    const SizeT         chain_scalar_count =
-        block_layouts.size() * m_gate_report.block_size;
+    const SizeT         chain_scalar_count = block_layouts.size() * block_size;
     if(!validate_dof_coverage(provider->dof_slots(),
                               ordering_dof_count,
                               chain_scalar_count,
@@ -404,42 +427,79 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                               build_coverage,
                               ordering_detail))
     {
-        m_gate_report = make_failure(SocuApproxGateReason::StructuredCoverageInvalid,
-                                     ordering_detail,
-                                     ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        m_gate_report.block_utilization = provider->quality_report().block_utilization;
-        m_gate_report.coverage_active_dof_count = build_coverage.active_dof_count;
-        m_gate_report.coverage_padding_dof_count = build_coverage.padding_dof_count;
-        m_gate_report.complete_dof_coverage = false;
-        throw_gate_failure(m_gate_report);
+        auto failure =
+            make_failure(SocuApproxGateReason::StructuredCoverageInvalid,
+                         ordering_detail,
+                         ordering_report_path.string());
+        failure.block_size = block_size;
+        failure.block_utilization = provider->quality_report().block_utilization;
+        failure.coverage_active_dof_count = build_coverage.active_dof_count;
+        failure.coverage_padding_dof_count = build_coverage.padding_dof_count;
+        failure.complete_dof_coverage = false;
+        if(failure_detail)
+            *failure_detail = failure.detail;
+        if(throw_on_failure)
+        {
+            m_gate_report = std::move(failure);
+            throw_gate_failure(m_gate_report);
+        }
+        return false;
     }
-    m_host_old_to_chain = std::move(build_old_to_chain);
-    m_host_chain_to_old = std::move(build_chain_to_old);
 
     if(!validate_atom_inverse_mapping(*ordering, ordering_detail))
+        return fail(SocuApproxGateReason::OrderingInvalid, ordering_detail);
+
+    std::vector<IndexT> old_dof_to_atom(ordering_dof_count, IndexT{-1});
+    std::vector<IndexT> atom_dof_count(ordering->at("atom_dof_count").size(), 0);
+    SizeT              old_dof_offset = 0;
+    for(SizeT atom = 0; atom < atom_dof_count.size(); ++atom)
     {
-        m_gate_report = make_failure(SocuApproxGateReason::OrderingInvalid,
-                                     ordering_detail,
-                                     ordering_report_path.string());
-        m_gate_report.block_size = ordering->at("block_size").get<SizeT>();
-        throw_gate_failure(m_gate_report);
+        const SizeT dofs = ordering->at("atom_dof_count").at(atom).get<SizeT>();
+        atom_dof_count[atom] = static_cast<IndexT>(dofs);
+        if(old_dof_offset + dofs > old_dof_to_atom.size())
+            return fail(SocuApproxGateReason::OrderingInvalid,
+                        "ordering atom_dof_count exceeds ordering DoF count");
+        for(SizeT local = 0; local < dofs; ++local)
+            old_dof_to_atom[old_dof_offset + local] = static_cast<IndexT>(atom);
+        old_dof_offset += dofs;
+    }
+    if(m_runtime_reorder_frame_interval > 0)
+    {
+        m_runtime_reorder_edge_capacity =
+            m_runtime_reorder_edge_capacity_config > 0
+                ? m_runtime_reorder_edge_capacity_config
+                : std::max<SizeT>(SizeT{1} << 20, atom_dof_count.size() * 256);
+    }
+    else
+    {
+        m_runtime_reorder_edge_capacity = 0;
     }
 
+    SocuApproxGateReport next_gate = {};
+    next_gate.ordering_report_path = ordering_report_path.string();
+    next_gate.structured_scope     = m_structured_scope;
+    if(report.contains("provider_kind") && report["provider_kind"].is_string())
+        next_gate.provider_kind = report["provider_kind"].get<std::string>();
+    else
+        next_gate.provider_kind = "runtime_hessian";
+    next_gate.block_size = block_size;
+    next_gate.block_utilization = provider->quality_report().block_utilization;
+    next_gate.dtype = socu_dtype_name<GlobalLinearSystem::SolveScalar>();
+    next_gate.coverage_active_dof_count = build_coverage.active_dof_count;
+    next_gate.coverage_padding_dof_count = build_coverage.padding_dof_count;
+    next_gate.complete_dof_coverage = true;
     if(const Json* metrics = metrics_json(report, *candidate))
     {
         if(metrics->contains("near_band_ratio"))
-            m_gate_report.near_band_ratio = metrics->at("near_band_ratio").get<double>();
+            next_gate.near_band_ratio = metrics->at("near_band_ratio").get<double>();
         if(metrics->contains("off_band_ratio"))
-            m_gate_report.off_band_ratio = metrics->at("off_band_ratio").get<double>();
+            next_gate.off_band_ratio = metrics->at("off_band_ratio").get<double>();
         if(metrics->contains("off_band_drop_norm_ratio"))
-            m_gate_report.off_band_drop_norm_ratio =
+            next_gate.off_band_drop_norm_ratio =
                 metrics->at("off_band_drop_norm_ratio").get<double>();
     }
 
-    m_gate_report.block_utilization =
-        provider->quality_report().block_utilization;
-
+    auto& config = world().scene().config();
     auto min_near_attr =
         config.find<Float>("linear_system/socu_approx/min_near_band_ratio");
     auto max_off_attr =
@@ -465,115 +525,43 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             ? fs::absolute(fs::path{workspace()} / "socu_approx_report.json")
             : absolute_workspace_path(workspace(), solve_report);
 
-    m_report                         = SocuApproxSolveReport{};
-    m_report.report_path             = solve_report_path.string();
-    m_report.ordering_report_path    = ordering_report_path.string();
-    m_report.provider_kind           = m_gate_report.provider_kind;
-    m_report.structured_scope        = structured_scope;
-    m_report.block_size         = m_gate_report.block_size;
-    m_report.block_count        = block_layouts.size();
-    m_report.chain_atom_count   = ordering->at("chain_to_old").size();
-    m_report.ordering_dof_count = ordering_dof_count;
-    m_report.structured_slot_count = provider->dof_slots().size();
-    m_report.padding_slot_count = padding_slot_count;
-    m_report.block_utilization =
-        provider->quality_report().block_utilization;
-    m_report.near_band_ratio = m_gate_report.near_band_ratio;
-    m_report.off_band_ratio = m_gate_report.off_band_ratio;
-    m_report.off_band_drop_norm_ratio =
-        m_gate_report.off_band_drop_norm_ratio;
-    m_report.min_block_utilization = min_block_utilization;
-    m_report.min_near_band_ratio = min_near_band_ratio;
-    m_report.max_off_band_ratio = max_off_band_ratio;
-    m_report.max_off_band_drop_norm_ratio =
-        max_off_band_drop_norm_ratio;
-    m_report.debug_validation_enabled = m_debug_validation;
-    m_report.debug_timing_enabled = m_debug_timing;
-    m_report.report_each_solve = m_report_each_solve;
-    m_report.damping_shift = m_damping_shift;
-    m_report.direction_min_abs_threshold = m_direction_min_abs;
-    m_report.direction_min_rel_threshold = m_direction_min_rel;
-    m_report.coverage_active_dof_count =
-        build_coverage.active_dof_count;
-    m_report.coverage_padding_dof_count =
-        build_coverage.padding_dof_count;
-    m_report.complete_dof_coverage = true;
-    m_report.blocks             = std::move(block_layouts);
-    m_dof_slots.assign(provider->dof_slots().begin(), provider->dof_slots().end());
-
-    m_gate_report.passed = true;
-    m_gate_report.reason = SocuApproxGateReason::None;
-    m_gate_report.detail =
-        fmt::format("structured band direct solve enabled for provider_kind={} scope={}",
-                    m_gate_report.provider_kind,
-                    structured_scope);
-    m_gate_report.dtype = socu_dtype_name<GlobalLinearSystem::SolveScalar>();
-    m_gate_report.coverage_active_dof_count =
-        build_coverage.active_dof_count;
-    m_gate_report.coverage_padding_dof_count =
-        build_coverage.padding_dof_count;
-    m_gate_report.complete_dof_coverage = true;
-
 #if UIPC_WITH_SOCU_NATIVE
     const auto manifest_path = default_mathdx_manifest_path();
     if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
-    {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-            fmt::format("MathDx manifest is missing; expected '{}'",
-                        manifest_path.string()),
-            ordering_report_path.string());
-        m_gate_report.block_size = m_report.block_size;
-        throw_gate_failure(m_gate_report);
-    }
+        return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                    fmt::format("MathDx manifest is missing; expected '{}'",
+                                manifest_path.string()));
 
     std::string manifest_detail;
     try
     {
         if(!validate_mathdx_manifest<Runtime::Scalar>(manifest_path,
-                                                      m_report.block_size,
-                                                      m_gate_report,
+                                                      block_size,
+                                                      next_gate,
                                                       manifest_detail))
         {
-            m_gate_report = make_failure(
-                SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-                manifest_detail,
-                ordering_report_path.string());
-            m_gate_report.block_size = m_report.block_size;
-            m_gate_report.mathdx_manifest_path = manifest_path.string();
-            throw_gate_failure(m_gate_report);
+            return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                        manifest_detail);
         }
     }
     catch(const std::exception& e)
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-            fmt::format("MathDx manifest preflight failed: {}", e.what()),
-            ordering_report_path.string());
-        m_gate_report.block_size = m_report.block_size;
-        m_gate_report.mathdx_manifest_path = manifest_path.string();
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                    fmt::format("MathDx manifest preflight failed: {}", e.what()));
     }
 
-    m_gate_report.mathdx_prebuilt_cubin_ok = m_gate_report.mathdx_artifacts_ok;
-    m_gate_report.debug_validation_enabled = m_debug_validation;
-    m_gate_report.debug_timing_enabled = m_debug_timing;
     int device_count = 0;
     const cudaError_t device_query = cudaGetDeviceCount(&device_count);
     if(device_query != cudaSuccess || device_count == 0)
     {
         cudaGetLastError();
-        m_gate_report = make_failure(
-            SocuApproxGateReason::SocuMathDxUnsupported,
-            "no CUDA device is available for socu_approx",
-            ordering_report_path.string());
-        m_gate_report.block_size = m_report.block_size;
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::SocuMathDxUnsupported,
+                    "no CUDA device is available for socu_approx");
     }
 
     socu_native::ProblemShape shape{
-        static_cast<int>(m_report.block_count),
-        static_cast<int>(m_report.block_size),
+        static_cast<int>(block_layouts.size()),
+        static_cast<int>(block_size),
         1};
     socu_native::SolverPlanOptions options;
     options.backend      = socu_native::SolverBackend::NativePerf;
@@ -586,54 +574,285 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             shape,
             socu_native::SolverOperation::FactorAndSolve,
             options);
-    m_gate_report.resolved_backend =
-        to_report_string(capability.resolved_backend);
-    m_gate_report.resolved_perf_backend =
-        to_report_string(capability.resolved_perf_backend);
-    m_gate_report.resolved_math_mode =
-        to_report_string(capability.resolved_math_mode);
-    m_gate_report.resolved_graph_mode =
-        to_report_string(capability.resolved_graph_mode);
+    next_gate.resolved_backend = to_report_string(capability.resolved_backend);
+    next_gate.resolved_perf_backend = to_report_string(capability.resolved_perf_backend);
+    next_gate.resolved_math_mode = to_report_string(capability.resolved_math_mode);
+    next_gate.resolved_graph_mode = to_report_string(capability.resolved_graph_mode);
     if(!capability.supported
        || capability.resolved_backend != socu_native::SolverBackend::NativePerf
        || capability.resolved_perf_backend != socu_native::PerfBackend::MathDx)
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::SocuMathDxUnsupported,
-            fmt::format("socu_native MathDx capability rejected: {}",
-                        capability.reason),
-            ordering_report_path.string());
-        m_gate_report.block_size = m_report.block_size;
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::SocuMathDxUnsupported,
+                    fmt::format("socu_native MathDx capability rejected: {}",
+                                capability.reason));
     }
 
+    std::unique_ptr<Runtime> next_runtime;
     try
     {
-        m_runtime = std::make_unique<Runtime>(shape, options);
-        m_runtime->reserve(m_debug_validation, m_report_counters_enabled);
-        m_runtime->upload_mappings_once(m_host_old_to_chain, m_host_chain_to_old);
-        m_runtime->create_plan();
+        next_runtime = std::make_unique<Runtime>(shape, options);
+        next_runtime->reserve(m_debug_validation, m_report_counters_enabled);
+        next_runtime->upload_mappings_once(build_old_to_chain, build_chain_to_old);
+        next_runtime->upload_old_dof_to_atom(old_dof_to_atom);
+        if(m_runtime_reorder_edge_capacity > 0)
+            next_runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
+        next_runtime->create_plan();
     }
     catch(const std::exception& e)
     {
-        m_gate_report = make_failure(
-            SocuApproxGateReason::SocuRuntimeError,
-            fmt::format("socu_native runtime initialization failed: {}", e.what()),
-            ordering_report_path.string());
-        m_gate_report.block_size = m_report.block_size;
-        throw_gate_failure(m_gate_report);
+        return fail(SocuApproxGateReason::SocuRuntimeError,
+                    fmt::format("socu_native runtime initialization failed: {}", e.what()));
     }
 #else
-    m_gate_report = make_failure(
-        SocuApproxGateReason::SocuDisabled,
-        "socu_native is disabled or not available");
-    throw_gate_failure(m_gate_report);
+    return fail(SocuApproxGateReason::SocuDisabled,
+                "socu_native is disabled or not available");
 #endif
 
-    logger::info("SocuApproxSolver strict structured solve enabled: block_size={}, blocks={}, report='{}'",
-                 m_report.block_size,
-                 m_report.block_count,
-                 m_report.report_path);
+    SocuApproxSolveReport next_report = m_report;
+    next_report.packed = false;
+    next_report.report_path = solve_report_path.string();
+    next_report.ordering_report_path = ordering_report_path.string();
+    next_report.provider_kind = next_gate.provider_kind;
+    next_report.structured_scope = m_structured_scope;
+    next_report.block_size = block_size;
+    next_report.block_count = block_layouts.size();
+    next_report.chain_atom_count = ordering->at("chain_to_old").size();
+    next_report.ordering_dof_count = ordering_dof_count;
+    next_report.structured_slot_count = provider->dof_slots().size();
+    next_report.padding_slot_count = padding_slot_count;
+    next_report.block_utilization = provider->quality_report().block_utilization;
+    next_report.near_band_ratio = next_gate.near_band_ratio;
+    next_report.off_band_ratio = next_gate.off_band_ratio;
+    next_report.off_band_drop_norm_ratio = next_gate.off_band_drop_norm_ratio;
+    next_report.min_block_utilization = min_block_utilization;
+    next_report.min_near_band_ratio = min_near_band_ratio;
+    next_report.max_off_band_ratio = max_off_band_ratio;
+    next_report.max_off_band_drop_norm_ratio = max_off_band_drop_norm_ratio;
+    next_report.debug_validation_enabled = m_debug_validation;
+    next_report.debug_timing_enabled = m_debug_timing;
+    next_report.report_each_solve = m_report_each_solve;
+    next_report.damping_shift = m_damping_shift;
+    next_report.direction_min_abs_threshold = m_direction_min_abs;
+    next_report.direction_min_rel_threshold = m_direction_min_rel;
+    next_report.coverage_active_dof_count = build_coverage.active_dof_count;
+    next_report.coverage_padding_dof_count = build_coverage.padding_dof_count;
+    next_report.complete_dof_coverage = true;
+    next_report.blocks = std::move(block_layouts);
+    next_report.runtime_reorder_enabled = m_runtime_reorder_frame_interval > 0;
+    next_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
+    next_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+
+    m_gate_report = std::move(next_gate);
+    m_gate_report.passed = true;
+    m_gate_report.reason = SocuApproxGateReason::None;
+    m_gate_report.detail =
+        fmt::format("structured band direct solve enabled for provider_kind={} scope={}",
+                    m_gate_report.provider_kind,
+                    m_structured_scope);
+    m_gate_report.mathdx_prebuilt_cubin_ok = m_gate_report.mathdx_artifacts_ok;
+    m_gate_report.debug_validation_enabled = m_debug_validation;
+    m_gate_report.debug_timing_enabled = m_debug_timing;
+
+    m_host_old_to_chain = std::move(build_old_to_chain);
+    m_host_chain_to_old = std::move(build_chain_to_old);
+    m_host_old_dof_to_atom = std::move(old_dof_to_atom);
+    m_host_atom_dof_count = std::move(atom_dof_count);
+    m_dof_slots.assign(provider->dof_slots().begin(), provider->dof_slots().end());
+#if UIPC_WITH_SOCU_NATIVE
+    m_runtime = std::move(next_runtime);
+#endif
+    m_report = std::move(next_report);
+    return true;
+}
+
+void SocuApproxSolver::apply_pending_runtime_reorder()
+{
+    if(!m_runtime_reorder_pending || !m_runtime || m_runtime_reorder_edge_capacity == 0)
+        return;
+    if(engine().frame() == m_runtime_reorder_collecting_frame)
+        return;
+
+    std::array<IndexT, 2> cursor{};
+    m_runtime->runtime_ordering_cursor.view().copy_to(cursor.data());
+    const SizeT raw_count =
+        std::min<SizeT>(static_cast<SizeT>(std::max<IndexT>(cursor[0], 0)),
+                        m_runtime_reorder_edge_capacity);
+    const SizeT overflow_count = static_cast<SizeT>(std::max<IndexT>(cursor[1], 0));
+
+    m_report.runtime_reorder_edge_count = raw_count;
+    m_report.runtime_reorder_overflow_count = overflow_count;
+    m_report.runtime_reorder_applied = false;
+    m_report.runtime_reorder_failure_detail.clear();
+
+    if(overflow_count != 0)
+    {
+        m_report.runtime_reorder_failure_detail =
+            fmt::format("runtime Hessian edge collector overflowed by {} entries",
+                        overflow_count);
+        m_runtime_reorder_pending = false;
+        return;
+    }
+    if(raw_count == 0)
+    {
+        m_report.runtime_reorder_failure_detail =
+            "runtime Hessian edge collector produced no edges";
+        m_runtime_reorder_pending = false;
+        return;
+    }
+
+    std::vector<RuntimeOrderingEdge> edges(raw_count);
+    m_runtime->runtime_ordering_edges.view(0, raw_count).copy_to(edges.data());
+
+    struct PairKey
+    {
+        IndexT a = 0;
+        IndexT b = 0;
+        bool operator==(const PairKey& other) const noexcept
+        {
+            return a == other.a && b == other.b;
+        }
+    };
+    struct PairHash
+    {
+        std::size_t operator()(const PairKey& key) const noexcept
+        {
+            const auto ha = std::hash<IndexT>{}(key.a);
+            const auto hb = std::hash<IndexT>{}(key.b);
+            return ha ^ (hb + 0x9e3779b97f4a7c15ull + (ha << 6) + (ha >> 2));
+        }
+    };
+
+    std::unordered_map<PairKey, double, PairHash> merged;
+    merged.reserve(raw_count);
+    for(const auto& edge : edges)
+    {
+        if(edge.atom_a < 0 || edge.atom_b < 0 || edge.atom_a == edge.atom_b
+           || edge.abs_weight <= 0.0)
+            continue;
+        PairKey key{edge.atom_a, edge.atom_b};
+        if(key.a > key.b)
+            std::swap(key.a, key.b);
+        merged[key] += edge.abs_weight;
+    }
+    m_report.runtime_reorder_unique_edge_count = merged.size();
+    if(merged.empty())
+    {
+        m_report.runtime_reorder_failure_detail =
+            "runtime Hessian edge collector produced no valid off-diagonal atom edges";
+        m_runtime_reorder_pending = false;
+        return;
+    }
+
+    socu_approx::rcm::AtomGraph graph;
+    graph.name = "cuda_mixed_runtime_hessian";
+    for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
+        socu_approx::rcm::add_atom(graph,
+                                   static_cast<SizeT>(m_host_atom_dof_count[atom]),
+                                   "runtime_atom",
+                                   atom);
+    for(const auto& [key, weight] : merged)
+        socu_approx::rcm::add_edge(graph,
+                                   static_cast<SizeT>(key.a),
+                                   static_cast<SizeT>(key.b),
+                                   weight,
+                                   "runtime_hessian");
+
+    try
+    {
+        auto run = socu_approx::rcm::run_ordering(
+            graph,
+            m_ordering_orderer,
+            m_ordering_block_size);
+        Json report = socu_approx::rcm::to_json(run);
+        report["graph"] = socu_approx::rcm::to_json(graph);
+        report["generated_by"] = "cuda_mixed_socu_runtime_hessian";
+        report["ordering_source"] = "runtime_hessian";
+        report["provider_kind"] = m_gate_report.provider_kind.empty()
+                                      ? std::string{"runtime_hessian"}
+                                      : m_gate_report.provider_kind;
+
+        const auto path =
+            fs::absolute(fs::path{workspace()} / "socu_approx"
+                         / fmt::format("runtime_ordering.{}.json",
+                                       m_runtime_reorder_collecting_frame));
+        write_json_report(path, report);
+
+        std::string detail;
+        if(install_ordering_report(report, path, false, &detail))
+        {
+            m_runtime_reorder_last_applied_frame = engine().frame();
+            m_report.runtime_reorder_edge_count = raw_count;
+            m_report.runtime_reorder_unique_edge_count = merged.size();
+            m_report.runtime_reorder_overflow_count = overflow_count;
+            m_report.runtime_reorder_last_applied_frame =
+                m_runtime_reorder_last_applied_frame;
+            m_report.runtime_reorder_applied = true;
+            m_report.runtime_reorder_failure_detail.clear();
+        }
+        else
+        {
+            m_report.runtime_reorder_failure_detail =
+                detail.empty() ? "runtime ordering install failed" : detail;
+        }
+    }
+    catch(const std::exception& e)
+    {
+        m_report.runtime_reorder_failure_detail =
+            fmt::format("runtime Hessian ordering generation failed: {}", e.what());
+    }
+
+    m_runtime_reorder_pending = false;
+}
+
+void SocuApproxSolver::begin_runtime_reorder_collection(cudaStream_t stream)
+{
+    if(!m_runtime || m_runtime_reorder_frame_interval == 0
+       || m_runtime_reorder_edge_capacity == 0)
+    {
+        m_runtime_reorder_collecting = false;
+        return;
+    }
+
+    const SizeT frame = engine().frame();
+    m_runtime_reorder_collecting =
+        (frame % m_runtime_reorder_frame_interval) == 0;
+    if(!m_runtime_reorder_collecting)
+        return;
+
+    m_runtime_reorder_collecting_frame = frame;
+    m_runtime_reorder_pending = false;
+    if(m_runtime->runtime_ordering_cursor.size() >= 2)
+    {
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(m_runtime->runtime_ordering_cursor.data(),
+                                               0,
+                                               2 * sizeof(IndexT),
+                                               stream));
+    }
+}
+
+void SocuApproxSolver::finalize_runtime_reorder_collection()
+{
+    m_report.runtime_reorder_enabled = m_runtime_reorder_frame_interval > 0;
+    m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
+    m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+    m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting
+                                                    ? m_runtime_reorder_collecting_frame
+                                                    : static_cast<SizeT>(-1);
+    m_report.runtime_reorder_last_applied_frame =
+        m_runtime_reorder_last_applied_frame;
+
+    if(!m_runtime_reorder_collecting || !m_runtime
+       || m_runtime->runtime_ordering_cursor.size() < 2)
+        return;
+
+    std::array<IndexT, 2> cursor{};
+    m_runtime->runtime_ordering_cursor.view().copy_to(cursor.data());
+    m_report.runtime_reorder_edge_count =
+        std::min<SizeT>(static_cast<SizeT>(std::max<IndexT>(cursor[0], 0)),
+                        m_runtime_reorder_edge_capacity);
+    m_report.runtime_reorder_overflow_count =
+        static_cast<SizeT>(std::max<IndexT>(cursor[1], 0));
+    m_runtime_reorder_pending = true;
 }
 
 void SocuApproxSolver::prepare_structured_chain(
@@ -644,6 +863,14 @@ void SocuApproxSolver::prepare_structured_chain(
 #else
     UIPC_ASSERT(m_runtime != nullptr,
                 "SocuApproxSolver structured assembly requires initialized runtime.");
+
+    const SizeT frame = engine().frame();
+    const bool  new_frame = frame != m_runtime_reorder_last_prepared_frame;
+    if(new_frame)
+    {
+        apply_pending_runtime_reorder();
+        m_runtime_reorder_last_prepared_frame = frame;
+    }
 
     m_report.direction_available = false;
     m_report.status_reason.clear();
@@ -699,6 +926,8 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.damping_shift = m_damping_shift;
 
     const cudaStream_t stream = system().stream();
+    if(new_frame)
+        begin_runtime_reorder_collection(stream);
     if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         muda::BufferLaunch(stream).fill<IndexT>(m_runtime->report_counters.view(), 0);
 
@@ -730,6 +959,11 @@ void SocuApproxSolver::prepare_structured_chain(
         stream);
     if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
         info.set_contact_counters(m_runtime->report_counters.view());
+    if(m_runtime_reorder_collecting)
+        info.set_runtime_ordering_collector(
+            m_runtime->runtime_ordering_collector(true));
+    else
+        info.set_runtime_ordering_collector({});
 
     m_report.packed = true;
     m_report.active_rhs_scalar_count = info.b().size();
@@ -820,6 +1054,7 @@ void SocuApproxSolver::finalize_structured_chain(
                 "SocuApproxSolver structured assembly requires initialized runtime.");
     if(m_debug_validation)
         m_runtime->snapshot_matrix(info.stream());
+    finalize_runtime_reorder_collection();
     if(m_debug_dump_structured_matrix || m_debug_dump_problem_file) [[unlikely]]
     {
         cudaStreamSynchronize(info.stream());

@@ -810,6 +810,68 @@ void require_socu_approx_fem_runtime_contact_smoke(std::string_view name)
     CHECK(report["contact"]["weighted_off_band_ratio"].get<double>() == 0.0);
 #endif
 }
+
+void require_socu_approx_runtime_reorder_smoke(std::string_view name)
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    WARN("socu_native is not enabled in this build; runtime reorder smoke was not run");
+    return;
+#else
+    std::string skip_reason;
+    if(!can_run_socu_strict_contract(skip_reason))
+    {
+        WARN(skip_reason);
+        return;
+    }
+
+    auto config                       = linear_solver_selection_config();
+    config["contact"]["enable"]       = true;
+    config["contact"]["friction"]["enable"] = false;
+    config["contact"]["constitution"] = "ipc";
+    config["linear_system"]["solver"] = "socu_approx";
+    config["linear_system"]["socu_approx"]["ordering_source"] = "init_time";
+    config["linear_system"]["socu_approx"]["ordering_block_size"] = "32";
+    config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0;
+    config["linear_system"]["socu_approx"]["damping_shift"] = 1.0;
+    config["linear_system"]["socu_approx"]["max_relative_residual"] = 1e-3;
+    config["linear_system"]["socu_approx"]["debug_validation"] = 1;
+    config["linear_system"]["socu_approx"]["report_each_solve"] = 1;
+    config["linear_system"]["socu_approx"]["runtime_reorder_frame_interval"] = 1;
+
+    auto output_path = contract_workspace(name);
+    fs::create_directories(output_path);
+    auto report_path = output_path / "solve_report.json";
+    config["linear_system"]["socu_approx"]["report"] =
+        report_path.string();
+    test::Scene::dump_config(config, output_path.string());
+
+    Engine engine{"cuda_mixed", output_path.string()};
+    World  world{engine};
+    Scene  scene{config};
+    build_single_fem_tet_near_ground(scene);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    world.advance();
+    REQUIRE(world.is_valid());
+    world.advance();
+    REQUIRE(world.is_valid());
+    world.retrieve();
+    require_cuda_sync();
+
+    REQUIRE(fs::exists(report_path));
+    std::ifstream ifs{report_path};
+    Json          report = Json::parse(ifs);
+    REQUIRE(report["status"]["direction_available"].get<bool>() == true);
+    REQUIRE(report["runtime_reorder"]["enabled"].get<bool>() == true);
+    REQUIRE(report["runtime_reorder"]["interval"].get<SizeT>() == 1);
+    CHECK(report["runtime_reorder"]["edge_count"].get<SizeT>() > 0);
+    CHECK(report["runtime_reorder"]["overflow_count"].get<SizeT>() == 0);
+    CHECK(report["runtime_reorder"]["failure_detail"].get<std::string>().empty());
+    CHECK(report["runtime_reorder"]["applied"].get<bool>() == true);
+#endif
+}
 }  // namespace
 
 TEST_CASE("86_cuda_mixed_contract_abd_bdf2_zero_alloc",
@@ -995,6 +1057,12 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
     {
         require_socu_approx_fem_runtime_contact_smoke(
             "linear_solver_socu_approx_fem_runtime_contact");
+    }
+
+    SECTION("socu_approx_runtime_reorder_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder");
     }
 
 }

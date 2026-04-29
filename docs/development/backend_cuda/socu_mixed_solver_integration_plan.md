@@ -45,6 +45,14 @@ The fused PCG path keeps using the normal full sparse assembly route. Shared
 local Hessian evaluation code may feed either sink, but the SOCU path writes
 its structured destination directly.
 
+Runtime Hessian-based RCM reordering is optional and disabled by default. When
+enabled, a sampling frame records the atom-pair graph from structured Hessian
+writes, including off-band writes before they are dropped from the structured
+matrix. The merged graph is reordered on the CPU and the new structured
+runtime/plan is installed at the next frame's first linear build. A runtime
+reorder failure leaves the previous ordering active and is reported as a
+diagnostic.
+
 ## Failure And Report Semantics
 
 Hard failures are limited to invalid or unsupported states:
@@ -82,7 +90,9 @@ Typical strict structured solve configuration:
       "ordering_source": "init_time",
       "ordering_orderer": "rcm",
       "ordering_block_size": "64",
-      "damping_shift": 0.0
+      "damping_shift": 0.0,
+      "runtime_reorder_frame_interval": 0,
+      "runtime_reorder_edge_capacity": 0
     }
   }
 }
@@ -94,6 +104,14 @@ Typical strict structured solve configuration:
 been removed from the solver path. `ordering_orderer` only supports `rcm` in
 the runtime solver. `generated_ordering_report` may still be set to write the
 init-time ordering diagnostics for inspection.
+
+`runtime_reorder_frame_interval = 0` means init-time ordering only. A positive
+interval samples frames satisfying `frame % interval == 0` and applies the
+resulting `runtime_hessian` ordering on the next frame. The collector capacity
+defaults to an automatic value; setting `runtime_reorder_edge_capacity > 0`
+overrides it. Collector overflow, empty graphs, invalid mappings, or
+`socu_native` plan creation failures do not abort the solve; they are reported
+and the previous ordering remains active.
 
 SOCU approx now exposes only the strict structured direct solve path. The
 previous assembly-only validation path has been removed; structured assembly
@@ -112,6 +130,9 @@ The solve report records:
   norm, and direction validation thresholds
 - plan/timing/report counters when enabled
 - line-search feedback when available
+- optional `runtime_reorder` diagnostics: enabled state, interval, capacity,
+  collecting frame, last applied frame, raw/unique edge counts, overflow count,
+  apply status, and failure detail
 
 The report does not include dense matrix eigen summaries or pre-factor matrix
 downloads. Direction validation is the required lightweight correctness check

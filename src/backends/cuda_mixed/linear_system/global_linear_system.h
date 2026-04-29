@@ -175,6 +175,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_counters;
         }
+        RuntimeOrderingCollector runtime_ordering_collector() const noexcept
+        {
+            return m_runtime_ordering_collector;
+        }
         bool report_counters_enabled() const noexcept
         {
             return m_contact_counters.data() != nullptr;
@@ -188,7 +192,8 @@ class GlobalLinearSystem : public SimSystem
                 m_old_to_chain,
                 m_shape.horizon,
                 m_shape.block_size,
-                m_contact_counters};
+                m_contact_counters,
+                m_runtime_ordering_collector};
         }
 
         void set_workspace(StructuredChainShape       shape,
@@ -202,6 +207,10 @@ class GlobalLinearSystem : public SimSystem
         void set_contact_counters(muda::BufferView<IndexT> counters) noexcept
         {
             m_contact_counters = counters;
+        }
+        void set_runtime_ordering_collector(RuntimeOrderingCollector collector) noexcept
+        {
+            m_runtime_ordering_collector = collector;
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
@@ -271,6 +280,7 @@ class GlobalLinearSystem : public SimSystem
         muda::CBufferView<IndexT>  m_old_to_chain;
         muda::CBufferView<IndexT>  m_chain_to_old;
         muda::BufferView<IndexT>   m_contact_counters;
+        RuntimeOrderingCollector   m_runtime_ordering_collector;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;
         SizeT                      m_old_dof_count  = 0;

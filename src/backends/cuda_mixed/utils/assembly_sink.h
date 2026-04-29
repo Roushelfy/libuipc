@@ -15,6 +15,27 @@ enum class StructuredSinkWriteClass : unsigned char
     OffBand,
 };
 
+struct RuntimeOrderingEdge
+{
+    IndexT atom_a = -1;
+    IndexT atom_b = -1;
+    double abs_weight = 0.0;
+};
+
+struct RuntimeOrderingCollector
+{
+    muda::BufferView<RuntimeOrderingEdge> edges;
+    muda::BufferView<IndexT>              cursor;
+    muda::CBufferView<IndexT>             old_dof_to_atom;
+    bool                                  enabled = false;
+
+    MUDA_GENERIC bool valid() const noexcept
+    {
+        return enabled && edges.data() != nullptr && cursor.data() != nullptr
+               && cursor.size() >= 2 && old_dof_to_atom.data() != nullptr;
+    }
+};
+
 template <typename StoreT, int BlockDim>
 struct TripletAssemblySink
 {
@@ -125,6 +146,7 @@ struct StructuredDeviceAssemblySink
     SizeT                     horizon    = 0;
     SizeT                     block_size = 0;
     muda::BufferView<IndexT>  counters;
+    RuntimeOrderingCollector  runtime_ordering;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -135,6 +157,8 @@ struct StructuredDeviceAssemblySink
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
     add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
     {
+        record_runtime_ordering_edge(old_i, old_j, value);
+
         if(old_i < 0 || old_j < 0)
             return StructuredSinkWriteClass::Skipped;
         if(static_cast<SizeT>(old_i) >= old_to_chain.size()
@@ -178,6 +202,41 @@ struct StructuredDeviceAssemblySink
             return StructuredSinkWriteClass::FirstOffdiag;
         }
         return StructuredSinkWriteClass::Skipped;
+    }
+
+    MUDA_DEVICE __forceinline__ void record_runtime_ordering_edge(
+        IndexT old_i,
+        IndexT old_j,
+        StoreT value) const noexcept
+    {
+        if(!runtime_ordering.valid() || old_i < 0 || old_j < 0)
+            return;
+        if(static_cast<SizeT>(old_i) >= runtime_ordering.old_dof_to_atom.size()
+           || static_cast<SizeT>(old_j) >= runtime_ordering.old_dof_to_atom.size())
+            return;
+
+        IndexT atom_i = runtime_ordering.old_dof_to_atom[static_cast<SizeT>(old_i)];
+        IndexT atom_j = runtime_ordering.old_dof_to_atom[static_cast<SizeT>(old_j)];
+        if(atom_i < 0 || atom_j < 0 || atom_i == atom_j)
+            return;
+        if(atom_i > atom_j)
+        {
+            const IndexT tmp = atom_i;
+            atom_i = atom_j;
+            atom_j = tmp;
+        }
+
+        const IndexT slot = muda::atomic_add(runtime_ordering.cursor.data(0), IndexT{1});
+        if(static_cast<SizeT>(slot) >= runtime_ordering.edges.size())
+        {
+            muda::atomic_add(runtime_ordering.cursor.data(1), IndexT{1});
+            return;
+        }
+
+        const auto v = static_cast<double>(value);
+        runtime_ordering.edges.data(slot)->atom_a = atom_i;
+        runtime_ordering.edges.data(slot)->atom_b = atom_j;
+        runtime_ordering.edges.data(slot)->abs_weight = v < 0.0 ? -v : v;
     }
 
     MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,

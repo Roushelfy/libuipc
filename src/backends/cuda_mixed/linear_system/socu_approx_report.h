@@ -145,6 +145,17 @@ struct SocuApproxSolveReport
     double line_search_accepted_alpha = 1.0;
     SizeT line_search_reject_streak = 0;
 
+    bool        runtime_reorder_enabled = false;
+    SizeT       runtime_reorder_interval = 0;
+    SizeT       runtime_reorder_edge_capacity = 0;
+    SizeT       runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
+    SizeT       runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
+    SizeT       runtime_reorder_edge_count = 0;
+    SizeT       runtime_reorder_unique_edge_count = 0;
+    SizeT       runtime_reorder_overflow_count = 0;
+    bool        runtime_reorder_applied = false;
+    std::string runtime_reorder_failure_detail;
+
     bool        direction_available = false;
     std::string status_reason;
     std::string status_detail;
