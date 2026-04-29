@@ -13,6 +13,8 @@ class SimplexNormalContact : public ContactReporter
     using ContactReporter::ContactReporter;
     using StoreScalar = ContactReporter::StoreScalar;
     using EnergyScalar = ContactReporter::EnergyScalar;
+    using StoreMat12 = Eigen::Matrix<StoreScalar, 12, 12>;
+    using StoreMat6 = Eigen::Matrix<StoreScalar, 6, 6>;
     constexpr static SizeT PTHalfHessianSize = 4 * (4 + 1) / 2;  // 4 vertices, symmetric matrix
     constexpr static SizeT EEHalfHessianSize = 4 * (4 + 1) / 2;  // 4 vertices, symmetric matrix
     constexpr static SizeT PEHalfHessianSize = 3 * (3 + 1) / 2;  // 3 vertices, symmetric matrix
@@ -68,6 +70,8 @@ class SimplexNormalContact : public ContactReporter
         bool hessian_only() const noexcept { return m_hessian_only; }
         bool structured_hessian() const noexcept { return m_structured_hessian; }
         auto structured_hessian_sink() const noexcept { return m_structured_sink; }
+        muda::BufferView<StoreMat12> structured_EE_hessian_workspace(SizeT size) const;
+        muda::BufferView<StoreMat6>  structured_PP_hessian_workspace(SizeT size) const;
 
       private:
         friend class SimplexNormalContact;
@@ -172,6 +176,8 @@ class SimplexNormalContact : public ContactReporter
         muda::CBufferView<EnergyScalar>    PP_energies;
         muda::CDoubletVectorView<StoreScalar, 3> PP_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> PP_hessians;
+        muda::DeviceBuffer<StoreMat12> structured_EE_hessians;
+        muda::DeviceBuffer<StoreMat6>  structured_PP_hessians;
     };
 
     muda::CBufferView<Vector4i>        PTs() const;

@@ -188,6 +188,20 @@ void SimplexNormalContact::do_assemble_structured_hessian(
     do_assemble(this_info);
 }
 
+muda::BufferView<SimplexNormalContact::StoreMat12>
+SimplexNormalContact::ContactInfo::structured_EE_hessian_workspace(SizeT size) const
+{
+    m_impl->structured_EE_hessians.resize(size);
+    return m_impl->structured_EE_hessians.view();
+}
+
+muda::BufferView<SimplexNormalContact::StoreMat6>
+SimplexNormalContact::ContactInfo::structured_PP_hessian_workspace(SizeT size) const
+{
+    m_impl->structured_PP_hessians.resize(size);
+    return m_impl->structured_PP_hessians.view();
+}
+
 muda::CBuffer2DView<ContactCoeff> SimplexNormalContact::BaseInfo::contact_tabular() const
 {
     return m_impl->global_contact_manager->contact_tabular();

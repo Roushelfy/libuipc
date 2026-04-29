@@ -94,18 +94,21 @@ void assemble_ipc_simplex_normal_contact_structured(
                    });
     }
 
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(info.EEs().size(),
-               [structured_sink,
-                table = info.contact_tabular().viewer().name("contact_tabular"),
-                contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
-                EEs         = info.EEs().viewer().name("EEs"),
-                Ps          = info.positions().viewer().name("Ps"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                rest_Ps     = info.rest_positions().viewer().name("rest_Ps"),
-                d_hats      = info.d_hats().viewer().name("d_hats"),
-                dt          = info.dt()] __device__(int i) mutable
+    if(info.EEs().size())
+    {
+        auto ee_hessians = info.structured_EE_hessian_workspace(info.EEs().size());
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.EEs().size(),
+                   [Hs = ee_hessians.viewer().name("structured_EE_normal_Hs"),
+                    table = info.contact_tabular().viewer().name("contact_tabular"),
+                    contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                    EEs         = info.EEs().viewer().name("EEs"),
+                    Ps          = info.positions().viewer().name("Ps"),
+                    thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                    rest_Ps     = info.rest_positions().viewer().name("rest_Ps"),
+                    d_hats      = info.d_hats().viewer().name("d_hats"),
+                    dt          = info.dt()] __device__(int i) mutable
                {
                    Vector4i EE = EEs(i);
 
@@ -176,9 +179,19 @@ void assemble_ipc_simplex_normal_contact_structured(
                                                          E2,
                                                          E3);
                    make_spd(H);
-                   auto H_store = downcast_hessian<Store>(H);
-                   structured_sink.template write_hessian_half<4>(EE, H_store);
+                   Hs(i) = downcast_hessian<Store>(H);
                });
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.EEs().size(),
+                   [structured_sink,
+                    EEs = info.EEs().viewer().name("EEs"),
+                    Hs = ee_hessians.viewer().name("structured_EE_normal_Hs")] __device__(
+                       int i) mutable
+                   {
+                       structured_sink.template write_hessian_half<4>(EEs(i), Hs(i));
+                   });
+    }
 
     ParallelFor()
         .file_line(__FILE__, __LINE__)
@@ -236,17 +249,20 @@ void assemble_ipc_simplex_normal_contact_structured(
                    structured_sink.template write_hessian_half<3>(PE, H_store);
                });
 
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(info.PPs().size(),
-               [structured_sink,
-                table = info.contact_tabular().viewer().name("contact_tabular"),
-                contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
-                PPs = info.PPs().viewer().name("PPs"),
-                Ps  = info.positions().viewer().name("Ps"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                d_hats = info.d_hats().viewer().name("d_hats"),
-                dt     = info.dt()] __device__(int i) mutable
+    if(info.PPs().size())
+    {
+        auto pp_hessians = info.structured_PP_hessian_workspace(info.PPs().size());
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.PPs().size(),
+                   [Hs = pp_hessians.viewer().name("structured_PP_normal_Hs"),
+                    table = info.contact_tabular().viewer().name("contact_tabular"),
+                    contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                    PPs = info.PPs().viewer().name("PPs"),
+                    Ps  = info.positions().viewer().name("Ps"),
+                    thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                    d_hats = info.d_hats().viewer().name("d_hats"),
+                    dt     = info.dt()] __device__(int i) mutable
                {
                    const auto& PP = PPs(i);
 
@@ -283,8 +299,18 @@ void assemble_ipc_simplex_normal_contact_structured(
                    Mat6A H;
                    PP_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P0, P1);
                    make_spd(H);
-                   auto H_store = downcast_hessian<Store>(H);
-                   structured_sink.template write_hessian_half<2>(PP, H_store);
+                   Hs(i) = downcast_hessian<Store>(H);
                });
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.PPs().size(),
+                   [structured_sink,
+                    PPs = info.PPs().viewer().name("PPs"),
+                    Hs = pp_hessians.viewer().name("structured_PP_normal_Hs")] __device__(
+                       int i) mutable
+                   {
+                       structured_sink.template write_hessian_half<2>(PPs(i), Hs(i));
+                   });
+    }
 }
 }  // namespace uipc::backend::cuda_mixed

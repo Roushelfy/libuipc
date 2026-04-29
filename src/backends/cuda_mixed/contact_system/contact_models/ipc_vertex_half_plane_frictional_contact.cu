@@ -97,11 +97,14 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
         {
             if(info.friction_PHs().size())
             {
+                const SizeT count = info.friction_PHs().size();
                 const auto structured_sink = info.structured_hessian_sink();
+                auto       structured_hessians =
+                    info.structured_hessian_workspace(count);
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
-                    .apply(info.friction_PHs().size(),
-                           [structured_sink,
+                    .apply(count,
+                           [Hs  = structured_hessians.viewer().name("structured_PH_friction_Hs"),
                             PHs = info.friction_PHs().viewer().name("PHs"),
                             plane_positions =
                                 half_plane->positions().viewer().name("plane_positions"),
@@ -155,7 +158,19 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
                                                             P,
                                                             N);
                                cuda_mixed::make_spd(H_alu);
-                               structured_sink.write_hessian(vI, H_alu);
+                               Hs(I) = downcast_hessian<Store>(H_alu);
+                           });
+                ParallelFor()
+                    .file_line(__FILE__, __LINE__)
+                    .apply(count,
+                           [structured_sink,
+                            PHs = info.friction_PHs().viewer().name("PHs"),
+                            Hs = structured_hessians.viewer().name("structured_PH_friction_Hs")] __device__(
+                               int I) mutable
+                           {
+                               const Vector2i PH = PHs(I);
+                               const IndexT   vI = PH(0);
+                               structured_sink.write_hessian(vI, Hs(I));
                            });
             }
             return;
