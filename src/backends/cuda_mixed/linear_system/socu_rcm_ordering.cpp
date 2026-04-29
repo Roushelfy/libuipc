@@ -61,18 +61,62 @@ std::vector<std::vector<SizeT>> adjacency(const AtomGraph& graph)
     return out;
 }
 
-std::vector<SizeT> rcm_order_from_adjacency(const std::vector<std::vector<SizeT>>& adj)
+std::vector<std::vector<double>> adjacency_weights(const AtomGraph& graph,
+                                                   const std::vector<std::vector<SizeT>>& adj)
 {
+    std::vector<std::vector<double>> weights(graph.atoms.size());
+    for(SizeT i = 0; i < adj.size(); ++i)
+        weights[i].assign(adj[i].size(), 0.0);
+
+    for(const auto& edge : graph.edges)
+    {
+        auto fill = [&](SizeT a, SizeT b)
+        {
+            auto it = std::lower_bound(adj[a].begin(), adj[a].end(), b);
+            if(it != adj[a].end() && *it == b)
+                weights[a][static_cast<SizeT>(std::distance(adj[a].begin(), it))] =
+                    edge.weight;
+        };
+        fill(edge.a, edge.b);
+        fill(edge.b, edge.a);
+    }
+    return weights;
+}
+
+std::vector<double> weighted_degree(const std::vector<std::vector<double>>& weights)
+{
+    std::vector<double> out(weights.size(), 0.0);
+    for(SizeT i = 0; i < weights.size(); ++i)
+        out[i] = std::accumulate(weights[i].begin(), weights[i].end(), 0.0);
+    return out;
+}
+
+std::vector<SizeT> rcm_order_from_graph(const AtomGraph& graph)
+{
+    const auto adj = adjacency(graph);
+    const auto weights = adjacency_weights(graph, adj);
+    const auto wdegree = weighted_degree(weights);
     const SizeT n = adj.size();
     std::vector<SizeT> order;
     std::vector<char>  seen(n, 0);
     order.reserve(n);
 
-    auto degree_less = [&adj](SizeT a, SizeT b)
+    auto root_less = [&](SizeT a, SizeT b)
     {
         const auto da = adj[a].size();
         const auto db = adj[b].size();
-        return da == db ? a < b : da < db;
+        if(da != db)
+            return da < db;
+        if(wdegree[a] != wdegree[b])
+            return wdegree[a] > wdegree[b];
+        return a < b;
+    };
+    auto edge_weight = [&](SizeT a, SizeT b)
+    {
+        auto it = std::lower_bound(adj[a].begin(), adj[a].end(), b);
+        if(it == adj[a].end() || *it != b)
+            return 0.0;
+        return weights[a][static_cast<SizeT>(std::distance(adj[a].begin(), it))];
     };
 
     while(order.size() < n)
@@ -84,7 +128,7 @@ std::vector<SizeT> rcm_order_from_adjacency(const std::vector<std::vector<SizeT>
             break;
         for(SizeT i = start + 1; i < n; ++i)
         {
-            if(!seen[i] && degree_less(i, start))
+            if(!seen[i] && root_less(i, start))
                 start = i;
         }
 
@@ -98,7 +142,20 @@ std::vector<SizeT> rcm_order_from_adjacency(const std::vector<std::vector<SizeT>
             order.push_back(u);
 
             auto neighbors = adj[u];
-            std::sort(neighbors.begin(), neighbors.end(), degree_less);
+            std::sort(neighbors.begin(),
+                      neighbors.end(),
+                      [&](SizeT a, SizeT b)
+                      {
+                          const auto da = adj[a].size();
+                          const auto db = adj[b].size();
+                          if(da != db)
+                              return da < db;
+                          const double wa = edge_weight(u, a);
+                          const double wb = edge_weight(u, b);
+                          if(wa != wb)
+                              return wa > wb;
+                          return a < b;
+                      });
             for(const SizeT v : neighbors)
             {
                 if(v < n && !seen[v])
@@ -421,7 +478,7 @@ OrderingRun run_ordering(const AtomGraph& graph,
     run.graph_name = graph.name;
 
     const auto start = Clock::now();
-    const auto permutation = rcm_order_from_adjacency(adjacency(graph));
+    const auto permutation = rcm_order_from_graph(graph);
     const auto end = Clock::now();
     const double elapsed_ms =
         std::chrono::duration<double, std::milli>(end - start).count();

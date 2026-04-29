@@ -41,6 +41,24 @@ sol::AtomGraph make_shuffled_rod()
         std::swap(new_to_old[i], new_to_old[(i * 37 + 11) % new_to_old.size()]);
     return sol::relabel_graph(graph, new_to_old);
 }
+
+sol::AtomGraph make_empty_graph(std::size_t atom_count, std::string name)
+{
+    sol::AtomGraph graph;
+    graph.name = std::move(name);
+    for(std::size_t i = 0; i < atom_count; ++i)
+        sol::add_atom(graph);
+    return graph;
+}
+
+std::size_t chain_distance(const sol::OrderingResult& ordering,
+                           std::size_t a,
+                           std::size_t b)
+{
+    const auto ca = ordering.old_to_chain.at(a);
+    const auto cb = ordering.old_to_chain.at(b);
+    return ca > cb ? ca - cb : cb - ca;
+}
 } // namespace
 
 TEST_CASE("permutation validation rejects malformed mappings", "[socu][ordering]")
@@ -57,6 +75,165 @@ TEST_CASE("permutation validation rejects malformed mappings", "[socu][ordering]
     auto missing_inverse = valid.ordering;
     missing_inverse.old_to_chain[0] = 3;
     REQUIRE_THROWS(sol::validate_permutation(missing_inverse, graph.atoms.size()));
+}
+
+TEST_CASE("weighted RCM matches RCM when all edge weights are uniform",
+          "[socu][ordering][weighted_rcm]")
+{
+    auto graph = make_empty_graph(14, "uniform_weight_ladder");
+    for(std::size_t i = 0; i + 1 < graph.atoms.size(); ++i)
+        sol::add_edge(graph, i, i + 1, 1.0, "path");
+    for(std::size_t i = 0; i + 2 < graph.atoms.size(); ++i)
+        sol::add_edge(graph, i, i + 2, 1.0, "skip");
+
+    const auto rcm = sol::make_ordering_candidate(graph, "rcm", 32);
+    const auto weighted = sol::make_ordering_candidate(graph, "weighted_rcm", 32);
+
+    REQUIRE(rcm.ok);
+    REQUIRE(weighted.ok);
+    CHECK(weighted.ordering.chain_to_old == rcm.ordering.chain_to_old);
+    CHECK(weighted.metrics.valid_permutation);
+}
+
+TEST_CASE("weighted RCM uses weighted degree to break component root ties",
+          "[socu][ordering][weighted_rcm]")
+{
+    auto graph = make_empty_graph(4, "weighted_root_tie");
+    sol::add_edge(graph, 0, 1, 1.0, "weak_component");
+    sol::add_edge(graph, 2, 3, 10.0, "strong_component");
+
+    const auto rcm = sol::make_ordering_candidate(graph, "rcm", 32);
+    const auto weighted = sol::make_ordering_candidate(graph, "weighted_rcm", 32);
+
+    REQUIRE(rcm.ok);
+    REQUIRE(weighted.ok);
+    CHECK(rcm.ordering.chain_to_old == std::vector<std::size_t>{3, 2, 1, 0});
+    CHECK(weighted.ordering.chain_to_old == std::vector<std::size_t>{1, 0, 3, 2});
+    CHECK(weighted.ordering.chain_to_old != rcm.ordering.chain_to_old);
+}
+
+TEST_CASE("weighted RCM uses edge weight to break same-degree neighbor ties",
+          "[socu][ordering][weighted_rcm]")
+{
+    auto graph = make_empty_graph(6, "weighted_neighbor_tie");
+    sol::add_edge(graph, 0, 1, 100.0, "root_pin");
+    sol::add_edge(graph, 1, 2, 1.0, "weak_branch");
+    sol::add_edge(graph, 1, 3, 10.0, "strong_branch");
+    sol::add_edge(graph, 2, 4, 1.0, "weak_tail");
+    sol::add_edge(graph, 3, 5, 1.0, "strong_tail");
+
+    const auto rcm = sol::make_ordering_candidate(graph, "rcm", 32);
+    const auto weighted = sol::make_ordering_candidate(graph, "weighted_rcm", 32);
+
+    REQUIRE(rcm.ok);
+    REQUIRE(weighted.ok);
+    CHECK(chain_distance(weighted.ordering, 1, 3)
+          < chain_distance(weighted.ordering, 1, 2));
+    CHECK(chain_distance(rcm.ordering, 1, 2)
+          < chain_distance(rcm.ordering, 1, 3));
+}
+
+TEST_CASE("weighted RCM sees accumulated duplicate edge weights",
+          "[socu][ordering][weighted_rcm]")
+{
+    auto graph = make_empty_graph(4, "weighted_accumulated_edges");
+    sol::add_edge(graph, 0, 1, 1.0, "weak_component");
+    sol::add_edge(graph, 2, 3, 1.0, "strong_component");
+    sol::add_edge(graph, 2, 3, 9.0, "contact_hessian");
+
+    const auto weighted = sol::make_ordering_candidate(graph, "weighted_rcm", 32);
+
+    REQUIRE(weighted.ok);
+    CHECK(weighted.ordering.chain_to_old == std::vector<std::size_t>{1, 0, 3, 2});
+    REQUIRE(graph.edges.size() == 2);
+    CHECK(graph.edges[1].weight == Catch::Approx(10.0));
+}
+
+TEST_CASE("weighted RCM keeps strong same-degree branch closer in larger block layout",
+          "[socu][ordering][weighted_rcm]")
+{
+    auto graph = make_empty_graph(45, "weighted_large_branch");
+    for(std::size_t i = 0; i + 1 < 15; ++i)
+        sol::add_edge(graph, i, i + 1, 1.0, "base_path");
+    for(std::size_t i = 15; i + 1 < 30; ++i)
+        sol::add_edge(graph, i, i + 1, 1.0, "base_path");
+    for(std::size_t i = 30; i + 1 < 45; ++i)
+        sol::add_edge(graph, i, i + 1, 1.0, "base_path");
+
+    sol::add_edge(graph, 7, 22, 50.0, "strong_contact");
+    sol::add_edge(graph, 7, 37, 2.0, "weak_contact");
+
+    const auto rcm = sol::make_ordering_candidate(graph, "rcm", 32);
+    const auto weighted = sol::make_ordering_candidate(graph, "weighted_rcm", 32);
+
+    REQUIRE(rcm.ok);
+    REQUIRE(weighted.ok);
+    CHECK(weighted.metrics.valid_permutation);
+    CHECK(chain_distance(weighted.ordering, 7, 22)
+          <= chain_distance(weighted.ordering, 7, 37));
+    CHECK(weighted.metrics.weighted_off_band_ratio
+          <= rcm.metrics.weighted_off_band_ratio);
+}
+
+TEST_CASE("weighted RCM produces valid permutations for varied synthetic graphs",
+          "[socu][ordering][weighted_rcm]")
+{
+    std::vector<sol::AtomGraph> graphs;
+
+    {
+        auto graph = make_empty_graph(1, "singleton");
+        graphs.push_back(std::move(graph));
+    }
+    {
+        auto graph = make_empty_graph(8, "disconnected_pairs");
+        for(std::size_t i = 0; i + 1 < graph.atoms.size(); i += 2)
+            sol::add_edge(graph, i, i + 1, static_cast<double>(i + 1), "pair");
+        graphs.push_back(std::move(graph));
+    }
+    {
+        auto graph = make_empty_graph(12, "star");
+        for(std::size_t i = 1; i < graph.atoms.size(); ++i)
+            sol::add_edge(graph, 0, i, static_cast<double>(i), "spoke");
+        graphs.push_back(std::move(graph));
+    }
+    {
+        auto graph = make_empty_graph(18, "two_ladders");
+        for(std::size_t i = 0; i + 1 < 9; ++i)
+        {
+            sol::add_edge(graph, i, i + 1, 1.0, "rail");
+            sol::add_edge(graph, i + 9, i + 10, 1.0, "rail");
+            sol::add_edge(graph, i, i + 9, static_cast<double>(i + 1), "rung");
+        }
+        graphs.push_back(std::move(graph));
+    }
+    {
+        auto graph = make_empty_graph(10, "clique_tail");
+        for(std::size_t i = 0; i < 5; ++i)
+            for(std::size_t j = i + 1; j < 5; ++j)
+                sol::add_edge(graph, i, j, static_cast<double>(i + j + 1), "clique");
+        for(std::size_t i = 5; i + 1 < 10; ++i)
+            sol::add_edge(graph, i, i + 1, 1.0, "tail");
+        sol::add_edge(graph, 4, 5, 25.0, "bridge");
+        graphs.push_back(std::move(graph));
+    }
+
+    for(const auto& graph : graphs)
+    {
+        CAPTURE(graph.name);
+        for(const std::size_t block_size : {32, 64})
+        {
+            const auto candidate =
+                sol::make_ordering_candidate(graph, "weighted_rcm", block_size);
+            REQUIRE(candidate.ok);
+            CHECK(candidate.metrics.valid_permutation);
+            CHECK_NOTHROW(sol::validate_permutation(candidate.ordering,
+                                                    graph.atoms.size()));
+            CHECK(candidate.metrics.weighted_near_band_ratio >= 0.0);
+            CHECK(candidate.metrics.weighted_near_band_ratio <= 1.0);
+            CHECK(candidate.metrics.weighted_off_band_ratio >= 0.0);
+            CHECK(candidate.metrics.weighted_off_band_ratio <= 1.0);
+        }
+    }
 }
 
 TEST_CASE("rod keeps bandwidth-zero baselines and reports METIS ND separately", "[socu][ordering]")

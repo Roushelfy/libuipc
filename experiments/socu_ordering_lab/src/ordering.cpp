@@ -93,6 +93,117 @@ std::vector<std::size_t> rcm_order_from_adjacency(const std::vector<std::vector<
     return order;
 }
 
+std::vector<std::vector<double>>
+adjacency_weights(const AtomGraph& graph,
+                  const std::vector<std::vector<std::size_t>>& adj)
+{
+    std::vector<std::vector<double>> weights(adj.size());
+    for(std::size_t i = 0; i < adj.size(); ++i)
+        weights[i].assign(adj[i].size(), 0.0);
+
+    for(const auto& edge : graph.edges)
+    {
+        auto fill = [&](std::size_t a, std::size_t b)
+        {
+            const auto it = std::lower_bound(adj[a].begin(), adj[a].end(), b);
+            if(it != adj[a].end() && *it == b)
+            {
+                weights[a][static_cast<std::size_t>(
+                    std::distance(adj[a].begin(), it))] = edge.weight;
+            }
+        };
+        fill(edge.a, edge.b);
+        fill(edge.b, edge.a);
+    }
+    return weights;
+}
+
+std::vector<double> weighted_degree(const std::vector<std::vector<double>>& weights)
+{
+    std::vector<double> out(weights.size(), 0.0);
+    for(std::size_t i = 0; i < weights.size(); ++i)
+        out[i] = std::accumulate(weights[i].begin(), weights[i].end(), 0.0);
+    return out;
+}
+
+std::vector<std::size_t> weighted_rcm_order(const AtomGraph& graph)
+{
+    const auto adj = adjacency(graph);
+    const auto weights = adjacency_weights(graph, adj);
+    const auto wdegree = weighted_degree(weights);
+    const std::size_t n = adj.size();
+    std::vector<std::size_t> order;
+    std::vector<char>        seen(n, 0);
+    order.reserve(n);
+
+    auto root_less = [&](std::size_t a, std::size_t b)
+    {
+        const auto da = adj[a].size();
+        const auto db = adj[b].size();
+        if(da != db)
+            return da < db;
+        if(wdegree[a] != wdegree[b])
+            return wdegree[a] > wdegree[b];
+        return a < b;
+    };
+    auto edge_weight = [&](std::size_t a, std::size_t b)
+    {
+        const auto it = std::lower_bound(adj[a].begin(), adj[a].end(), b);
+        if(it == adj[a].end() || *it != b)
+            return 0.0;
+        return weights[a][static_cast<std::size_t>(
+            std::distance(adj[a].begin(), it))];
+    };
+
+    while(order.size() < n)
+    {
+        std::size_t start = 0;
+        while(start < n && seen[start])
+            ++start;
+        if(start == n)
+            break;
+        for(std::size_t i = start + 1; i < n; ++i)
+            if(!seen[i] && root_less(i, start))
+                start = i;
+
+        std::queue<std::size_t> queue;
+        queue.push(start);
+        seen[start] = 1;
+        while(!queue.empty())
+        {
+            const std::size_t u = queue.front();
+            queue.pop();
+            order.push_back(u);
+
+            auto neighbors = adj[u];
+            std::sort(neighbors.begin(),
+                      neighbors.end(),
+                      [&](std::size_t a, std::size_t b)
+                      {
+                          const auto da = adj[a].size();
+                          const auto db = adj[b].size();
+                          if(da != db)
+                              return da < db;
+                          const double wa = edge_weight(u, a);
+                          const double wb = edge_weight(u, b);
+                          if(wa != wb)
+                              return wa > wb;
+                          return a < b;
+                      });
+            for(const std::size_t v : neighbors)
+            {
+                if(v < n && !seen[v])
+                {
+                    seen[v] = 1;
+                    queue.push(v);
+                }
+            }
+        }
+    }
+    std::reverse(order.begin(), order.end());
+    return order;
+}
+
 std::vector<std::size_t> rcm_subset_order(const AtomGraph& graph,
                                           const std::vector<std::size_t>& subset)
 {
@@ -617,6 +728,8 @@ CandidateBuild build_candidate_order(const AtomGraph& graph,
         return CandidateBuild{original_order(graph.atoms.size()), ""};
     if(orderer == "rcm")
         return CandidateBuild{rcm_order_from_adjacency(adjacency(graph)), ""};
+    if(orderer == "weighted_rcm")
+        return CandidateBuild{weighted_rcm_order(graph), ""};
     if(orderer == "metis_nd")
         return metis_nd_order(graph);
     if(orderer == "metis_kway_rcm")
@@ -644,11 +757,12 @@ std::vector<std::string> resolve_orderers(std::string_view value)
         return {"original", "rcm", "metis_kway_rcm"};
     if(value == "auto" || value == "all" || value == "auto_exhaustive")
         return {"original", "rcm", "nvidia_symrcm", "metis_nd", "metis_kway_rcm"};
-    if(value == "original" || value == "rcm" || value == "nvidia_symrcm"
-       || value == "metis_nd" || value == "metis_kway_rcm")
+    if(value == "original" || value == "rcm" || value == "weighted_rcm"
+       || value == "nvidia_symrcm" || value == "metis_nd"
+       || value == "metis_kway_rcm")
         return {std::string(value)};
     throw std::invalid_argument(
-        "orderer must be original, rcm, nvidia_symrcm, metis_nd, metis_kway_rcm, auto_stable, auto_exhaustive, auto, or all");
+        "orderer must be original, rcm, weighted_rcm, nvidia_symrcm, metis_nd, metis_kway_rcm, auto_stable, auto_exhaustive, auto, or all");
 }
 
 void validate_permutation(const OrderingResult& ordering, std::size_t atom_count)
