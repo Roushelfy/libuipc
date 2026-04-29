@@ -64,6 +64,9 @@ void FiniteElementElastics::init()
 
 muda::DoubletVectorView<FiniteElementElastics::StoreScalar, 3> FiniteElementElastics::ComputeGradientHessianInfo::gradients() const noexcept
 {
+    if(structured_assembly() && !m_write_gradients)
+        return {};
+
     auto [offset, count] = m_impl->constitution_gradient_offsets_counts[m_index];
     return m_gradients.subview(offset, count);
 }

@@ -123,7 +123,7 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
     auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
     const bool structured_hessian_direct =
         info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian;
-    bool gradient_only = info.m_gradient_only;
+    bool gradient_only = info.m_gradient_only || structured_hessian_direct;
 
     logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}, AssemblyMode={}",
                  info.m_gradient_only,
@@ -200,7 +200,16 @@ void GlobalDyTopoEffectManager::Impl::_convert_matrix(ComputeDyTopoEffectInfo& i
 {
     Timer timer{"Convert Dytopo Matrix"};
 
-    matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
+    if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
+    {
+        loose_resize_entries(sorted_dytopo_effect_hessian, 0);
+        auto vertex_count = global_vertex_manager->positions().size();
+        sorted_dytopo_effect_hessian.reshape(vertex_count, vertex_count);
+    }
+    else
+    {
+        matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
+    }
     matrix_converter.convert(collected_dytopo_effect_gradient, sorted_dytopo_effect_gradient);
 }
 
@@ -508,33 +517,6 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             fem_linear_subsystem->dof_offset();
         info.m_contact_sink.fem_vertex_is_fixed =
             finite_element_method->is_fixed();
-    }
-
-    if(sorted_dytopo_effect_hessian.triplet_count() > 0)
-    {
-        auto contact_sink = info.contact_sink();
-        ParallelFor(256, 0, structured_info.stream())
-            .file_line(__FILE__, __LINE__)
-            .apply(sorted_dytopo_effect_hessian.triplet_count(),
-                   [contact_sink,
-                    hessians = sorted_dytopo_effect_hessian.cviewer().name(
-                        "sorted_dytopo_effect_hessian")] __device__(int I) mutable
-                   {
-                       const auto& [row, col, H] = hessians(I);
-                       if(row <= col)
-                       {
-                           contact_sink.write_hessian_block(row, col, H, row != col);
-                       }
-                       else
-                       {
-                           contact_sink.write_hessian_block(
-                               col,
-                               row,
-                               H.transpose(),
-                               true);
-                       }
-                   });
-        return;
     }
 
     for(auto&& reporter : dytopo_effect_reporters.view())

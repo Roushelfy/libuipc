@@ -128,7 +128,7 @@ struct SocuApproxSolveReport
     bool debug_timing_enabled = false;
     bool report_each_solve = false;
 
-    double damping_shift = 1e-6;
+    double damping_shift = 0.0;
     double surrogate_residual = 0.0;
     double surrogate_relative_residual = 0.0;
     double descent_dot = 0.0;

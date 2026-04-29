@@ -226,86 +226,91 @@ struct StructuredContactAssemblySink
     }
 
     template <typename H3>
-    MUDA_DEVICE void add_abd_abd(const VertexMap& lhs,
-                                 const VertexMap& rhs,
-                                 IndexT           global_i,
-                                 IndexT           global_j,
-                                 const H3&        H,
-                                 bool mirror_diag_block = false) const noexcept
+    MUDA_DEVICE Eigen::Matrix<ActivePolicy::AluScalar, 12, 12>
+    project_abd_abd_half(const VertexMap& lhs,
+                         const VertexMap& rhs,
+                         IndexT           global_i,
+                         IndexT           global_j,
+                         const H3&        H) const noexcept
     {
-        using Alu       = ActivePolicy::AluScalar;
-        if(lhs.body == rhs.body)
-        {
-            auto H12 = ABDJacobi::JT_H_J_t<Alu>(
-                lhs.J.T(),
-                H.template cast<Alu>(),
-                rhs.J);
-            if(global_i != global_j)
-            {
-                H12 += ABDJacobi::JT_H_J_t<Alu>(
-                    rhs.J.T(),
-                    H.template cast<Alu>().transpose(),
-                    lhs.J);
-            }
+        using Alu = ActivePolicy::AluScalar;
+        const Eigen::Matrix<Alu, 3, 12> J_i_mat = lhs.J.template to_mat_t<Alu>();
+        const Eigen::Matrix<Alu, 3, 12> J_j_mat = rhs.J.template to_mat_t<Alu>();
+        const Eigen::Matrix<Alu, 3, 3>  H3x3_alu = H.template cast<Alu>();
 
-            bool saw_near     = false;
-            bool saw_off_band = false;
+        if(lhs.body < rhs.body)
+            return (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+        if(lhs.body > rhs.body)
+            return (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat).eval();
+
+        if(global_i != global_j)
+        {
+            return (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval()
+                   + (J_j_mat.transpose() * H3x3_alu.transpose() * J_i_mat)
+                         .eval();
+        }
+        return (J_i_mat.transpose() * H3x3_alu * J_j_mat).eval();
+    }
+
+    template <typename H12>
+    MUDA_DEVICE void add_abd_same_body_half_projected(IndexT    old_dof,
+                                                      const H12& projected) const noexcept
+    {
+        bool saw_near     = false;
+        bool saw_off_band = false;
 #pragma unroll
-            for(IndexT row_block = 0; row_block < 4; ++row_block)
+        for(IndexT row_block = 0; row_block < 4; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < 4; ++col_block)
             {
 #pragma unroll
-                for(IndexT col_block = row_block; col_block < 4; ++col_block)
+                for(IndexT row = 0; row < 3; ++row)
                 {
 #pragma unroll
-                    for(IndexT row = 0; row < 3; ++row)
+                    for(IndexT col = 0; col < 3; ++col)
                     {
-#pragma unroll
-                        for(IndexT col = 0; col < 3; ++col)
+                        const IndexT local_i = row_block * 3 + row;
+                        const IndexT local_j = col_block * 3 + col;
+                        const IndexT old_i   = old_dof + local_i;
+                        const IndexT old_j   = old_dof + local_j;
+                        const StoreT value_store =
+                            static_cast<StoreT>(projected(local_i, local_j));
+                        const auto cls =
+                            add_scalar_counted(old_i, old_j, value_store);
+                        if(row_block != col_block
+                           && cls == StructuredSinkWriteClass::Diag)
                         {
-                            const IndexT local_i = row_block * 3 + row;
-                            const IndexT local_j = col_block * 3 + col;
-                            const IndexT old_i = lhs.old_dof + local_i;
-                            const IndexT old_j = lhs.old_dof + local_j;
-                            const StoreT value_store =
-                                static_cast<StoreT>(H12(local_i, local_j));
-                            const auto cls = add_scalar_counted(
-                                old_i,
-                                old_j,
-                                value_store);
-                            if(row_block != col_block
-                               && cls == StructuredSinkWriteClass::Diag)
-                            {
-                                add_scalar_counted(old_j, old_i, value_store);
-                            }
-                            saw_near |= cls == StructuredSinkWriteClass::Diag
-                                        || cls == StructuredSinkWriteClass::FirstOffdiag;
-                            saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
+                            add_scalar_counted(old_j, old_i, value_store);
                         }
+                        saw_near |= cls == StructuredSinkWriteClass::Diag
+                                    || cls == StructuredSinkWriteClass::FirstOffdiag;
+                        saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
                     }
                 }
             }
-            add_pair_counter(saw_near, saw_off_band);
-            return;
         }
+        add_pair_counter(saw_near, saw_off_band);
+    }
 
+    template <typename H12>
+    MUDA_DEVICE void add_abd_abd_projected(IndexT    old_row,
+                                           IndexT    old_col,
+                                           const H12& projected,
+                                           bool mirror_diag_block = false) const noexcept
+    {
         bool saw_near     = false;
         bool saw_off_band = false;
 #pragma unroll 1
         for(IndexT r = 0; r < 12; ++r)
         {
-            const IndexT comp_r = abd_component(r);
-            const Alu    wr     = abd_weight(lhs.J, r);
 #pragma unroll 1
             for(IndexT c = 0; c < 12; ++c)
             {
-                const IndexT comp_c = abd_component(c);
-                const Alu    wc     = abd_weight(rhs.J, c);
-                Alu value = wr * static_cast<Alu>(H(comp_r, comp_c)) * wc;
-
-                const IndexT row = lhs.old_dof + r;
-                const IndexT col = rhs.old_dof + c;
-                const StoreT value_store = static_cast<StoreT>(value);
-                const auto cls = add_scalar_counted(row, col, value_store);
+                const StoreT value_store = static_cast<StoreT>(projected(r, c));
+                const IndexT row         = old_row + r;
+                const IndexT col         = old_col + c;
+                const auto   cls = add_scalar_counted(row, col, value_store);
                 if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
                    && row != col)
                     add_scalar_counted(col, row, value_store);
@@ -315,6 +320,27 @@ struct StructuredContactAssemblySink
             }
         }
         add_pair_counter(saw_near, saw_off_band);
+    }
+
+    template <typename H3>
+    MUDA_DEVICE void add_abd_abd_half(const VertexMap& lhs,
+                                      const VertexMap& rhs,
+                                      IndexT           global_i,
+                                      IndexT           global_j,
+                                      const H3&        H,
+                                      bool mirror_diag_block = false) const noexcept
+    {
+        const auto H12 = project_abd_abd_half(lhs, rhs, global_i, global_j, H);
+        if(lhs.body == rhs.body)
+        {
+            add_abd_same_body_half_projected(lhs.old_dof, H12);
+            return;
+        }
+
+        if(lhs.body < rhs.body)
+            add_abd_abd_projected(lhs.old_dof, rhs.old_dof, H12, mirror_diag_block);
+        else
+            add_abd_abd_projected(rhs.old_dof, lhs.old_dof, H12, mirror_diag_block);
     }
 
     template <typename H3>
@@ -361,13 +387,22 @@ struct StructuredContactAssemblySink
                                               col_block,
                                               L,
                                               R);
-                write_hessian_block(
+                write_contact_half_block(
                     indices(L),
                     indices(R),
                     H.template block<3, 3>(L * 3, R * 3),
                     indices(L) != indices(R) || swapped);
             }
         }
+    }
+
+    template <typename H3>
+    MUDA_DEVICE void write_contact_half_block(IndexT global_i,
+                                              IndexT global_j,
+                                              const H3& H3x3,
+                                              bool mirror_diag_block = false) const noexcept
+    {
+        write_hessian_block(global_i, global_j, H3x3, mirror_diag_block);
     }
 
     template <typename H3>
@@ -404,7 +439,7 @@ struct StructuredContactAssemblySink
             return;
         }
 
-        add_abd_abd(lhs, rhs, global_i, global_j, H3x3, mirror_diag_block);
+        add_abd_abd_half(lhs, rhs, global_i, global_j, H3x3, mirror_diag_block);
     }
 };
 }  // namespace uipc::backend::cuda_mixed

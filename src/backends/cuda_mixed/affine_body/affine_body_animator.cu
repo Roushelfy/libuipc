@@ -208,6 +208,9 @@ muda::BufferView<AffineBodyAnimator::EnergyScalar> AffineBodyAnimator::ComputeEn
 
 muda::DoubletVectorView<AffineBodyAnimator::StoreScalar, 12> AffineBodyAnimator::ComputeGradientHessianInfo::gradients() const noexcept
 {
+    if(structured_assembly() && !m_write_gradients)
+        return {};
+
     auto [offset, count] = m_impl->constraint_gradient_offsets_counts[m_index];
     return m_gradients.subview(offset, count);
 }

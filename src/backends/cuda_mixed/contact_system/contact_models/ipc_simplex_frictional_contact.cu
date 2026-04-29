@@ -429,7 +429,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                             cuda_mixed::make_spd(H);
                             if(structured_hessian)
                             {
-                                structured_sink.template write_hessian_half<4>(PT, H);
+                                auto H_store = downcast_hessian<Store>(H);
+                                structured_sink.template write_hessian_half<4>(PT, H_store);
                             }
                             else
                             {
@@ -582,7 +583,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                             }
                             if(structured_hessian)
                             {
-                                structured_sink.template write_hessian_half<4>(EE, H);
+                                auto H_store = downcast_hessian<Store>(H);
+                                structured_sink.template write_hessian_half<4>(EE, H_store);
                             }
                             else
                             {
@@ -684,7 +686,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                             cuda_mixed::make_spd(H);
                             if(structured_hessian)
                             {
-                                structured_sink.template write_hessian_half<3>(PE, H);
+                                auto H_store = downcast_hessian<Store>(H);
+                                structured_sink.template write_hessian_half<3>(PE, H_store);
                             }
                             else
                             {
@@ -773,7 +776,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                             cuda_mixed::make_spd(H);
                             if(structured_hessian)
                             {
-                                structured_sink.template write_hessian_half<2>(PP, H);
+                                auto H_store = downcast_hessian<Store>(H);
+                                structured_sink.template write_hessian_half<2>(PP, H_store);
                             }
                             else
                             {

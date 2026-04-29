@@ -58,7 +58,7 @@ class SocuApproxSolver : public LinearSolver
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
     bool        m_allows_structured_offdiag = true;
-    double      m_damping_shift = 1e-6;
+    double      m_damping_shift = 0.0;
     double      m_descent_eta = 1e-8;
     double      m_max_relative_residual = 1e-4;
     double      m_direction_min_abs = 0.0;

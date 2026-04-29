@@ -33,12 +33,12 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/solver", std::string{"fused_pcg"});
     config.create("linear_system/socu_approx/ordering_source", std::string{"init_time"});
     config.create("linear_system/socu_approx/ordering_orderer", std::string{"rcm"});
-    config.create("linear_system/socu_approx/ordering_block_size", std::string{"auto"});
+    config.create("linear_system/socu_approx/ordering_block_size", std::string{"64"});
     config.create("linear_system/socu_approx/structured_scope",
                   std::string{"multi_provider"});
     config.create("linear_system/socu_approx/generated_ordering_report", std::string{});
     config.create("linear_system/socu_approx/report", std::string{});
-    config.create("linear_system/socu_approx/damping_shift", Float{1e-6});
+    config.create("linear_system/socu_approx/damping_shift", Float{0.0});
     config.create("linear_system/socu_approx/descent_eta", Float{1e-8});
     config.create("linear_system/socu_approx/max_relative_residual", Float{1e-4});
     config.create("linear_system/socu_approx/p_min_abs", Float{0.0});

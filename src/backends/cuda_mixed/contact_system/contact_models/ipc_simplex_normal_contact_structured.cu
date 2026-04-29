@@ -22,6 +22,7 @@ void assemble_ipc_simplex_normal_contact_structured(
     using Mat9A  = Eigen::Matrix<Alu, 9, 9>;
     using Vec6A  = Eigen::Matrix<Alu, 6, 1>;
     using Mat6A  = Eigen::Matrix<Alu, 6, 6>;
+    using Store   = ActivePolicy::StoreScalar;
 
     const auto structured_sink = info.structured_hessian_sink();
 
@@ -88,7 +89,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                        PT_barrier_gradient_hessian(
                            G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
                        make_spd(H);
-                       structured_sink.template write_hessian_half<4>(PT, H);
+                       auto H_store = downcast_hessian<Store>(H);
+                       structured_sink.template write_hessian_half<4>(PT, H_store);
                    });
     }
 
@@ -174,7 +176,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                                                          E2,
                                                          E3);
                    make_spd(H);
-                   structured_sink.template write_hessian_half<4>(EE, H);
+                   auto H_store = downcast_hessian<Store>(H);
+                   structured_sink.template write_hessian_half<4>(EE, H_store);
                });
 
     ParallelFor()
@@ -229,7 +232,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                    Mat9A H;
                    PE_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P, E0, E1);
                    make_spd(H);
-                   structured_sink.template write_hessian_half<3>(PE, H);
+                   auto H_store = downcast_hessian<Store>(H);
+                   structured_sink.template write_hessian_half<3>(PE, H_store);
                });
 
     ParallelFor()
@@ -279,7 +283,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                    Mat6A H;
                    PP_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P0, P1);
                    make_spd(H);
-                   structured_sink.template write_hessian_half<2>(PP, H);
+                   auto H_store = downcast_hessian<Store>(H);
+                   structured_sink.template write_hessian_half<2>(PP, H_store);
                });
 }
 }  // namespace uipc::backend::cuda_mixed

@@ -81,14 +81,14 @@ Typical strict structured solve configuration:
       "structured_scope": "multi_provider",
       "ordering_source": "init_time",
       "ordering_orderer": "rcm",
-      "ordering_block_size": "auto",
-      "damping_shift": 1e-6
+      "ordering_block_size": "64",
+      "damping_shift": 0.0
     }
   }
 }
 ```
 
-`damping_shift = 0.0` is supported. The default remains `1e-6`.
+`damping_shift = 0.0` and `ordering_block_size = "64"` are the defaults.
 
 `ordering_source` only supports `init_time`; external ordering report mode has
 been removed from the solver path. `ordering_orderer` only supports `rcm` in

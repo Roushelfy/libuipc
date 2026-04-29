@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -161,7 +162,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                           : rhs_zero_abs_default;
 
     m_damping_shift =
-        damping_attr ? static_cast<double>(damping_attr->view()[0]) : 1e-6;
+        damping_attr ? static_cast<double>(damping_attr->view()[0]) : 0.0;
     m_descent_eta =
         descent_eta_attr ? static_cast<double>(descent_eta_attr->view()[0]) : 1e-8;
     m_max_relative_residual =
@@ -255,7 +256,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                               : std::string{"rcm"};
     const std::string ordering_block_size =
         ordering_block_size_attr ? ordering_block_size_attr->view()[0]
-                                 : std::string{"auto"};
+                                 : std::string{"64"};
     if(ordering_block_size != "auto" && ordering_block_size != "32"
        && ordering_block_size != "64")
     {
@@ -1055,8 +1056,14 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
     const bool rhs_finite =
         validation_sums[3] == 0.0
         && std::isfinite(m_report.gradient_norm);
+    const double rhs_zero_threshold =
+        std::max(m_rhs_zero_abs, 1000.0 * m_direction_min_abs);
+    const double tiny_rhs_threshold =
+        std::sqrt(static_cast<double>(std::numeric_limits<Runtime::Scalar>::epsilon()));
+    const double near_zero_direction_rhs_threshold =
+        std::max({rhs_zero_threshold, 10000.0 * m_direction_min_abs, tiny_rhs_threshold});
     const bool zero_rhs = rhs_finite
-        && m_report.gradient_norm <= m_rhs_zero_abs;
+        && m_report.gradient_norm <= rhs_zero_threshold;
     if(zero_rhs)
     {
         const auto rhs_bytes =
@@ -1081,6 +1088,21 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
         m_report.descent_dot
         < -m_descent_eta * m_report.gradient_norm
                * m_report.direction_norm;
+    const bool near_zero_direction =
+        finite
+        && m_report.gradient_norm <= near_zero_direction_rhs_threshold
+        && m_report.direction_norm <= p_threshold;
+    if(near_zero_direction)
+    {
+        const auto rhs_bytes =
+            m_runtime->device_rhs.size() * sizeof(Runtime::Scalar);
+        if(rhs_bytes)
+            SOCU_NATIVE_CHECK_CUDA(
+                cudaMemsetAsync(m_runtime->device_rhs.data(), 0, rhs_bytes, stream));
+        m_report.direction_norm = 0.0;
+        m_report.descent_dot = 0.0;
+        return;
+    }
     if(!finite || !nonzero || !descent)
     {
         m_report.direction_available = false;
@@ -1089,7 +1111,8 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
         m_report.status_detail =
             fmt::format("light direction validation failed: finite={}, nonzero={}, "
                         "descent={}, nonfinite_count={}, g_dot_p={}, g_norm={}, "
-                        "p_norm={}, p_threshold={}",
+                        "p_norm={}, p_threshold={}, rhs_zero_threshold={}, "
+                        "near_zero_direction_rhs_threshold={}",
                         finite,
                         nonzero,
                         descent,
@@ -1097,7 +1120,9 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
                         m_report.descent_dot,
                         m_report.gradient_norm,
                         m_report.direction_norm,
-                        p_threshold);
+                        p_threshold,
+                        rhs_zero_threshold,
+                        near_zero_direction_rhs_threshold);
         write_solve_report(m_report);
         throw Exception{fmt::format("SocuApproxSolver direction invalid: {}",
                                     m_report.status_detail)};
@@ -1157,13 +1182,25 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
                * m_report.direction_norm;
     const bool residual_ok =
         m_report.surrogate_relative_residual <= m_max_relative_residual;
+    const double rhs_zero_threshold =
+        std::max(m_rhs_zero_abs, 1000.0 * m_direction_min_abs);
+    const double tiny_rhs_threshold =
+        std::sqrt(static_cast<double>(std::numeric_limits<Runtime::Scalar>::epsilon()));
+    const double near_zero_direction_rhs_threshold =
+        std::max({rhs_zero_threshold, 10000.0 * m_direction_min_abs, tiny_rhs_threshold});
     const bool zero_rhs_converged =
         finite
-        && m_report.gradient_norm <= m_rhs_zero_abs
+        && m_report.gradient_norm <= rhs_zero_threshold
+        && m_report.direction_norm <= p_threshold
+        && residual_ok;
+    const bool near_zero_direction_converged =
+        finite
+        && m_report.gradient_norm <= near_zero_direction_rhs_threshold
         && m_report.direction_norm <= p_threshold
         && residual_ok;
 
-    if(!zero_rhs_converged && (!finite || !nonzero || !descent || !residual_ok))
+    if(!zero_rhs_converged && !near_zero_direction_converged
+       && (!finite || !nonzero || !descent || !residual_ok))
     {
         m_report.direction_available = false;
         m_report.status_reason =
@@ -1171,7 +1208,9 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
         m_report.status_detail =
             fmt::format("direction validation failed: finite={}, nonzero={}, descent={}, "
                         "residual_ok={}, g_dot_p={}, g_norm={}, p_norm={}, "
-                        "p_threshold={}, rel_residual={}, max_relative_residual={}",
+                        "p_threshold={}, rhs_zero_threshold={}, "
+                        "near_zero_direction_rhs_threshold={}, rel_residual={}, "
+                        "max_relative_residual={}",
                         finite,
                         nonzero,
                         descent,
@@ -1180,6 +1219,8 @@ void SocuApproxSolver::debug_validate_direction(cudaStream_t stream)
                         m_report.gradient_norm,
                         m_report.direction_norm,
                         p_threshold,
+                        rhs_zero_threshold,
+                        near_zero_direction_rhs_threshold,
                         m_report.surrogate_relative_residual,
                         m_max_relative_residual);
         write_solve_report(m_report);
