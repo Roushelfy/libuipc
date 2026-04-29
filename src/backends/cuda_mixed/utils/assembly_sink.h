@@ -183,6 +183,8 @@ struct StructuredDeviceAssemblySink
         if(bi == bj)
         {
             const SizeT index = (bi * block_size + li) * block_size + lj;
+            if(index >= diag.size())
+                return StructuredSinkWriteClass::Skipped;
             muda::atomic_add(diag.data(index), v);
             return StructuredSinkWriteClass::Diag;
         }

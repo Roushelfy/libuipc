@@ -86,7 +86,7 @@ class SocuApproxSolver : public LinearSolver
     double      m_direction_min_abs = 0.0;
     double      m_direction_min_rel = 1e-12;
     double      m_rhs_zero_abs = 0.0;
-    IndexT      m_max_line_search_reject_streak = 1;
+    IndexT      m_max_line_search_reject_streak = 0;
 
     std::unique_ptr<Runtime> m_runtime;
 };

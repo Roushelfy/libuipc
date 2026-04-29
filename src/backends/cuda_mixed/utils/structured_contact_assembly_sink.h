@@ -14,6 +14,7 @@ struct StructuredContactAssemblySink
 
     IndexT abd_vertex_offset = -1;
     IndexT abd_vertex_count  = 0;
+    IndexT abd_body_count    = 0;
     IndexT abd_old_dof_offset = -1;
     muda::CBufferView<IndexT>    abd_vertex_to_body;
     muda::CBufferView<ABDJacobi> abd_vertex_to_J;
@@ -54,7 +55,14 @@ struct StructuredContactAssemblySink
            && global_vertex < abd_vertex_offset + abd_vertex_count)
         {
             const IndexT local = global_vertex - abd_vertex_offset;
+            if(abd_vertex_to_body.data() == nullptr || abd_vertex_to_J.data() == nullptr
+               || local < 0 || local >= abd_vertex_to_body.size()
+               || local >= abd_vertex_to_J.size())
+                return mapped;
             const IndexT body  = abd_vertex_to_body.data()[local];
+            if(abd_body_is_fixed.data() == nullptr || body < 0 || body >= abd_body_count
+               || body >= abd_body_is_fixed.size())
+                return mapped;
             mapped.kind        = VertexMap::Abd;
             mapped.local_vertex = local;
             mapped.body        = body;
@@ -68,6 +76,9 @@ struct StructuredContactAssemblySink
            && global_vertex < fem_vertex_offset + fem_vertex_count)
         {
             const IndexT local = global_vertex - fem_vertex_offset;
+            if(fem_vertex_is_fixed.data() == nullptr || local < 0
+               || local >= fem_vertex_is_fixed.size())
+                return mapped;
             mapped.kind        = VertexMap::Fem;
             mapped.local_vertex = local;
             mapped.old_dof     = fem_old_dof_offset + local * 3;
@@ -80,7 +91,7 @@ struct StructuredContactAssemblySink
 
     MUDA_DEVICE void add_counter(StructuredSinkWriteClass cls) const noexcept
     {
-        if(counters.data() == nullptr)
+        if(counters.data() == nullptr || counters.size() < 3)
             return;
         switch(cls)
         {
@@ -101,7 +112,7 @@ struct StructuredContactAssemblySink
 
     MUDA_DEVICE void add_pair_counter(bool saw_near, bool saw_off_band) const noexcept
     {
-        if(counters.data() == nullptr)
+        if(counters.data() == nullptr || counters.size() < 5)
             return;
         if(saw_off_band)
             muda::atomic_add(counters.data(4), IndexT{1});
@@ -323,6 +334,51 @@ struct StructuredContactAssemblySink
     }
 
     template <typename H3>
+    MUDA_DEVICE void add_abd_diag_hessian(const VertexMap& v, const H3& H) const noexcept
+    {
+        using Alu       = ActivePolicy::AluScalar;
+        bool saw_near     = false;
+        bool saw_off_band = false;
+#pragma unroll
+        for(IndexT row_block = 0; row_block < 4; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < 4; ++col_block)
+            {
+#pragma unroll
+                for(IndexT row = 0; row < 3; ++row)
+                {
+                    const IndexT local_i = row_block * 3 + row;
+                    const IndexT comp_i  = abd_component(local_i);
+                    const Alu    wi      = abd_weight(v.J, local_i);
+#pragma unroll
+                    for(IndexT col = 0; col < 3; ++col)
+                    {
+                        const IndexT local_j = col_block * 3 + col;
+                        const IndexT comp_j  = abd_component(local_j);
+                        const Alu    wj      = abd_weight(v.J, local_j);
+                        const IndexT old_i   = v.old_dof + local_i;
+                        const IndexT old_j   = v.old_dof + local_j;
+                        const StoreT value_store = static_cast<StoreT>(
+                            wi * static_cast<Alu>(H(comp_i, comp_j)) * wj);
+                        const auto cls =
+                            add_scalar_counted(old_i, old_j, value_store);
+                        if(row_block != col_block
+                           && cls == StructuredSinkWriteClass::Diag)
+                        {
+                            add_scalar_counted(old_j, old_i, value_store);
+                        }
+                        saw_near |= cls == StructuredSinkWriteClass::Diag
+                                    || cls == StructuredSinkWriteClass::FirstOffdiag;
+                        saw_off_band |= cls == StructuredSinkWriteClass::OffBand;
+                    }
+                }
+            }
+        }
+        add_pair_counter(saw_near, saw_off_band);
+    }
+
+    template <typename H3>
     MUDA_DEVICE void add_abd_abd_half(const VertexMap& lhs,
                                       const VertexMap& rhs,
                                       IndexT           global_i,
@@ -346,7 +402,20 @@ struct StructuredContactAssemblySink
     template <typename H3>
     MUDA_DEVICE void write_hessian(IndexT global_vertex, const H3& H) const noexcept
     {
-        write_hessian_block(global_vertex, global_vertex, H);
+        if(!valid())
+            return;
+
+        const auto v = map_vertex(global_vertex);
+        if(v.kind == VertexMap::None || v.fixed)
+            return;
+
+        if(v.kind == VertexMap::Fem)
+        {
+            add_fem_fem(v.old_dof, v.old_dof, H);
+            return;
+        }
+
+        add_abd_diag_hessian(v, H);
     }
 
     MUDA_DEVICE bool upper_lr(IndexT left_value,

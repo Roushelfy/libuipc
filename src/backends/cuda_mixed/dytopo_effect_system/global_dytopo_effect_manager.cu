@@ -497,14 +497,16 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             affine_body_vertex_reporter->vertex_offset();
         info.m_contact_sink.abd_vertex_count =
             affine_body_vertex_reporter->vertex_count();
+        auto abd_body_is_fixed = affine_body_dynamics->body_is_fixed();
+        info.m_contact_sink.abd_body_count =
+            static_cast<IndexT>(abd_body_is_fixed.size());
         info.m_contact_sink.abd_old_dof_offset =
             abd_linear_subsystem->dof_offset();
         info.m_contact_sink.abd_vertex_to_body =
             affine_body_dynamics->v2b();
         info.m_contact_sink.abd_vertex_to_J =
             affine_body_dynamics->Js();
-        info.m_contact_sink.abd_body_is_fixed =
-            affine_body_dynamics->body_is_fixed();
+        info.m_contact_sink.abd_body_is_fixed = abd_body_is_fixed;
     }
 
     if(fem_linear_subsystem && finite_element_method && finite_element_vertex_reporter)

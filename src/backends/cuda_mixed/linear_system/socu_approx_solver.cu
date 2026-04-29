@@ -180,7 +180,7 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         configured_rhs_zero_abs > 0.0 ? configured_rhs_zero_abs
                                       : rhs_zero_abs_default;
     m_max_line_search_reject_streak =
-        reject_streak_attr ? reject_streak_attr->view()[0] : 1;
+        reject_streak_attr ? reject_streak_attr->view()[0] : 0;
     if(m_damping_shift < 0.0)
     {
         m_gate_report = make_failure(
