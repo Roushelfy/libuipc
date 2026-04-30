@@ -51,9 +51,6 @@ class SocuApproxSolver : public LinearSolver
                                  const std::filesystem::path& ordering_report_path,
                                  bool                         throw_on_failure,
                                  std::string*                 failure_detail);
-    void apply_pending_runtime_reorder();
-    void begin_runtime_reorder_collection(cudaStream_t stream);
-    void finalize_runtime_reorder_collection();
     bool install_runtime_reorder_from_collector(SizeT collected_frame);
 
     SocuApproxGateReport  m_gate_report;
@@ -71,11 +68,10 @@ class SocuApproxSolver : public LinearSolver
     bool        m_debug_dump_structured_matrix = false;
     bool        m_debug_dump_problem_file = false;
     bool        m_debug_compare_full_sparse = false;
+    bool        m_debug_write_runtime_ordering_report = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
     bool        m_allows_structured_offdiag = true;
-    bool        m_runtime_reorder_collecting = false;
-    bool        m_runtime_reorder_pending = false;
     bool        m_runtime_reorder_probe_active = false;
     SizeT       m_runtime_reorder_frame_interval = 0;
     SizeT       m_runtime_reorder_edge_capacity_config = 0;
@@ -84,7 +80,6 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_prepared_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_probe_frame = static_cast<SizeT>(-1);
-    SizeT       m_runtime_reorder_last_probe_signature = 0;
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";

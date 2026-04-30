@@ -179,6 +179,12 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_compare_full_sparse =
         debug_compare_full_sparse_attr
         && debug_compare_full_sparse_attr->view()[0] != 0;
+    auto debug_write_runtime_ordering_report_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/debug_write_runtime_ordering_report");
+    m_debug_write_runtime_ordering_report =
+        debug_write_runtime_ordering_report_attr
+        && debug_write_runtime_ordering_report_attr->view()[0] != 0;
 
     auto damping_attr =
         config.find<Float>("linear_system/socu_approx/damping_shift");
@@ -731,16 +737,6 @@ bool SocuApproxSolver::install_ordering_report(
     return true;
 }
 
-void SocuApproxSolver::apply_pending_runtime_reorder()
-{
-    if(!m_runtime_reorder_pending || !m_runtime || m_runtime_reorder_edge_capacity == 0)
-        return;
-    if(engine().frame() == m_runtime_reorder_collecting_frame)
-        return;
-
-    (void)install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
-}
-
 bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_frame)
 {
     if(!m_runtime || m_runtime_reorder_edge_capacity == 0)
@@ -763,14 +759,12 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
         m_report.runtime_reorder_failure_detail =
             fmt::format("runtime reorder edge collector overflowed by {} entries",
                         overflow_count);
-        m_runtime_reorder_pending = false;
         return false;
     }
     if(raw_count == 0 && m_runtime_reorder_graph_source == "full_hessian")
     {
         m_report.runtime_reorder_failure_detail =
             "runtime reorder edge collector produced no edges";
-        m_runtime_reorder_pending = false;
         return false;
     }
 
@@ -814,7 +808,6 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
     {
         m_report.runtime_reorder_failure_detail =
             "runtime reorder edge collector produced no valid off-diagonal atom edges";
-        m_runtime_reorder_pending = false;
         return false;
     }
 
@@ -848,7 +841,6 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
     {
         m_report.runtime_reorder_failure_detail =
             "runtime reorder graph has no off-diagonal atom edges";
-        m_runtime_reorder_pending = false;
         return false;
     }
     for(const auto& [key, weight] : merged)
@@ -867,10 +859,13 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
 
     try
     {
+        const std::string block_size =
+            m_report.block_size != 0 ? fmt::format("{}", m_report.block_size)
+                                     : m_ordering_block_size;
         auto run = socu_approx::rcm::run_ordering(
             graph,
             m_ordering_orderer,
-            "64");
+            block_size);
         Json report = socu_approx::rcm::to_json(run);
         report["graph"] = socu_approx::rcm::to_json(graph);
         report["generated_by"] = "cuda_mixed_socu_runtime_current_frame";
@@ -884,10 +879,15 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
             fs::absolute(fs::path{workspace()} / "socu_approx"
                          / fmt::format("runtime_ordering.{}.json",
                                        collected_frame));
-        write_json_report(path, report);
+        if(m_debug_write_runtime_ordering_report)
+            write_json_report(path, report);
 
         std::string detail;
-        if(install_ordering_report(report, path, false, &detail))
+        if(install_ordering_report(
+               report,
+               m_debug_write_runtime_ordering_report ? path : fs::path{},
+               false,
+               &detail))
         {
             m_runtime_reorder_last_applied_frame = engine().frame();
             m_report.runtime_reorder_edge_count = raw_count;
@@ -910,60 +910,8 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
             fmt::format("runtime Hessian ordering generation failed: {}", e.what());
     }
 
-    m_runtime_reorder_pending = false;
     return m_report.runtime_reorder_applied
            && m_report.runtime_reorder_failure_detail.empty();
-}
-
-void SocuApproxSolver::begin_runtime_reorder_collection(cudaStream_t stream)
-{
-    if(!m_runtime || m_runtime_reorder_frame_interval == 0
-       || m_runtime_reorder_edge_capacity == 0)
-    {
-        m_runtime_reorder_collecting = false;
-        return;
-    }
-
-    const SizeT frame = engine().frame();
-    m_runtime_reorder_collecting =
-        (frame % m_runtime_reorder_frame_interval) == 0;
-    if(!m_runtime_reorder_collecting)
-        return;
-
-    m_runtime_reorder_collecting_frame = frame;
-    m_runtime_reorder_pending = false;
-    if(m_runtime->runtime_ordering_cursor.size() >= 2)
-    {
-        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(m_runtime->runtime_ordering_cursor.data(),
-                                               0,
-                                               2 * sizeof(IndexT),
-                                               stream));
-    }
-}
-
-void SocuApproxSolver::finalize_runtime_reorder_collection()
-{
-    m_report.runtime_reorder_enabled = m_runtime_reorder_frame_interval > 0;
-    m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
-    m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
-    m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting
-                                                    ? m_runtime_reorder_collecting_frame
-                                                    : static_cast<SizeT>(-1);
-    m_report.runtime_reorder_last_applied_frame =
-        m_runtime_reorder_last_applied_frame;
-
-    if(!m_runtime_reorder_collecting || !m_runtime
-       || m_runtime->runtime_ordering_cursor.size() < 2)
-        return;
-
-    std::array<IndexT, 2> cursor{};
-    m_runtime->runtime_ordering_cursor.view().copy_to(cursor.data());
-    m_report.runtime_reorder_edge_count =
-        std::min<SizeT>(static_cast<SizeT>(std::max<IndexT>(cursor[0], 0)),
-                        m_runtime_reorder_edge_capacity);
-    m_report.runtime_reorder_overflow_count =
-        static_cast<SizeT>(std::max<IndexT>(cursor[1], 0));
-    m_runtime_reorder_pending = true;
 }
 
 void SocuApproxSolver::prepare_structured_chain(
@@ -1099,9 +1047,7 @@ auto SocuApproxSolver::prepare_structured_probe(
 
     m_runtime_reorder_last_probe_frame = frame;
     m_runtime_reorder_collecting_frame = frame;
-    m_runtime_reorder_collecting = true;
     m_runtime_reorder_probe_active = true;
-    m_runtime_reorder_pending = false;
     m_report.runtime_reorder_enabled = true;
     m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
     m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
@@ -1154,7 +1100,6 @@ bool SocuApproxSolver::finalize_structured_probe(
         return false;
 
     m_runtime_reorder_probe_active = false;
-    m_runtime_reorder_collecting = false;
     const bool installed =
         install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
     m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting_frame;
@@ -1768,12 +1713,16 @@ void SocuApproxSolver::do_solve(GlobalLinearSystem::SolvingInfo& info)
         write_solve_report(m_report);
 
     info.iter_count(1);
-    logger::info("SocuApproxSolver strict structured solve launched on mixed backend "
-                 "stream: provider={}, scope={}, debug_validation={}, report='{}'",
-                 m_report.provider_kind,
-                 m_report.structured_scope,
-                 m_debug_validation,
-                 m_report.report_path);
+    if(m_report_each_solve || m_debug_validation || m_debug_timing)
+    {
+        logger::info(
+            "SocuApproxSolver strict structured solve launched on mixed backend "
+            "stream: provider={}, scope={}, debug_validation={}, report='{}'",
+            m_report.provider_kind,
+            m_report.structured_scope,
+            m_debug_validation,
+            m_report.report_path);
+    }
 #endif
 }
 

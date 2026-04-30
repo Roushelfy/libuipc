@@ -43,6 +43,7 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/max_relative_residual", Float{1e-4});
     config.create("linear_system/socu_approx/p_min_abs", Float{0.0});
     config.create("linear_system/socu_approx/p_min_rel", Float{1e-12});
+    config.create("linear_system/socu_approx/rhs_zero_abs", Float{0.0});
     config.create("linear_system/socu_approx/min_near_band_ratio", Float{0.90});
     config.create("linear_system/socu_approx/max_off_band_ratio", Float{0.10});
     config.create("linear_system/socu_approx/min_block_utilization", Float{0.65});
@@ -52,6 +53,11 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/runtime_reorder_graph_source",
                   std::string{"topology"});
     config.create("linear_system/socu_approx/max_line_search_reject_streak", IndexT{0});
+    config.create("linear_system/socu_approx/debug_dump_structured_matrix", IndexT{0});
+    config.create("linear_system/socu_approx/debug_dump_problem_file", IndexT{0});
+    config.create("linear_system/socu_approx/debug_compare_full_sparse", IndexT{0});
+    config.create("linear_system/socu_approx/debug_write_runtime_ordering_report",
+                  IndexT{0});
     config.create("linear_system/socu_approx/debug_validation", IndexT{0});
     config.create("linear_system/socu_approx/debug_timing", IndexT{0});
     config.create("linear_system/socu_approx/report_each_solve", IndexT{0});

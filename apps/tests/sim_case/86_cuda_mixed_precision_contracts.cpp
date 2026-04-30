@@ -872,7 +872,8 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     CHECK(report["runtime_reorder"]["overflow_count"].get<SizeT>() == 0);
     CHECK(report["runtime_reorder"]["failure_detail"].get<std::string>().empty());
     CHECK(report["runtime_reorder"]["applied"].get<bool>() == true);
-    CHECK(fs::exists(output_path / "socu_approx" / "runtime_ordering.1.json"));
+    CHECK(report["block_size"].get<SizeT>() == 32);
+    CHECK_FALSE(fs::exists(output_path / "socu_approx" / "runtime_ordering.1.json"));
 #endif
 }
 }  // namespace
