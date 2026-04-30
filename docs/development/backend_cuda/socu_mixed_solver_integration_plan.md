@@ -46,12 +46,60 @@ local Hessian evaluation code may feed either sink, but the SOCU path writes
 its structured destination directly.
 
 Runtime Hessian-based RCM reordering is optional and disabled by default. When
-enabled, a sampling frame records the atom-pair graph from structured Hessian
-writes, including off-band writes before they are dropped from the structured
-matrix. The merged graph is reordered on the CPU and the new structured
-runtime/plan is installed at the next frame's first linear build. A runtime
-reorder failure leaves the previous ordering active and is reported as a
-diagnostic.
+enabled, a matching frame first runs a graph-only structured probe, records the
+atom-pair graph from structured Hessian writes, including off-band writes before
+they are dropped from the structured matrix, reorders the merged graph on the
+CPU, and installs the new structured runtime/plan before the final structured
+assembly and solve. A runtime reorder failure leaves the previous ordering
+active and is reported as a diagnostic.
+
+Current-frame probing must be treated as a per-linear-build concern, not only a
+per-frame concern. Contact sets can change after the first Newton solve in a
+frame; for example, `wrecking_ball` frame 13 has only PH contacts in Newton
+iteration 0, then activates EE/PP simplex contacts in Newton iteration 1. If
+runtime reorder probes only once at the start of the frame, the later EE/PP
+body-pair graph is absent from the ordering, strong off-band blocks are dropped,
+and the SOCU direct direction can become invalid even though the current-frame
+ordering report for the first solve shows `off_band_ratio = 0`.
+
+## Future Contact Write Plan Cache
+
+Large IPC contact Hessian kernels can become register-bound when they compute
+the contact Hessian and also inline the full structured contact sink. The
+current stable path splits the largest structured contact writes through compact
+Hessian workspaces before the structured scatter pass. A future optimization
+should reduce or remove this workspace traffic by moving mapping work out of
+the Hessian kernels.
+
+The intended design is a two-level cache:
+
+1. Reorder-level vertex slots. After each init-time ordering install or runtime
+   reorder, build a device table indexed by global vertex. Each entry records
+   the vertex kind, fixed state, ABD body, old DoF begin, chain block, chain
+   local offset, and the ABD Jacobian or Jacobian index. Contact kernels then
+   avoid repeated `global_vertex -> old_dof -> chain` lookups.
+2. Contact-set write plans. After contact detection updates the active
+   PT/EE/PE/PP/PH stencils, build a lightweight device write plan for each
+   half-Hessian vertex pair under the current ordering. The plan records the
+   FEM/ABD projection kind, diag/first-offdiag/off-band status, target block
+   and local offsets, transpose direction, and skip/fixed state.
+
+With these caches, Hessian kernels should use:
+
+```text
+H = compute_contact_hessian(...)
+write_by_plan(contact_write_plan[i], H)
+```
+
+instead of redoing vertex mapping, old-to-chain lookup, band classification,
+and fixed/off-band handling inside the large Hessian kernel. ABD projection
+values still depend on the current ABD Jacobian data, but the write location
+and projection kind are fixed for a given contact stencil and ordering.
+
+This optimization must keep the existing compact workspace path as a fallback
+until ptxas resource usage and benchmark runs show that planned direct writes
+are stable. The first target should be EE/PP simplex normal contact because
+their Hessian compute kernels are already near the per-thread register limit.
 
 ## Failure And Report Semantics
 

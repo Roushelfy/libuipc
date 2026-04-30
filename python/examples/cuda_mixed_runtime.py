@@ -52,17 +52,12 @@ def _candidate_module_dirs() -> list[tuple[Path, bool]]:
             "MinSizeRel",
         ]
         for parent in package_path.parents:
-            found_package_candidate = False
             for config in configs:
                 if not config:
                     continue
                 config_bin = parent / config / "bin"
                 if (config_bin / lib_name).exists():
                     candidates.append((config_bin, False))
-                    found_package_candidate = True
-                    break
-            if found_package_candidate:
-                break
 
     return candidates
 

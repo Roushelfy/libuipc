@@ -179,6 +179,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_runtime_ordering_collector;
         }
+        SizeT contact_set_signature() const noexcept
+        {
+            return m_contact_set_signature;
+        }
         bool report_counters_enabled() const noexcept
         {
             return m_contact_counters.data() != nullptr;
@@ -211,6 +215,10 @@ class GlobalLinearSystem : public SimSystem
         void set_runtime_ordering_collector(RuntimeOrderingCollector collector) noexcept
         {
             m_runtime_ordering_collector = collector;
+        }
+        void set_contact_set_signature(SizeT signature) noexcept
+        {
+            m_contact_set_signature = signature;
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
@@ -281,6 +289,7 @@ class GlobalLinearSystem : public SimSystem
         muda::CBufferView<IndexT>  m_chain_to_old;
         muda::BufferView<IndexT>   m_contact_counters;
         RuntimeOrderingCollector   m_runtime_ordering_collector;
+        SizeT                      m_contact_set_signature = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;
         SizeT                      m_old_dof_count  = 0;

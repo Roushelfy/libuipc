@@ -48,6 +48,12 @@ struct StructuredContactAssemblySink
 
     MUDA_GENERIC bool valid() const noexcept { return sink.valid(); }
 
+    MUDA_GENERIC bool topology_probe_only() const noexcept
+    {
+        return sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
+               && sink.runtime_ordering.topology_only;
+    }
+
     MUDA_DEVICE VertexMap map_vertex(IndexT global_vertex) const noexcept
     {
         VertexMap mapped;
@@ -127,6 +133,43 @@ struct StructuredContactAssemblySink
         const auto cls = sink.add_hessian_scalar_status(old_row, old_col, value);
         add_counter(cls);
         return cls;
+    }
+
+    MUDA_DEVICE void record_topology_pair(const VertexMap& lhs,
+                                          const VertexMap& rhs) const noexcept
+    {
+        if(!valid() || !sink.runtime_ordering.valid())
+            return;
+        if(lhs.kind == VertexMap::None || rhs.kind == VertexMap::None)
+            return;
+        if(lhs.fixed || rhs.fixed)
+            return;
+
+        const IndexT lhs_atom_count = lhs.kind == VertexMap::Abd ? 4 : 1;
+        const IndexT rhs_atom_count = rhs.kind == VertexMap::Abd ? 4 : 1;
+#pragma unroll
+        for(IndexT lhs_atom = 0; lhs_atom < 4; ++lhs_atom)
+        {
+            if(lhs_atom >= lhs_atom_count)
+                continue;
+#pragma unroll
+            for(IndexT rhs_atom = 0; rhs_atom < 4; ++rhs_atom)
+            {
+                if(rhs_atom >= rhs_atom_count)
+                    continue;
+                sink.record_runtime_ordering_edge(lhs.old_dof + lhs_atom * 3,
+                                                  rhs.old_dof + rhs_atom * 3,
+                                                  StoreT{1});
+            }
+        }
+    }
+
+    MUDA_DEVICE void record_topology_pair(IndexT global_i,
+                                          IndexT global_j) const noexcept
+    {
+        const auto lhs = map_vertex(global_i);
+        const auto rhs = map_vertex(global_j);
+        record_topology_pair(lhs, rhs);
     }
 
     static MUDA_DEVICE IndexT abd_component(IndexT dof) noexcept
@@ -465,6 +508,29 @@ struct StructuredContactAssemblySink
         }
     }
 
+    template <int StencilSize>
+    MUDA_DEVICE void write_topology_half(
+        const Eigen::Vector<IndexT, StencilSize>& indices) const noexcept
+    {
+#pragma unroll
+        for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+            {
+                IndexT L = row_block;
+                IndexT R = col_block;
+                upper_lr(indices(row_block),
+                         indices(col_block),
+                         row_block,
+                         col_block,
+                         L,
+                         R);
+                record_topology_pair(indices(L), indices(R));
+            }
+        }
+    }
+
     template <typename H3>
     MUDA_DEVICE void write_contact_half_block(IndexT global_i,
                                               IndexT global_j,
@@ -489,6 +555,13 @@ struct StructuredContactAssemblySink
             return;
         if(lhs.fixed || rhs.fixed)
             return;
+
+        if(sink.runtime_ordering.valid() && sink.runtime_ordering.topology_only)
+        {
+            record_topology_pair(lhs, rhs);
+            if(sink.runtime_ordering.graph_only)
+                return;
+        }
 
         if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Fem)
         {

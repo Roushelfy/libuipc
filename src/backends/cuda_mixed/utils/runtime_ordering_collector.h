@@ -19,6 +19,7 @@ struct RuntimeOrderingCollector
     muda::CBufferView<IndexT>             old_dof_to_atom;
     bool                                  enabled = false;
     bool                                  graph_only = false;
+    bool                                  topology_only = false;
 
     MUDA_GENERIC bool valid() const noexcept
     {

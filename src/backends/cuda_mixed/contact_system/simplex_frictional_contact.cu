@@ -3,6 +3,28 @@
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+template <int StencilSize, typename ContactSink, typename IndicesView>
+void record_friction_contact_topology(ContactSink sink,
+                                      IndicesView indices,
+                                      const char* name)
+{
+    if(indices.size() == 0)
+        return;
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(indices.size(),
+               [sink, indices = indices.viewer().name(name)] __device__(
+                   int i) mutable
+               {
+                   sink.template write_topology_half<StencilSize>(indices(i));
+               });
+}
+}  // namespace
+
 void SimplexFrictionalContact::do_build(ContactReporter::BuildInfo& info)
 {
     auto& config      = world().scene().config();
@@ -187,6 +209,19 @@ void SimplexFrictionalContact::do_assemble_structured_hessian(
     this_info.m_hessian_only       = true;
     this_info.m_structured_hessian = true;
     this_info.m_structured_sink    = info.contact_sink();
+
+    if(this_info.m_structured_sink.topology_probe_only())
+    {
+        record_friction_contact_topology<4>(
+            this_info.m_structured_sink, this_info.friction_PTs(), "friction_PTs");
+        record_friction_contact_topology<4>(
+            this_info.m_structured_sink, this_info.friction_EEs(), "friction_EEs");
+        record_friction_contact_topology<3>(
+            this_info.m_structured_sink, this_info.friction_PEs(), "friction_PEs");
+        record_friction_contact_topology<2>(
+            this_info.m_structured_sink, this_info.friction_PPs(), "friction_PPs");
+        return;
+    }
 
     m_impl.PT_hessians = {};
     m_impl.EE_hessians = {};

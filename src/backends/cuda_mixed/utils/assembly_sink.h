@@ -354,7 +354,8 @@ struct StructuredDeviceAssemblySink
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
     add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
     {
-        record_runtime_ordering_edge(old_i, old_j, value);
+        if(!runtime_ordering.topology_only)
+            record_runtime_ordering_edge(old_i, old_j, value);
         if(runtime_ordering.graph_only)
             return StructuredSinkWriteClass::Skipped;
         return matrix.add_hessian_scalar_status(old_i, old_j, value);

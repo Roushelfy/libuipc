@@ -48,6 +48,14 @@ VARIANTS = {
 }
 
 
+def set_scene_config_path(config: Any, path: str, value: Any) -> None:
+    slot = config.find(path)
+    if slot is None:
+        config.create(path, value)
+    else:
+        view(slot)[0] = value
+
+
 def matrix_from_position_rotation(position: list[float], rotation_deg: list[float]) -> Matrix4x4:
     rx, ry, rz = [math.radians(float(v)) for v in rotation_deg]
 
@@ -89,6 +97,8 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     if os.environ.get("SOCU_DEBUG_DUMP"):
         socu["debug_dump_problem_file"] = 1
         socu["debug_dump_structured_matrix"] = 1
+        socu["debug_compare_full_sparse"] = 1
+        config["extras"]["debug"]["dump_linear_system"] = 1
     socu["report_each_solve"] = 1
     socu["generated_ordering_report"] = str(workspace / "socu_approx_ordering.json")
     socu["report"] = str(workspace / "socu_approx_report.json")
@@ -132,6 +142,14 @@ def build_scene(variant: str, workspace: Path) -> tuple[Engine, World]:
     configure_solver(config, variant, workspace)
 
     scene = Scene(config)
+    if VARIANTS[variant]["solver"] == "socu_approx" and os.environ.get("SOCU_DEBUG_DUMP"):
+        scene_config = scene.config()
+        set_scene_config_path(scene_config, "linear_system/socu_approx/debug_dump_problem_file", 1)
+        set_scene_config_path(scene_config,
+                              "linear_system/socu_approx/debug_dump_structured_matrix",
+                              1)
+        set_scene_config_path(scene_config, "linear_system/socu_approx/debug_compare_full_sparse", 1)
+        set_scene_config_path(scene_config, "extras/debug/dump_linear_system", 1)
     abd = AffineBodyConstitution()
     scene.constitution_tabular().insert(abd)
     scene.contact_tabular().default_model(0.01, 20.0e9)

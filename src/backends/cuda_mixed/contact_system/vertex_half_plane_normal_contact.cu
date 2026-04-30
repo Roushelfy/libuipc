@@ -90,6 +90,9 @@ void VertexHalfPlaneNormalContact::do_assemble_structured_hessian(
     this_info.m_structured_hessian = true;
     this_info.m_structured_sink    = info.contact_sink();
 
+    if(this_info.m_structured_sink.topology_probe_only())
+        return;
+
     m_impl.hessians = {};
     do_assemble(this_info);
 }

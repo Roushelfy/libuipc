@@ -84,6 +84,7 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_prepared_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_probe_frame = static_cast<SizeT>(-1);
+    SizeT       m_runtime_reorder_last_probe_signature = 0;
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";

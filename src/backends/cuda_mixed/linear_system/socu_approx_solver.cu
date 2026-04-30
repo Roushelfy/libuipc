@@ -530,7 +530,7 @@ bool SocuApproxSolver::install_ordering_report(
         m_runtime_reorder_edge_capacity =
             m_runtime_reorder_edge_capacity_config > 0
                 ? m_runtime_reorder_edge_capacity_config
-                : std::max<SizeT>(SizeT{1} << 20, atom_dof_count.size() * 256);
+                : std::max<SizeT>(SizeT{1} << 20, atom_dof_count.size() * 4096);
     }
     else
     {
@@ -1091,8 +1091,7 @@ auto SocuApproxSolver::prepare_structured_probe(
         return StructuredProbeAssembly::None;
 
     const SizeT frame = engine().frame();
-    if((frame % m_runtime_reorder_frame_interval) != 0
-       || m_runtime_reorder_last_probe_frame == frame)
+    if((frame % m_runtime_reorder_frame_interval) != 0)
         return StructuredProbeAssembly::None;
 
     m_runtime_reorder_last_probe_frame = frame;
@@ -1130,7 +1129,10 @@ auto SocuApproxSolver::prepare_structured_probe(
         m_runtime->device_chain_to_old.view(),
         stream);
     info.set_runtime_ordering_collector(
-        m_runtime->runtime_ordering_collector(true, true));
+        m_runtime->runtime_ordering_collector(
+            true,
+            true,
+            false));
 
     return m_runtime_reorder_graph_source == "full_hessian"
                ? StructuredProbeAssembly::Full

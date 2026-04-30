@@ -153,6 +153,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
         void _distribute(ComputeDyTopoEffectInfo& info);
         void assemble_structured_hessian(
             GlobalLinearSystem::StructuredAssemblyInfo& info);
+        SizeT contact_set_signature();
 
         SimSystemSlot<GlobalVertexManager> global_vertex_manager;
         SimSystemSlot<ABDLinearSubsystem> abd_linear_subsystem;
@@ -215,6 +216,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
 
     void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
     void assemble_structured_hessian(GlobalLinearSystem::StructuredAssemblyInfo& info);
+    SizeT contact_set_signature();
 
   protected:
     virtual void do_build() override;

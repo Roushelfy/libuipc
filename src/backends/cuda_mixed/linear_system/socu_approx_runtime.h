@@ -182,14 +182,16 @@ struct SocuApproxRuntime
     }
 
     RuntimeOrderingCollector runtime_ordering_collector(bool enabled,
-                                                        bool graph_only = false) noexcept
+                                                        bool graph_only = false,
+                                                        bool topology_only = false) noexcept
     {
         return RuntimeOrderingCollector{
             runtime_ordering_edges.view(),
             runtime_ordering_cursor.view(),
             device_old_dof_to_atom.view(),
             enabled,
-            graph_only};
+            graph_only,
+            topology_only};
     }
 
     bool factor_and_solve(cudaStream_t stream)
