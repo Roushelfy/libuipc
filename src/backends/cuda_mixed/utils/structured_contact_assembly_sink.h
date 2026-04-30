@@ -164,6 +164,38 @@ struct StructuredContactAssemblySink
         }
     }
 
+    MUDA_DEVICE void record_weighted_pair(const VertexMap& lhs,
+                                          const VertexMap& rhs,
+                                          StoreT           weight) const noexcept
+    {
+        if(!valid() || !sink.runtime_ordering.valid())
+            return;
+        if(lhs.kind == VertexMap::None || rhs.kind == VertexMap::None)
+            return;
+        if(lhs.fixed || rhs.fixed)
+            return;
+        if(static_cast<double>(weight) == 0.0)
+            return;
+
+        const IndexT lhs_atom_count = lhs.kind == VertexMap::Abd ? 4 : 1;
+        const IndexT rhs_atom_count = rhs.kind == VertexMap::Abd ? 4 : 1;
+#pragma unroll 1
+        for(IndexT lhs_atom = 0; lhs_atom < 4; ++lhs_atom)
+        {
+            if(lhs_atom >= lhs_atom_count)
+                continue;
+#pragma unroll 1
+            for(IndexT rhs_atom = 0; rhs_atom < 4; ++rhs_atom)
+            {
+                if(rhs_atom >= rhs_atom_count)
+                    continue;
+                sink.record_runtime_ordering_edge(lhs.old_dof + lhs_atom * 3,
+                                                  rhs.old_dof + rhs_atom * 3,
+                                                  weight);
+            }
+        }
+    }
+
     MUDA_DEVICE void record_topology_pair(IndexT global_i,
                                           IndexT global_j) const noexcept
     {
@@ -183,6 +215,24 @@ struct StructuredContactAssemblySink
         if(dof < 3)
             return ActivePolicy::AluScalar{1};
         return static_cast<ActivePolicy::AluScalar>(J.x_bar()((dof - 3) % 3));
+    }
+
+    template <typename H3>
+    static MUDA_DEVICE StoreT h3_abs_sum(const H3& H) noexcept
+    {
+        using Alu = ActivePolicy::AluScalar;
+        Alu sum   = 0;
+#pragma unroll
+        for(IndexT r = 0; r < 3; ++r)
+        {
+#pragma unroll
+            for(IndexT c = 0; c < 3; ++c)
+            {
+                const Alu value = static_cast<Alu>(H(r, c));
+                sum += value < Alu{0} ? -value : value;
+            }
+        }
+        return static_cast<StoreT>(sum);
     }
 
     template <typename H3>
@@ -556,10 +606,12 @@ struct StructuredContactAssemblySink
         if(lhs.fixed || rhs.fixed)
             return;
 
-        if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
-           && sink.runtime_ordering.topology_only)
+        if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only)
         {
-            record_topology_pair(lhs, rhs);
+            if(sink.runtime_ordering.topology_only)
+                record_topology_pair(lhs, rhs);
+            else
+                record_weighted_pair(lhs, rhs, h3_abs_sum(H3x3));
             return;
         }
 
