@@ -147,12 +147,9 @@ struct SocuApproxRuntime
         SOCU_NATIVE_CHECK_CUDA(cudaEventSynchronize(validation_done));
     }
 
-    void upload_mappings_once(const std::vector<IndexT>& old_to_chain,
-                              const std::vector<IndexT>& chain_to_old)
+    void upload_mappings(const std::vector<IndexT>& old_to_chain,
+                         const std::vector<IndexT>& chain_to_old)
     {
-        if(mappings_uploaded && device_old_to_chain.size() == old_to_chain.size()
-           && device_chain_to_old.size() == chain_to_old.size())
-            return;
         device_old_to_chain.resize(old_to_chain.size());
         device_chain_to_old.resize(chain_to_old.size());
         if(!old_to_chain.empty())
@@ -160,6 +157,15 @@ struct SocuApproxRuntime
         if(!chain_to_old.empty())
             device_chain_to_old.view().copy_from(chain_to_old.data());
         mappings_uploaded = true;
+    }
+
+    void upload_mappings_once(const std::vector<IndexT>& old_to_chain,
+                              const std::vector<IndexT>& chain_to_old)
+    {
+        if(mappings_uploaded && device_old_to_chain.size() == old_to_chain.size()
+           && device_chain_to_old.size() == chain_to_old.size())
+            return;
+        upload_mappings(old_to_chain, chain_to_old);
     }
 
     void upload_old_dof_to_atom(const std::vector<IndexT>& old_dof_to_atom)

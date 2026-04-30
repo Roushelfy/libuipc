@@ -43,6 +43,23 @@ class SocuApproxSolver : public LinearSolver
   private:
     using Runtime = SocuApproxRuntime;
 
+    struct RuntimePreflightCache
+    {
+        bool        valid = false;
+        SizeT       block_size = 0;
+        SizeT       block_count = 0;
+        std::string dtype;
+        std::string resolved_backend;
+        std::string resolved_perf_backend;
+        std::string resolved_math_mode;
+        std::string resolved_graph_mode;
+        std::string mathdx_manifest_path;
+        std::string mathdx_runtime_cache_dir;
+        bool        mathdx_manifest_ok = false;
+        bool        mathdx_artifacts_ok = false;
+        bool        mathdx_prebuilt_cubin_ok = false;
+    };
+
     void validate_direction_light(cudaStream_t stream);
     void debug_validate_direction(cudaStream_t stream);
     void dump_structured_matrix(const GlobalLinearSystem::StructuredAssemblyInfo& info);
@@ -94,5 +111,6 @@ class SocuApproxSolver : public LinearSolver
 
     std::unique_ptr<Runtime> m_runtime;
     Json                     m_runtime_reorder_base_graph;
+    RuntimePreflightCache    m_runtime_preflight_cache;
 };
 }  // namespace uipc::backend::cuda_mixed

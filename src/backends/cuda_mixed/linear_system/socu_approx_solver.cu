@@ -598,38 +598,6 @@ bool SocuApproxSolver::install_ordering_report(
 
 #if UIPC_WITH_SOCU_NATIVE
     const auto manifest_path = default_mathdx_manifest_path();
-    if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
-        return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-                    fmt::format("MathDx manifest is missing; expected '{}'",
-                                manifest_path.string()));
-
-    std::string manifest_detail;
-    try
-    {
-        if(!validate_mathdx_manifest<Runtime::Scalar>(manifest_path,
-                                                      block_size,
-                                                      next_gate,
-                                                      manifest_detail))
-        {
-            return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-                        manifest_detail);
-        }
-    }
-    catch(const std::exception& e)
-    {
-        return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
-                    fmt::format("MathDx manifest preflight failed: {}", e.what()));
-    }
-
-    int device_count = 0;
-    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
-    if(device_query != cudaSuccess || device_count == 0)
-    {
-        cudaGetLastError();
-        return fail(SocuApproxGateReason::SocuMathDxUnsupported,
-                    "no CUDA device is available for socu_approx");
-    }
-
     socu_native::ProblemShape shape{
         static_cast<int>(block_layouts.size()),
         static_cast<int>(block_size),
@@ -640,34 +608,132 @@ bool SocuApproxSolver::install_ordering_report(
     options.math_mode    = socu_native::MathMode::Auto;
     options.graph_mode   = socu_native::GraphMode::Off;
 
-    const auto capability =
-        socu_native::query_solver_capability<Runtime::Scalar>(
-            shape,
-            socu_native::SolverOperation::FactorAndSolve,
-            options);
-    next_gate.resolved_backend = to_report_string(capability.resolved_backend);
-    next_gate.resolved_perf_backend = to_report_string(capability.resolved_perf_backend);
-    next_gate.resolved_math_mode = to_report_string(capability.resolved_math_mode);
-    next_gate.resolved_graph_mode = to_report_string(capability.resolved_graph_mode);
-    if(!capability.supported
-       || capability.resolved_backend != socu_native::SolverBackend::NativePerf
-       || capability.resolved_perf_backend != socu_native::PerfBackend::MathDx)
+    const bool preflight_cache_hit =
+        m_runtime_preflight_cache.valid
+        && m_runtime_preflight_cache.block_size == block_size
+        && m_runtime_preflight_cache.block_count == block_layouts.size()
+        && m_runtime_preflight_cache.dtype == next_gate.dtype;
+    if(preflight_cache_hit)
     {
-        return fail(SocuApproxGateReason::SocuMathDxUnsupported,
-                    fmt::format("socu_native MathDx capability rejected: {}",
-                                capability.reason));
+        next_gate.resolved_backend =
+            m_runtime_preflight_cache.resolved_backend;
+        next_gate.resolved_perf_backend =
+            m_runtime_preflight_cache.resolved_perf_backend;
+        next_gate.resolved_math_mode =
+            m_runtime_preflight_cache.resolved_math_mode;
+        next_gate.resolved_graph_mode =
+            m_runtime_preflight_cache.resolved_graph_mode;
+        next_gate.mathdx_manifest_path =
+            m_runtime_preflight_cache.mathdx_manifest_path;
+        next_gate.mathdx_runtime_cache_dir =
+            m_runtime_preflight_cache.mathdx_runtime_cache_dir;
+        next_gate.mathdx_manifest_ok =
+            m_runtime_preflight_cache.mathdx_manifest_ok;
+        next_gate.mathdx_artifacts_ok =
+            m_runtime_preflight_cache.mathdx_artifacts_ok;
+        next_gate.mathdx_prebuilt_cubin_ok =
+            m_runtime_preflight_cache.mathdx_prebuilt_cubin_ok;
+    }
+    else
+    {
+        if(manifest_path.empty() || !fs::is_regular_file(manifest_path))
+            return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                        fmt::format("MathDx manifest is missing; expected '{}'",
+                                    manifest_path.string()));
+
+        std::string manifest_detail;
+        try
+        {
+            if(!validate_mathdx_manifest<Runtime::Scalar>(manifest_path,
+                                                          block_size,
+                                                          next_gate,
+                                                          manifest_detail))
+            {
+                return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                            manifest_detail);
+            }
+        }
+        catch(const std::exception& e)
+        {
+            return fail(SocuApproxGateReason::SocuRuntimeArtifactUnavailable,
+                        fmt::format("MathDx manifest preflight failed: {}", e.what()));
+        }
+
+        int device_count = 0;
+        const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+        if(device_query != cudaSuccess || device_count == 0)
+        {
+            cudaGetLastError();
+            return fail(SocuApproxGateReason::SocuMathDxUnsupported,
+                        "no CUDA device is available for socu_approx");
+        }
+
+        const auto capability =
+            socu_native::query_solver_capability<Runtime::Scalar>(
+                shape,
+                socu_native::SolverOperation::FactorAndSolve,
+                options);
+        next_gate.resolved_backend = to_report_string(capability.resolved_backend);
+        next_gate.resolved_perf_backend =
+            to_report_string(capability.resolved_perf_backend);
+        next_gate.resolved_math_mode = to_report_string(capability.resolved_math_mode);
+        next_gate.resolved_graph_mode = to_report_string(capability.resolved_graph_mode);
+        if(!capability.supported
+           || capability.resolved_backend != socu_native::SolverBackend::NativePerf
+           || capability.resolved_perf_backend != socu_native::PerfBackend::MathDx)
+        {
+            return fail(SocuApproxGateReason::SocuMathDxUnsupported,
+                        fmt::format("socu_native MathDx capability rejected: {}",
+                                    capability.reason));
+        }
+
+        m_runtime_preflight_cache.valid = true;
+        m_runtime_preflight_cache.block_size = block_size;
+        m_runtime_preflight_cache.block_count = block_layouts.size();
+        m_runtime_preflight_cache.dtype = next_gate.dtype;
+        m_runtime_preflight_cache.resolved_backend = next_gate.resolved_backend;
+        m_runtime_preflight_cache.resolved_perf_backend =
+            next_gate.resolved_perf_backend;
+        m_runtime_preflight_cache.resolved_math_mode = next_gate.resolved_math_mode;
+        m_runtime_preflight_cache.resolved_graph_mode = next_gate.resolved_graph_mode;
+        m_runtime_preflight_cache.mathdx_manifest_path =
+            next_gate.mathdx_manifest_path;
+        m_runtime_preflight_cache.mathdx_runtime_cache_dir =
+            next_gate.mathdx_runtime_cache_dir;
+        m_runtime_preflight_cache.mathdx_manifest_ok =
+            next_gate.mathdx_manifest_ok;
+        m_runtime_preflight_cache.mathdx_artifacts_ok =
+            next_gate.mathdx_artifacts_ok;
+        m_runtime_preflight_cache.mathdx_prebuilt_cubin_ok =
+            next_gate.mathdx_prebuilt_cubin_ok;
     }
 
     std::unique_ptr<Runtime> next_runtime;
     try
     {
-        next_runtime = std::make_unique<Runtime>(shape, options);
-        next_runtime->reserve(m_debug_validation, m_report_counters_enabled);
-        next_runtime->upload_mappings_once(build_old_to_chain, build_chain_to_old);
-        next_runtime->upload_old_dof_to_atom(old_dof_to_atom);
+        const bool can_reuse_runtime =
+            m_runtime
+            && m_runtime->shape.horizon == shape.horizon
+            && m_runtime->shape.n == shape.n
+            && m_runtime->shape.nrhs == shape.nrhs;
+        Runtime* runtime = nullptr;
+        if(can_reuse_runtime)
+        {
+            runtime = m_runtime.get();
+        }
+        else
+        {
+            next_runtime = std::make_unique<Runtime>(shape, options);
+            runtime = next_runtime.get();
+        }
+
+        runtime->reserve(m_debug_validation, m_report_counters_enabled);
+        runtime->upload_mappings(build_old_to_chain, build_chain_to_old);
+        runtime->upload_old_dof_to_atom(old_dof_to_atom);
         if(m_runtime_reorder_edge_capacity > 0)
-            next_runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
-        next_runtime->create_plan();
+            runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
+        if(!can_reuse_runtime)
+            runtime->create_plan();
     }
     catch(const std::exception& e)
     {
@@ -731,7 +797,8 @@ bool SocuApproxSolver::install_ordering_report(
     m_host_atom_dof_count = std::move(atom_dof_count);
     m_dof_slots.assign(provider->dof_slots().begin(), provider->dof_slots().end());
 #if UIPC_WITH_SOCU_NATIVE
-    m_runtime = std::move(next_runtime);
+    if(next_runtime)
+        m_runtime = std::move(next_runtime);
 #endif
     m_report = std::move(next_report);
     return true;
