@@ -129,6 +129,11 @@ auto SocuApproxSolver::assembly_requirements() const -> AssemblyRequirements
 
 SocuApproxSolver::~SocuApproxSolver() = default;
 
+bool SocuApproxSolver::needs_contact_set_signature() const noexcept
+{
+    return m_runtime_reorder_frame_interval > 0;
+}
+
 void SocuApproxSolver::do_build(BuildInfo& info)
 {
     auto&      config      = world().scene().config();
@@ -1112,6 +1117,22 @@ auto SocuApproxSolver::prepare_structured_probe(
     if((frame % m_runtime_reorder_frame_interval) != 0)
         return StructuredProbeAssembly::None;
 
+    const SizeT contact_signature = info.contact_set_signature();
+    if(m_runtime_reorder_last_signature_valid
+       && contact_signature == m_runtime_reorder_last_signature)
+    {
+        m_report.runtime_reorder_enabled = true;
+        m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
+        m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
+        m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+        m_report.runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
+        m_report.runtime_reorder_last_applied_frame =
+            m_runtime_reorder_last_applied_frame;
+        m_report.runtime_reorder_applied = false;
+        m_report.runtime_reorder_failure_detail.clear();
+        return StructuredProbeAssembly::None;
+    }
+
     m_runtime_reorder_last_probe_frame = frame;
     m_runtime_reorder_collecting_frame = frame;
     m_runtime_reorder_probe_active = true;
@@ -1169,6 +1190,11 @@ bool SocuApproxSolver::finalize_structured_probe(
     m_runtime_reorder_probe_active = false;
     const bool installed =
         install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
+    if(installed)
+    {
+        m_runtime_reorder_last_signature = info.contact_set_signature();
+        m_runtime_reorder_last_signature_valid = true;
+    }
     m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting_frame;
     m_report.runtime_reorder_last_applied_frame =
         m_runtime_reorder_last_applied_frame;

@@ -37,6 +37,7 @@ class SocuApproxSolver : public LinearSolver
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual bool finalize_structured_probe(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual bool needs_contact_set_signature() const noexcept override;
     virtual void notify_line_search_result(
         const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 
@@ -97,6 +98,8 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_prepared_frame = static_cast<SizeT>(-1);
     SizeT       m_runtime_reorder_last_probe_frame = static_cast<SizeT>(-1);
+    bool        m_runtime_reorder_last_signature_valid = false;
+    SizeT       m_runtime_reorder_last_signature = 0;
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";

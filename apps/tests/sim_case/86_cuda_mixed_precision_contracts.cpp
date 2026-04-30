@@ -841,6 +841,7 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
         "topology";
 
     auto output_path = contract_workspace(name);
+    fs::remove_all(output_path / "socu_approx");
     fs::create_directories(output_path);
     auto report_path = output_path / "solve_report.json";
     config["linear_system"]["socu_approx"]["report"] =
@@ -871,7 +872,8 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     CHECK(report["runtime_reorder"]["graph_source"].get<std::string>() == "topology");
     CHECK(report["runtime_reorder"]["overflow_count"].get<SizeT>() == 0);
     CHECK(report["runtime_reorder"]["failure_detail"].get<std::string>().empty());
-    CHECK(report["runtime_reorder"]["applied"].get<bool>() == true);
+    CHECK(report["runtime_reorder"]["last_applied_frame"].get<SizeT>()
+          != static_cast<SizeT>(-1));
     CHECK(report["block_size"].get<SizeT>() == 32);
     CHECK_FALSE(fs::exists(output_path / "socu_approx" / "runtime_ordering.1.json"));
 #endif

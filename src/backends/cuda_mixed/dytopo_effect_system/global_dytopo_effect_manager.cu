@@ -3,6 +3,10 @@
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
 #include <dytopo_effect_system/dytopo_effect_receiver.h>
 #include <contact_system/contact_reporter.h>
+#include <contact_system/simplex_frictional_contact.h>
+#include <contact_system/simplex_normal_contact.h>
+#include <contact_system/vertex_half_plane_frictional_contact.h>
+#include <contact_system/vertex_half_plane_normal_contact.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution_manager.h>
 #include <affine_body/abd_linear_subsystem.h>
 #include <affine_body/affine_body_dynamics.h>
@@ -17,6 +21,7 @@
 #include <uipc/common/zip.h>
 #include <energy_component_flags.h>
 #include <fmt/format.h>
+#include <vector>
 
 namespace uipc::backend
 {
@@ -52,6 +57,36 @@ const char* dytopo_assemble_timer_name(const DyTopoEffectReporter& reporter)
     if(dynamic_cast<const InterPrimitiveConstitutionManager*>(&reporter))
         return "Assemble Inter-Primitive";
     return "Assemble Unclassified DyTopo";
+}
+
+constexpr SizeT ContactSignatureFnvOffset =
+    static_cast<SizeT>(1469598103934665603ull);
+constexpr SizeT ContactSignatureFnvPrime =
+    static_cast<SizeT>(1099511628211ull);
+
+void mix_contact_signature(SizeT& signature, SizeT value) noexcept
+{
+    signature ^= value;
+    signature *= ContactSignatureFnvPrime;
+}
+
+template <typename ValueT>
+void mix_contact_vector_view(SizeT& signature,
+                             SizeT  tag,
+                             muda::CBufferView<ValueT> view)
+{
+    mix_contact_signature(signature, tag);
+    mix_contact_signature(signature, view.size());
+    if(view.size() == 0)
+        return;
+
+    std::vector<ValueT> host(view.size());
+    view.copy_to(host.data());
+    for(const auto& item : host)
+    {
+        for(Eigen::Index i = 0; i < item.size(); ++i)
+            mix_contact_signature(signature, static_cast<SizeT>(item(i)));
+    }
 }
 }  // namespace
 
@@ -538,17 +573,7 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
 SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()
 {
-    constexpr SizeT FnvOffset =
-        static_cast<SizeT>(1469598103934665603ull);
-    constexpr SizeT FnvPrime =
-        static_cast<SizeT>(1099511628211ull);
-
-    SizeT signature = FnvOffset;
-    auto  mix = [&](SizeT value)
-    {
-        signature ^= value;
-        signature *= FnvPrime;
-    };
+    SizeT signature = ContactSignatureFnvOffset;
 
     SizeT reporter_index = 0;
     for(auto&& reporter : dytopo_effect_reporters.view())
@@ -560,11 +585,39 @@ SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()
         extent_info.m_gradient_only = false;
         reporter->report_gradient_hessian_extent(extent_info);
 
-        mix(reporter_index++);
-        mix(extent_info.m_gradient_count);
-        mix(extent_info.m_hessian_count);
+        mix_contact_signature(signature, reporter_index++);
+
+        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+        {
+            mix_contact_vector_view(signature, SizeT{0x1001}, normal->PTs());
+            mix_contact_vector_view(signature, SizeT{0x1002}, normal->EEs());
+            mix_contact_vector_view(signature, SizeT{0x1003}, normal->PEs());
+            mix_contact_vector_view(signature, SizeT{0x1004}, normal->PPs());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
+        {
+            mix_contact_vector_view(signature, SizeT{0x2001}, friction->PTs());
+            mix_contact_vector_view(signature, SizeT{0x2002}, friction->EEs());
+            mix_contact_vector_view(signature, SizeT{0x2003}, friction->PEs());
+            mix_contact_vector_view(signature, SizeT{0x2004}, friction->PPs());
+            continue;
+        }
+        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+        {
+            mix_contact_vector_view(signature, SizeT{0x3001}, normal->PHs());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
+        {
+            mix_contact_vector_view(signature, SizeT{0x4001}, friction->PHs());
+            continue;
+        }
+
+        mix_contact_signature(signature, extent_info.m_gradient_count);
+        mix_contact_signature(signature, extent_info.m_hessian_count);
     }
-    mix(reporter_index);
+    mix_contact_signature(signature, reporter_index);
     return signature;
 }
 

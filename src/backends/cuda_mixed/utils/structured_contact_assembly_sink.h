@@ -147,12 +147,12 @@ struct StructuredContactAssemblySink
 
         const IndexT lhs_atom_count = lhs.kind == VertexMap::Abd ? 4 : 1;
         const IndexT rhs_atom_count = rhs.kind == VertexMap::Abd ? 4 : 1;
-#pragma unroll
+#pragma unroll 1
         for(IndexT lhs_atom = 0; lhs_atom < 4; ++lhs_atom)
         {
             if(lhs_atom >= lhs_atom_count)
                 continue;
-#pragma unroll
+#pragma unroll 1
             for(IndexT rhs_atom = 0; rhs_atom < 4; ++rhs_atom)
             {
                 if(rhs_atom >= rhs_atom_count)
@@ -556,11 +556,11 @@ struct StructuredContactAssemblySink
         if(lhs.fixed || rhs.fixed)
             return;
 
-        if(sink.runtime_ordering.valid() && sink.runtime_ordering.topology_only)
+        if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
+           && sink.runtime_ordering.topology_only)
         {
             record_topology_pair(lhs, rhs);
-            if(sink.runtime_ordering.graph_only)
-                return;
+            return;
         }
 
         if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Fem)
