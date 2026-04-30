@@ -527,10 +527,13 @@ bool SocuApproxSolver::install_ordering_report(
     }
     if(m_runtime_reorder_frame_interval > 0)
     {
+        const SizeT auto_capacity_multiplier =
+            m_runtime_reorder_graph_source == "topology" ? SizeT{1024} : SizeT{4096};
         m_runtime_reorder_edge_capacity =
             m_runtime_reorder_edge_capacity_config > 0
                 ? m_runtime_reorder_edge_capacity_config
-                : std::max<SizeT>(SizeT{1} << 20, atom_dof_count.size() * 4096);
+                : std::max<SizeT>(SizeT{1} << 20,
+                                   atom_dof_count.size() * auto_capacity_multiplier);
     }
     else
     {
@@ -1132,7 +1135,7 @@ auto SocuApproxSolver::prepare_structured_probe(
         m_runtime->runtime_ordering_collector(
             true,
             true,
-            false));
+            m_runtime_reorder_graph_source == "topology"));
 
     return m_runtime_reorder_graph_source == "full_hessian"
                ? StructuredProbeAssembly::Full
