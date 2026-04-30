@@ -62,8 +62,10 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
     muda::DeviceBuffer<double> validation_sums;
+    muda::DeviceBuffer<IndexT> validation_status;
     muda::DeviceBuffer<IndexT> report_counters;
     double*                    host_validation_sums = nullptr;
+    IndexT*                    host_validation_status = nullptr;
     cudaEvent_t                validation_done = nullptr;
     bool                       mappings_uploaded = false;
 
@@ -84,6 +86,8 @@ struct SocuApproxRuntime
             cudaEventDestroy(validation_done);
         if(host_validation_sums)
             cudaFreeHost(host_validation_sums);
+        if(host_validation_status)
+            cudaFreeHost(host_validation_status);
     }
 
     void reserve(bool debug_validation, bool report_counters_enabled)
@@ -102,14 +106,24 @@ struct SocuApproxRuntime
             device_rhs_original.reserve(layout.rhs_element_count);
         if(validation_sums.capacity() < 5)
             validation_sums.reserve(5);
+        if(validation_status.capacity() < 1)
+            validation_status.reserve(1);
         device_rhs_original.resize(layout.rhs_element_count);
         validation_sums.resize(5);
+        validation_status.resize(1);
 
         if(!host_validation_sums)
         {
             SOCU_NATIVE_CHECK_CUDA(
                 cudaHostAlloc(reinterpret_cast<void**>(&host_validation_sums),
                               5 * sizeof(double),
+                              cudaHostAllocDefault));
+        }
+        if(!host_validation_status)
+        {
+            SOCU_NATIVE_CHECK_CUDA(
+                cudaHostAlloc(reinterpret_cast<void**>(&host_validation_status),
+                              sizeof(IndexT),
                               cudaHostAllocDefault));
         }
         if(!validation_done)
@@ -141,6 +155,17 @@ struct SocuApproxRuntime
         SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_validation_sums,
                                                validation_sums.data(),
                                                5 * sizeof(double),
+                                               cudaMemcpyDeviceToHost,
+                                               stream));
+        SOCU_NATIVE_CHECK_CUDA(cudaEventRecord(validation_done, stream));
+        SOCU_NATIVE_CHECK_CUDA(cudaEventSynchronize(validation_done));
+    }
+
+    void download_validation_status(cudaStream_t stream)
+    {
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_validation_status,
+                                               validation_status.data(),
+                                               sizeof(IndexT),
                                                cudaMemcpyDeviceToHost,
                                                stream));
         SOCU_NATIVE_CHECK_CUDA(cudaEventRecord(validation_done, stream));

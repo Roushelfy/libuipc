@@ -7,6 +7,8 @@
 #include <muda/atomic.h>
 #include <muda/launch/parallel_for.h>
 
+#include <limits>
+
 #ifndef UIPC_WITH_SOCU_NATIVE
 #define UIPC_WITH_SOCU_NATIVE 0
 #endif
@@ -142,6 +144,69 @@ void validate_structured_direction_light(cudaStream_t                  stream,
 
                    atomic_add_double(sums.data() + 1, x_i * x_i);
                    atomic_add_double(sums.data() + 2, rhs_i * x_i);
+               });
+}
+
+template <typename SolveScalar>
+void finalize_structured_direction_light_status(cudaStream_t             stream,
+                                                muda::CBufferView<double> sums,
+                                                muda::BufferView<IndexT> status,
+                                                double direction_min_abs,
+                                                double direction_min_rel,
+                                                double rhs_zero_abs,
+                                                double descent_eta)
+{
+    muda::ParallelFor(1, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(1,
+               [sums = sums.cviewer().name("sums"),
+                status = status.viewer().name("status"),
+                direction_min_abs,
+                direction_min_rel,
+                rhs_zero_abs,
+                descent_eta] __device__(int) mutable
+               {
+                   const double gradient_norm = sqrt(sums(0));
+                   const double direction_norm = sqrt(sums(1));
+                   const double descent_dot = -sums(2);
+                   const double p_threshold =
+                       fmax(direction_min_abs, direction_min_rel * gradient_norm);
+                   const double rhs_zero_threshold =
+                       fmax(rhs_zero_abs, 1000.0 * direction_min_abs);
+                   const double tiny_rhs_threshold =
+                       sqrt(static_cast<double>(
+                           std::numeric_limits<SolveScalar>::epsilon()));
+                   const double near_zero_direction_rhs_threshold =
+                       fmax(fmax(rhs_zero_threshold,
+                                 10000.0 * direction_min_abs),
+                            tiny_rhs_threshold);
+
+                   const bool rhs_finite =
+                       sums(3) == 0.0 && isfinite(gradient_norm);
+                   if(rhs_finite && gradient_norm <= rhs_zero_threshold)
+                   {
+                       status(0) = 1;
+                       return;
+                   }
+
+                   const bool finite =
+                       sums(4) == 0.0 && isfinite(descent_dot)
+                       && isfinite(gradient_norm) && isfinite(direction_norm);
+                   const bool nonzero =
+                       gradient_norm > 0.0 && direction_norm > p_threshold;
+                   const bool descent =
+                       descent_dot
+                       < -descent_eta * gradient_norm * direction_norm;
+                   const bool near_zero_direction =
+                       finite && gradient_norm <= near_zero_direction_rhs_threshold
+                       && direction_norm <= p_threshold;
+                   if(near_zero_direction)
+                   {
+                       status(0) = 2;
+                       return;
+                   }
+
+                   status(0) = (finite && nonzero && descent) ? 0 : 3;
                });
 }
 

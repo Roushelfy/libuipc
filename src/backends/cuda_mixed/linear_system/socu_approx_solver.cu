@@ -1494,52 +1494,76 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
     UIPC_ASSERT(m_runtime != nullptr,
                 "SocuApproxSolver solve mode requires initialized runtime.");
 
+    const StructuredChainShape shape{static_cast<SizeT>(m_runtime->shape.horizon),
+                                     static_cast<SizeT>(m_runtime->shape.n),
+                                     static_cast<SizeT>(m_runtime->shape.nrhs),
+                                     true};
     validate_structured_direction_light<Runtime::Scalar>(
         stream,
-        StructuredChainShape{static_cast<SizeT>(m_runtime->shape.horizon),
-                             static_cast<SizeT>(m_runtime->shape.n),
-                             static_cast<SizeT>(m_runtime->shape.nrhs),
-                             true},
+        shape,
         m_runtime->device_rhs_original.view(),
         m_runtime->device_rhs.view(),
         m_runtime->device_chain_to_old.view(),
         m_runtime->validation_sums.view());
-    m_runtime->download_validation_sums(stream);
-    const double* validation_sums = m_runtime->host_validation_sums;
+    finalize_structured_direction_light_status<Runtime::Scalar>(
+        stream,
+        m_runtime->validation_sums.view(),
+        m_runtime->validation_status.view(),
+        m_direction_min_abs,
+        m_direction_min_rel,
+        m_rhs_zero_abs,
+        m_descent_eta);
+    m_runtime->download_validation_status(stream);
 
-    m_report.gradient_norm = std::sqrt(validation_sums[0]);
-    m_report.direction_norm = std::sqrt(validation_sums[1]);
-    m_report.descent_dot = -validation_sums[2];
     m_report.rhs_sign_convention = "rhs_is_global_b";
 
     m_report.direction_min_abs_threshold = m_direction_min_abs;
     m_report.direction_min_rel_threshold = m_direction_min_rel;
 
-    const double p_threshold =
-        std::max(m_direction_min_abs, m_direction_min_rel * m_report.gradient_norm);
-    const bool rhs_finite =
-        validation_sums[3] == 0.0
-        && std::isfinite(m_report.gradient_norm);
     const double rhs_zero_threshold =
         std::max(m_rhs_zero_abs, 1000.0 * m_direction_min_abs);
     const double tiny_rhs_threshold =
         std::sqrt(static_cast<double>(std::numeric_limits<Runtime::Scalar>::epsilon()));
     const double near_zero_direction_rhs_threshold =
         std::max({rhs_zero_threshold, 10000.0 * m_direction_min_abs, tiny_rhs_threshold});
-    const bool zero_rhs = rhs_finite
-        && m_report.gradient_norm <= rhs_zero_threshold;
-    if(zero_rhs)
+
+    const bool need_light_report =
+        (m_report_each_solve || m_debug_timing) && !m_debug_validation;
+    auto download_light_report = [&]() -> const double*
+    {
+        m_runtime->download_validation_sums(stream);
+        const double* validation_sums = m_runtime->host_validation_sums;
+        m_report.gradient_norm = std::sqrt(validation_sums[0]);
+        m_report.direction_norm = std::sqrt(validation_sums[1]);
+        m_report.descent_dot = -validation_sums[2];
+        return validation_sums;
+    };
+
+    const IndexT validation_code = m_runtime->host_validation_status[0];
+    if(validation_code == 1 || validation_code == 2)
     {
         const auto rhs_bytes =
             m_runtime->device_rhs.size() * sizeof(Runtime::Scalar);
         if(rhs_bytes)
             SOCU_NATIVE_CHECK_CUDA(
                 cudaMemsetAsync(m_runtime->device_rhs.data(), 0, rhs_bytes, stream));
+        if(need_light_report)
+            download_light_report();
         m_report.direction_norm = 0.0;
         m_report.descent_dot = 0.0;
         return;
     }
 
+    if(validation_code == 0)
+    {
+        if(need_light_report)
+            download_light_report();
+        return;
+    }
+
+    const double* validation_sums = download_light_report();
+    const double p_threshold =
+        std::max(m_direction_min_abs, m_direction_min_rel * m_report.gradient_norm);
     const bool finite =
         validation_sums[4] == 0.0
         && std::isfinite(m_report.descent_dot)
@@ -1552,21 +1576,6 @@ void SocuApproxSolver::validate_direction_light(cudaStream_t stream)
         m_report.descent_dot
         < -m_descent_eta * m_report.gradient_norm
                * m_report.direction_norm;
-    const bool near_zero_direction =
-        finite
-        && m_report.gradient_norm <= near_zero_direction_rhs_threshold
-        && m_report.direction_norm <= p_threshold;
-    if(near_zero_direction)
-    {
-        const auto rhs_bytes =
-            m_runtime->device_rhs.size() * sizeof(Runtime::Scalar);
-        if(rhs_bytes)
-            SOCU_NATIVE_CHECK_CUDA(
-                cudaMemsetAsync(m_runtime->device_rhs.data(), 0, rhs_bytes, stream));
-        m_report.direction_norm = 0.0;
-        m_report.descent_dot = 0.0;
-        return;
-    }
     if(!finite || !nonzero || !descent)
     {
         m_report.direction_available = false;
