@@ -361,6 +361,18 @@ function(uipc_install_target target_name)
             LIBRARY DESTINATION "${UIPC_INSTALL_DIR}"
             ARCHIVE DESTINATION EXCLUDE_FROM_ALL)
     endif()
+
+    if(UIPC_BUILD_PYBIND)
+        set(PYTHON_NATIVE_DIR "${CMAKE_BINARY_DIR}/python/src/uipc/_native")
+        add_custom_command(
+            TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${PYTHON_NATIVE_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:${target_name}>"
+                "${PYTHON_NATIVE_DIR}/$<TARGET_FILE_NAME:${target_name}>"
+            COMMENT "Syncing $<TARGET_FILE_NAME:${target_name}> to Python _native"
+            VERBATIM)
+    endif()
 endfunction()
 
 # -----------------------------------------------------------------------------------------
