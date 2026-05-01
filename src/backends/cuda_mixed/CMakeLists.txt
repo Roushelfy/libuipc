@@ -55,6 +55,29 @@ endif()
 # all files in this directory
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
 
+if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
+    set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE ${SOURCES})
+    list(LENGTH _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE)
+
+    set(_UIPC_CUDA_MIXED_MINIMAL_EXCLUDE_PATTERNS
+        ".*/affine_body/constitutions/affine_body_.*joint.*\\.cu$"
+        ".*/affine_body/constraints/(external_articulation_constraint|soft_transform_constraint|affine_body_.*joint_external_body_force_constraint)\\.cu$"
+        ".*/affine_body/affine_body_.*joint_external_body_force\\.cu$"
+        ".*/contact_system/al_.*\\.cu$"
+        ".*/contact_system/adaptive_strategies/.*\\.cu$"
+        ".*/coupling_system/.*\\.cu$"
+        ".*/finite_element/constitutions/(discrete_shell_bending|hookean_spring_1d|kirchhoff_rod_bending|neo_hookean_shell_2d|plastic_discrete_shell_bending|strain_limiting_baraff_witkin_shell_2d|stress_plastic_discrete_shell_bending)\\.cu$"
+        ".*/finite_element/constraints/soft_position_constraint\\.cu$"
+        ".*/inter_primitive_effect_system/constitutions/.*\\.cu$")
+
+    foreach(_UIPC_CUDA_MIXED_EXCLUDE_PATTERN IN LISTS _UIPC_CUDA_MIXED_MINIMAL_EXCLUDE_PATTERNS)
+        list(FILTER SOURCES EXCLUDE REGEX "${_UIPC_CUDA_MIXED_EXCLUDE_PATTERN}")
+    endforeach()
+
+    list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER)
+    uipc_info("cuda_mixed wrecking_ball minimal build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER} source entries")
+endif()
+
 target_sources(cuda_mixed PRIVATE ${SOURCES})
 uipc_target_set_relative_source_file(cuda_mixed)
 

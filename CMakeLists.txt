@@ -38,6 +38,8 @@ set(UIPC_USD_INSTALL_DIR "" CACHE PATH
 # =========================================================================
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
 option(UIPC_WITH_CUDA_MIXED_BACKEND "Build with CUDA mixed backend" OFF)
+option(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD
+    "Compile a reduced cuda_mixed backend surface for wrecking_ball SOCU regression tests" OFF)
 set(UIPC_WITH_SOCU_NATIVE "AUTO"
     CACHE STRING "Enable optional socu_native integration for cuda_mixed: AUTO|ON|OFF")
 set_property(CACHE UIPC_WITH_SOCU_NATIVE PROPERTY STRINGS AUTO ON OFF)
