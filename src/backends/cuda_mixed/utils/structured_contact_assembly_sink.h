@@ -7,10 +7,40 @@
 
 namespace uipc::backend::cuda_mixed
 {
+struct StructuredContactVertexSlot
+{
+    enum Kind : IndexT
+    {
+        None = 0,
+        Abd  = 1,
+        Fem  = 2,
+    };
+
+    Kind   kind         = None;
+    IndexT old_dof      = -1;
+    IndexT body         = -1;
+    IndexT local_vertex = -1;
+    IndexT fixed        = 0;
+};
+
+struct StructuredContactHalfBlockPlan
+{
+    StructuredContactVertexSlot lhs;
+    StructuredContactVertexSlot rhs;
+    IndexT                      global_i = -1;
+    IndexT                      global_j = -1;
+    IndexT                      h_l      = 0;
+    IndexT                      h_r      = 0;
+    IndexT                      mirror_diag_block = 0;
+    IndexT                      valid = 0;
+};
+
 template <typename StoreT, typename SolveT>
 struct StructuredContactAssemblySink
 {
     StructuredDeviceAssemblySink<StoreT, SolveT> sink;
+
+    muda::CBufferView<StructuredContactVertexSlot> vertex_slots;
 
     IndexT abd_vertex_offset = -1;
     IndexT abd_vertex_count  = 0;
@@ -54,7 +84,53 @@ struct StructuredContactAssemblySink
                && sink.runtime_ordering.topology_only;
     }
 
-    MUDA_DEVICE VertexMap map_vertex(IndexT global_vertex) const noexcept
+    MUDA_DEVICE VertexMap slot_to_vertex_map(
+        const StructuredContactVertexSlot& slot) const noexcept
+    {
+        VertexMap mapped;
+        if(slot.kind == StructuredContactVertexSlot::None)
+            return mapped;
+        if(slot.fixed)
+            mapped.fixed = true;
+
+        mapped.old_dof      = slot.old_dof;
+        mapped.body         = slot.body;
+        mapped.local_vertex = slot.local_vertex;
+        mapped.fixed        = slot.fixed != 0;
+        if(slot.kind == StructuredContactVertexSlot::Fem)
+        {
+            mapped.kind = VertexMap::Fem;
+            return mapped;
+        }
+
+        mapped.kind = VertexMap::Abd;
+        if(abd_vertex_to_J.data() == nullptr || slot.local_vertex < 0
+           || slot.local_vertex >= abd_vertex_to_J.size())
+        {
+            mapped.kind = VertexMap::None;
+            return mapped;
+        }
+        mapped.J = abd_vertex_to_J.data()[slot.local_vertex];
+        return mapped;
+    }
+
+    static MUDA_DEVICE StructuredContactVertexSlot vertex_slot_from_map(
+        const VertexMap& mapped) noexcept
+    {
+        StructuredContactVertexSlot slot;
+        if(mapped.kind == VertexMap::None)
+            return slot;
+        slot.kind = mapped.kind == VertexMap::Abd
+                        ? StructuredContactVertexSlot::Abd
+                        : StructuredContactVertexSlot::Fem;
+        slot.old_dof      = mapped.old_dof;
+        slot.body         = mapped.body;
+        slot.local_vertex = mapped.local_vertex;
+        slot.fixed        = mapped.fixed ? 1 : 0;
+        return slot;
+    }
+
+    MUDA_DEVICE VertexMap map_vertex_slow(IndexT global_vertex) const noexcept
     {
         VertexMap mapped;
         if(abd_vertex_offset >= 0 && global_vertex >= abd_vertex_offset
@@ -93,6 +169,30 @@ struct StructuredContactAssemblySink
         }
 
         return mapped;
+    }
+
+    MUDA_DEVICE VertexMap map_vertex(IndexT global_vertex) const noexcept
+    {
+        if(vertex_slots.data() != nullptr && global_vertex >= 0
+           && global_vertex < vertex_slots.size())
+        {
+            const auto slot = vertex_slots[global_vertex];
+            if(slot.kind != StructuredContactVertexSlot::None)
+                return slot_to_vertex_map(slot);
+        }
+        return map_vertex_slow(global_vertex);
+    }
+
+    MUDA_DEVICE StructuredContactVertexSlot vertex_slot(IndexT global_vertex) const noexcept
+    {
+        if(vertex_slots.data() != nullptr && global_vertex >= 0
+           && global_vertex < vertex_slots.size())
+        {
+            const auto slot = vertex_slots[global_vertex];
+            if(slot.kind != StructuredContactVertexSlot::None)
+                return slot;
+        }
+        return vertex_slot_from_map(map_vertex_slow(global_vertex));
     }
 
     MUDA_DEVICE void add_counter(StructuredSinkWriteClass cls) const noexcept
@@ -530,6 +630,66 @@ struct StructuredContactAssemblySink
         return left_slot != right_slot;
     }
 
+    MUDA_DEVICE StructuredContactHalfBlockPlan make_half_block_plan(
+        IndexT global_i,
+        IndexT global_j,
+        IndexT h_l,
+        IndexT h_r,
+        bool   mirror_diag_block) const noexcept
+    {
+        StructuredContactHalfBlockPlan plan;
+        plan.global_i          = global_i;
+        plan.global_j          = global_j;
+        plan.h_l               = h_l;
+        plan.h_r               = h_r;
+        plan.mirror_diag_block = mirror_diag_block ? 1 : 0;
+
+        const auto lhs = vertex_slot(global_i);
+        const auto rhs = vertex_slot(global_j);
+        if(lhs.kind == StructuredContactVertexSlot::None
+           || rhs.kind == StructuredContactVertexSlot::None)
+            return plan;
+        if(lhs.fixed || rhs.fixed)
+            return plan;
+
+        plan.lhs   = lhs;
+        plan.rhs   = rhs;
+        plan.valid = 1;
+        return plan;
+    }
+
+    template <int StencilSize, typename PlanView>
+    MUDA_DEVICE void build_hessian_half_plan(
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        PlanView                                  plans,
+        IndexT                                    plan_offset) const noexcept
+    {
+        IndexT pair = 0;
+#pragma unroll
+        for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+            {
+                IndexT L = row_block;
+                IndexT R = col_block;
+                const bool swapped = upper_lr(indices(row_block),
+                                              indices(col_block),
+                                              row_block,
+                                              col_block,
+                                              L,
+                                              R);
+                plans(plan_offset + pair) = make_half_block_plan(
+                    indices(L),
+                    indices(R),
+                    L,
+                    R,
+                    indices(L) != indices(R) || swapped);
+                ++pair;
+            }
+        }
+    }
+
     template <int StencilSize, typename HMat>
     MUDA_DEVICE void write_hessian_half(
         const Eigen::Vector<IndexT, StencilSize>& indices,
@@ -588,6 +748,68 @@ struct StructuredContactAssemblySink
                                               bool mirror_diag_block = false) const noexcept
     {
         write_hessian_block(global_i, global_j, H3x3, mirror_diag_block);
+    }
+
+    template <typename H3>
+    MUDA_DEVICE void write_contact_plan_block(
+        const StructuredContactHalfBlockPlan& plan,
+        const H3&                             H3x3) const noexcept
+    {
+        if(!plan.valid || !valid())
+            return;
+
+        const auto lhs = slot_to_vertex_map(plan.lhs);
+        const auto rhs = slot_to_vertex_map(plan.rhs);
+        if(lhs.kind == VertexMap::None || rhs.kind == VertexMap::None)
+            return;
+        if(lhs.fixed || rhs.fixed)
+            return;
+
+        if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only)
+        {
+            if(sink.runtime_ordering.topology_only)
+                record_topology_pair(lhs, rhs);
+            else
+                record_weighted_pair(lhs, rhs, h3_abs_sum(H3x3));
+            return;
+        }
+
+        const bool mirror_diag_block = plan.mirror_diag_block != 0;
+        if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Fem)
+        {
+            add_fem_fem(lhs.old_dof, rhs.old_dof, H3x3, mirror_diag_block);
+            return;
+        }
+
+        if(lhs.kind == VertexMap::Abd && rhs.kind == VertexMap::Fem)
+        {
+            add_abd_fem(lhs, rhs, H3x3, mirror_diag_block);
+            return;
+        }
+
+        if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Abd)
+        {
+            add_fem_abd(lhs, rhs, H3x3, mirror_diag_block);
+            return;
+        }
+
+        add_abd_abd_half(lhs, rhs, plan.global_i, plan.global_j, H3x3, mirror_diag_block);
+    }
+
+    template <int StencilSize, typename PlanView, typename HMat>
+    MUDA_DEVICE void write_hessian_half_with_plan(PlanView    plans,
+                                                  IndexT      plan_offset,
+                                                  const HMat& H) const noexcept
+    {
+        constexpr IndexT PairCount = StencilSize * (StencilSize + 1) / 2;
+#pragma unroll
+        for(IndexT pair = 0; pair < PairCount; ++pair)
+        {
+            const auto plan = plans(plan_offset + pair);
+            write_contact_plan_block(
+                plan,
+                H.template block<3, 3>(plan.h_l * 3, plan.h_r * 3));
+        }
     }
 
     template <typename H3>

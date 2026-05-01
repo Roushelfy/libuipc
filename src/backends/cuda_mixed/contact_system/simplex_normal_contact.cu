@@ -233,6 +233,20 @@ SimplexNormalContact::ContactInfo::structured_PP_hessian_workspace(SizeT size) c
     return m_impl->structured_PP_hessians.view();
 }
 
+muda::BufferView<StructuredContactHalfBlockPlan>
+SimplexNormalContact::ContactInfo::structured_EE_write_plan_workspace(SizeT size) const
+{
+    m_impl->structured_EE_write_plans.resize(size);
+    return m_impl->structured_EE_write_plans.view();
+}
+
+muda::BufferView<StructuredContactHalfBlockPlan>
+SimplexNormalContact::ContactInfo::structured_PP_write_plan_workspace(SizeT size) const
+{
+    m_impl->structured_PP_write_plans.resize(size);
+    return m_impl->structured_PP_write_plans.view();
+}
+
 muda::CBuffer2DView<ContactCoeff> SimplexNormalContact::BaseInfo::contact_tabular() const
 {
     return m_impl->global_contact_manager->contact_tabular();

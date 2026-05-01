@@ -88,6 +88,102 @@ void mix_contact_vector_view(SizeT& signature,
             mix_contact_signature(signature, static_cast<SizeT>(item(i)));
     }
 }
+
+void reset_structured_contact_vertex_slots(
+    muda::BufferView<StructuredContactVertexSlot> slots)
+{
+    if(slots.size() == 0)
+        return;
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(slots.size(),
+               [slots] __device__(int i) mutable
+               {
+                   *slots.data(i) = {};
+               });
+}
+
+void fill_abd_structured_contact_vertex_slots(
+    muda::BufferView<StructuredContactVertexSlot> slots,
+    IndexT                                        vertex_offset,
+    IndexT                                        vertex_count,
+    IndexT                                        old_dof_offset,
+    IndexT                                        body_count,
+    muda::CBufferView<IndexT>                     vertex_to_body,
+    muda::CBufferView<IndexT>                     body_is_fixed)
+{
+    if(slots.size() == 0 || vertex_count <= 0)
+        return;
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(vertex_count,
+               [slots,
+                vertex_offset,
+                old_dof_offset,
+                body_count,
+                vertex_to_body,
+                body_is_fixed] __device__(int local) mutable
+               {
+                   const IndexT global = vertex_offset + local;
+                   if(global < 0 || global >= slots.size())
+                       return;
+                   if(vertex_to_body.data() == nullptr || local < 0
+                      || local >= vertex_to_body.size())
+                       return;
+                   const IndexT body = vertex_to_body[local];
+                   if(body_is_fixed.data() == nullptr || body < 0 || body >= body_count
+                      || body >= body_is_fixed.size())
+                       return;
+
+                   StructuredContactVertexSlot slot;
+                   slot.kind         = StructuredContactVertexSlot::Abd;
+                   slot.old_dof      = old_dof_offset + body * 12;
+                   slot.body         = body;
+                   slot.local_vertex = local;
+                   slot.fixed        = body_is_fixed[body] != 0 ? 1 : 0;
+                   *slots.data(global) = slot;
+               });
+}
+
+void fill_fem_structured_contact_vertex_slots(
+    muda::BufferView<StructuredContactVertexSlot> slots,
+    IndexT                                        vertex_offset,
+    IndexT                                        vertex_count,
+    IndexT                                        old_dof_offset,
+    muda::CBufferView<IndexT>                     vertex_is_fixed)
+{
+    if(slots.size() == 0 || vertex_count <= 0)
+        return;
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(vertex_count,
+               [slots,
+                vertex_offset,
+                old_dof_offset,
+                vertex_is_fixed] __device__(int local) mutable
+               {
+                   const IndexT global = vertex_offset + local;
+                   if(global < 0 || global >= slots.size())
+                       return;
+                   if(vertex_is_fixed.data() == nullptr || local < 0
+                      || local >= vertex_is_fixed.size())
+                       return;
+
+                   StructuredContactVertexSlot slot;
+                   slot.kind         = StructuredContactVertexSlot::Fem;
+                   slot.old_dof      = old_dof_offset + local * 3;
+                   slot.body         = -1;
+                   slot.local_vertex = local;
+                   slot.fixed        = vertex_is_fixed[local] != 0 ? 1 : 0;
+                   *slots.data(global) = slot;
+               });
+}
 }  // namespace
 
 REGISTER_SIM_SYSTEM(GlobalDyTopoEffectManager);
@@ -554,6 +650,52 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             fem_linear_subsystem->dof_offset();
         info.m_contact_sink.fem_vertex_is_fixed =
             finite_element_method->is_fixed();
+    }
+
+    SizeT vertex_slot_count = 0;
+    if(info.m_contact_sink.abd_vertex_offset >= 0 && info.m_contact_sink.abd_vertex_count > 0)
+    {
+        const SizeT end = static_cast<SizeT>(info.m_contact_sink.abd_vertex_offset
+                                             + info.m_contact_sink.abd_vertex_count);
+        if(end > vertex_slot_count)
+            vertex_slot_count = end;
+    }
+    if(info.m_contact_sink.fem_vertex_offset >= 0 && info.m_contact_sink.fem_vertex_count > 0)
+    {
+        const SizeT end = static_cast<SizeT>(info.m_contact_sink.fem_vertex_offset
+                                             + info.m_contact_sink.fem_vertex_count);
+        if(end > vertex_slot_count)
+            vertex_slot_count = end;
+    }
+
+    if(vertex_slot_count > 0)
+    {
+        structured_contact_vertex_slots.resize(vertex_slot_count);
+        auto slots = structured_contact_vertex_slots.view();
+        reset_structured_contact_vertex_slots(slots);
+        if(info.m_contact_sink.abd_vertex_offset >= 0
+           && info.m_contact_sink.abd_vertex_count > 0)
+        {
+            fill_abd_structured_contact_vertex_slots(
+                slots,
+                info.m_contact_sink.abd_vertex_offset,
+                info.m_contact_sink.abd_vertex_count,
+                info.m_contact_sink.abd_old_dof_offset,
+                info.m_contact_sink.abd_body_count,
+                info.m_contact_sink.abd_vertex_to_body,
+                info.m_contact_sink.abd_body_is_fixed);
+        }
+        if(info.m_contact_sink.fem_vertex_offset >= 0
+           && info.m_contact_sink.fem_vertex_count > 0)
+        {
+            fill_fem_structured_contact_vertex_slots(
+                slots,
+                info.m_contact_sink.fem_vertex_offset,
+                info.m_contact_sink.fem_vertex_count,
+                info.m_contact_sink.fem_old_dof_offset,
+                info.m_contact_sink.fem_vertex_is_fixed);
+        }
+        info.m_contact_sink.vertex_slots = structured_contact_vertex_slots.view();
     }
 
     for(auto&& reporter : dytopo_effect_reporters.view())

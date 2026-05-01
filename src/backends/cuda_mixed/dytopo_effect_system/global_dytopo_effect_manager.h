@@ -194,6 +194,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::DeviceVar<Vector2i>  gradient_range;
         muda::DeviceBuffer<IndexT> selected_hessian;
         muda::DeviceBuffer<IndexT> selected_hessian_offsets;
+        muda::DeviceBuffer<StructuredContactVertexSlot> structured_contact_vertex_slots;
 
         vector<muda::DeviceTripletMatrix<StoreScalar, 3>> classified_dytopo_effect_hessians;
         vector<muda::DeviceDoubletVector<StoreScalar, 3>> classified_dytopo_effect_gradients;

@@ -72,6 +72,8 @@ class SimplexNormalContact : public ContactReporter
         auto structured_hessian_sink() const noexcept { return m_structured_sink; }
         muda::BufferView<StoreMat12> structured_EE_hessian_workspace(SizeT size) const;
         muda::BufferView<StoreMat6>  structured_PP_hessian_workspace(SizeT size) const;
+        muda::BufferView<StructuredContactHalfBlockPlan> structured_EE_write_plan_workspace(SizeT size) const;
+        muda::BufferView<StructuredContactHalfBlockPlan> structured_PP_write_plan_workspace(SizeT size) const;
 
       private:
         friend class SimplexNormalContact;
@@ -178,6 +180,8 @@ class SimplexNormalContact : public ContactReporter
         muda::CTripletMatrixView<StoreScalar, 3> PP_hessians;
         muda::DeviceBuffer<StoreMat12> structured_EE_hessians;
         muda::DeviceBuffer<StoreMat6>  structured_PP_hessians;
+        muda::DeviceBuffer<StructuredContactHalfBlockPlan> structured_EE_write_plans;
+        muda::DeviceBuffer<StructuredContactHalfBlockPlan> structured_PP_write_plans;
     };
 
     muda::CBufferView<Vector4i>        PTs() const;
