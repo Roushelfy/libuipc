@@ -6,6 +6,7 @@
 #include <linear_system/socu_approx_solver.h>
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
+#include <utils/structured_contact_assembly_sink.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -150,6 +151,42 @@ static_assert(std::is_same_v<decltype(socu_native::ProblemShape{}.n), int>);
 TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")
 {
     SUCCEED();
+}
+
+TEST_CASE("cuda_mixed_socu_upper_lr_equal_vertex_no_mirror",
+          "[cuda_mixed][contract][socu_approx]")
+{
+    using Sink = StructuredContactAssemblySink<ActivePolicy::StoreScalar,
+                                               ActivePolicy::SolveScalar>;
+    Sink sink{};
+
+    // equal global vertex indices with different stencil slots:
+    // should NOT be treated as swapped (no mirror on diagonal block)
+    {
+        IndexT L = -1, R = -1;
+        const bool swapped = sink.upper_lr(5, 5, 0, 1, L, R);
+        CHECK(!swapped);
+        CHECK(L == 0);
+        CHECK(R == 1);
+    }
+
+    // left_value > right_value: must swap and signal mirror
+    {
+        IndexT L = -1, R = -1;
+        const bool swapped = sink.upper_lr(7, 3, 2, 4, L, R);
+        CHECK(swapped);
+        CHECK(L == 4);
+        CHECK(R == 2);
+    }
+
+    // left_value < right_value: no swap
+    {
+        IndexT L = -1, R = -1;
+        const bool swapped = sink.upper_lr(1, 9, 0, 3, L, R);
+        CHECK(!swapped);
+        CHECK(L == 0);
+        CHECK(R == 3);
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_approx_source_contract",

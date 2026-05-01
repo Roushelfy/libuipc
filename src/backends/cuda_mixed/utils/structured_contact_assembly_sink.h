@@ -611,14 +611,14 @@ struct StructuredContactAssemblySink
         add_abd_diag_hessian(v, H);
     }
 
-    MUDA_DEVICE bool upper_lr(IndexT left_value,
+    MUDA_GENERIC bool upper_lr(IndexT left_value,
                               IndexT right_value,
                               IndexT left_slot,
                               IndexT right_slot,
                               IndexT& L,
                               IndexT& R) const noexcept
     {
-        if(left_value < right_value)
+        if(left_value <= right_value)
         {
             L = left_slot;
             R = right_slot;
@@ -627,7 +627,7 @@ struct StructuredContactAssemblySink
 
         L = right_slot;
         R = left_slot;
-        return left_slot != right_slot;
+        return true;
     }
 
     MUDA_DEVICE StructuredContactHalfBlockPlan make_half_block_plan(
