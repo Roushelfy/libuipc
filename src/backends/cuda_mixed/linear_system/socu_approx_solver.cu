@@ -129,9 +129,16 @@ auto SocuApproxSolver::assembly_requirements() const -> AssemblyRequirements
 
 SocuApproxSolver::~SocuApproxSolver() = default;
 
-bool SocuApproxSolver::needs_contact_set_signature() const noexcept
+bool SocuApproxSolver::needs_contact_set_signature_for_probe(SizeT frame) const noexcept
 {
-    return m_runtime_reorder_frame_interval > 0;
+#if !UIPC_WITH_SOCU_NATIVE
+    (void)frame;
+    return false;
+#else
+    return m_runtime && m_runtime_reorder_frame_interval > 0
+           && m_runtime_reorder_edge_capacity > 0
+           && (frame % m_runtime_reorder_frame_interval) == 0;
+#endif
 }
 
 void SocuApproxSolver::do_build(BuildInfo& info)
@@ -1113,11 +1120,14 @@ auto SocuApproxSolver::prepare_structured_probe(
        || m_runtime_reorder_edge_capacity == 0)
         return StructuredProbeAssembly::None;
 
+    m_runtime_reorder_pending_signature_valid = false;
     const SizeT frame = engine().frame();
     if((frame % m_runtime_reorder_frame_interval) != 0)
         return StructuredProbeAssembly::None;
 
     const SizeT contact_signature = info.contact_set_signature();
+    m_runtime_reorder_pending_signature = contact_signature;
+    m_runtime_reorder_pending_signature_valid = true;
     if(m_runtime_reorder_last_signature_valid
        && contact_signature == m_runtime_reorder_last_signature)
     {
@@ -1192,9 +1202,13 @@ bool SocuApproxSolver::finalize_structured_probe(
         install_runtime_reorder_from_collector(m_runtime_reorder_collecting_frame);
     if(installed)
     {
-        m_runtime_reorder_last_signature = info.contact_set_signature();
-        m_runtime_reorder_last_signature_valid = true;
+        if(m_runtime_reorder_pending_signature_valid)
+        {
+            m_runtime_reorder_last_signature = m_runtime_reorder_pending_signature;
+            m_runtime_reorder_last_signature_valid = true;
+        }
     }
+    m_runtime_reorder_pending_signature_valid = false;
     m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting_frame;
     m_report.runtime_reorder_last_applied_frame =
         m_runtime_reorder_last_applied_frame;

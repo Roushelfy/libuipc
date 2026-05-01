@@ -476,8 +476,10 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
     {
         StructuredAssemblyInfo probe_info{this};
         probe_info.m_b = b.cview();
+        const SizeT frame =
+            selected_linear_solver->system().engine().frame();
         if(global_dytopo_effect_manager
-           && selected_linear_solver->needs_contact_set_signature())
+           && selected_linear_solver->needs_contact_set_signature_for_probe(frame))
             probe_info.set_contact_set_signature(
                 global_dytopo_effect_manager->contact_set_signature());
         const auto probe =
@@ -496,10 +498,6 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
             {
                 StructuredAssemblyInfo info{this};
                 info.m_b = b.cview();
-                if(global_dytopo_effect_manager
-                   && selected_linear_solver->needs_contact_set_signature())
-                    info.set_contact_set_signature(
-                        global_dytopo_effect_manager->contact_set_signature());
                 selected_linear_solver->prepare_structured_chain(info);
                 if(!info.configured())
                 {
@@ -516,10 +514,6 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
     {
         StructuredAssemblyInfo info{this};
         info.m_b = b.cview();
-        if(global_dytopo_effect_manager
-           && selected_linear_solver->needs_contact_set_signature())
-            info.set_contact_set_signature(
-                global_dytopo_effect_manager->contact_set_signature());
         selected_linear_solver->prepare_structured_chain(info);
         if(!info.configured())
         {
