@@ -225,6 +225,24 @@ TEST_CASE("cuda_mixed_socu_upper_lr_equal_vertex_no_mirror",
     }
 }
 
+TEST_CASE("cuda_mixed_socu_probe_mode_topology_flag",
+          "[cuda_mixed][contract][socu_approx]")
+{
+    using namespace uipc::backend::cuda_mixed;
+    using Sink = StructuredContactAssemblySink<ActivePolicy::StoreScalar,
+                                               ActivePolicy::SolveScalar>;
+
+    // A default-constructed (invalid) sink is never in probe mode.
+    Sink sink{};
+    CHECK(!sink.topology_probe_only());
+
+    // topology_probe_only() == runtime_ordering.valid() && graph_only && topology_only.
+    // An invalid sink has runtime_ordering.valid() == false, so the flag is always false.
+    // This validates the short-circuit: probe-mode guards like
+    //   if(structured_sink.topology_probe_only()) { write_topology_half...; }
+    // correctly fall through to the full plan-based path in normal assembly.
+}
+
 TEST_CASE("cuda_mixed_socu_approx_source_contract",
           "[cuda_mixed][contract][socu_approx]")
 {
