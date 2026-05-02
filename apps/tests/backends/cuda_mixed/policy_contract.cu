@@ -243,6 +243,29 @@ TEST_CASE("cuda_mixed_socu_probe_mode_topology_flag",
     // correctly fall through to the full plan-based path in normal assembly.
 }
 
+TEST_CASE("cuda_mixed_socu_vertex_slot_fill_unified",
+          "[cuda_mixed][contract][socu_approx]")
+{
+    // Source contract: the two separate fill kernels have been replaced by a single
+    // fill_structured_contact_vertex_slots that calls map_vertex_slow, which contains
+    // the full bounds-checked vertex-to-slot resolution logic in one place.
+    const auto source_path =
+        std::filesystem::path{UIPC_PROJECT_DIR}
+        / "src/backends/cuda_mixed/dytopo_effect_system/global_dytopo_effect_manager.cu";
+    std::ifstream ifs{source_path};
+    REQUIRE(ifs.good());
+
+    const std::string source{std::istreambuf_iterator<char>{ifs},
+                             std::istreambuf_iterator<char>{}};
+    // old per-type fill functions must not exist anymore
+    CHECK(source.find("fill_abd_structured_contact_vertex_slots") == std::string::npos);
+    CHECK(source.find("fill_fem_structured_contact_vertex_slots") == std::string::npos);
+    // new unified function must exist
+    CHECK(source.find("fill_structured_contact_vertex_slots") != std::string::npos);
+    // unified fill delegates to map_vertex_slow (single source of truth)
+    CHECK(source.find("map_vertex_slow") != std::string::npos);
+}
+
 TEST_CASE("cuda_mixed_socu_approx_source_contract",
           "[cuda_mixed][contract][socu_approx]")
 {
