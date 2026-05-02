@@ -195,6 +195,14 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::DeviceBuffer<IndexT> selected_hessian;
         muda::DeviceBuffer<IndexT> selected_hessian_offsets;
         muda::DeviceBuffer<StructuredContactVertexSlot> structured_contact_vertex_slots;
+        // Cache the parameters that determine slot content; slots only need refilling
+        // when the DOF layout changes (ordering or topology update).
+        IndexT cached_abd_vertex_offset  = -2;
+        IndexT cached_abd_vertex_count   = -1;
+        IndexT cached_abd_old_dof_offset = -2;
+        IndexT cached_fem_vertex_offset  = -2;
+        IndexT cached_fem_vertex_count   = -1;
+        IndexT cached_fem_old_dof_offset = -2;
 
         vector<muda::DeviceTripletMatrix<StoreScalar, 3>> classified_dytopo_effect_hessians;
         vector<muda::DeviceDoubletVector<StoreScalar, 3>> classified_dytopo_effect_gradients;
