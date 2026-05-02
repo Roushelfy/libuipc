@@ -41,26 +41,10 @@ void assemble_ipc_simplex_normal_contact_structured(
         }
         else
         {
-            auto pt_hessians = info.structured_PT_hessian_workspace(info.PTs().size());
-            auto pt_write_plans = info.structured_PT_write_plan_workspace(
-                info.PTs().size() * SimplexNormalContact::PTHalfHessianSize);
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.PTs().size(),
                        [structured_sink,
-                        PTs = info.PTs().viewer().name("PTs"),
-                        Plans = pt_write_plans.viewer().name("structured_PT_write_plans")] __device__(
-                           int i) mutable
-                       {
-                           structured_sink.template build_hessian_half_plan<4>(
-                               PTs(i),
-                               Plans,
-                               i * SimplexNormalContact::PTHalfHessianSize);
-                       });
-            ParallelFor()
-                .file_line(__FILE__, __LINE__)
-                .apply(info.PTs().size(),
-                       [Hs = pt_hessians.viewer().name("structured_PT_normal_Hs"),
                         table = info.contact_tabular().viewer().name("contact_tabular"),
                         contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                         PTs = info.PTs().viewer().name("PTs"),
@@ -118,20 +102,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                            PT_barrier_gradient_hessian(
                                G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
                            make_spd(H);
-                           Hs(i) = downcast_hessian<Store>(H);
-                       });
-            ParallelFor()
-                .file_line(__FILE__, __LINE__)
-                .apply(info.PTs().size(),
-                       [structured_sink,
-                        Plans = pt_write_plans.viewer().name("structured_PT_write_plans"),
-                        Hs = pt_hessians.viewer().name("structured_PT_normal_Hs")] __device__(
-                           int i) mutable
-                       {
-                           structured_sink.template write_hessian_half_with_plan<4>(
-                               Plans,
-                               i * SimplexNormalContact::PTHalfHessianSize,
-                               Hs(i));
+                           auto H_store = downcast_hessian<Store>(H);
+                           structured_sink.template write_hessian_half<4>(PT, H_store);
                        });
         }
     }
@@ -282,26 +254,10 @@ void assemble_ipc_simplex_normal_contact_structured(
         }
         else
         {
-            auto pe_hessians = info.structured_PE_hessian_workspace(info.PEs().size());
-            auto pe_write_plans = info.structured_PE_write_plan_workspace(
-                info.PEs().size() * SimplexNormalContact::PEHalfHessianSize);
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.PEs().size(),
                        [structured_sink,
-                        PEs = info.PEs().viewer().name("PEs"),
-                        Plans = pe_write_plans.viewer().name("structured_PE_write_plans")] __device__(
-                           int i) mutable
-                       {
-                           structured_sink.template build_hessian_half_plan<3>(
-                               PEs(i),
-                               Plans,
-                               i * SimplexNormalContact::PEHalfHessianSize);
-                       });
-            ParallelFor()
-                .file_line(__FILE__, __LINE__)
-                .apply(info.PEs().size(),
-                       [Hs = pe_hessians.viewer().name("structured_PE_normal_Hs"),
                         table = info.contact_tabular().viewer().name("contact_tabular"),
                         contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                         PEs     = info.PEs().viewer().name("PEs"),
@@ -350,20 +306,8 @@ void assemble_ipc_simplex_normal_contact_structured(
                            Mat9A H;
                            PE_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P, E0, E1);
                            make_spd(H);
-                           Hs(i) = downcast_hessian<Store>(H);
-                       });
-            ParallelFor()
-                .file_line(__FILE__, __LINE__)
-                .apply(info.PEs().size(),
-                       [structured_sink,
-                        Plans = pe_write_plans.viewer().name("structured_PE_write_plans"),
-                        Hs = pe_hessians.viewer().name("structured_PE_normal_Hs")] __device__(
-                           int i) mutable
-                       {
-                           structured_sink.template write_hessian_half_with_plan<3>(
-                               Plans,
-                               i * SimplexNormalContact::PEHalfHessianSize,
-                               Hs(i));
+                           auto H_store = downcast_hessian<Store>(H);
+                           structured_sink.template write_hessian_half<3>(PE, H_store);
                        });
         }
     }

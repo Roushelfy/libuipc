@@ -610,28 +610,9 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
     if(vertex_slot_count > 0)
     {
-        const bool slots_dirty =
-            info.m_contact_sink.abd_vertex_offset  != cached_abd_vertex_offset
-            || info.m_contact_sink.abd_vertex_count   != cached_abd_vertex_count
-            || info.m_contact_sink.abd_old_dof_offset != cached_abd_old_dof_offset
-            || info.m_contact_sink.fem_vertex_offset  != cached_fem_vertex_offset
-            || info.m_contact_sink.fem_vertex_count   != cached_fem_vertex_count
-            || info.m_contact_sink.fem_old_dof_offset != cached_fem_old_dof_offset
-            || structured_contact_vertex_slots.size() != vertex_slot_count;
-
-        if(slots_dirty)
-        {
-            structured_contact_vertex_slots.resize(vertex_slot_count);
-            auto slots = structured_contact_vertex_slots.view();
-            fill_structured_contact_vertex_slots(slots, info.m_contact_sink);
-
-            cached_abd_vertex_offset  = info.m_contact_sink.abd_vertex_offset;
-            cached_abd_vertex_count   = info.m_contact_sink.abd_vertex_count;
-            cached_abd_old_dof_offset = info.m_contact_sink.abd_old_dof_offset;
-            cached_fem_vertex_offset  = info.m_contact_sink.fem_vertex_offset;
-            cached_fem_vertex_count   = info.m_contact_sink.fem_vertex_count;
-            cached_fem_old_dof_offset = info.m_contact_sink.fem_old_dof_offset;
-        }
+        structured_contact_vertex_slots.resize(vertex_slot_count);
+        auto slots = structured_contact_vertex_slots.view();
+        fill_structured_contact_vertex_slots(slots, info.m_contact_sink);
         info.m_contact_sink.vertex_slots = structured_contact_vertex_slots.view();
     }
 
