@@ -65,10 +65,15 @@ class SocuApproxSolver : public LinearSolver
     void debug_validate_direction(cudaStream_t stream);
     void dump_structured_matrix(const GlobalLinearSystem::StructuredAssemblyInfo& info);
     void dump_problem_file(const GlobalLinearSystem::StructuredAssemblyInfo& info);
-    bool install_ordering_report(const Json&                  report,
-                                 const std::filesystem::path& ordering_report_path,
-                                 bool                         throw_on_failure,
-                                 std::string*                 failure_detail);
+    void install_ordering_report_or_throw(const Json&                  report,
+                                          const std::filesystem::path& ordering_report_path);
+    bool try_install_ordering_report(const Json&                  report,
+                                     const std::filesystem::path& ordering_report_path,
+                                     std::string*                 failure_detail);
+    bool install_ordering_report_impl(const Json&                  report,
+                                      const std::filesystem::path& ordering_report_path,
+                                      bool                         throw_on_failure,
+                                      std::string*                 failure_detail);
     bool install_runtime_reorder_from_collector(SizeT collected_frame);
 
     SocuApproxGateReport  m_gate_report;

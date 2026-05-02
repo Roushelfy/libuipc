@@ -10,6 +10,7 @@ namespace uipc::backend::cuda_mixed
 enum class SocuApproxGateReason
 {
     None,
+    Unknown,
     SocuDisabled,
     OrderingInvalid,
     UnsupportedPrecisionContract,
@@ -29,7 +30,7 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept;
 struct SocuApproxGateReport
 {
     bool                 passed = false;
-    SocuApproxGateReason reason = SocuApproxGateReason::SocuDisabled;
+    SocuApproxGateReason reason = SocuApproxGateReason::Unknown;
     std::string          detail;
     std::string          ordering_report_path;
     std::string          provider_kind;

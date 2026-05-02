@@ -418,16 +418,29 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     logger::info("Generated socu_approx init-time ordering report at {}",
                  ordering_report_path.string());
 
-    std::string install_detail;
-    if(!install_ordering_report(report, ordering_report_path, true, &install_detail))
-        throw Exception{install_detail};
+    install_ordering_report_or_throw(report, ordering_report_path);
     logger::info("SocuApproxSolver strict structured solve enabled: block_size={}, blocks={}, report='{}'",
                  m_report.block_size,
                  m_report.block_count,
                  m_report.report_path);
 }
 
-bool SocuApproxSolver::install_ordering_report(
+void SocuApproxSolver::install_ordering_report_or_throw(
+    const Json& report, const std::filesystem::path& ordering_report_path)
+{
+    install_ordering_report_impl(report, ordering_report_path, true, nullptr);
+}
+
+bool SocuApproxSolver::try_install_ordering_report(
+    const Json&                  report,
+    const std::filesystem::path& ordering_report_path,
+    std::string*                 failure_detail)
+{
+    return install_ordering_report_impl(
+        report, ordering_report_path, false, failure_detail);
+}
+
+bool SocuApproxSolver::install_ordering_report_impl(
     const Json&                  report,
     const std::filesystem::path& ordering_report_path,
     bool                         throw_on_failure,
@@ -962,10 +975,9 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
             write_json_report(path, report);
 
         std::string detail;
-        if(install_ordering_report(
+        if(try_install_ordering_report(
                report,
                m_debug_write_runtime_ordering_report ? path : fs::path{},
-               false,
                &detail))
         {
             m_runtime_reorder_last_applied_frame = engine().frame();
@@ -1063,7 +1075,7 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.damping_shift = m_damping_shift;
 
     const cudaStream_t stream = system().stream();
-    if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
+    if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         muda::BufferLaunch(stream).fill<IndexT>(m_runtime->report_counters.view(), 0);
 
     initialize_structured_workspace<GlobalLinearSystem::StoreScalar, Runtime::Scalar>(
@@ -1092,7 +1104,7 @@ void SocuApproxSolver::prepare_structured_chain(
         m_runtime->device_old_to_chain.view(),
         m_runtime->device_chain_to_old.view(),
         stream);
-    if(m_report_counters_enabled && m_runtime->report_counters.size() == 5)
+    if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
 

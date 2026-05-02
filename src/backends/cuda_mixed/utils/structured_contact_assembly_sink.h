@@ -247,12 +247,12 @@ struct StructuredContactAssemblySink
 
         const IndexT lhs_atom_count = lhs.kind == VertexMap::Abd ? 4 : 1;
         const IndexT rhs_atom_count = rhs.kind == VertexMap::Abd ? 4 : 1;
-#pragma unroll 1
+#pragma unroll 1  // suppress unroll: register pressure with up to 4x4 atom loops
         for(IndexT lhs_atom = 0; lhs_atom < 4; ++lhs_atom)
         {
             if(lhs_atom >= lhs_atom_count)
                 continue;
-#pragma unroll 1
+#pragma unroll 1  // same reason
             for(IndexT rhs_atom = 0; rhs_atom < 4; ++rhs_atom)
             {
                 if(rhs_atom >= rhs_atom_count)
@@ -279,12 +279,12 @@ struct StructuredContactAssemblySink
 
         const IndexT lhs_atom_count = lhs.kind == VertexMap::Abd ? 4 : 1;
         const IndexT rhs_atom_count = rhs.kind == VertexMap::Abd ? 4 : 1;
-#pragma unroll 1
+#pragma unroll 1  // suppress unroll: register pressure with up to 4x4 atom loops
         for(IndexT lhs_atom = 0; lhs_atom < 4; ++lhs_atom)
         {
             if(lhs_atom >= lhs_atom_count)
                 continue;
-#pragma unroll 1
+#pragma unroll 1  // same reason
             for(IndexT rhs_atom = 0; rhs_atom < 4; ++rhs_atom)
             {
                 if(rhs_atom >= rhs_atom_count)

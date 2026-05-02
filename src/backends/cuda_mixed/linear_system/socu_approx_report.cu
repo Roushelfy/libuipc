@@ -1,9 +1,9 @@
 #include <linear_system/socu_approx_report.h>
 
-#include <uipc/common/exception.h>
 #include <uipc/common/json.h>
 
 #include <fmt/format.h>
+#include <spdlog/spdlog.h>
 
 #include <filesystem>
 #include <fstream>
@@ -148,8 +148,11 @@ void write_solve_report(const SocuApproxSolveReport& report)
     std::filesystem::create_directories(report_path.parent_path());
     std::ofstream ofs{report_path};
     if(!ofs)
-        throw Exception{fmt::format("SocuApproxSolver report '{}' cannot be written",
-                                    report.report_path)};
+    {
+        spdlog::warn("SocuApproxSolver report '{}' cannot be written",
+                     report.report_path);
+        return;
+    }
     ofs << to_json(report).dump(2);
 }
 
@@ -159,6 +162,8 @@ std::string_view to_string(SocuApproxGateReason reason) noexcept
     {
     case SocuApproxGateReason::None:
         return "none";
+    case SocuApproxGateReason::Unknown:
+        return "unknown";
     case SocuApproxGateReason::SocuDisabled:
         return "socu_disabled";
     case SocuApproxGateReason::OrderingInvalid:

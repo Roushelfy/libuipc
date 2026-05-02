@@ -61,6 +61,9 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
+    static constexpr SizeT kValidationSumCount  = 5;
+    static constexpr SizeT kReportCounterCount  = 5;
+
     muda::DeviceBuffer<double> validation_sums;
     muda::DeviceBuffer<IndexT> validation_status;
     muda::DeviceBuffer<IndexT> report_counters;
@@ -104,19 +107,19 @@ struct SocuApproxRuntime
 
         if(device_rhs_original.capacity() < layout.rhs_element_count)
             device_rhs_original.reserve(layout.rhs_element_count);
-        if(validation_sums.capacity() < 5)
-            validation_sums.reserve(5);
+        if(validation_sums.capacity() < kValidationSumCount)
+            validation_sums.reserve(kValidationSumCount);
         if(validation_status.capacity() < 1)
             validation_status.reserve(1);
         device_rhs_original.resize(layout.rhs_element_count);
-        validation_sums.resize(5);
+        validation_sums.resize(kValidationSumCount);
         validation_status.resize(1);
 
         if(!host_validation_sums)
         {
             SOCU_NATIVE_CHECK_CUDA(
                 cudaHostAlloc(reinterpret_cast<void**>(&host_validation_sums),
-                              5 * sizeof(double),
+                              kValidationSumCount * sizeof(double),
                               cudaHostAllocDefault));
         }
         if(!host_validation_status)
@@ -134,9 +137,9 @@ struct SocuApproxRuntime
 
         if(report_counters_enabled)
         {
-            if(report_counters.capacity() < 5)
-                report_counters.reserve(5);
-            report_counters.resize(5);
+            if(report_counters.capacity() < kReportCounterCount)
+                report_counters.reserve(kReportCounterCount);
+            report_counters.resize(kReportCounterCount);
         }
 
         if(debug_validation)
@@ -154,7 +157,7 @@ struct SocuApproxRuntime
     {
         SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_validation_sums,
                                                validation_sums.data(),
-                                               5 * sizeof(double),
+                                               kValidationSumCount * sizeof(double),
                                                cudaMemcpyDeviceToHost,
                                                stream));
         SOCU_NATIVE_CHECK_CUDA(cudaEventRecord(validation_done, stream));
