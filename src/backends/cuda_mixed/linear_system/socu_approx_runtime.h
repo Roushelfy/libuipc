@@ -62,7 +62,7 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
     static constexpr SizeT kValidationSumCount  = 5;
-    static constexpr SizeT kReportCounterCount  = 5;
+    static constexpr SizeT kReportCounterCount  = 9;
 
     muda::DeviceBuffer<double> validation_sums;
     muda::DeviceBuffer<IndexT> validation_status;

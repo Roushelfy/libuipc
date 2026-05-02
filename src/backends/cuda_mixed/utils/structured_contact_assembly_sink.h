@@ -58,6 +58,7 @@ struct StructuredContactAssemblySink
     // [diag scalar writes, first-offdiag scalar writes, off-band scalar drops,
     //  near contact pairs, off-band contact pairs]
     muda::BufferView<IndexT> counters;
+    bool                     debug_contact_write_plan_validate = false;
 
     struct VertexMap
     {
@@ -82,6 +83,25 @@ struct StructuredContactAssemblySink
     {
         return sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
                && sink.runtime_ordering.topology_only;
+    }
+
+    MUDA_DEVICE void record_plan_validation_counter(
+        StructuredSinkWriteClass cls) const noexcept
+    {
+        if(!debug_contact_write_plan_validate || counters.data() == nullptr
+           || counters.size() < 9)
+            return;
+        if(cls == StructuredSinkWriteClass::Skipped)
+            muda::atomic_add(counters.data(6), IndexT{1});
+        else
+        {
+            muda::atomic_add(counters.data(5), IndexT{1});
+            if(cls == StructuredSinkWriteClass::Diag
+               || cls == StructuredSinkWriteClass::FirstOffdiag)
+                muda::atomic_add(counters.data(7), IndexT{1});
+            else if(cls == StructuredSinkWriteClass::OffBand)
+                muda::atomic_add(counters.data(8), IndexT{1});
+        }
     }
 
     MUDA_DEVICE VertexMap slot_to_vertex_map(
@@ -687,6 +707,24 @@ struct StructuredContactAssemblySink
                     indices(L) != indices(R) || swapped);
                 ++pair;
             }
+        }
+    }
+
+    template <int HalfBlockCount, typename PlanView>
+    MUDA_DEVICE void count_hessian_half_plan(PlanView plans,
+                                             IndexT   plan_offset) const noexcept
+    {
+#pragma unroll
+        for(IndexT pair = 0; pair < HalfBlockCount; ++pair)
+        {
+            const auto plan = plans(plan_offset + pair);
+            if(!plan.valid)
+            {
+                record_plan_validation_counter(StructuredSinkWriteClass::Skipped);
+                continue;
+            }
+            record_plan_validation_counter(
+                sink.matrix.classify_dof_pair(plan.lhs.old_dof, plan.rhs.old_dof));
         }
     }
 

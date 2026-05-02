@@ -9,6 +9,30 @@
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+template <int HalfBlockCount, typename ContactSink, typename PlanView>
+void count_contact_write_plans(ContactSink sink,
+                               PlanView    plans,
+                               SizeT       contact_count,
+                               const char* name)
+{
+    if(!sink.debug_contact_write_plan_validate || contact_count == 0)
+        return;
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(contact_count,
+               [sink, Plans = plans.viewer().name(name)] __device__(
+                   int i) mutable
+               {
+                   sink.template count_hessian_half_plan<HalfBlockCount>(
+                       Plans, i * HalfBlockCount);
+               });
+}
+}  // namespace
+
 void assemble_ipc_simplex_normal_contact_structured(
     SimplexNormalContact::ContactInfo& info)
 {
@@ -41,6 +65,30 @@ void assemble_ipc_simplex_normal_contact_structured(
         }
         else
         {
+            if(structured_sink.debug_contact_write_plan_validate)
+            {
+                auto pt_write_plans = info.structured_PT_write_plan_workspace(
+                    info.PTs().size() * SimplexNormalContact::PTHalfHessianSize);
+                ParallelFor()
+                    .file_line(__FILE__, __LINE__)
+                    .apply(info.PTs().size(),
+                           [structured_sink,
+                            PTs = info.PTs().viewer().name("PTs"),
+                            Plans = pt_write_plans.viewer().name("structured_PT_write_plans")] __device__(
+                               int i) mutable
+                           {
+                               structured_sink.template build_hessian_half_plan<4>(
+                                   PTs(i),
+                                   Plans,
+                                   i * SimplexNormalContact::PTHalfHessianSize);
+                           });
+                count_contact_write_plans<SimplexNormalContact::PTHalfHessianSize>(
+                    structured_sink,
+                    pt_write_plans,
+                    info.PTs().size(),
+                    "structured_PT_write_plans");
+            }
+
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.PTs().size(),
@@ -138,7 +186,12 @@ void assemble_ipc_simplex_normal_contact_structured(
                                EEs(i),
                                Plans,
                                i * SimplexNormalContact::EEHalfHessianSize);
-                       });
+                           });
+            count_contact_write_plans<SimplexNormalContact::EEHalfHessianSize>(
+                structured_sink,
+                ee_write_plans,
+                info.EEs().size(),
+                "structured_EE_write_plans");
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.EEs().size(),
@@ -254,6 +307,30 @@ void assemble_ipc_simplex_normal_contact_structured(
         }
         else
         {
+            if(structured_sink.debug_contact_write_plan_validate)
+            {
+                auto pe_write_plans = info.structured_PE_write_plan_workspace(
+                    info.PEs().size() * SimplexNormalContact::PEHalfHessianSize);
+                ParallelFor()
+                    .file_line(__FILE__, __LINE__)
+                    .apply(info.PEs().size(),
+                           [structured_sink,
+                            PEs = info.PEs().viewer().name("PEs"),
+                            Plans = pe_write_plans.viewer().name("structured_PE_write_plans")] __device__(
+                               int i) mutable
+                           {
+                               structured_sink.template build_hessian_half_plan<3>(
+                                   PEs(i),
+                                   Plans,
+                                   i * SimplexNormalContact::PEHalfHessianSize);
+                           });
+                count_contact_write_plans<SimplexNormalContact::PEHalfHessianSize>(
+                    structured_sink,
+                    pe_write_plans,
+                    info.PEs().size(),
+                    "structured_PE_write_plans");
+            }
+
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.PEs().size(),
@@ -342,7 +419,12 @@ void assemble_ipc_simplex_normal_contact_structured(
                                PPs(i),
                                Plans,
                                i * SimplexNormalContact::PPHalfHessianSize);
-                       });
+                           });
+            count_contact_write_plans<SimplexNormalContact::PPHalfHessianSize>(
+                structured_sink,
+                pp_write_plans,
+                info.PPs().size(),
+                "structured_PP_write_plans");
             ParallelFor()
                 .file_line(__FILE__, __LINE__)
                 .apply(info.PPs().size(),

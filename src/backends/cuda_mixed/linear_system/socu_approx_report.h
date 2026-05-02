@@ -119,6 +119,11 @@ struct SocuApproxSolveReport
     double structured_diag_contact_abs_sum      = 0.0;
     double structured_first_offdiag_contact_abs_sum = 0.0;
     double structured_off_band_drop_abs_sum     = 0.0;
+    bool   contact_write_plan_validation_enabled = false;
+    SizeT  contact_write_plan_valid_count        = 0;
+    SizeT  contact_write_plan_skipped_count      = 0;
+    SizeT  contact_write_plan_near_band_count    = 0;
+    SizeT  contact_write_plan_off_band_count     = 0;
     double rhs_abs_sum                         = 0.0;
 
     double socu_factor_solve_time_ms = 0.0;

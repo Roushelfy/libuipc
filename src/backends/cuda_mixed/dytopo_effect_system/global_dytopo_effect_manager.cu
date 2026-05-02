@@ -561,6 +561,8 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     auto contact_sink = structured_info.sink();
     info.m_contact_sink.sink = contact_sink;
     info.m_contact_sink.counters = structured_info.contact_counters();
+    info.m_contact_sink.debug_contact_write_plan_validate =
+        structured_info.debug_contact_write_plan_validate();
 
     if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
     {

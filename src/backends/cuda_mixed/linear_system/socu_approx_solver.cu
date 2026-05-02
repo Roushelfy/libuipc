@@ -197,6 +197,14 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_write_runtime_ordering_report =
         debug_write_runtime_ordering_report_attr
         && debug_write_runtime_ordering_report_attr->view()[0] != 0;
+    auto debug_contact_write_plan_validate_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/debug_contact_write_plan_validate");
+    m_debug_contact_write_plan_validate =
+        debug_contact_write_plan_validate_attr
+        && debug_contact_write_plan_validate_attr->view()[0] != 0;
+    if(m_debug_contact_write_plan_validate)
+        m_report_counters_enabled = true;
 
     auto damping_attr =
         config.find<Float>("linear_system/socu_approx/damping_shift");
@@ -1107,6 +1115,8 @@ void SocuApproxSolver::prepare_structured_chain(
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
+    info.set_debug_contact_write_plan_validate(
+        m_debug_contact_write_plan_validate);
 
     m_report.packed = true;
     m_report.active_rhs_scalar_count = info.b().size();
@@ -1233,7 +1243,7 @@ void SocuApproxSolver::finalize_structured_chain(
 {
     if(info.report_counters_enabled())
     {
-        std::array<IndexT, 5> contact_counts{};
+        std::array<IndexT, Runtime::kReportCounterCount> contact_counts{};
         info.contact_counters().copy_to(contact_counts.data());
         info.record_contact_diag_writes(static_cast<SizeT>(contact_counts[0]));
         info.record_contact_first_offdiag_writes(static_cast<SizeT>(contact_counts[1]));
@@ -1242,7 +1252,20 @@ void SocuApproxSolver::finalize_structured_chain(
             static_cast<SizeT>(contact_counts[4]),
             static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
             static_cast<SizeT>(contact_counts[2]));
+        if(contact_counts.size() >= 9)
+        {
+            m_report.contact_write_plan_valid_count =
+                static_cast<SizeT>(contact_counts[5]);
+            m_report.contact_write_plan_skipped_count =
+                static_cast<SizeT>(contact_counts[6]);
+            m_report.contact_write_plan_near_band_count =
+                static_cast<SizeT>(contact_counts[7]);
+            m_report.contact_write_plan_off_band_count =
+                static_cast<SizeT>(contact_counts[8]);
+        }
     }
+    m_report.contact_write_plan_validation_enabled =
+        m_debug_contact_write_plan_validate;
 
     m_report.structured_diag_write_count =
         info.diag_write_count() + info.contact_diag_write_count();

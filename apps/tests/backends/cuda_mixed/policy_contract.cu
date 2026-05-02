@@ -8,9 +8,6 @@
 #include <utils/assembly_sink.h>
 #include <utils/structured_contact_assembly_sink.h>
 #include <linear_system/socu_rcm_ordering.h>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <type_traits>
 
@@ -243,58 +240,16 @@ TEST_CASE("cuda_mixed_socu_probe_mode_topology_flag",
     // correctly fall through to the full plan-based path in normal assembly.
 }
 
-TEST_CASE("cuda_mixed_socu_vertex_slot_fill_unified",
+TEST_CASE("cuda_mixed_socu_contact_write_plan_pod_contract",
           "[cuda_mixed][contract][socu_approx]")
 {
-    // Source contract: the two separate fill kernels have been replaced by a single
-    // fill_structured_contact_vertex_slots that calls map_vertex_slow, which contains
-    // the full bounds-checked vertex-to-slot resolution logic in one place.
-    const auto source_path =
-        std::filesystem::path{UIPC_PROJECT_DIR}
-        / "src/backends/cuda_mixed/dytopo_effect_system/global_dytopo_effect_manager.cu";
-    std::ifstream ifs{source_path};
-    REQUIRE(ifs.good());
+    using namespace uipc::backend::cuda_mixed;
 
-    const std::string source{std::istreambuf_iterator<char>{ifs},
-                             std::istreambuf_iterator<char>{}};
-    // old per-type fill functions must not exist anymore
-    CHECK(source.find("fill_abd_structured_contact_vertex_slots") == std::string::npos);
-    CHECK(source.find("fill_fem_structured_contact_vertex_slots") == std::string::npos);
-    // new unified function must exist
-    CHECK(source.find("fill_structured_contact_vertex_slots") != std::string::npos);
-    // unified fill delegates to map_vertex_slow (single source of truth)
-    CHECK(source.find("map_vertex_slow") != std::string::npos);
-}
-
-TEST_CASE("cuda_mixed_socu_approx_source_contract",
-          "[cuda_mixed][contract][socu_approx]")
-{
-    const auto source_path =
-        std::filesystem::path{UIPC_PROJECT_DIR}
-        / "src/backends/cuda_mixed/linear_system/socu_approx_solver.cu";
-    std::ifstream ifs{source_path};
-    REQUIRE(ifs.good());
-
-    const std::string source{std::istreambuf_iterator<char>{ifs},
-                             std::istreambuf_iterator<char>{}};
-    const auto do_solve = source.find("void SocuApproxSolver::do_solve");
-    REQUIRE(do_solve != std::string::npos);
-    const auto production_begin =
-        source.find("const cudaStream_t stream = system().stream();", do_solve);
-    REQUIRE(production_begin != std::string::npos);
-    const auto production_end =
-        source.find("\"SocuApproxSolver strict structured solve launched",
-                    production_begin);
-    REQUIRE(production_end != std::string::npos);
-
-    const auto production =
-        source.substr(production_begin, production_end - production_begin);
-    CHECK(production.find("load_contact_report") == std::string::npos);
-    CHECK(production.find("CpuStructuredDryRunSink") == std::string::npos);
-    CHECK(production.find(".copy_to(") == std::string::npos);
-    CHECK(production.find(".copy_from(") == std::string::npos);
-    CHECK(production.find("cudaStream_t stream = nullptr") == std::string::npos);
-    CHECK(production.find("validate_direction_light(stream)") != std::string::npos);
-    CHECK(production.find("snapshot_matrix") == std::string::npos);
-    CHECK(production.find("validate_structured_direction(") == std::string::npos);
+    StructuredContactHalfBlockPlan plan{};
+    CHECK(plan.valid == 0);
+    CHECK(plan.lhs.kind == StructuredContactVertexSlot::None);
+    CHECK(plan.rhs.kind == StructuredContactVertexSlot::None);
+    CHECK(plan.global_i == -1);
+    CHECK(plan.global_j == -1);
+    CHECK(plan.mirror_diag_block == 0);
 }

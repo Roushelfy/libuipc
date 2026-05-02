@@ -134,6 +134,33 @@ struct StructuredDeviceMatrixSink
     }
 
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    classify_dof_pair(IndexT old_i, IndexT old_j) const noexcept
+    {
+        if(old_i < 0 || old_j < 0)
+            return StructuredSinkWriteClass::Skipped;
+        if(static_cast<SizeT>(old_i) >= old_to_chain.size()
+           || static_cast<SizeT>(old_j) >= old_to_chain.size())
+            return StructuredSinkWriteClass::Skipped;
+
+        const IndexT chain_i = old_to_chain[static_cast<SizeT>(old_i)];
+        const IndexT chain_j = old_to_chain[static_cast<SizeT>(old_j)];
+        if(chain_i < 0 || chain_j < 0)
+            return StructuredSinkWriteClass::Skipped;
+
+        const SizeT bi = static_cast<SizeT>(chain_i) / block_size;
+        const SizeT bj = static_cast<SizeT>(chain_j) / block_size;
+        if(bi >= horizon || bj >= horizon)
+            return StructuredSinkWriteClass::Skipped;
+        if(bi == bj)
+            return StructuredSinkWriteClass::Diag;
+
+        const SizeT distance = bi > bj ? bi - bj : bj - bi;
+        return distance == 1 && first_offdiag.data() != nullptr
+                   ? StructuredSinkWriteClass::FirstOffdiag
+                   : StructuredSinkWriteClass::OffBand;
+    }
+
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
     add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
     {
         if(old_i < 0 || old_j < 0)
