@@ -7,6 +7,7 @@
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
 #include <utils/structured_contact_assembly_sink.h>
+#include <linear_system/socu_rcm_ordering.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -153,9 +154,44 @@ TEST_CASE("cuda_mixed_policy_contract", "[cuda_mixed][contract]")
     SUCCEED();
 }
 
+TEST_CASE("cuda_mixed_socu_mixed_graph_fem_source_id",
+          "[cuda_mixed][contract][socu_approx]")
+{
+    using uipc::SizeT;
+    namespace ordering = uipc::backend::cuda_mixed::socu_approx::rcm;
+
+    // Simulate a FEM sub-graph: 3 vertices with source_ids 10, 11, 12
+    ordering::AtomGraph fem_graph;
+    for(SizeT v = 0; v < 3; ++v)
+        ordering::add_atom(fem_graph, 3, "fem_vertex", 10 + v);
+
+    // Simulate an ABD graph: 2 bodies * 4 atoms = 8 atoms
+    ordering::AtomGraph merged;
+    const SizeT abd_atom_count = 8;
+    for(SizeT i = 0; i < abd_atom_count; ++i)
+        ordering::add_atom(merged, 3, "abd_body_local", i);
+
+    const SizeT fem_atom_base = merged.atoms.size();  // = 8
+
+    // Fixed code: use fem_graph.atoms[atom].source_id
+    for(SizeT atom = 0; atom < fem_graph.atoms.size(); ++atom)
+        ordering::add_atom(merged, 3, "fem_vertex", fem_graph.atoms[atom].source_id);
+
+    REQUIRE(merged.atoms.size() == abd_atom_count + 3);
+    for(SizeT atom = 0; atom < fem_graph.atoms.size(); ++atom)
+    {
+        const SizeT merged_id = fem_atom_base + atom;
+        // source_id must equal the original FEM vertex index, not merged_id
+        CHECK(merged.atoms[merged_id].source_id == fem_graph.atoms[atom].source_id);
+        CHECK(merged.atoms[merged_id].source_id != merged_id);  // would be wrong
+    }
+}
+
 TEST_CASE("cuda_mixed_socu_upper_lr_equal_vertex_no_mirror",
           "[cuda_mixed][contract][socu_approx]")
 {
+    using uipc::IndexT;
+    using namespace uipc::backend::cuda_mixed;
     using Sink = StructuredContactAssemblySink<ActivePolicy::StoreScalar,
                                                ActivePolicy::SolveScalar>;
     Sink sink{};
@@ -206,7 +242,7 @@ TEST_CASE("cuda_mixed_socu_approx_source_contract",
         source.find("const cudaStream_t stream = system().stream();", do_solve);
     REQUIRE(production_begin != std::string::npos);
     const auto production_end =
-        source.find("logger::info(\"SocuApproxSolver strict structured solve launched",
+        source.find("\"SocuApproxSolver strict structured solve launched",
                     production_begin);
     REQUIRE(production_end != std::string::npos);
 

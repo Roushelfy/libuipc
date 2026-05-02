@@ -287,7 +287,7 @@ Json generate_mixed_abd_fem_init_time_ordering_report(WorldVisitor&     world,
     const SizeT fem_atom_base = graph.atoms.size();
     auto fem_graph = make_fem_vertex_atom_graph(world);
     for(SizeT atom = 0; atom < fem_graph.atoms.size(); ++atom)
-        ordering::add_atom(graph, 3, "fem_vertex", fem_atom_base + atom);
+        ordering::add_atom(graph, 3, "fem_vertex", fem_graph.atoms[atom].source_id);
     for(const auto& edge : fem_graph.edges)
         ordering::add_edge(graph,
                            fem_atom_base + edge.a,
