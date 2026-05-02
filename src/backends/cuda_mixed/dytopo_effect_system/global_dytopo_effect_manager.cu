@@ -89,22 +89,6 @@ void mix_contact_vector_view(SizeT& signature,
     }
 }
 
-void reset_structured_contact_vertex_slots(
-    muda::BufferView<StructuredContactVertexSlot> slots)
-{
-    if(slots.size() == 0)
-        return;
-
-    using namespace muda;
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(slots.size(),
-               [slots] __device__(int i) mutable
-               {
-                   *slots.data(i) = {};
-               });
-}
-
 using ContactSink = GlobalDyTopoEffectManager::StructuredHessianInfo::ContactSink;
 
 void fill_structured_contact_vertex_slots(

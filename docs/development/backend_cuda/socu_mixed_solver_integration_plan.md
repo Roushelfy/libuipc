@@ -62,44 +62,57 @@ body-pair graph is absent from the ordering, strong off-band blocks are dropped,
 and the SOCU direct direction can become invalid even though the current-frame
 ordering report for the first solve shows `off_band_ratio = 0`.
 
-## Future Contact Write Plan Cache
+## Contact Write Plan Cache
 
 Large IPC contact Hessian kernels can become register-bound when they compute
 the contact Hessian and also inline the full structured contact sink. The
-current stable path splits the largest structured contact writes through compact
-Hessian workspaces before the structured scatter pass. A future optimization
-should reduce or remove this workspace traffic by moving mapping work out of
-the Hessian kernels.
+current stable path splits the largest structured contact writes through
+compact Hessian workspaces before the structured scatter pass. The production
+default uses that stable compact path for EE/PP simplex normal contact and keeps
+PT/PE on the direct structured sink path.
 
-The intended design is a two-level cache:
+The write-plan cache is staged so unverified direct-write expansion does not
+replace the stable path:
 
 1. Reorder-level vertex slots. After each init-time ordering install or runtime
    reorder, build a device table indexed by global vertex. Each entry records
    the vertex kind, fixed state, ABD body, old DoF begin, chain block, chain
-   local offset, and the ABD Jacobian or Jacobian index. Contact kernels then
+   local offset, and the ABD Jacobian index. Contact kernels then
    avoid repeated `global_vertex -> old_dof -> chain` lookups.
 2. Contact-set write plans. After contact detection updates the active
    PT/EE/PE/PP/PH stencils, build a lightweight device write plan for each
    half-Hessian vertex pair under the current ordering. The plan records the
    FEM/ABD projection kind, diag/first-offdiag/off-band status, target block
    and local offsets, transpose direction, and skip/fixed state.
+3. Debug validation. `debug_contact_write_plan_validate = 1` builds PT/EE/PE/PP
+   simplex normal write plans and reports plan skip/near/off-band counters
+   without changing the default write path.
+4. Stable planned compact scatter. EE/PP simplex normal contact use
+   `build plan -> compact Hessian workspace -> planned scatter` by default.
+   PT/PE remain on the direct structured sink path unless the debug validator is
+   enabled.
+5. Experimental planned direct write.
+   `experimental_contact_planned_direct_write = 1` tries EE/PP simplex normal
+   planned direct writes, reusing the same write plan while bypassing the
+   compact Hessian workspace. This is deliberately off by default.
 
-With these caches, Hessian kernels should use:
+The experimental target shape is:
 
 ```text
 H = compute_contact_hessian(...)
 write_by_plan(contact_write_plan[i], H)
 ```
 
-instead of redoing vertex mapping, old-to-chain lookup, band classification,
-and fixed/off-band handling inside the large Hessian kernel. ABD projection
-values still depend on the current ABD Jacobian data, but the write location
-and projection kind are fixed for a given contact stencil and ordering.
+instead of redoing vertex mapping, old-to-chain lookup, band classification, and
+fixed/off-band handling inside the large Hessian kernel. ABD projection values
+still depend on current ABD Jacobian data, but the write location and projection
+kind are fixed for a given contact stencil and ordering.
 
-This optimization must keep the existing compact workspace path as a fallback
-until ptxas resource usage and benchmark runs show that planned direct writes
-are stable. The first target should be EE/PP simplex normal contact because
-their Hessian compute kernels are already near the per-thread register limit.
+PH, frictional contact, and PT/PE planned direct writes are not production
+defaults. Expansion requires all of the following gates: `wrecking_ball
+socu_rt1` reaches frame 16, planned and old structured matrices match in band,
+ptxas register/spill usage does not regress without a runtime win, and
+contact-heavy benchmarks are not slower by more than 5%.
 
 ## Failure And Report Semantics
 
@@ -141,7 +154,9 @@ Typical strict structured solve configuration:
       "damping_shift": 0.0,
       "runtime_reorder_frame_interval": 0,
       "runtime_reorder_edge_capacity": 0,
-      "runtime_reorder_graph_source": "topology"
+      "runtime_reorder_graph_source": "topology",
+      "debug_contact_write_plan_validate": 0,
+      "experimental_contact_planned_direct_write": 0
     }
   }
 }
@@ -161,10 +176,10 @@ that frame's first structured solve, then assembles once with the new ordering.
 base topology plus current contact topology with unit weights,
 `contact_hessian` keeps base topology at weight 1 and weights current contacts
 by accumulated absolute contact Hessian contribution, and `full_hessian` uses a
-graph-only full Hessian probe for diagnostics. Runtime reorder always installs a
-64-wide block layout. The collector capacity defaults to an automatic value;
-setting `runtime_reorder_edge_capacity > 0` overrides it. Collector overflow,
-empty graphs, invalid mappings, or
+graph-only full Hessian probe for diagnostics. Runtime reorder preserves the
+currently installed block size. The collector capacity defaults to an automatic
+value; setting `runtime_reorder_edge_capacity > 0` overrides it. Collector
+overflow, empty graphs, invalid mappings, or
 `socu_native` plan creation failures do not abort the solve; they are reported
 and the previous ordering remains active.
 
