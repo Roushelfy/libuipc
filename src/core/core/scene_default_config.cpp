@@ -60,6 +60,8 @@ geometry::AttributeCollection default_scene_config() noexcept
                   IndexT{0});
     config.create("linear_system/socu_approx/debug_contact_write_plan_validate",
                   IndexT{0});
+    config.create("linear_system/socu_approx/experimental_contact_planned_direct_write",
+                  IndexT{0});
     config.create("linear_system/socu_approx/debug_validation", IndexT{0});
     config.create("linear_system/socu_approx/debug_timing", IndexT{0});
     config.create("linear_system/socu_approx/report_each_solve", IndexT{0});

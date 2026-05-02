@@ -120,6 +120,7 @@ struct SocuApproxSolveReport
     double structured_first_offdiag_contact_abs_sum = 0.0;
     double structured_off_band_drop_abs_sum     = 0.0;
     bool   contact_write_plan_validation_enabled = false;
+    bool   contact_planned_direct_write_enabled  = false;
     SizeT  contact_write_plan_valid_count        = 0;
     SizeT  contact_write_plan_skipped_count      = 0;
     SizeT  contact_write_plan_near_band_count    = 0;

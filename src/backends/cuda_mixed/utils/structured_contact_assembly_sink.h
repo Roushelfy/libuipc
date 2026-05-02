@@ -59,6 +59,7 @@ struct StructuredContactAssemblySink
     //  near contact pairs, off-band contact pairs]
     muda::BufferView<IndexT> counters;
     bool                     debug_contact_write_plan_validate = false;
+    bool                     experimental_contact_planned_direct_write = false;
 
     struct VertexMap
     {

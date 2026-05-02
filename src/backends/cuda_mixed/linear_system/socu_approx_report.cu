@@ -95,6 +95,8 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.structured_off_band_drop_abs_sum},
                   {"contact_write_plan_validation_enabled",
                    report.contact_write_plan_validation_enabled},
+                  {"contact_planned_direct_write_enabled",
+                   report.contact_planned_direct_write_enabled},
                   {"contact_write_plan_valid_count",
                    report.contact_write_plan_valid_count},
                   {"contact_write_plan_skipped_count",
