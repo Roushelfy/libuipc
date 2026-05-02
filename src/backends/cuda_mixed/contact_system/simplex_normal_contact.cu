@@ -220,10 +220,24 @@ void SimplexNormalContact::do_assemble_structured_hessian(
 }
 
 muda::BufferView<SimplexNormalContact::StoreMat12>
+SimplexNormalContact::ContactInfo::structured_PT_hessian_workspace(SizeT size) const
+{
+    m_impl->structured_PT_hessians.resize(size);
+    return m_impl->structured_PT_hessians.view();
+}
+
+muda::BufferView<SimplexNormalContact::StoreMat12>
 SimplexNormalContact::ContactInfo::structured_EE_hessian_workspace(SizeT size) const
 {
     m_impl->structured_EE_hessians.resize(size);
     return m_impl->structured_EE_hessians.view();
+}
+
+muda::BufferView<SimplexNormalContact::StoreMat9>
+SimplexNormalContact::ContactInfo::structured_PE_hessian_workspace(SizeT size) const
+{
+    m_impl->structured_PE_hessians.resize(size);
+    return m_impl->structured_PE_hessians.view();
 }
 
 muda::BufferView<SimplexNormalContact::StoreMat6>
@@ -234,10 +248,24 @@ SimplexNormalContact::ContactInfo::structured_PP_hessian_workspace(SizeT size) c
 }
 
 muda::BufferView<StructuredContactHalfBlockPlan>
+SimplexNormalContact::ContactInfo::structured_PT_write_plan_workspace(SizeT size) const
+{
+    m_impl->structured_PT_write_plans.resize(size);
+    return m_impl->structured_PT_write_plans.view();
+}
+
+muda::BufferView<StructuredContactHalfBlockPlan>
 SimplexNormalContact::ContactInfo::structured_EE_write_plan_workspace(SizeT size) const
 {
     m_impl->structured_EE_write_plans.resize(size);
     return m_impl->structured_EE_write_plans.view();
+}
+
+muda::BufferView<StructuredContactHalfBlockPlan>
+SimplexNormalContact::ContactInfo::structured_PE_write_plan_workspace(SizeT size) const
+{
+    m_impl->structured_PE_write_plans.resize(size);
+    return m_impl->structured_PE_write_plans.view();
 }
 
 muda::BufferView<StructuredContactHalfBlockPlan>

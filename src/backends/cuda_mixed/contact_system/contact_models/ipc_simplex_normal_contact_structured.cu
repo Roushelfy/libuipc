@@ -28,70 +28,112 @@ void assemble_ipc_simplex_normal_contact_structured(
 
     if(info.PTs().size())
     {
-        ParallelFor()
-            .file_line(__FILE__, __LINE__)
-            .apply(info.PTs().size(),
-                   [structured_sink,
-                    table = info.contact_tabular().viewer().name("contact_tabular"),
-                    contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
-                    PTs = info.PTs().viewer().name("PTs"),
-                    Ps  = info.positions().viewer().name("Ps"),
-                    thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                    d_hats = info.d_hats().viewer().name("d_hats"),
-                    dt     = info.dt()] __device__(int i) mutable
-                   {
-                       Vector4i PT = PTs(i);
-
-                       Vector4i cids = {contact_ids(PT[0]),
-                                        contact_ids(PT[1]),
-                                        contact_ids(PT[2]),
-                                        contact_ids(PT[3])};
-                       Alu kt2 = safe_cast<Alu>(PT_kappa(table, cids) * dt * dt);
-
-                       const Vector3& P_f  = Ps(PT[0]);
-                       const Vector3& T0_f = Ps(PT[1]);
-                       const Vector3& T1_f = Ps(PT[2]);
-                       const Vector3& T2_f = Ps(PT[3]);
-                       Vec3A         P     = P_f.template cast<Alu>();
-                       Vec3A         T0    = T0_f.template cast<Alu>();
-                       Vec3A         T1    = T1_f.template cast<Alu>();
-                       Vec3A         T2    = T2_f.template cast<Alu>();
-
-                       Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT(0)),
-                                                                   thicknesses(PT(1)),
-                                                                   thicknesses(PT(2)),
-                                                                   thicknesses(PT(3))));
-                       Alu d_hat = safe_cast<Alu>(PT_d_hat(
-                           d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3))));
-
-                       Vector4i flag =
-                           distance::point_triangle_distance_flag(P_f, T0_f, T1_f, T2_f);
-
-                       if constexpr(RUNTIME_CHECK)
+        if(structured_sink.topology_probe_only())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PTs().size(),
+                       [structured_sink,
+                        PTs = info.PTs().viewer().name("PTs")] __device__(int i) mutable
                        {
-                           Float D;
-                           distance::point_triangle_distance2(flag, P_f, T0_f, T1_f, T2_f, D);
-                           Vector2 range =
-                               D_range(safe_cast<Float>(thickness), safe_cast<Float>(d_hat));
-                           MUDA_ASSERT(is_active_D(range, D),
-                                       "PT[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f)",
-                                       PT(0),
-                                       PT(1),
-                                       PT(2),
-                                       PT(3),
-                                       D,
-                                       range(0),
-                                       range(1));
-                       }
+                           structured_sink.template write_topology_half<4>(PTs(i));
+                       });
+        }
+        else
+        {
+            auto pt_hessians = info.structured_PT_hessian_workspace(info.PTs().size());
+            auto pt_write_plans = info.structured_PT_write_plan_workspace(
+                info.PTs().size() * SimplexNormalContact::PTHalfHessianSize);
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PTs().size(),
+                       [structured_sink,
+                        PTs = info.PTs().viewer().name("PTs"),
+                        Plans = pt_write_plans.viewer().name("structured_PT_write_plans")] __device__(
+                           int i) mutable
+                       {
+                           structured_sink.template build_hessian_half_plan<4>(
+                               PTs(i),
+                               Plans,
+                               i * SimplexNormalContact::PTHalfHessianSize);
+                       });
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PTs().size(),
+                       [Hs = pt_hessians.viewer().name("structured_PT_normal_Hs"),
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PTs = info.PTs().viewer().name("PTs"),
+                        Ps  = info.positions().viewer().name("Ps"),
+                        thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                        d_hats = info.d_hats().viewer().name("d_hats"),
+                        dt     = info.dt()] __device__(int i) mutable
+                       {
+                           Vector4i PT = PTs(i);
 
-                       Vec12A G;
-                       Mat12A H;
-                       PT_barrier_gradient_hessian(
-                           G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
-                       make_spd(H);
-                       auto H_store = downcast_hessian<Store>(H);
-                       structured_sink.template write_hessian_half<4>(PT, H_store);
-                   });
+                           Vector4i cids = {contact_ids(PT[0]),
+                                            contact_ids(PT[1]),
+                                            contact_ids(PT[2]),
+                                            contact_ids(PT[3])};
+                           Alu kt2 = safe_cast<Alu>(PT_kappa(table, cids) * dt * dt);
+
+                           const Vector3& P_f  = Ps(PT[0]);
+                           const Vector3& T0_f = Ps(PT[1]);
+                           const Vector3& T1_f = Ps(PT[2]);
+                           const Vector3& T2_f = Ps(PT[3]);
+                           Vec3A         P     = P_f.template cast<Alu>();
+                           Vec3A         T0    = T0_f.template cast<Alu>();
+                           Vec3A         T1    = T1_f.template cast<Alu>();
+                           Vec3A         T2    = T2_f.template cast<Alu>();
+
+                           Alu thickness = safe_cast<Alu>(PT_thickness(thicknesses(PT(0)),
+                                                                       thicknesses(PT(1)),
+                                                                       thicknesses(PT(2)),
+                                                                       thicknesses(PT(3))));
+                           Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                               d_hats(PT(0)), d_hats(PT(1)), d_hats(PT(2)), d_hats(PT(3))));
+
+                           Vector4i flag =
+                               distance::point_triangle_distance_flag(P_f, T0_f, T1_f, T2_f);
+
+                           if constexpr(RUNTIME_CHECK)
+                           {
+                               Float D;
+                               distance::point_triangle_distance2(flag, P_f, T0_f, T1_f, T2_f, D);
+                               Vector2 range =
+                                   D_range(safe_cast<Float>(thickness), safe_cast<Float>(d_hat));
+                               MUDA_ASSERT(is_active_D(range, D),
+                                           "PT[%d,%d,%d,%d] d^2(%f) out of range, (%f,%f)",
+                                           PT(0),
+                                           PT(1),
+                                           PT(2),
+                                           PT(3),
+                                           D,
+                                           range(0),
+                                           range(1));
+                           }
+
+                           Vec12A G;
+                           Mat12A H;
+                           PT_barrier_gradient_hessian(
+                               G, H, flag, kt2, d_hat, thickness, P, T0, T1, T2);
+                           make_spd(H);
+                           Hs(i) = downcast_hessian<Store>(H);
+                       });
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PTs().size(),
+                       [structured_sink,
+                        Plans = pt_write_plans.viewer().name("structured_PT_write_plans"),
+                        Hs = pt_hessians.viewer().name("structured_PT_normal_Hs")] __device__(
+                           int i) mutable
+                       {
+                           structured_sink.template write_hessian_half_with_plan<4>(
+                               Plans,
+                               i * SimplexNormalContact::PTHalfHessianSize,
+                               Hs(i));
+                       });
+        }
     }
 
     if(info.EEs().size())
@@ -225,61 +267,106 @@ void assemble_ipc_simplex_normal_contact_structured(
         }
     }
 
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(info.PEs().size(),
-               [structured_sink,
-                table = info.contact_tabular().viewer().name("contact_tabular"),
-                contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
-                PEs     = info.PEs().viewer().name("PEs"),
-                Ps      = info.positions().viewer().name("Ps"),
-                rest_Ps = info.rest_positions().viewer().name("rest_Ps"),
-                thicknesses = info.thicknesses().viewer().name("thicknesses"),
-                d_hats = info.d_hats().viewer().name("d_hats"),
-                dt     = info.dt()] __device__(int i) mutable
-               {
-                   Vector3i PE = PEs(i);
+    if(info.PEs().size())
+    {
+        if(structured_sink.topology_probe_only())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PEs().size(),
+                       [structured_sink,
+                        PEs = info.PEs().viewer().name("PEs")] __device__(int i) mutable
+                       {
+                           structured_sink.template write_topology_half<3>(PEs(i));
+                       });
+        }
+        else
+        {
+            auto pe_hessians = info.structured_PE_hessian_workspace(info.PEs().size());
+            auto pe_write_plans = info.structured_PE_write_plan_workspace(
+                info.PEs().size() * SimplexNormalContact::PEHalfHessianSize);
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PEs().size(),
+                       [structured_sink,
+                        PEs = info.PEs().viewer().name("PEs"),
+                        Plans = pe_write_plans.viewer().name("structured_PE_write_plans")] __device__(
+                           int i) mutable
+                       {
+                           structured_sink.template build_hessian_half_plan<3>(
+                               PEs(i),
+                               Plans,
+                               i * SimplexNormalContact::PEHalfHessianSize);
+                       });
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PEs().size(),
+                       [Hs = pe_hessians.viewer().name("structured_PE_normal_Hs"),
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PEs     = info.PEs().viewer().name("PEs"),
+                        Ps      = info.positions().viewer().name("Ps"),
+                        rest_Ps = info.rest_positions().viewer().name("rest_Ps"),
+                        thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                        d_hats = info.d_hats().viewer().name("d_hats"),
+                        dt     = info.dt()] __device__(int i) mutable
+                       {
+                           Vector3i PE = PEs(i);
 
-                   Vector3i cids = {contact_ids(PE[0]), contact_ids(PE[1]), contact_ids(PE[2])};
-                   Alu kt2 = safe_cast<Alu>(PE_kappa(table, cids) * dt * dt);
+                           Vector3i cids = {contact_ids(PE[0]), contact_ids(PE[1]), contact_ids(PE[2])};
+                           Alu kt2 = safe_cast<Alu>(PE_kappa(table, cids) * dt * dt);
 
-                   const Vector3& P_f  = Ps(PE[0]);
-                   const Vector3& E0_f = Ps(PE[1]);
-                   const Vector3& E1_f = Ps(PE[2]);
-                   Vec3A         P     = P_f.template cast<Alu>();
-                   Vec3A         E0    = E0_f.template cast<Alu>();
-                   Vec3A         E1    = E1_f.template cast<Alu>();
+                           const Vector3& P_f  = Ps(PE[0]);
+                           const Vector3& E0_f = Ps(PE[1]);
+                           const Vector3& E1_f = Ps(PE[2]);
+                           Vec3A         P     = P_f.template cast<Alu>();
+                           Vec3A         E0    = E0_f.template cast<Alu>();
+                           Vec3A         E1    = E1_f.template cast<Alu>();
 
-                   Alu thickness = safe_cast<Alu>(PE_thickness(
-                       thicknesses(PE(0)), thicknesses(PE(1)), thicknesses(PE(2))));
-                   Alu d_hat = safe_cast<Alu>(
-                       PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2))));
+                           Alu thickness = safe_cast<Alu>(PE_thickness(
+                               thicknesses(PE(0)), thicknesses(PE(1)), thicknesses(PE(2))));
+                           Alu d_hat = safe_cast<Alu>(
+                               PE_d_hat(d_hats(PE(0)), d_hats(PE(1)), d_hats(PE(2))));
 
-                   Vector3i flag = distance::point_edge_distance_flag(P_f, E0_f, E1_f);
+                           Vector3i flag = distance::point_edge_distance_flag(P_f, E0_f, E1_f);
 
-                   if constexpr(RUNTIME_CHECK)
-                   {
-                       Float D;
-                       distance::point_edge_distance2(flag, P_f, E0_f, E1_f, D);
-                       Vector2 range =
-                           D_range(safe_cast<Float>(thickness), safe_cast<Float>(d_hat));
-                       MUDA_ASSERT(is_active_D(range, D),
-                                   "PE[%d,%d,%d] d^2(%f) out of range, (%f,%f)",
-                                   PE(0),
-                                   PE(1),
-                                   PE(2),
-                                   D,
-                                   range(0),
-                                   range(1));
-                   }
+                           if constexpr(RUNTIME_CHECK)
+                           {
+                               Float D;
+                               distance::point_edge_distance2(flag, P_f, E0_f, E1_f, D);
+                               Vector2 range =
+                                   D_range(safe_cast<Float>(thickness), safe_cast<Float>(d_hat));
+                               MUDA_ASSERT(is_active_D(range, D),
+                                           "PE[%d,%d,%d] d^2(%f) out of range, (%f,%f)",
+                                           PE(0),
+                                           PE(1),
+                                           PE(2),
+                                           D,
+                                           range(0),
+                                           range(1));
+                           }
 
-                   Vec9A G;
-                   Mat9A H;
-                   PE_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P, E0, E1);
-                   make_spd(H);
-                   auto H_store = downcast_hessian<Store>(H);
-                   structured_sink.template write_hessian_half<3>(PE, H_store);
-               });
+                           Vec9A G;
+                           Mat9A H;
+                           PE_barrier_gradient_hessian(G, H, flag, kt2, d_hat, thickness, P, E0, E1);
+                           make_spd(H);
+                           Hs(i) = downcast_hessian<Store>(H);
+                       });
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PEs().size(),
+                       [structured_sink,
+                        Plans = pe_write_plans.viewer().name("structured_PE_write_plans"),
+                        Hs = pe_hessians.viewer().name("structured_PE_normal_Hs")] __device__(
+                           int i) mutable
+                       {
+                           structured_sink.template write_hessian_half_with_plan<3>(
+                               Plans,
+                               i * SimplexNormalContact::PEHalfHessianSize,
+                               Hs(i));
+                       });
+        }
+    }
 
     if(info.PPs().size())
     {
