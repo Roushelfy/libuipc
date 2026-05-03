@@ -61,7 +61,6 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         bool hessian_only() const noexcept { return m_hessian_only; }
         bool structured_hessian() const noexcept { return m_structured_hessian; }
         auto structured_hessian_sink() const noexcept { return m_structured_sink; }
-        muda::BufferView<StoreMat3> structured_hessian_workspace(SizeT size) const;
 
       private:
         friend class VertexHalfPlaneFrictionalContact;
@@ -111,7 +110,6 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         muda::CBufferView<EnergyScalar>    energies;
         muda::CDoubletVectorView<StoreScalar, 3> gradients;
         muda::CTripletMatrixView<StoreScalar, 3> hessians;
-        muda::DeviceBuffer<StoreMat3>      structured_hessians;
     };
 
     muda::CBufferView<Vector2i>        PHs() const noexcept;

@@ -92,8 +92,6 @@ class SocuApproxSolver : public LinearSolver
     bool        m_debug_dump_problem_file = false;
     bool        m_debug_compare_full_sparse = false;
     bool        m_debug_write_runtime_ordering_report = false;
-    bool        m_debug_contact_write_plan_validate = false;
-    bool        m_experimental_contact_planned_direct_write = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
     bool        m_allows_structured_offdiag = true;

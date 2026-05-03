@@ -11,6 +11,9 @@
 
 namespace uipc::backend::cuda_mixed
 {
+void assemble_ipc_simplex_frictional_contact_structured(
+    SimplexFrictionalContact::ContactInfo& info);
+
 class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 {
   public:
@@ -327,16 +330,18 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
         using Mat9A = Eigen::Matrix<Alu, 9, 9>;
         using Vec6A = Eigen::Matrix<Alu, 6, 1>;
         using Mat6A = Eigen::Matrix<Alu, 6, 6>;
-        const bool structured_hessian = info.structured_hessian();
-        const auto structured_sink    = info.structured_hessian_sink();
+
+        if(info.structured_hessian())
+        {
+            assemble_ipc_simplex_frictional_contact_structured(info);
+            return;
+        }
 
         // Compute Point-Triangle Gradient and Hessian
         ParallelFor()
             .file_line(__FILE__, __LINE__)
             .apply(info.friction_PTs().size(),
                    [gradient_only = info.gradient_only(),
-                    structured_hessian,
-                    structured_sink,
                     table = info.contact_tabular().viewer().name("contact_tabular"),
                     contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                     PTs     = info.friction_PTs().viewer().name("PTs"),
@@ -427,20 +432,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                          T1_alu,
                                                          T2_alu);
                             cuda_mixed::make_spd(H);
-                            if(structured_hessian)
-                            {
-                                auto H_store = downcast_hessian<Store>(H);
-                                structured_sink.template write_hessian_half<4>(PT, H_store);
-                            }
-                            else
-                            {
-                                DoubletVectorAssembler DVA{Gs};
-                                auto G_store = downcast_gradient<Store>(G);
-                                DVA.segment<4>(i * 4).write(PT, G_store);
-                                TripletMatrixAssembler TMA{Hs};
-                                auto H_store = downcast_hessian<Store>(H);
-                                TMA.half_block<4>(i * PTHalfHessianSize).write(PT, H_store);
-                            }
+                            DoubletVectorAssembler DVA{Gs};
+                            auto G_store = downcast_gradient<Store>(G);
+                            DVA.segment<4>(i * 4).write(PT, G_store);
+                            TripletMatrixAssembler TMA{Hs};
+                            auto H_store = downcast_hessian<Store>(H);
+                            TMA.half_block<4>(i * PTHalfHessianSize).write(PT, H_store);
                        }
                    });
 
@@ -449,8 +446,6 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
             .file_line(__FILE__, __LINE__)
             .apply(info.friction_EEs().size(),
                    [gradient_only = info.gradient_only(),
-                    structured_hessian,
-                    structured_sink,
                     table = info.contact_tabular().viewer().name("contact_tabular"),
                     contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                     EEs     = info.friction_EEs().viewer().name("EEs"),
@@ -581,20 +576,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                              Eb1_alu);
                                 cuda_mixed::make_spd(H);
                             }
-                            if(structured_hessian)
-                            {
-                                auto H_store = downcast_hessian<Store>(H);
-                                structured_sink.template write_hessian_half<4>(EE, H_store);
-                            }
-                            else
-                            {
-                                DoubletVectorAssembler DVA{Gs};
-                                auto G_store = downcast_gradient<Store>(G);
-                                DVA.segment<4>(i * 4).write(EE, G_store);
-                                TripletMatrixAssembler TMA{Hs};
-                                auto H_store = downcast_hessian<Store>(H);
-                                TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
-                            }
+                            DoubletVectorAssembler DVA{Gs};
+                            auto G_store = downcast_gradient<Store>(G);
+                            DVA.segment<4>(i * 4).write(EE, G_store);
+                            TripletMatrixAssembler TMA{Hs};
+                            auto H_store = downcast_hessian<Store>(H);
+                            TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
                        }
                    });
 
@@ -603,8 +590,6 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
             .file_line(__FILE__, __LINE__)
             .apply(info.friction_PEs().size(),
                    [gradient_only = info.gradient_only(),
-                    structured_hessian,
-                    structured_sink,
                     table = info.contact_tabular().viewer().name("contact_tabular"),
                     contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                     PEs     = info.friction_PEs().viewer().name("PEs"),
@@ -684,20 +669,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                          E0_alu,
                                                          E1_alu);
                             cuda_mixed::make_spd(H);
-                            if(structured_hessian)
-                            {
-                                auto H_store = downcast_hessian<Store>(H);
-                                structured_sink.template write_hessian_half<3>(PE, H_store);
-                            }
-                            else
-                            {
-                                DoubletVectorAssembler DVA{Gs};
-                                auto G_store = downcast_gradient<Store>(G);
-                                DVA.segment<3>(i * 3).write(PE, G_store);
-                                TripletMatrixAssembler TMA{Hs};
-                                auto H_store = downcast_hessian<Store>(H);
-                                TMA.half_block<3>(i * PEHalfHessianSize).write(PE, H_store);
-                            }
+                            DoubletVectorAssembler DVA{Gs};
+                            auto G_store = downcast_gradient<Store>(G);
+                            DVA.segment<3>(i * 3).write(PE, G_store);
+                            TripletMatrixAssembler TMA{Hs};
+                            auto H_store = downcast_hessian<Store>(H);
+                            TMA.half_block<3>(i * PEHalfHessianSize).write(PE, H_store);
                        }
                    });
 
@@ -706,8 +683,6 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
             .file_line(__FILE__, __LINE__)
             .apply(info.friction_PPs().size(),
                    [gradient_only = info.gradient_only(),
-                    structured_hessian,
-                    structured_sink,
                     table = info.contact_tabular().viewer().name("contact_tabular"),
                     contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
                     PPs     = info.friction_PPs().viewer().name("PPs"),
@@ -774,20 +749,12 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                                                          P0_alu,
                                                          P1_alu);
                             cuda_mixed::make_spd(H);
-                            if(structured_hessian)
-                            {
-                                auto H_store = downcast_hessian<Store>(H);
-                                structured_sink.template write_hessian_half<2>(PP, H_store);
-                            }
-                            else
-                            {
-                                DoubletVectorAssembler DVA{Gs};
-                                auto G_store = downcast_gradient<Store>(G);
-                                DVA.segment<2>(i * 2).write(PP, G_store);
-                                TripletMatrixAssembler TMA{Hs};
-                                auto H_store = downcast_hessian<Store>(H);
-                                TMA.half_block<2>(i * PPHalfHessianSize).write(PP, H_store);
-                            }
+                            DoubletVectorAssembler DVA{Gs};
+                            auto G_store = downcast_gradient<Store>(G);
+                            DVA.segment<2>(i * 2).write(PP, G_store);
+                            TripletMatrixAssembler TMA{Hs};
+                            auto H_store = downcast_hessian<Store>(H);
+                            TMA.half_block<2>(i * PPHalfHessianSize).write(PP, H_store);
                         }
                     });
     }

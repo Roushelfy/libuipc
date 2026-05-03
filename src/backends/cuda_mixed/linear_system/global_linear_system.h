@@ -179,14 +179,6 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_runtime_ordering_collector;
         }
-        bool debug_contact_write_plan_validate() const noexcept
-        {
-            return m_debug_contact_write_plan_validate;
-        }
-        bool experimental_contact_planned_direct_write() const noexcept
-        {
-            return m_experimental_contact_planned_direct_write;
-        }
         SizeT contact_set_signature() const noexcept
         {
             return m_contact_set_signature;
@@ -223,14 +215,6 @@ class GlobalLinearSystem : public SimSystem
         void set_runtime_ordering_collector(RuntimeOrderingCollector collector) noexcept
         {
             m_runtime_ordering_collector = collector;
-        }
-        void set_debug_contact_write_plan_validate(bool enabled) noexcept
-        {
-            m_debug_contact_write_plan_validate = enabled;
-        }
-        void set_experimental_contact_planned_direct_write(bool enabled) noexcept
-        {
-            m_experimental_contact_planned_direct_write = enabled;
         }
         void set_contact_set_signature(SizeT signature) noexcept
         {
@@ -305,8 +289,6 @@ class GlobalLinearSystem : public SimSystem
         muda::CBufferView<IndexT>  m_chain_to_old;
         muda::BufferView<IndexT>   m_contact_counters;
         RuntimeOrderingCollector   m_runtime_ordering_collector;
-        bool                       m_debug_contact_write_plan_validate = false;
-        bool                       m_experimental_contact_planned_direct_write = false;
         SizeT                      m_contact_set_signature = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;

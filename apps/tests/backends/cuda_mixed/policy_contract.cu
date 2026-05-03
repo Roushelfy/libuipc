@@ -235,21 +235,6 @@ TEST_CASE("cuda_mixed_socu_probe_mode_topology_flag",
 
     // topology_probe_only() == runtime_ordering.valid() && graph_only && topology_only.
     // An invalid sink has runtime_ordering.valid() == false, so the flag is always false.
-    // This validates the short-circuit: probe-mode guards like
-    //   if(structured_sink.topology_probe_only()) { write_topology_half...; }
-    // correctly fall through to the full plan-based path in normal assembly.
-}
-
-TEST_CASE("cuda_mixed_socu_contact_write_plan_pod_contract",
-          "[cuda_mixed][contract][socu_approx]")
-{
-    using namespace uipc::backend::cuda_mixed;
-
-    StructuredContactHalfBlockPlan plan{};
-    CHECK(plan.valid == 0);
-    CHECK(plan.lhs.kind == StructuredContactVertexSlot::None);
-    CHECK(plan.rhs.kind == StructuredContactVertexSlot::None);
-    CHECK(plan.global_i == -1);
-    CHECK(plan.global_j == -1);
-    CHECK(plan.mirror_diag_block == 0);
+    // This validates the short-circuit used by direct structured contact
+    // kernels before they write topology-only contact edges.
 }

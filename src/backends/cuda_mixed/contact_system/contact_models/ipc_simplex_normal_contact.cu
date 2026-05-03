@@ -404,7 +404,6 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                             DoubletVectorAssembler DVA{Gs};
                             auto G_store = downcast_gradient<Store>(G);
                             DVA.segment<4>(i * 4).write(PT, G_store);
-
                             TripletMatrixAssembler TMA{Hs};
                             auto H_store = downcast_hessian<Store>(H);
                             TMA.half_block<4>(i * PTHalfHessianSize).write(PT, H_store);
@@ -504,7 +503,6 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                         DoubletVectorAssembler DVA{Gs};
                         auto G_store = downcast_gradient<Store>(G);
                         DVA.segment<4>(i * 4).write(EE, G_store);
-
                         TripletMatrixAssembler TMA{Hs};
                         auto H_store = downcast_hessian<Store>(H);
                         TMA.half_block<4>(i * EEHalfHessianSize).write(EE, H_store);
@@ -585,7 +583,6 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                            DoubletVectorAssembler DVA{Gs};
                            auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<3>(i * 3).write(PE, G_store);
-
                            TripletMatrixAssembler TMA{Hs};
                            auto H_store = downcast_hessian<Store>(H);
                            TMA.half_block<3>(i * PEHalfHessianSize).write(PE, H_store);
@@ -657,7 +654,6 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                            DoubletVectorAssembler DVA{Gs};
                            auto G_store = downcast_gradient<Store>(G);
                            DVA.segment<2>(i * 2).write(PP, G_store);
-
                            TripletMatrixAssembler TMA{Hs};
                            auto H_store = downcast_hessian<Store>(H);
                            TMA.half_block<2>(i * PPHalfHessianSize).write(PP, H_store);

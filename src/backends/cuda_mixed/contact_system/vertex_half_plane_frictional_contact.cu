@@ -104,14 +104,6 @@ void VertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
     do_assemble(this_info);
 }
 
-muda::BufferView<VertexHalfPlaneFrictionalContact::StoreMat3>
-VertexHalfPlaneFrictionalContact::ContactInfo::structured_hessian_workspace(
-    SizeT size) const
-{
-    m_impl->structured_hessians.resize(size);
-    return m_impl->structured_hessians.view();
-}
-
 muda::CBuffer2DView<ContactCoeff> VertexHalfPlaneFrictionalContact::BaseInfo::contact_tabular() const
 {
     return m_impl->global_contact_manager->contact_tabular();

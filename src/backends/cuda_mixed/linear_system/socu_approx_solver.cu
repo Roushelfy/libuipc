@@ -197,20 +197,6 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_write_runtime_ordering_report =
         debug_write_runtime_ordering_report_attr
         && debug_write_runtime_ordering_report_attr->view()[0] != 0;
-    auto debug_contact_write_plan_validate_attr =
-        config.find<IndexT>(
-            "linear_system/socu_approx/debug_contact_write_plan_validate");
-    m_debug_contact_write_plan_validate =
-        debug_contact_write_plan_validate_attr
-        && debug_contact_write_plan_validate_attr->view()[0] != 0;
-    if(m_debug_contact_write_plan_validate)
-        m_report_counters_enabled = true;
-    auto experimental_contact_planned_direct_write_attr =
-        config.find<IndexT>(
-            "linear_system/socu_approx/experimental_contact_planned_direct_write");
-    m_experimental_contact_planned_direct_write =
-        experimental_contact_planned_direct_write_attr
-        && experimental_contact_planned_direct_write_attr->view()[0] != 0;
 
     auto damping_attr =
         config.find<Float>("linear_system/socu_approx/damping_shift");
@@ -845,6 +831,10 @@ bool SocuApproxSolver::install_ordering_report_impl(
 
 bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_frame)
 {
+#if !UIPC_WITH_SOCU_NATIVE
+    (void)collected_frame;
+    return false;
+#else
     if(!m_runtime || m_runtime_reorder_edge_capacity == 0)
         return false;
 
@@ -1017,6 +1007,7 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
 
     return m_report.runtime_reorder_applied
            && m_report.runtime_reorder_failure_detail.empty();
+#endif
 }
 
 void SocuApproxSolver::prepare_structured_chain(
@@ -1121,10 +1112,6 @@ void SocuApproxSolver::prepare_structured_chain(
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
-    info.set_debug_contact_write_plan_validate(
-        m_debug_contact_write_plan_validate);
-    info.set_experimental_contact_planned_direct_write(
-        m_experimental_contact_planned_direct_write);
 
     m_report.packed = true;
     m_report.active_rhs_scalar_count = info.b().size();
@@ -1260,22 +1247,7 @@ void SocuApproxSolver::finalize_structured_chain(
             static_cast<SizeT>(contact_counts[4]),
             static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
             static_cast<SizeT>(contact_counts[2]));
-        if(contact_counts.size() >= 9)
-        {
-            m_report.contact_write_plan_valid_count =
-                static_cast<SizeT>(contact_counts[5]);
-            m_report.contact_write_plan_skipped_count =
-                static_cast<SizeT>(contact_counts[6]);
-            m_report.contact_write_plan_near_band_count =
-                static_cast<SizeT>(contact_counts[7]);
-            m_report.contact_write_plan_off_band_count =
-                static_cast<SizeT>(contact_counts[8]);
-        }
     }
-    m_report.contact_write_plan_validation_enabled =
-        m_debug_contact_write_plan_validate;
-    m_report.contact_planned_direct_write_enabled =
-        m_experimental_contact_planned_direct_write;
 
     m_report.structured_diag_write_count =
         info.diag_write_count() + info.contact_diag_write_count();

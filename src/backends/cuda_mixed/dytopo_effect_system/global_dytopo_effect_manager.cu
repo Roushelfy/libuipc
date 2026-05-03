@@ -89,25 +89,6 @@ void mix_contact_vector_view(SizeT& signature,
     }
 }
 
-using ContactSink = GlobalDyTopoEffectManager::StructuredHessianInfo::ContactSink;
-
-void fill_structured_contact_vertex_slots(
-    muda::BufferView<StructuredContactVertexSlot> slots,
-    ContactSink                                   sink)
-{
-    if(slots.size() == 0)
-        return;
-
-    using namespace muda;
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(slots.size(),
-               [slots, sink] __device__(int i) mutable
-               {
-                   *slots.data(i) =
-                       ContactSink::vertex_slot_from_map(sink.map_vertex_slow(i));
-               });
-}
 }  // namespace
 
 REGISTER_SIM_SYSTEM(GlobalDyTopoEffectManager);
@@ -545,10 +526,6 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     auto contact_sink = structured_info.sink();
     info.m_contact_sink.sink = contact_sink;
     info.m_contact_sink.counters = structured_info.contact_counters();
-    info.m_contact_sink.debug_contact_write_plan_validate =
-        structured_info.debug_contact_write_plan_validate();
-    info.m_contact_sink.experimental_contact_planned_direct_write =
-        structured_info.experimental_contact_planned_direct_write();
 
     if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
     {
@@ -578,30 +555,6 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             fem_linear_subsystem->dof_offset();
         info.m_contact_sink.fem_vertex_is_fixed =
             finite_element_method->is_fixed();
-    }
-
-    SizeT vertex_slot_count = 0;
-    if(info.m_contact_sink.abd_vertex_offset >= 0 && info.m_contact_sink.abd_vertex_count > 0)
-    {
-        const SizeT end = static_cast<SizeT>(info.m_contact_sink.abd_vertex_offset
-                                             + info.m_contact_sink.abd_vertex_count);
-        if(end > vertex_slot_count)
-            vertex_slot_count = end;
-    }
-    if(info.m_contact_sink.fem_vertex_offset >= 0 && info.m_contact_sink.fem_vertex_count > 0)
-    {
-        const SizeT end = static_cast<SizeT>(info.m_contact_sink.fem_vertex_offset
-                                             + info.m_contact_sink.fem_vertex_count);
-        if(end > vertex_slot_count)
-            vertex_slot_count = end;
-    }
-
-    if(vertex_slot_count > 0)
-    {
-        structured_contact_vertex_slots.resize(vertex_slot_count);
-        auto slots = structured_contact_vertex_slots.view();
-        fill_structured_contact_vertex_slots(slots, info.m_contact_sink);
-        info.m_contact_sink.vertex_slots = structured_contact_vertex_slots.view();
     }
 
     for(auto&& reporter : dytopo_effect_reporters.view())

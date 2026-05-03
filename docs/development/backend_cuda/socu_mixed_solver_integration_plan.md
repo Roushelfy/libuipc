@@ -62,57 +62,38 @@ body-pair graph is absent from the ordering, strong off-band blocks are dropped,
 and the SOCU direct direction can become invalid even though the current-frame
 ordering report for the first solve shows `off_band_ratio = 0`.
 
-## Contact Write Plan Cache
+## Contact Structured Writes
 
-Large IPC contact Hessian kernels can become register-bound when they compute
-the contact Hessian and also inline the full structured contact sink. The
-current stable path splits the largest structured contact writes through
-compact Hessian workspaces before the structured scatter pass. The production
-default uses that stable compact path for EE/PP simplex normal contact and keeps
-PT/PE on the direct structured sink path.
+Ordinary IPC contact assembly keeps the pre-SOCU shape: gradient/Hessian kernels
+write the original doublet and triplet buffers and do not capture the structured
+contact sink. SOCU contact Hessian assembly is split into separate structured
+translation units so the ordinary kernels do not inherit SOCU register pressure
+or template instantiations.
 
-The write-plan cache is staged so unverified direct-write expansion does not
-replace the stable path:
-
-1. Reorder-level vertex slots. After each init-time ordering install or runtime
-   reorder, build a device table indexed by global vertex. Each entry records
-   the vertex kind, fixed state, ABD body, old DoF begin, chain block, chain
-   local offset, and the ABD Jacobian index. Contact kernels then
-   avoid repeated `global_vertex -> old_dof -> chain` lookups.
-2. Contact-set write plans. After contact detection updates the active
-   PT/EE/PE/PP/PH stencils, build a lightweight device write plan for each
-   half-Hessian vertex pair under the current ordering. The plan records the
-   FEM/ABD projection kind, diag/first-offdiag/off-band status, target block
-   and local offsets, transpose direction, and skip/fixed state.
-3. Debug validation. `debug_contact_write_plan_validate = 1` builds PT/EE/PE/PP
-   simplex normal write plans and reports plan skip/near/off-band counters
-   without changing the default write path.
-4. Stable planned compact scatter. EE/PP simplex normal contact use
-   `build plan -> compact Hessian workspace -> planned scatter` by default.
-   PT/PE remain on the direct structured sink path unless the debug validator is
-   enabled.
-5. Experimental planned direct write.
-   `experimental_contact_planned_direct_write = 1` tries EE/PP simplex normal
-   planned direct writes, reusing the same write plan while bypassing the
-   compact Hessian workspace. This is deliberately off by default.
-
-The experimental target shape is:
+The production structured path is deliberately direct:
 
 ```text
 H = compute_contact_hessian(...)
-write_by_plan(contact_write_plan[i], H)
+structured_sink.write_hessian_half(stencil, H)
 ```
 
-instead of redoing vertex mapping, old-to-chain lookup, band classification, and
-fixed/off-band handling inside the large Hessian kernel. ABD projection values
-still depend on current ABD Jacobian data, but the write location and projection
-kind are fixed for a given contact stencil and ordering.
+Simplex normal and frictional PT/EE/PE/PP contacts, plus vertex-half-plane
+normal/frictional PH contacts, use this compute-and-write path. The structured
+sink maps the current global vertex to FEM/ABD old DoFs, projects ABD blocks,
+classifies diag/first-offdiag/off-band writes, and records runtime-reorder graph
+edges when the runtime ordering collector is active.
 
-PH, frictional contact, and PT/PE planned direct writes are not production
-defaults. Expansion requires all of the following gates: `wrecking_ball
-socu_rt1` reaches frame 16, planned and old structured matrices match in band,
-ptxas register/spill usage does not regress without a runtime win, and
-contact-heavy benchmarks are not slower by more than 5%.
+The previous reorder-level vertex-slot table, contact-set write plans, planned
+scatter path, and planned-direct-write debug switches are not part of the
+current runtime. They can be revisited only as a separate optimization after
+the direct structured path is stable on `wrecking_ball socu_rt1 --frames 20`
+through `>>> Begin Frame: 16`, with any later known direction-validation NaN
+tracked separately.
+
+The ordinary `fused_pcg` path remains the contact assembly baseline. Any SOCU
+contact split must keep `wrecking_ball fused_pcg --frames 20` passing through
+frame 20; a fused-PCG failure before frame 20 is a refactor blocker, not an
+acceptable SOCU validation limitation.
 
 ## Failure And Report Semantics
 
@@ -154,9 +135,7 @@ Typical strict structured solve configuration:
       "damping_shift": 0.0,
       "runtime_reorder_frame_interval": 0,
       "runtime_reorder_edge_capacity": 0,
-      "runtime_reorder_graph_source": "topology",
-      "debug_contact_write_plan_validate": 0,
-      "experimental_contact_planned_direct_write": 0
+      "runtime_reorder_graph_source": "topology"
     }
   }
 }

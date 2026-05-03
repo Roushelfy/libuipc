@@ -35,6 +35,9 @@ std::string socu_dtype_name()
 
 struct SocuApproxRuntime
 {
+    static constexpr SizeT kValidationSumCount = 5;
+    static constexpr SizeT kReportCounterCount = 5;
+
 #if UIPC_WITH_SOCU_NATIVE
     using Scalar = ActivePolicy::SolveScalar;
 
@@ -61,9 +64,6 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
-    static constexpr SizeT kValidationSumCount  = 5;
-    static constexpr SizeT kReportCounterCount  = 9;
-
     muda::DeviceBuffer<double> validation_sums;
     muda::DeviceBuffer<IndexT> validation_status;
     muda::DeviceBuffer<IndexT> report_counters;
