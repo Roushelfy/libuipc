@@ -25,6 +25,95 @@ void assemble_ipc_simplex_frictional_contact_structured(
 
     const auto structured_sink = info.structured_hessian_sink();
 
+    if(structured_sink.approximate_weight_probe_only())
+    {
+        if(info.friction_PTs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.friction_PTs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PTs = info.friction_PTs().viewer().name("friction_PTs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PT = PTs(i);
+                           Vector4i cids = {contact_ids(PT[0]),
+                                            contact_ids(PT[1]),
+                                            contact_ids(PT[2]),
+                                            contact_ids(PT[3])};
+                           auto coeff = PT_contact_coeff(table, cids);
+                           const Store weight =
+                               safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                           structured_sink.template write_weighted_half<4>(PT, weight);
+                       });
+        }
+        if(info.friction_EEs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.friction_EEs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        EEs = info.friction_EEs().viewer().name("friction_EEs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& EE = EEs(i);
+                           Vector4i cids = {contact_ids(EE[0]),
+                                            contact_ids(EE[1]),
+                                            contact_ids(EE[2]),
+                                            contact_ids(EE[3])};
+                           auto coeff = EE_contact_coeff(table, cids);
+                           const Store weight =
+                               safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                           structured_sink.template write_weighted_half<4>(EE, weight);
+                       });
+        }
+        if(info.friction_PEs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.friction_PEs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PEs = info.friction_PEs().viewer().name("friction_PEs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PE = PEs(i);
+                           Vector3i cids = {contact_ids(PE[0]),
+                                            contact_ids(PE[1]),
+                                            contact_ids(PE[2])};
+                           auto coeff = PE_contact_coeff(table, cids);
+                           const Store weight =
+                               safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                           structured_sink.template write_weighted_half<3>(PE, weight);
+                       });
+        }
+        if(info.friction_PPs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.friction_PPs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PPs = info.friction_PPs().viewer().name("friction_PPs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PP = PPs(i);
+                           Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
+                           auto coeff = PP_contact_coeff(table, cids);
+                           const Store weight =
+                               safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                           structured_sink.template write_weighted_half<2>(PP, weight);
+                       });
+        }
+        return;
+    }
+
     ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(info.friction_PTs().size(),

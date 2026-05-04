@@ -20,6 +20,7 @@ struct RuntimeOrderingCollector
     bool                                  enabled = false;
     bool                                  graph_only = false;
     bool                                  topology_only = false;
+    bool                                  approximate_weight = false;
 
     MUDA_GENERIC bool valid() const noexcept
     {

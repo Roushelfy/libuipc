@@ -67,6 +67,23 @@ SocuApproxGateReport make_failure(SocuApproxGateReason reason,
     return report;
 }
 
+bool runtime_graph_source_valid(const std::string& source) noexcept
+{
+    return source == "topology" || source == "contact_hessian"
+           || source == "full_hessian" || source == "contact_weight_approx"
+           || source == "full_weight_approx";
+}
+
+bool runtime_graph_source_full(const std::string& source) noexcept
+{
+    return source == "full_hessian" || source == "full_weight_approx";
+}
+
+bool runtime_graph_source_approx(const std::string& source) noexcept
+{
+    return source == "contact_weight_approx" || source == "full_weight_approx";
+}
+
 socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
                                             bool normalize_edge_weight)
 {
@@ -286,14 +303,13 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         runtime_reorder_graph_source_attr
             ? runtime_reorder_graph_source_attr->view()[0]
             : std::string{"topology"};
-    if(m_runtime_reorder_graph_source != "topology"
-       && m_runtime_reorder_graph_source != "contact_hessian"
-       && m_runtime_reorder_graph_source != "full_hessian")
+    if(!runtime_graph_source_valid(m_runtime_reorder_graph_source))
     {
         m_gate_report = make_failure(
             SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/runtime_reorder_graph_source "
-                        "must be 'topology', 'contact_hessian', or 'full_hessian', got '{}'",
+                        "must be 'topology', 'contact_hessian', 'full_hessian', "
+                        "'contact_weight_approx', or 'full_weight_approx', got '{}'",
                         m_runtime_reorder_graph_source));
         throw_gate_failure(m_gate_report);
     }
@@ -857,7 +873,7 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
                         overflow_count);
         return false;
     }
-    if(raw_count == 0 && m_runtime_reorder_graph_source == "full_hessian")
+    if(raw_count == 0 && runtime_graph_source_full(m_runtime_reorder_graph_source))
     {
         m_report.runtime_reorder_failure_detail =
             "runtime reorder edge collector produced no edges";
@@ -900,7 +916,7 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
         merged[key] += edge.abs_weight;
     }
     m_report.runtime_reorder_unique_edge_count = merged.size();
-    if(merged.empty() && m_runtime_reorder_graph_source == "full_hessian")
+    if(merged.empty() && runtime_graph_source_full(m_runtime_reorder_graph_source))
     {
         m_report.runtime_reorder_failure_detail =
             "runtime reorder edge collector produced no valid off-diagonal atom edges";
@@ -908,9 +924,11 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
     }
 
     socu_approx::rcm::AtomGraph graph;
-    if(m_runtime_reorder_graph_source == "full_hessian")
+    if(runtime_graph_source_full(m_runtime_reorder_graph_source))
     {
-        graph.name = "cuda_mixed_runtime_full_hessian";
+        graph.name = m_runtime_reorder_graph_source == "full_hessian"
+                         ? "cuda_mixed_runtime_full_hessian"
+                         : "cuda_mixed_runtime_full_weight_approx";
         for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
             socu_approx::rcm::add_atom(graph,
                                        static_cast<SizeT>(m_host_atom_dof_count[atom]),
@@ -920,9 +938,12 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
     else
     {
         graph = graph_from_json(m_runtime_reorder_base_graph, true);
-        graph.name = m_runtime_reorder_graph_source == "topology"
-                         ? "cuda_mixed_runtime_topology"
-                         : "cuda_mixed_runtime_contact_hessian";
+        graph.name =
+            m_runtime_reorder_graph_source == "topology"
+                ? "cuda_mixed_runtime_topology"
+                : (m_runtime_reorder_graph_source == "contact_weight_approx"
+                       ? "cuda_mixed_runtime_contact_weight_approx"
+                       : "cuda_mixed_runtime_contact_hessian");
         if(graph.atoms.empty())
         {
             for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
@@ -950,7 +971,9 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
             runtime_weight,
             m_runtime_reorder_graph_source == "topology"
                 ? "runtime_contact_topology"
-                : "runtime_hessian");
+                : (runtime_graph_source_approx(m_runtime_reorder_graph_source)
+                       ? "runtime_contact_weight_approx"
+                       : "runtime_hessian"));
     }
 
     try
@@ -1196,9 +1219,10 @@ auto SocuApproxSolver::prepare_structured_probe(
         m_runtime->runtime_ordering_collector(
             true,
             true,
-            m_runtime_reorder_graph_source == "topology"));
+            m_runtime_reorder_graph_source == "topology",
+            runtime_graph_source_approx(m_runtime_reorder_graph_source)));
 
-    return m_runtime_reorder_graph_source == "full_hessian"
+    return runtime_graph_source_full(m_runtime_reorder_graph_source)
                ? StructuredProbeAssembly::Full
                : StructuredProbeAssembly::ContactOnly;
 #endif

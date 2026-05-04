@@ -217,7 +217,8 @@ struct SocuApproxRuntime
 
     RuntimeOrderingCollector runtime_ordering_collector(bool enabled,
                                                         bool graph_only = false,
-                                                        bool topology_only = false) noexcept
+                                                        bool topology_only = false,
+                                                        bool approximate_weight = false) noexcept
     {
         return RuntimeOrderingCollector{
             runtime_ordering_edges.view(),
@@ -225,7 +226,8 @@ struct SocuApproxRuntime
             device_old_dof_to_atom.view(),
             enabled,
             graph_only,
-            topology_only};
+            topology_only,
+            approximate_weight};
     }
 
     bool factor_and_solve(cudaStream_t stream)

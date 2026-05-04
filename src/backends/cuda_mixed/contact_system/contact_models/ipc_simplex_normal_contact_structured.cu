@@ -26,6 +26,91 @@ void assemble_ipc_simplex_normal_contact_structured(
 
     const auto structured_sink = info.structured_hessian_sink();
 
+    if(structured_sink.approximate_weight_probe_only())
+    {
+        if(info.PTs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PTs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PTs = info.PTs().viewer().name("PTs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PT = PTs(i);
+                           Vector4i cids = {contact_ids(PT[0]),
+                                            contact_ids(PT[1]),
+                                            contact_ids(PT[2]),
+                                            contact_ids(PT[3])};
+                           const Store weight =
+                               safe_cast<Store>(PT_kappa(table, cids) * dt * dt);
+                           structured_sink.template write_weighted_half<4>(PT, weight);
+                       });
+        }
+        if(info.EEs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.EEs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        EEs = info.EEs().viewer().name("EEs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& EE = EEs(i);
+                           Vector4i cids = {contact_ids(EE[0]),
+                                            contact_ids(EE[1]),
+                                            contact_ids(EE[2]),
+                                            contact_ids(EE[3])};
+                           const Store weight =
+                               safe_cast<Store>(EE_kappa(table, cids) * dt * dt);
+                           structured_sink.template write_weighted_half<4>(EE, weight);
+                       });
+        }
+        if(info.PEs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PEs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PEs = info.PEs().viewer().name("PEs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PE = PEs(i);
+                           Vector3i cids = {contact_ids(PE[0]),
+                                            contact_ids(PE[1]),
+                                            contact_ids(PE[2])};
+                           const Store weight =
+                               safe_cast<Store>(PE_kappa(table, cids) * dt * dt);
+                           structured_sink.template write_weighted_half<3>(PE, weight);
+                       });
+        }
+        if(info.PPs().size())
+        {
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(info.PPs().size(),
+                       [structured_sink,
+                        table = info.contact_tabular().viewer().name("contact_tabular"),
+                        contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                        PPs = info.PPs().viewer().name("PPs"),
+                        dt  = info.dt()] __device__(int i) mutable
+                       {
+                           const auto& PP = PPs(i);
+                           Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
+                           const Store weight =
+                               safe_cast<Store>(PP_kappa(table, cids) * dt * dt);
+                           structured_sink.template write_weighted_half<2>(PP, weight);
+                       });
+        }
+        return;
+    }
+
     if(info.PTs().size())
     {
         if(structured_sink.topology_probe_only())

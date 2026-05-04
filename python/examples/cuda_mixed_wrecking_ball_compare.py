@@ -43,6 +43,26 @@ VARIANTS = {
     "fused_pcg": {"solver": "fused_pcg", "runtime_interval": 0},
     "socu_init": {"solver": "socu_approx", "runtime_interval": 0},
     "socu_rt1": {"solver": "socu_approx", "runtime_interval": 1},
+    "socu_rt1_contact_hessian": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "contact_hessian",
+    },
+    "socu_rt1_full_hessian": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "full_hessian",
+    },
+    "socu_rt1_contact_weight_approx": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "contact_weight_approx",
+    },
+    "socu_rt1_full_weight_approx": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "full_weight_approx",
+    },
     "socu_rt5": {"solver": "socu_approx", "runtime_interval": 5},
     "socu_rt10": {"solver": "socu_approx", "runtime_interval": 10},
 }
@@ -91,15 +111,19 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     socu["ordering_block_size"] = "64"
     socu["damping_shift"] = float(os.environ.get("SOCU_DAMPING_SHIFT", "0.0"))
     socu["runtime_reorder_frame_interval"] = int(spec["runtime_interval"])
-    socu["runtime_reorder_graph_source"] = "topology"
-    socu["debug_validation"] = 1
-    socu["debug_timing"] = 1
+    socu["runtime_reorder_graph_source"] = spec.get(
+        "runtime_graph_source",
+        "topology",
+    )
+    report_counters = os.environ.get("SOCU_REPORT_COUNTERS", "1") != "0"
+    socu["debug_validation"] = 1 if report_counters else 0
+    socu["debug_timing"] = 1 if report_counters else 0
     if os.environ.get("SOCU_DEBUG_DUMP"):
         socu["debug_dump_problem_file"] = 1
         socu["debug_dump_structured_matrix"] = 1
         socu["debug_compare_full_sparse"] = 1
         config["extras"]["debug"]["dump_linear_system"] = 1
-    socu["report_each_solve"] = 1
+    socu["report_each_solve"] = 1 if report_counters else 0
     socu["generated_ordering_report"] = str(workspace / "socu_approx_ordering.json")
     socu["report"] = str(workspace / "socu_approx_report.json")
 
@@ -207,6 +231,10 @@ def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
     _ = engine
     result = {
         "variant": variant,
+        "runtime_graph_source": VARIANTS[variant].get(
+            "runtime_graph_source",
+            "topology",
+        ),
         "frames": frames,
         "final_frame": int(world.frame()),
         "wall_time_s": time.perf_counter() - start,

@@ -54,6 +54,12 @@ struct StructuredContactAssemblySink
                && sink.runtime_ordering.topology_only;
     }
 
+    MUDA_GENERIC bool approximate_weight_probe_only() const noexcept
+    {
+        return sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
+               && sink.runtime_ordering.approximate_weight;
+    }
+
     MUDA_DEVICE VertexMap map_vertex(IndexT global_vertex) const noexcept
     {
         VertexMap mapped;
@@ -577,6 +583,39 @@ struct StructuredContactAssemblySink
                          L,
                          R);
                 record_topology_pair(indices(L), indices(R));
+            }
+        }
+    }
+
+    MUDA_DEVICE void write_weighted_hessian(IndexT global_vertex,
+                                            StoreT weight) const noexcept
+    {
+        const auto v = map_vertex(global_vertex);
+        record_weighted_pair(v, v, weight);
+    }
+
+    template <int StencilSize>
+    MUDA_DEVICE void write_weighted_half(
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        StoreT                                    weight) const noexcept
+    {
+#pragma unroll
+        for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+            {
+                IndexT L = row_block;
+                IndexT R = col_block;
+                upper_lr(indices(row_block),
+                         indices(col_block),
+                         row_block,
+                         col_block,
+                         L,
+                         R);
+                const auto lhs = map_vertex(indices(L));
+                const auto rhs = map_vertex(indices(R));
+                record_weighted_pair(lhs, rhs, weight);
             }
         }
     }

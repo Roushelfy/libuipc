@@ -20,6 +20,43 @@ void assemble_ipc_vertex_half_plane_frictional_contact_structured(
         return;
 
     const auto structured_sink = info.structured_hessian_sink();
+    if(structured_sink.topology_probe_only())
+    {
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.friction_PHs().size(),
+                   [structured_sink,
+                    PHs = info.friction_PHs().viewer().name("friction_PHs")] __device__(int I) mutable
+                   {
+                       const Vector2i PH = PHs(I);
+                       structured_sink.write_weighted_hessian(PH(0), Store{1});
+                   });
+        return;
+    }
+    if(structured_sink.approximate_weight_probe_only())
+    {
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(info.friction_PHs().size(),
+                   [structured_sink,
+                    PHs = info.friction_PHs().viewer().name("friction_PHs"),
+                    table = info.contact_tabular().viewer().name("contact_tabular"),
+                    contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
+                    half_plane_vertex_offset = info.half_plane_vertex_offset(),
+                    dt = info.dt()] __device__(int I) mutable
+                   {
+                       const Vector2i PH = PHs(I);
+                       const IndexT   vI = PH(0);
+                       const IndexT   HI = PH(1);
+                       const ContactCoeff coeff =
+                           table(contact_ids(vI), contact_ids(HI + half_plane_vertex_offset));
+                       const Store weight =
+                           safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                       structured_sink.write_weighted_hessian(vI, weight);
+                   });
+        return;
+    }
+
     ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(info.friction_PHs().size(),

@@ -811,7 +811,8 @@ void require_socu_approx_fem_runtime_contact_smoke(std::string_view name)
 #endif
 }
 
-void require_socu_approx_runtime_reorder_smoke(std::string_view name)
+void require_socu_approx_runtime_reorder_smoke(std::string_view name,
+                                               std::string_view graph_source)
 {
 #if !UIPC_WITH_SOCU_NATIVE
     WARN("socu_native is not enabled in this build; runtime reorder smoke was not run");
@@ -838,7 +839,7 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     config["linear_system"]["socu_approx"]["report_each_solve"] = 1;
     config["linear_system"]["socu_approx"]["runtime_reorder_frame_interval"] = 1;
     config["linear_system"]["socu_approx"]["runtime_reorder_graph_source"] =
-        "topology";
+        std::string{graph_source};
 
     auto output_path = contract_workspace(name);
     fs::remove_all(output_path / "socu_approx");
@@ -869,7 +870,8 @@ void require_socu_approx_runtime_reorder_smoke(std::string_view name)
     REQUIRE(report["status"]["direction_available"].get<bool>() == true);
     REQUIRE(report["runtime_reorder"]["enabled"].get<bool>() == true);
     REQUIRE(report["runtime_reorder"]["interval"].get<SizeT>() == 1);
-    CHECK(report["runtime_reorder"]["graph_source"].get<std::string>() == "topology");
+    CHECK(report["runtime_reorder"]["graph_source"].get<std::string>()
+          == std::string{graph_source});
     CHECK(report["runtime_reorder"]["overflow_count"].get<SizeT>() == 0);
     CHECK(report["runtime_reorder"]["failure_detail"].get<std::string>().empty());
     CHECK(report["runtime_reorder"]["last_applied_frame"].get<SizeT>()
@@ -1081,7 +1083,36 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
     SECTION("socu_approx_runtime_reorder_smoke")
     {
         require_socu_approx_runtime_reorder_smoke(
-            "linear_solver_socu_approx_runtime_reorder");
+            "linear_solver_socu_approx_runtime_reorder_topology",
+            "topology");
+    }
+
+    SECTION("socu_approx_runtime_reorder_contact_hessian_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder_contact_hessian",
+            "contact_hessian");
+    }
+
+    SECTION("socu_approx_runtime_reorder_full_hessian_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder_full_hessian",
+            "full_hessian");
+    }
+
+    SECTION("socu_approx_runtime_reorder_contact_weight_approx_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder_contact_weight_approx",
+            "contact_weight_approx");
+    }
+
+    SECTION("socu_approx_runtime_reorder_full_weight_approx_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder_full_weight_approx",
+            "full_weight_approx");
     }
 
 }
