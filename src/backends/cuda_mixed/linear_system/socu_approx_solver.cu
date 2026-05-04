@@ -1018,8 +1018,9 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
 
         const auto path =
             fs::absolute(fs::path{workspace()} / "socu_approx"
-                         / fmt::format("runtime_ordering.{}.json",
-                                       collected_frame));
+                         / fmt::format("runtime_ordering.{}.{}.json",
+                                       collected_frame,
+                                       engine().newton_iter()));
         if(m_debug_write_runtime_ordering_report)
             write_json_report(path, report);
 

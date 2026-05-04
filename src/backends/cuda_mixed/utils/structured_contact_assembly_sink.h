@@ -511,6 +511,12 @@ struct StructuredContactAssemblySink
         if(v.kind == VertexMap::None || v.fixed)
             return;
 
+        if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only
+           && !sink.runtime_ordering.topology_only)
+        {
+            append_hessian_cache(global_vertex, global_vertex, H, false);
+        }
+
         if(v.kind == VertexMap::Fem)
         {
             add_fem_fem(v.old_dof, v.old_dof, H);

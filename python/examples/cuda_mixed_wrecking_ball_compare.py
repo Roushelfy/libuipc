@@ -128,6 +128,8 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
         socu["debug_dump_structured_matrix"] = 1
         socu["debug_compare_full_sparse"] = 1
         config["extras"]["debug"]["dump_linear_system"] = 1
+    if os.environ.get("SOCU_DEBUG_RUNTIME_ORDERING"):
+        socu["debug_write_runtime_ordering_report"] = 1
     socu["report_each_solve"] = 1 if report_counters else 0
     socu["generated_ordering_report"] = str(workspace / "socu_approx_ordering.json")
     socu["report"] = str(workspace / "socu_approx_report.json")

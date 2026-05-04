@@ -423,3 +423,46 @@ than replacing `full_hessian`.
 Decision: accept `full_hessian_cached` as an experimental graph source. It is
 not a default path. Follow-up work should investigate why cached runs take more
 structured solves despite matching the first dumped matrices exactly.
+
+### Step 4 Diagonal Cache Fix
+
+2026-05-04: Follow-up validation found that the first cached structured matrix
+matched exact `full_hessian`, but frame 13 Newton iteration 1 diverged even
+when the runtime graph and selected ordering were identical. The missing piece
+was `StructuredContactAssemblySink::write_hessian(global_vertex, H)`: the graph
+probe recorded scalar graph weights for this single-vertex diagonal contact
+path, but the compact cache only stored half-block writes. The cache therefore
+replayed an incomplete final contact matrix.
+
+Fix:
+
+- Add the diagonal `write_hessian(global_vertex, H)` block to the compact
+  Hessian cache during weighted graph probes.
+- Keep the cache append before the scalar graph recording path. Moving it after
+  scalar graph recording slightly reduced floating-point ordering perturbation
+  in debug dumps, but did not eliminate it and was not kept because it offered
+  no measured benefit.
+- Add debug-only per-Newton runtime ordering dumps as
+  `runtime_ordering.<frame>.<newton_iter>.json`, enabled by
+  `SOCU_DEBUG_RUNTIME_ORDERING=1` in the wrecking-ball comparison script.
+
+Validation with counters disabled:
+
+| variant | final frame | wall time | mean frame | Build/Solve calls | Newton sum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `socu_rt1_full_hessian` | `20` | `6.292579s` | `176.071150 ms` | `65 / 65` | `45` |
+| `socu_rt1_full_hessian_cached` | `20` | `4.851380s` | `171.110829 ms` | `69 / 69` | `49` |
+
+Frame 13-20 structured contact comparison:
+
+- exact final structured contact:
+  `0.921110s / 312 calls = 2.952 ms/call`
+- cached final structured contact plus replay:
+  `0.416651s / 172 calls + 0.056771s / 43 replay calls = 0.473422s`
+- final structured contact plus replay duration improved by about `48.6%`.
+
+Decision update: keep the diagonal cache fix and keep `full_hessian_cached` as
+an opt-in experimental graph source. The large extra-iteration issue from the
+initial cache experiment was caused by the missing diagonal records; after the
+fix, 20-frame total solve/build counts are close enough for continued
+benchmarking.
