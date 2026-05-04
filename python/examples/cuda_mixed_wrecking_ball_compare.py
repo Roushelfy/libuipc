@@ -63,6 +63,11 @@ VARIANTS = {
         "runtime_interval": 1,
         "runtime_graph_source": "full_weight_approx",
     },
+    "socu_rt1_full_hessian_cached": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "full_hessian_cached",
+    },
     "socu_rt5": {"solver": "socu_approx", "runtime_interval": 5},
     "socu_rt10": {"solver": "socu_approx", "runtime_interval": 10},
 }

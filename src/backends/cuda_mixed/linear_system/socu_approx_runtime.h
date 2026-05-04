@@ -3,6 +3,7 @@
 #include <linear_system/socu_approx_report.h>
 #include <mixed_precision/policy.h>
 #include <utils/runtime_ordering_collector.h>
+#include <utils/structured_contact_hessian_cache.h>
 
 #include <cuda_runtime.h>
 #include <muda/buffer/device_buffer.h>
@@ -64,6 +65,9 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
+    muda::DeviceBuffer<StructuredContactHessianRecord<ActivePolicy::StoreScalar>>
+        contact_hessian_cache_records;
+    muda::DeviceBuffer<IndexT> contact_hessian_cache_cursor;
     muda::DeviceBuffer<double> validation_sums;
     muda::DeviceBuffer<IndexT> validation_status;
     muda::DeviceBuffer<IndexT> report_counters;
@@ -213,6 +217,31 @@ struct SocuApproxRuntime
         if(runtime_ordering_cursor.capacity() < 2)
             runtime_ordering_cursor.reserve(2);
         runtime_ordering_cursor.resize(2);
+    }
+
+    void reserve_contact_hessian_cache(SizeT record_capacity)
+    {
+        if(record_capacity == 0)
+            return;
+        if(contact_hessian_cache_records.capacity() < record_capacity)
+            contact_hessian_cache_records.reserve(record_capacity);
+        contact_hessian_cache_records.resize(record_capacity);
+        if(contact_hessian_cache_cursor.capacity() < 2)
+            contact_hessian_cache_cursor.reserve(2);
+        contact_hessian_cache_cursor.resize(2);
+    }
+
+    StructuredContactHessianCache<ActivePolicy::StoreScalar>
+    contact_hessian_cache(bool collect,
+                          bool replay,
+                          SizeT replay_count = 0) noexcept
+    {
+        return StructuredContactHessianCache<ActivePolicy::StoreScalar>{
+            contact_hessian_cache_records.view(),
+            contact_hessian_cache_cursor.view(),
+            replay_count,
+            collect,
+            replay};
     }
 
     RuntimeOrderingCollector runtime_ordering_collector(bool enabled,

@@ -155,12 +155,24 @@ that frame's first structured solve, then assembles once with the new ordering.
 base topology plus current contact topology with unit weights,
 `contact_hessian` keeps base topology at weight 1 and weights current contacts
 by accumulated absolute contact Hessian contribution, and `full_hessian` uses a
-graph-only full Hessian probe for diagnostics. Runtime reorder preserves the
-currently installed block size. The collector capacity defaults to an automatic
-value; setting `runtime_reorder_edge_capacity > 0` overrides it. Collector
-overflow, empty graphs, invalid mappings, or
+graph-only full Hessian probe for diagnostics. Experimental graph sources are
+`contact_weight_approx`, `full_weight_approx`, and `full_hessian_cached`.
+Approximate sources use cheap contact coefficients for ordering weights. The
+cached full Hessian source replays the contact Hessian half-blocks computed by
+the graph probe for the immediately following structured contact assembly.
+Runtime reorder preserves the currently installed block size. The collector
+capacity defaults to an automatic value; setting
+`runtime_reorder_edge_capacity > 0` overrides it. Collector overflow, empty
+graphs, invalid mappings, or
 `socu_native` plan creation failures do not abort the solve; they are reported
 and the previous ordering remains active.
+
+The wrecking-ball comparison script exposes the default topology runtime
+variant as `socu_rt1`, plus explicit diagnostics `socu_rt1_contact_hessian` and
+`socu_rt1_full_hessian`. It also exposes experimental variants for
+`full_weight_approx` and `full_hessian_cached`. They use the same frame
+interval and differ only in the runtime reorder graph source, so frame-16
+failures can be compared without changing the ordinary `fused_pcg` baseline.
 
 SOCU approx now exposes only the strict structured direct solve path. The
 previous assembly-only validation path has been removed; structured assembly

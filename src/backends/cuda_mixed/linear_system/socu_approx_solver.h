@@ -107,6 +107,10 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_runtime_reorder_last_signature = 0;
     bool        m_runtime_reorder_pending_signature_valid = false;
     SizeT       m_runtime_reorder_pending_signature = 0;
+    bool        m_cached_contact_hessian_valid = false;
+    SizeT       m_cached_contact_hessian_count = 0;
+    SizeT       m_cached_contact_hessian_capacity = 0;
+    SizeT       m_cached_contact_hessian_frame = static_cast<SizeT>(-1);
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";

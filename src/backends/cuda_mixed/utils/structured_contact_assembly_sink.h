@@ -3,6 +3,8 @@
 #include <affine_body/abd_jacobi_matrix.h>
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
+#include <utils/structured_contact_hessian_cache.h>
+#include <cuda_runtime_api.h>
 #include <muda/atomic.h>
 
 namespace uipc::backend::cuda_mixed
@@ -28,6 +30,7 @@ struct StructuredContactAssemblySink
     // [diag scalar writes, first-offdiag scalar writes, off-band scalar drops,
     //  near contact pairs, off-band contact pairs]
     muda::BufferView<IndexT> counters;
+    StructuredContactHessianCache<StoreT> hessian_cache;
 
     struct VertexMap
     {
@@ -648,9 +651,14 @@ struct StructuredContactAssemblySink
         if(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only)
         {
             if(sink.runtime_ordering.topology_only)
+            {
                 record_topology_pair(lhs, rhs);
+            }
             else
+            {
                 record_weighted_pair(lhs, rhs, h3_abs_sum(H3x3));
+                append_hessian_cache(global_i, global_j, H3x3, mirror_diag_block);
+            }
             return;
         }
 
@@ -674,5 +682,40 @@ struct StructuredContactAssemblySink
 
         add_abd_abd_half(lhs, rhs, global_i, global_j, H3x3, mirror_diag_block);
     }
+
+    template <typename H3>
+    MUDA_DEVICE void append_hessian_cache(IndexT global_i,
+                                          IndexT global_j,
+                                          const H3& H3x3,
+                                          bool mirror_diag_block) const noexcept
+    {
+        if(!hessian_cache.collect_valid())
+            return;
+
+        const IndexT slot = muda::atomic_add(hessian_cache.cursor.data(0), IndexT{1});
+        if(slot < 0 || static_cast<SizeT>(slot) >= hessian_cache.records.size())
+        {
+            muda::atomic_add(hessian_cache.cursor.data(1), IndexT{1});
+            return;
+        }
+
+        auto& record = hessian_cache.records.data()[slot];
+        record.global_i = global_i;
+        record.global_j = global_j;
+        record.mirror_diag_block = mirror_diag_block ? IndexT{1} : IndexT{0};
+#pragma unroll
+        for(IndexT r = 0; r < 3; ++r)
+        {
+#pragma unroll
+            for(IndexT c = 0; c < 3; ++c)
+                record.H[r * 3 + c] = static_cast<StoreT>(H3x3(r, c));
+        }
+    }
+
 };
+
+void replay_structured_contact_hessian_cache(
+    cudaStream_t stream,
+    StructuredContactAssemblySink<ActivePolicy::StoreScalar, ActivePolicy::SolveScalar>
+        sink);
 }  // namespace uipc::backend::cuda_mixed

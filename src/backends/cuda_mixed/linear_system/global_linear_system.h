@@ -10,6 +10,7 @@
 #include <linear_system/structured_chain_provider.h>
 #include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
+#include <utils/structured_contact_hessian_cache.h>
 #include <energy_component_flags.h>
 #include <mixed_precision/policy.h>
 #include <cuda_runtime_api.h>
@@ -179,6 +180,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_runtime_ordering_collector;
         }
+        StructuredContactHessianCache<StoreScalar> contact_hessian_cache() const noexcept
+        {
+            return m_contact_hessian_cache;
+        }
         SizeT contact_set_signature() const noexcept
         {
             return m_contact_set_signature;
@@ -215,6 +220,11 @@ class GlobalLinearSystem : public SimSystem
         void set_runtime_ordering_collector(RuntimeOrderingCollector collector) noexcept
         {
             m_runtime_ordering_collector = collector;
+        }
+        void set_contact_hessian_cache(
+            StructuredContactHessianCache<StoreScalar> cache) noexcept
+        {
+            m_contact_hessian_cache = cache;
         }
         void set_contact_set_signature(SizeT signature) noexcept
         {
@@ -289,6 +299,7 @@ class GlobalLinearSystem : public SimSystem
         muda::CBufferView<IndexT>  m_chain_to_old;
         muda::BufferView<IndexT>   m_contact_counters;
         RuntimeOrderingCollector   m_runtime_ordering_collector;
+        StructuredContactHessianCache<StoreScalar> m_contact_hessian_cache;
         SizeT                      m_contact_set_signature = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;

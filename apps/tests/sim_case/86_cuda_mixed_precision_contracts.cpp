@@ -1115,6 +1115,13 @@ TEST_CASE("86_cuda_mixed_linear_solver_selection_smoke",
             "full_weight_approx");
     }
 
+    SECTION("socu_approx_runtime_reorder_full_hessian_cached_smoke")
+    {
+        require_socu_approx_runtime_reorder_smoke(
+            "linear_solver_socu_approx_runtime_reorder_full_hessian_cached",
+            "full_hessian_cached");
+    }
+
 }
 
 TEST_CASE("86_cuda_mixed_contract_abd_fixed_joint_zero_alloc",

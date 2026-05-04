@@ -71,17 +71,23 @@ bool runtime_graph_source_valid(const std::string& source) noexcept
 {
     return source == "topology" || source == "contact_hessian"
            || source == "full_hessian" || source == "contact_weight_approx"
-           || source == "full_weight_approx";
+           || source == "full_weight_approx" || source == "full_hessian_cached";
 }
 
 bool runtime_graph_source_full(const std::string& source) noexcept
 {
-    return source == "full_hessian" || source == "full_weight_approx";
+    return source == "full_hessian" || source == "full_weight_approx"
+           || source == "full_hessian_cached";
 }
 
 bool runtime_graph_source_approx(const std::string& source) noexcept
 {
     return source == "contact_weight_approx" || source == "full_weight_approx";
+}
+
+bool runtime_graph_source_cache_enabled(const std::string& source) noexcept
+{
+    return source == "full_hessian_cached";
 }
 
 socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
@@ -309,7 +315,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
             SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/runtime_reorder_graph_source "
                         "must be 'topology', 'contact_hessian', 'full_hessian', "
-                        "'contact_weight_approx', or 'full_weight_approx', got '{}'",
+                        "'contact_weight_approx', 'full_weight_approx', or "
+                        "'full_hessian_cached', got '{}'",
                         m_runtime_reorder_graph_source));
         throw_gate_failure(m_gate_report);
     }
@@ -773,6 +780,16 @@ bool SocuApproxSolver::install_ordering_report_impl(
         runtime->upload_old_dof_to_atom(old_dof_to_atom);
         if(m_runtime_reorder_edge_capacity > 0)
             runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
+        if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source))
+        {
+            m_cached_contact_hessian_capacity =
+                std::min<SizeT>(m_runtime_reorder_edge_capacity, SizeT{1} << 20);
+            runtime->reserve_contact_hessian_cache(m_cached_contact_hessian_capacity);
+        }
+        else
+        {
+            m_cached_contact_hessian_capacity = 0;
+        }
         if(!can_reuse_runtime)
             runtime->create_plan();
     }
@@ -926,9 +943,12 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
     socu_approx::rcm::AtomGraph graph;
     if(runtime_graph_source_full(m_runtime_reorder_graph_source))
     {
-        graph.name = m_runtime_reorder_graph_source == "full_hessian"
-                         ? "cuda_mixed_runtime_full_hessian"
-                         : "cuda_mixed_runtime_full_weight_approx";
+        graph.name =
+            m_runtime_reorder_graph_source == "full_hessian"
+                ? "cuda_mixed_runtime_full_hessian"
+                : (m_runtime_reorder_graph_source == "full_hessian_cached"
+                       ? "cuda_mixed_runtime_full_hessian_cached"
+                       : "cuda_mixed_runtime_full_weight_approx");
         for(SizeT atom = 0; atom < m_host_atom_dof_count.size(); ++atom)
             socu_approx::rcm::add_atom(graph,
                                        static_cast<SizeT>(m_host_atom_dof_count[atom]),
@@ -973,7 +993,9 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
                 ? "runtime_contact_topology"
                 : (runtime_graph_source_approx(m_runtime_reorder_graph_source)
                        ? "runtime_contact_weight_approx"
-                       : "runtime_hessian"));
+                       : (runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+                              ? "runtime_hessian_cached"
+                              : "runtime_hessian")));
     }
 
     try
@@ -1135,6 +1157,15 @@ void SocuApproxSolver::prepare_structured_chain(
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
+    if(m_cached_contact_hessian_valid
+       && m_cached_contact_hessian_frame == engine().frame())
+    {
+        info.set_contact_hessian_cache(
+            m_runtime->contact_hessian_cache(false,
+                                             true,
+                                             m_cached_contact_hessian_count));
+        m_cached_contact_hessian_valid = false;
+    }
 
     m_report.packed = true;
     m_report.active_rhs_scalar_count = info.b().size();
@@ -1161,6 +1192,9 @@ auto SocuApproxSolver::prepare_structured_probe(
         return StructuredProbeAssembly::None;
 
     m_runtime_reorder_pending_signature_valid = false;
+    m_cached_contact_hessian_valid = false;
+    m_cached_contact_hessian_count = 0;
+    m_cached_contact_hessian_frame = static_cast<SizeT>(-1);
     const SizeT frame = engine().frame();
     if((frame % m_runtime_reorder_frame_interval) != 0)
         return StructuredProbeAssembly::None;
@@ -1202,6 +1236,15 @@ auto SocuApproxSolver::prepare_structured_probe(
                                                2 * sizeof(IndexT),
                                                stream));
     }
+    if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+       && m_runtime->contact_hessian_cache_cursor.size() >= 2)
+    {
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(
+            m_runtime->contact_hessian_cache_cursor.data(),
+            0,
+            2 * sizeof(IndexT),
+            stream));
+    }
 
     info.set_workspace(
         StructuredChainShape{static_cast<SizeT>(m_runtime->shape.horizon),
@@ -1221,6 +1264,11 @@ auto SocuApproxSolver::prepare_structured_probe(
             true,
             m_runtime_reorder_graph_source == "topology",
             runtime_graph_source_approx(m_runtime_reorder_graph_source)));
+    if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source))
+    {
+        info.set_contact_hessian_cache(
+            m_runtime->contact_hessian_cache(true, false, 0));
+    }
 
     return runtime_graph_source_full(m_runtime_reorder_graph_source)
                ? StructuredProbeAssembly::Full
@@ -1247,6 +1295,23 @@ bool SocuApproxSolver::finalize_structured_probe(
         {
             m_runtime_reorder_last_signature = m_runtime_reorder_pending_signature;
             m_runtime_reorder_last_signature_valid = true;
+        }
+        if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+           && m_runtime->contact_hessian_cache_cursor.size() >= 2)
+        {
+            std::array<IndexT, 2> cache_cursor{};
+            m_runtime->contact_hessian_cache_cursor.view().copy_to(cache_cursor.data());
+            const SizeT raw_count = std::min<SizeT>(
+                static_cast<SizeT>(std::max<IndexT>(cache_cursor[0], 0)),
+                m_cached_contact_hessian_capacity);
+            const SizeT overflow_count =
+                static_cast<SizeT>(std::max<IndexT>(cache_cursor[1], 0));
+            if(raw_count != 0 && overflow_count == 0)
+            {
+                m_cached_contact_hessian_valid = true;
+                m_cached_contact_hessian_count = raw_count;
+                m_cached_contact_hessian_frame = engine().frame();
+            }
         }
     }
     m_runtime_reorder_pending_signature_valid = false;

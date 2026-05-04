@@ -366,3 +366,60 @@ improvement is `19.32%`.
 Decision update: accept the experimental `full_weight_approx` /
 `contact_weight_approx` graph sources as opt-in variants. They remain
 non-default, but the multi-run median clears the 5% performance threshold.
+
+### Step 4 Compact Hessian Cache Experiment
+
+2026-05-04: Added the benchmark-only runtime graph source
+`full_hessian_cached`. It keeps exact `full_hessian` graph weights, but when a
+runtime reorder is successfully installed it reuses the contact half-block
+Hessians computed during the graph probe for the immediately following final
+structured contact assembly. The cache is one-shot and frame-local; default
+`full_hessian`, `topology`, and approximate graph sources are unchanged.
+
+Implementation shape:
+
+- Contact graph probe appends compact half-block records
+  `(global_i, global_j, mirror_diag_block, H3x3)` while collecting exact graph
+  weights.
+- Final structured assembly replays those cached records through
+  `StructuredContactAssemblySink::write_contact_half_block`.
+- The replay launcher lives in `structured_contact_hessian_cache.cu`, so the
+  shared sink header no longer owns the `ParallelFor` replay kernel body.
+- Cache overflow, empty cache, stale frame, or a skipped runtime reorder falls
+  back to the existing recompute path.
+
+Validation:
+
+- `git diff --check` passed.
+- `matrix_converter.inl` and `fast_segmental_reduce.inl` had no diff.
+- `uipc_test_sim_case_cuda_mixed_only
+  "86_cuda_mixed_linear_solver_selection_smoke" -s` passed: 207 assertions.
+- `SOCU_REPORT_COUNTERS=0 ... --variant fused_pcg --frames 20` passed with
+  `final_frame=20`, `wall_time_s=4.197232440999869`, and
+  `mean_frame_ms=105.11000325004716`.
+- `SOCU_REPORT_COUNTERS=0 ... --variant socu_rt1_full_hessian_cached
+  --frames 20` passed with `final_frame=20`.
+- `SOCU_REPORT_COUNTERS=0 ... --variant socu_rt1_contact_hessian --frames 20`
+  reached frame 16 and failed in the known light direction validation mode.
+- Debug dumps for frame 1 Newton iterations 0 and 1 matched exactly between
+  `socu_rt1_full_hessian` and `socu_rt1_full_hessian_cached`: same nonzero
+  structure and zero value difference for `A_structured.1.0.mtx` and
+  `A_structured.1.1.mtx`.
+
+Frame 13-20 timing, excluding one exact run with negative timer duration:
+
+| variant | runs | wall median | mean frame median | contact + replay median | structured DyTopo median | Build Linear System median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `socu_rt1_full_hessian` | 3 | `6.382151s` | `212.377556 ms` | `2.240269 ms/call` | `13.095898 ms/call` | `61.231031 ms/call` |
+| `socu_rt1_full_hessian_cached` | 3 | `5.659183s` | `213.919838 ms` | `1.060268 ms/call` | `4.417649 ms/call` | `35.551243 ms/call` |
+
+The compact cache reduces the contact-plus-replay median by `52.67%` and the
+structured DyTopo median by `66.27%` relative to the paired exact
+`full_hessian` runs. Total wall time also improved in the median run, although
+`full_hessian_cached` performed more Build Linear System calls in these 20-frame
+runs (`61` median vs `43`), so it remains an opt-in benchmark source rather
+than replacing `full_hessian`.
+
+Decision: accept `full_hessian_cached` as an experimental graph source. It is
+not a default path. Follow-up work should investigate why cached runs take more
+structured solves despite matching the first dumped matrices exactly.

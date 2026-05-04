@@ -526,6 +526,7 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     auto contact_sink = structured_info.sink();
     info.m_contact_sink.sink = contact_sink;
     info.m_contact_sink.counters = structured_info.contact_counters();
+    info.m_contact_sink.hessian_cache = structured_info.contact_hessian_cache();
 
     if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
     {
@@ -555,6 +556,14 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             fem_linear_subsystem->dof_offset();
         info.m_contact_sink.fem_vertex_is_fixed =
             finite_element_method->is_fixed();
+    }
+
+    if(info.m_contact_sink.hessian_cache.replay_valid())
+    {
+        Timer timer{"Replay Structured Contact Hessian Cache"};
+        replay_structured_contact_hessian_cache(structured_info.stream(),
+                                                info.m_contact_sink);
+        return;
     }
 
     for(auto&& reporter : dytopo_effect_reporters.view())
