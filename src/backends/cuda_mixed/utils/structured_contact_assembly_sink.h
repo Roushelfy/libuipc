@@ -4,6 +4,7 @@
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
 #include <utils/structured_contact_hessian_cache.h>
+#include <utils/structured_contact_offband_policy.h>
 #include <cuda_runtime_api.h>
 #include <muda/atomic.h>
 
@@ -28,9 +29,12 @@ struct StructuredContactAssemblySink
     muda::CBufferView<IndexT> fem_vertex_is_fixed;
 
     // [diag scalar writes, first-offdiag scalar writes, off-band scalar drops,
-    //  near contact pairs, off-band contact pairs]
+    //  near contact pairs, off-band contact pairs, diag fallback stencils,
+    //  lump fallback stencils]
     muda::BufferView<IndexT> counters;
     StructuredContactHessianCache<StoreT> hessian_cache;
+    StructuredContactOffbandPolicy offband_policy =
+        StructuredContactOffbandPolicy::Drop;
 
     struct VertexMap
     {
@@ -133,6 +137,26 @@ struct StructuredContactAssemblySink
             muda::atomic_add(counters.data(4), IndexT{1});
         else if(saw_near)
             muda::atomic_add(counters.data(3), IndexT{1});
+    }
+
+    MUDA_DEVICE void add_diag_fallback_counter() const noexcept
+    {
+        if(counters.data() == nullptr || counters.size() < 7)
+            return;
+        muda::atomic_add(counters.data(5), IndexT{1});
+    }
+
+    MUDA_DEVICE void add_lump_fallback_counter() const noexcept
+    {
+        if(counters.data() == nullptr || counters.size() < 7)
+            return;
+        muda::atomic_add(counters.data(6), IndexT{1});
+    }
+
+    MUDA_GENERIC bool matrix_offband_policy_active() const noexcept
+    {
+        return offband_policy != StructuredContactOffbandPolicy::Drop
+               && !(sink.runtime_ordering.valid() && sink.runtime_ordering.graph_only);
     }
 
     MUDA_DEVICE StructuredSinkWriteClass add_scalar_counted(IndexT old_row,
@@ -242,6 +266,238 @@ struct StructuredContactAssemblySink
             }
         }
         return static_cast<StoreT>(sum);
+    }
+
+    MUDA_DEVICE bool scalar_pair_offband(IndexT old_i, IndexT old_j) const noexcept
+    {
+        return sink.matrix.classify_dof_pair(old_i, old_j)
+               == StructuredSinkWriteClass::OffBand;
+    }
+
+    MUDA_DEVICE bool fem_fem_has_offband(IndexT old_row,
+                                         IndexT old_col) const noexcept
+    {
+#pragma unroll
+        for(IndexT r = 0; r < 3; ++r)
+        {
+#pragma unroll
+            for(IndexT c = 0; c < 3; ++c)
+            {
+                if(scalar_pair_offband(old_row + r, old_col + c))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    MUDA_DEVICE bool abd_fem_has_offband(const VertexMap& lhs,
+                                         const VertexMap& rhs) const noexcept
+    {
+#pragma unroll 1
+        for(IndexT r = 0; r < 12; ++r)
+        {
+#pragma unroll
+            for(IndexT c = 0; c < 3; ++c)
+            {
+                if(scalar_pair_offband(lhs.old_dof + r, rhs.old_dof + c))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    MUDA_DEVICE bool fem_abd_has_offband(const VertexMap& lhs,
+                                         const VertexMap& rhs) const noexcept
+    {
+#pragma unroll
+        for(IndexT r = 0; r < 3; ++r)
+        {
+#pragma unroll 1
+            for(IndexT c = 0; c < 12; ++c)
+            {
+                if(scalar_pair_offband(lhs.old_dof + r, rhs.old_dof + c))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    MUDA_DEVICE bool abd_same_body_half_has_offband(IndexT old_dof) const noexcept
+    {
+#pragma unroll 1
+        for(IndexT row_block = 0; row_block < 4; ++row_block)
+        {
+#pragma unroll 1
+            for(IndexT col_block = row_block; col_block < 4; ++col_block)
+            {
+#pragma unroll
+                for(IndexT row = 0; row < 3; ++row)
+                {
+#pragma unroll
+                    for(IndexT col = 0; col < 3; ++col)
+                    {
+                        const IndexT old_i = old_dof + row_block * 3 + row;
+                        const IndexT old_j = old_dof + col_block * 3 + col;
+                        if(scalar_pair_offband(old_i, old_j))
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    MUDA_DEVICE bool abd_abd_projected_has_offband(IndexT old_row,
+                                                   IndexT old_col) const noexcept
+    {
+#pragma unroll 1
+        for(IndexT r = 0; r < 12; ++r)
+        {
+#pragma unroll 1
+            for(IndexT c = 0; c < 12; ++c)
+            {
+                if(scalar_pair_offband(old_row + r, old_col + c))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    MUDA_DEVICE bool single_vertex_hessian_has_offband(
+        const VertexMap& v) const noexcept
+    {
+        if(v.kind == VertexMap::Fem)
+            return fem_fem_has_offband(v.old_dof, v.old_dof);
+        if(v.kind == VertexMap::Abd)
+            return abd_same_body_half_has_offband(v.old_dof);
+        return false;
+    }
+
+    MUDA_DEVICE bool hessian_block_has_offband(IndexT global_i,
+                                               IndexT global_j) const noexcept
+    {
+        const auto lhs = map_vertex(global_i);
+        const auto rhs = map_vertex(global_j);
+        if(lhs.kind == VertexMap::None || rhs.kind == VertexMap::None)
+            return false;
+        if(lhs.fixed || rhs.fixed)
+            return false;
+
+        if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Fem)
+            return fem_fem_has_offband(lhs.old_dof, rhs.old_dof);
+        if(lhs.kind == VertexMap::Abd && rhs.kind == VertexMap::Fem)
+            return abd_fem_has_offband(lhs, rhs);
+        if(lhs.kind == VertexMap::Fem && rhs.kind == VertexMap::Abd)
+            return fem_abd_has_offband(lhs, rhs);
+        if(lhs.body == rhs.body)
+            return abd_same_body_half_has_offband(lhs.old_dof);
+        return abd_abd_projected_has_offband(lhs.old_dof, rhs.old_dof);
+    }
+
+    template <int StencilSize>
+    MUDA_DEVICE bool stencil_has_offband(
+        const Eigen::Vector<IndexT, StencilSize>& indices) const noexcept
+    {
+#pragma unroll 1
+        for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
+        {
+#pragma unroll 1
+            for(IndexT col_block = row_block; col_block < StencilSize; ++col_block)
+            {
+                IndexT L = row_block;
+                IndexT R = col_block;
+                if(indices(row_block) > indices(col_block))
+                {
+                    L = col_block;
+                    R = row_block;
+                }
+                if(hessian_block_has_offband(indices(L), indices(R)))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    template <typename H3>
+    MUDA_DEVICE void write_vertex_exact_scalar_diag(const VertexMap& v,
+                                                    const H3&        H) const noexcept
+    {
+        using Alu = ActivePolicy::AluScalar;
+        if(v.kind == VertexMap::Fem)
+        {
+#pragma unroll
+            for(IndexT r = 0; r < 3; ++r)
+            {
+                add_scalar_counted(v.old_dof + r,
+                                   v.old_dof + r,
+                                   static_cast<StoreT>(H(r, r)));
+            }
+            return;
+        }
+
+        if(v.kind != VertexMap::Abd)
+            return;
+
+#pragma unroll 1
+        for(IndexT q = 0; q < 12; ++q)
+        {
+            const IndexT comp = abd_component(q);
+            const Alu    w    = abd_weight(v.J, q);
+            const StoreT value = static_cast<StoreT>(
+                w * static_cast<Alu>(H(comp, comp)) * w);
+            add_scalar_counted(v.old_dof + q, v.old_dof + q, value);
+        }
+    }
+
+    template <typename H3>
+    MUDA_DEVICE void write_vertex_exact_diag_block(IndexT global_vertex,
+                                                   const H3& H) const noexcept
+    {
+        const auto v = map_vertex(global_vertex);
+        if(v.kind == VertexMap::None || v.fixed)
+            return;
+
+        if(!single_vertex_hessian_has_offband(v))
+        {
+            if(v.kind == VertexMap::Fem)
+                add_fem_fem(v.old_dof, v.old_dof, H);
+            else
+                add_abd_diag_hessian(v, H);
+            return;
+        }
+
+        write_vertex_exact_scalar_diag(v, H);
+    }
+
+    MUDA_DEVICE void write_vertex_lumped_scalar_diag(
+        IndexT                    global_vertex,
+        ActivePolicy::AluScalar   lump_x,
+        ActivePolicy::AluScalar   lump_y,
+        ActivePolicy::AluScalar   lump_z) const noexcept
+    {
+        using Alu = ActivePolicy::AluScalar;
+        const auto v = map_vertex(global_vertex);
+        if(v.kind == VertexMap::None || v.fixed)
+            return;
+
+        if(v.kind == VertexMap::Fem)
+        {
+            add_scalar_counted(v.old_dof + 0, v.old_dof + 0, static_cast<StoreT>(lump_x));
+            add_scalar_counted(v.old_dof + 1, v.old_dof + 1, static_cast<StoreT>(lump_y));
+            add_scalar_counted(v.old_dof + 2, v.old_dof + 2, static_cast<StoreT>(lump_z));
+            return;
+        }
+
+        const Alu lumps[3] = {lump_x, lump_y, lump_z};
+#pragma unroll 1
+        for(IndexT q = 0; q < 12; ++q)
+        {
+            const IndexT comp = abd_component(q);
+            const Alu    w    = abd_weight(v.J, q);
+            const StoreT value =
+                static_cast<StoreT>(w * lumps[comp] * w);
+            add_scalar_counted(v.old_dof + q, v.old_dof + q, value);
+        }
     }
 
     template <typename H3>
@@ -517,6 +773,38 @@ struct StructuredContactAssemblySink
             append_hessian_cache(global_vertex, global_vertex, H, false);
         }
 
+        if(matrix_offband_policy_active() && single_vertex_hessian_has_offband(v))
+        {
+            if(offband_policy == StructuredContactOffbandPolicy::Diag)
+            {
+                add_diag_fallback_counter();
+                write_vertex_exact_scalar_diag(v, H);
+                return;
+            }
+
+            if(offband_policy == StructuredContactOffbandPolicy::DiagLump)
+            {
+                using Alu = ActivePolicy::AluScalar;
+                Alu lump[3] = {Alu{0}, Alu{0}, Alu{0}};
+#pragma unroll
+                for(IndexT r = 0; r < 3; ++r)
+                {
+#pragma unroll
+                    for(IndexT c = 0; c < 3; ++c)
+                    {
+                        const Alu value = static_cast<Alu>(H(r, c));
+                        lump[r] += value < Alu{0} ? -value : value;
+                    }
+                }
+                add_lump_fallback_counter();
+                write_vertex_lumped_scalar_diag(global_vertex,
+                                                lump[0],
+                                                lump[1],
+                                                lump[2]);
+                return;
+            }
+        }
+
         if(v.kind == VertexMap::Fem)
         {
             add_fem_fem(v.old_dof, v.old_dof, H);
@@ -546,10 +834,65 @@ struct StructuredContactAssemblySink
     }
 
     template <int StencilSize, typename HMat>
+    MUDA_DEVICE void write_hessian_half_offband_fallback(
+        const Eigen::Vector<IndexT, StencilSize>& indices,
+        const HMat& H) const noexcept
+    {
+        if(offband_policy == StructuredContactOffbandPolicy::Diag)
+        {
+            add_diag_fallback_counter();
+#pragma unroll 1
+            for(IndexT k = 0; k < StencilSize; ++k)
+            {
+                write_vertex_exact_diag_block(
+                    indices(k),
+                    H.template block<3, 3>(k * 3, k * 3));
+            }
+            return;
+        }
+
+        if(offband_policy != StructuredContactOffbandPolicy::DiagLump)
+            return;
+
+        using Alu = ActivePolicy::AluScalar;
+        add_lump_fallback_counter();
+#pragma unroll 1
+        for(IndexT k = 0; k < StencilSize; ++k)
+        {
+            Alu lump[3] = {Alu{0}, Alu{0}, Alu{0}};
+#pragma unroll
+            for(IndexT r = 0; r < 3; ++r)
+            {
+#pragma unroll 1
+                for(IndexT j = 0; j < StencilSize; ++j)
+                {
+#pragma unroll
+                    for(IndexT c = 0; c < 3; ++c)
+                    {
+                        const Alu value =
+                            static_cast<Alu>(H(k * 3 + r, j * 3 + c));
+                        lump[r] += value < Alu{0} ? -value : value;
+                    }
+                }
+            }
+            write_vertex_lumped_scalar_diag(indices(k),
+                                            lump[0],
+                                            lump[1],
+                                            lump[2]);
+        }
+    }
+
+    template <int StencilSize, typename HMat>
     MUDA_DEVICE void write_hessian_half(
         const Eigen::Vector<IndexT, StencilSize>& indices,
         const HMat& H) const noexcept
     {
+        if(matrix_offband_policy_active() && stencil_has_offband(indices))
+        {
+            write_hessian_half_offband_fallback(indices, H);
+            return;
+        }
+
 #pragma unroll
         for(IndexT row_block = 0; row_block < StencilSize; ++row_block)
         {

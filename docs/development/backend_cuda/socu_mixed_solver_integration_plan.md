@@ -174,6 +174,31 @@ variant as `socu_rt1`, plus explicit diagnostics `socu_rt1_contact_hessian` and
 interval and differ only in the runtime reorder graph source, so frame-16
 failures can be compared without changing the ordinary `fused_pcg` baseline.
 
+Future off-band contact experiments must remain opt-in and must not replace the
+default exact structured contact assembly without measurement. The planned
+stability sequence is:
+
+1. `diag` / `diag_lump`: compute the exact contact Hessian, write it unchanged
+   when the entire contact stencil fits in the current SOCU band, and otherwise
+   replace the partial off-band stencil with either the exact per-vertex
+   diagonal contribution (`diag`) or a conservative nonnegative lumped-diagonal
+   contribution (`diag_lump`).
+2. `approx_diag`: use cheap normal/frictional contact weights to write only
+   per-vertex diagonal blocks in the final structured matrix. This is a matrix
+   approximation, not merely a runtime ordering graph approximation.
+3. `hybrid`: use exact structured contact writes for fully in-band stencils and
+   approximate diagonal writes for stencils that would otherwise be partially
+   dropped.
+4. Approximate cache: only consider this after profiling shows approximate
+   diagonal assembly is still dominated by repeated traversal or
+   classification.
+
+These policies are intended to diagnose whether partial off-band contact block
+dropping breaks positive semidefiniteness. Validation must compare the new
+variant against `fused_pcg`, `socu_rt1_full_hessian_cached`, and the exact
+`contact_hessian` / `full_hessian` diagnostics before any default behavior
+changes.
+
 SOCU approx now exposes only the strict structured direct solve path. The
 previous assembly-only validation path has been removed; structured assembly
 diagnostics are reported from the real solve path through

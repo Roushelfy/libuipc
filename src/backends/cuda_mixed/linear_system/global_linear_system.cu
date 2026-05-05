@@ -463,6 +463,13 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
                 Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
                 off_diag_subsystem->assemble_structured(info);
             }
+
+            if(probe == LinearSolver::StructuredProbeAssembly::None)
+            {
+                selected_linear_solver->debug_dump_structured_chain_checkpoint(
+                    info,
+                    "no_contact");
+            }
         }
 
         if(global_dytopo_effect_manager)

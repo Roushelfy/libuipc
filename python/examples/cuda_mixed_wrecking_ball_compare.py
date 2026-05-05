@@ -48,10 +48,34 @@ VARIANTS = {
         "runtime_interval": 1,
         "runtime_graph_source": "contact_hessian",
     },
+    "socu_rt1_contact_hessian_diag": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "contact_hessian",
+        "contact_offband_policy": "diag",
+    },
+    "socu_rt1_contact_hessian_diag_lump": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "contact_hessian",
+        "contact_offband_policy": "diag_lump",
+    },
     "socu_rt1_full_hessian": {
         "solver": "socu_approx",
         "runtime_interval": 1,
         "runtime_graph_source": "full_hessian",
+    },
+    "socu_rt1_full_hessian_diag": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "full_hessian",
+        "contact_offband_policy": "diag",
+    },
+    "socu_rt1_full_hessian_diag_lump": {
+        "solver": "socu_approx",
+        "runtime_interval": 1,
+        "runtime_graph_source": "full_hessian",
+        "contact_offband_policy": "diag_lump",
     },
     "socu_rt1_contact_weight_approx": {
         "solver": "socu_approx",
@@ -120,6 +144,7 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
         "runtime_graph_source",
         "topology",
     )
+    socu["contact_offband_policy"] = spec.get("contact_offband_policy", "drop")
     report_counters = os.environ.get("SOCU_REPORT_COUNTERS", "1") != "0"
     socu["debug_validation"] = 1 if report_counters else 0
     socu["debug_timing"] = 1 if report_counters else 0
@@ -173,6 +198,12 @@ def build_scene(variant: str, workspace: Path) -> tuple[Engine, World]:
     configure_solver(config, variant, workspace)
 
     scene = Scene(config)
+    if VARIANTS[variant]["solver"] == "socu_approx":
+        set_scene_config_path(
+            scene.config(),
+            "linear_system/socu_approx/contact_offband_policy",
+            VARIANTS[variant].get("contact_offband_policy", "drop"),
+        )
     if VARIANTS[variant]["solver"] == "socu_approx" and os.environ.get("SOCU_DEBUG_DUMP"):
         scene_config = scene.config()
         set_scene_config_path(scene_config, "linear_system/socu_approx/debug_dump_problem_file", 1)
@@ -241,6 +272,10 @@ def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
         "runtime_graph_source": VARIANTS[variant].get(
             "runtime_graph_source",
             "topology",
+        ),
+        "contact_offband_policy": VARIANTS[variant].get(
+            "contact_offband_policy",
+            "drop",
         ),
         "frames": frames,
         "final_frame": int(world.frame()),

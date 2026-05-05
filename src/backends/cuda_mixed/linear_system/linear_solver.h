@@ -46,6 +46,14 @@ class LinearSolver : public SimSystem
     {
     }
 
+    virtual void debug_dump_structured_chain_checkpoint(
+        GlobalLinearSystem::StructuredAssemblyInfo& info,
+        std::string_view                            label)
+    {
+        (void)info;
+        (void)label;
+    }
+
     enum class StructuredProbeAssembly
     {
         None,

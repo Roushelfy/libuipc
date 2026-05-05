@@ -25,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -88,6 +89,50 @@ bool runtime_graph_source_approx(const std::string& source) noexcept
 bool runtime_graph_source_cache_enabled(const std::string& source) noexcept
 {
     return source == "full_hessian_cached";
+}
+
+bool parse_contact_offband_policy(const std::string& source,
+                                  StructuredContactOffbandPolicy& policy) noexcept
+{
+    if(source == "drop")
+    {
+        policy = StructuredContactOffbandPolicy::Drop;
+        return true;
+    }
+    if(source == "diag")
+    {
+        policy = StructuredContactOffbandPolicy::Diag;
+        return true;
+    }
+    if(source == "diag_lump")
+    {
+        policy = StructuredContactOffbandPolicy::DiagLump;
+        return true;
+    }
+    return false;
+}
+
+std::string_view contact_offband_policy_name(
+    StructuredContactOffbandPolicy policy) noexcept
+{
+    switch(policy)
+    {
+        case StructuredContactOffbandPolicy::Drop:
+            return "drop";
+        case StructuredContactOffbandPolicy::Diag:
+            return "diag";
+        case StructuredContactOffbandPolicy::DiagLump:
+            return "diag_lump";
+        default:
+            return "drop";
+    }
+}
+
+bool contact_hessian_cache_enabled(const std::string&             graph_source,
+                                   StructuredContactOffbandPolicy policy) noexcept
+{
+    return runtime_graph_source_cache_enabled(graph_source)
+           && policy == StructuredContactOffbandPolicy::Drop;
 }
 
 socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
@@ -297,6 +342,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         config.find<IndexT>("linear_system/socu_approx/runtime_reorder_edge_capacity");
     auto runtime_reorder_graph_source_attr =
         config.find<std::string>("linear_system/socu_approx/runtime_reorder_graph_source");
+    auto contact_offband_policy_attr =
+        config.find<std::string>("linear_system/socu_approx/contact_offband_policy");
     m_runtime_reorder_frame_interval =
         runtime_reorder_interval_attr
             ? static_cast<SizeT>(std::max<IndexT>(0, runtime_reorder_interval_attr->view()[0]))
@@ -318,6 +365,19 @@ void SocuApproxSolver::do_build(BuildInfo& info)
                         "'contact_weight_approx', 'full_weight_approx', or "
                         "'full_hessian_cached', got '{}'",
                         m_runtime_reorder_graph_source));
+        throw_gate_failure(m_gate_report);
+    }
+    const std::string contact_offband_policy =
+        contact_offband_policy_attr ? contact_offband_policy_attr->view()[0]
+                                    : std::string{"drop"};
+    if(!parse_contact_offband_policy(contact_offband_policy,
+                                     m_contact_offband_policy))
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/contact_offband_policy must be "
+                        "'drop', 'diag', or 'diag_lump', got '{}'",
+                        contact_offband_policy));
         throw_gate_failure(m_gate_report);
     }
 
@@ -780,7 +840,8 @@ bool SocuApproxSolver::install_ordering_report_impl(
         runtime->upload_old_dof_to_atom(old_dof_to_atom);
         if(m_runtime_reorder_edge_capacity > 0)
             runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
-        if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source))
+        if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                         m_contact_offband_policy))
         {
             m_cached_contact_hessian_capacity =
                 std::min<SizeT>(m_runtime_reorder_edge_capacity, SizeT{1} << 20);
@@ -837,6 +898,8 @@ bool SocuApproxSolver::install_ordering_report_impl(
     next_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
     next_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
     next_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+    next_report.contact_offband_policy =
+        std::string{contact_offband_policy_name(m_contact_offband_policy)};
 
     m_gate_report = std::move(next_gate);
     m_gate_report.passed = true;
@@ -993,7 +1056,8 @@ bool SocuApproxSolver::install_runtime_reorder_from_collector(SizeT collected_fr
                 ? "runtime_contact_topology"
                 : (runtime_graph_source_approx(m_runtime_reorder_graph_source)
                        ? "runtime_contact_weight_approx"
-                       : (runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+                       : (contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                                        m_contact_offband_policy)
                               ? "runtime_hessian_cached"
                               : "runtime_hessian")));
     }
@@ -1158,7 +1222,10 @@ void SocuApproxSolver::prepare_structured_chain(
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
-    if(m_cached_contact_hessian_valid
+    info.set_contact_offband_policy(m_contact_offband_policy);
+    if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                     m_contact_offband_policy)
+       && m_cached_contact_hessian_valid
        && m_cached_contact_hessian_frame == engine().frame())
     {
         info.set_contact_hessian_cache(
@@ -1210,6 +1277,8 @@ auto SocuApproxSolver::prepare_structured_probe(
         m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
         m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
         m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+        m_report.contact_offband_policy =
+            std::string{contact_offband_policy_name(m_contact_offband_policy)};
         m_report.runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
         m_report.runtime_reorder_last_applied_frame =
             m_runtime_reorder_last_applied_frame;
@@ -1225,6 +1294,8 @@ auto SocuApproxSolver::prepare_structured_probe(
     m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
     m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
     m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+    m_report.contact_offband_policy =
+        std::string{contact_offband_policy_name(m_contact_offband_policy)};
     m_report.runtime_reorder_collecting_frame = frame;
     m_report.runtime_reorder_applied = false;
     m_report.runtime_reorder_failure_detail.clear();
@@ -1237,7 +1308,8 @@ auto SocuApproxSolver::prepare_structured_probe(
                                                2 * sizeof(IndexT),
                                                stream));
     }
-    if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+    if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                     m_contact_offband_policy)
        && m_runtime->contact_hessian_cache_cursor.size() >= 2)
     {
         SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(
@@ -1265,7 +1337,9 @@ auto SocuApproxSolver::prepare_structured_probe(
             true,
             m_runtime_reorder_graph_source == "topology",
             runtime_graph_source_approx(m_runtime_reorder_graph_source)));
-    if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source))
+    info.set_contact_offband_policy(m_contact_offband_policy);
+    if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                     m_contact_offband_policy))
     {
         info.set_contact_hessian_cache(
             m_runtime->contact_hessian_cache(true, false, 0));
@@ -1297,7 +1371,8 @@ bool SocuApproxSolver::finalize_structured_probe(
             m_runtime_reorder_last_signature = m_runtime_reorder_pending_signature;
             m_runtime_reorder_last_signature_valid = true;
         }
-        if(runtime_graph_source_cache_enabled(m_runtime_reorder_graph_source)
+        if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
+                                         m_contact_offband_policy)
            && m_runtime->contact_hessian_cache_cursor.size() >= 2)
         {
             std::array<IndexT, 2> cache_cursor{};
@@ -1336,7 +1411,9 @@ void SocuApproxSolver::finalize_structured_chain(
             static_cast<SizeT>(contact_counts[3]),
             static_cast<SizeT>(contact_counts[4]),
             static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
-            static_cast<SizeT>(contact_counts[2]));
+            static_cast<SizeT>(contact_counts[2]),
+            static_cast<SizeT>(contact_counts[5]),
+            static_cast<SizeT>(contact_counts[6]));
     }
 
     m_report.structured_diag_write_count =
@@ -1356,6 +1433,10 @@ void SocuApproxSolver::finalize_structured_chain(
         info.off_band_contribution_count();
     m_report.structured_off_band_drop_count =
         info.off_band_contribution_count();
+    m_report.contact_offband_diag_fallback_count =
+        info.contact_diag_fallback_count();
+    m_report.contact_offband_lump_fallback_count =
+        info.contact_lump_fallback_count();
 
     const SizeT total_contact_count =
         info.near_band_contact_count() + info.off_band_contact_count();
@@ -1403,6 +1484,8 @@ void SocuApproxSolver::finalize_structured_chain(
     m_report.runtime_reorder_interval = m_runtime_reorder_frame_interval;
     m_report.runtime_reorder_edge_capacity = m_runtime_reorder_edge_capacity;
     m_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
+    m_report.contact_offband_policy =
+        std::string{contact_offband_policy_name(m_contact_offband_policy)};
     m_report.runtime_reorder_last_applied_frame =
         m_runtime_reorder_last_applied_frame;
     if(m_debug_dump_structured_matrix || m_debug_dump_problem_file) [[unlikely]]
@@ -1416,8 +1499,33 @@ void SocuApproxSolver::finalize_structured_chain(
 #endif
 }
 
+void SocuApproxSolver::debug_dump_structured_chain_checkpoint(
+    GlobalLinearSystem::StructuredAssemblyInfo& info,
+    std::string_view                            label)
+{
+#if UIPC_WITH_SOCU_NATIVE
+    if(!(m_debug_dump_structured_matrix || m_debug_dump_problem_file))
+        return;
+    if(!m_runtime)
+        return;
+    if(info.runtime_ordering_collector().valid()
+       && info.runtime_ordering_collector().graph_only)
+        return;
+
+    cudaStreamSynchronize(info.stream());
+    if(m_debug_dump_structured_matrix)
+        dump_structured_matrix(info, label);
+    if(m_debug_dump_problem_file)
+        dump_problem_file(info, label);
+#else
+    (void)info;
+    (void)label;
+#endif
+}
+
 void SocuApproxSolver::dump_structured_matrix(
-    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/)
+    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/,
+    std::string_view label)
 {
 #if UIPC_WITH_SOCU_NATIVE
     UIPC_ASSERT(m_runtime != nullptr,
@@ -1516,8 +1624,11 @@ void SocuApproxSolver::dump_structured_matrix(
     // Write Matrix Market file
     auto path_tool = BackendPathTool(workspace());
     auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
-    const auto path = fmt::format("{}A_structured.{}.{}.mtx",
+    const std::string suffix =
+        label.empty() ? std::string{} : fmt::format("_{}", label);
+    const auto path = fmt::format("{}A_structured{}.{}.{}.mtx",
                                   output_folder.string(),
+                                  suffix,
                                   engine().frame(),
                                   engine().newton_iter());
     FILE* fp = std::fopen(path.c_str(), "w");
@@ -1539,7 +1650,8 @@ void SocuApproxSolver::dump_structured_matrix(
 }
 
 void SocuApproxSolver::dump_problem_file(
-    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/)
+    const GlobalLinearSystem::StructuredAssemblyInfo& /*info*/,
+    std::string_view label)
 {
 #if UIPC_WITH_SOCU_NATIVE
     UIPC_ASSERT(m_runtime != nullptr,
@@ -1577,8 +1689,11 @@ void SocuApproxSolver::dump_problem_file(
 
     auto path_tool = BackendPathTool(workspace());
     auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
-    auto path = fmt::format("{}problem.{}.{}.bin",
+    const std::string suffix =
+        label.empty() ? std::string{} : fmt::format("_{}", label);
+    auto path = fmt::format("{}problem{}.{}.{}.bin",
                             output_folder.string(),
+                            suffix,
                             engine().frame(),
                             engine().newton_iter());
 

@@ -37,7 +37,7 @@ std::string socu_dtype_name()
 struct SocuApproxRuntime
 {
     static constexpr SizeT kValidationSumCount = 5;
-    static constexpr SizeT kReportCounterCount = 5;
+    static constexpr SizeT kReportCounterCount = 7;
 
 #if UIPC_WITH_SOCU_NATIVE
     using Scalar = ActivePolicy::SolveScalar;

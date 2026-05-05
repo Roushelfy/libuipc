@@ -466,3 +466,388 @@ an opt-in experimental graph source. The large extra-iteration issue from the
 initial cache experiment was caused by the missing diagonal records; after the
 fix, 20-frame total solve/build counts are close enough for continued
 benchmarking.
+
+### Offband-Safe Contact Matrix Experiment Plan
+
+2026-05-04: The next stability experiment will test whether the known frame-16
+`contact_hessian` direction-validation failure is caused by partially dropping
+off-band contact Hessian blocks. The current default remains unchanged: exact
+contact Hessians are assembled into the SOCU structured matrix and off-band
+entries are dropped according to the existing band policy. New policies must be
+opt-in benchmark variants only.
+
+Motivation:
+
+- A complete contact stencil Hessian may be positive semidefinite after the
+  existing contact Hessian projection, but keeping only an arbitrary subset of
+  its off-diagonal blocks is not guaranteed to preserve positive
+  semidefiniteness.
+- A diagonal or lumped-diagonal contact contribution with nonnegative weights is
+  positive semidefinite, so it should not introduce an indefinite contribution
+  into the total Hessian.
+- The experiment should separate ordering/probe approximation from matrix
+  approximation. Changing both at once would make frame-16 failures harder to
+  diagnose.
+
+Planned experiment order:
+
+1. Exact offband diagonalize / lump.
+   Keep computing the exact contact Hessian. If every half-block in a contact
+   stencil can be written into the current SOCU band, write the exact stencil as
+   before. If any half-block is off-band, do not write a partial off-diagonal
+   stencil. Instead, write a conservative vertex-diagonal contribution. Test
+   two opt-in variants: `socu_rt1_full_hessian_diag` keeps only the exact
+   per-vertex diagonal block, while `socu_rt1_full_hessian_diag_lump` writes a
+   nonnegative row-sum / `abs_sum(H)` lump to scalar diagonal entries.
+2. Approximate diagonal matrix mode.
+   Add opt-in variants such as `socu_rt1_full_weight_approx_diag` and
+   `socu_rt1_contact_weight_approx_diag`. Final structured contact assembly
+   does not compute the exact contact Hessian. Normal contact writes
+   `abs(kappa * dt * dt) * scale * I3`; frictional contact writes
+   `abs(kappa * mu * dt * dt) * scale * I3`. Each stencil writes only
+   per-vertex diagonal blocks, no off-diagonal coupling. This path is expected
+   to be cheap enough that a compact Hessian cache is not useful initially.
+3. Hybrid exact-band else approximate diagonal.
+   Cheaply classify the stencil under the current ordering before computing a
+   Hessian. If all half-blocks are in band, write exact contact Hessian values.
+   If any half-block is off-band, skip exact off-diagonal coupling and write
+   the approximate diagonal contribution. This is more faithful than always
+   approximate, and safer than partial off-band dropping.
+4. Approximate cache.
+   Keep this as the lowest-priority follow-up. Approximate diagonal assembly is
+   expected to be dominated by contact traversal and classification rather than
+   Hessian math. Only add a cache if profiling shows repeated approximate
+   traversal/classification is still a measurable bottleneck.
+
+Validation requirements for each variant:
+
+- `uipc_test_sim_case_cuda_mixed_only
+  "86_cuda_mixed_linear_solver_selection_smoke" -s`.
+- `SOCU_REPORT_COUNTERS=0 ... --variant fused_pcg --frames 20` must still
+  complete `final_frame=20`.
+- The new variant must run `--frames 20`; the key question is whether it gets
+  past `>>> Begin Frame: 16` without the known direction-validation NaN.
+- If the 20-frame run passes, run `--frames 100` and record final frame, Newton
+  sum, Build/Solve counts, line-search behavior, and whether the diagonal mode
+  appears stable but too soft.
+- Dump frame 13 and/or frame 16 structured matrices for representative runs and
+  compare symmetry, off-band / near-band counters, minimum diagonal, direction
+  validation status, and, where practical, sparse factorization or minimum
+  eigenvalue estimates.
+- With `SOCU_REPORT_COUNTERS=0`, compare total wall time, Build Linear System,
+  Assemble Structured Chain, Assemble Structured DyTopo Hessian, Assemble
+  Contact, Replay Structured Contact Hessian Cache, and Solve Linear System
+  against both `socu_rt1_full_hessian_cached` and `fused_pcg`.
+
+Acceptance policy:
+
+- Keep each mode opt-in until it proves both stable and useful.
+- The first implementation target is the exact `diag` / `diag_lump` pair,
+  because together they answer the narrowest question: whether partial
+  off-band dropping is the source of the frame-16 non-SPD / NaN behavior.
+- If either exact diagonal policy passes 100 frames without a major Newton-count
+  increase, proceed to the cheaper approximate diagonal matrix modes for
+  performance.
+
+### Offband Diag / Diag-Lump Prototype Retained Opt-In
+
+2026-05-05: Implemented the opt-in matrix fallback policies
+`contact_offband_policy = diag` and `diag_lump`. The prototype keeps default
+`drop` unchanged, disables compact Hessian cache replay whenever the policy is
+not `drop`, and adds wrecking-ball variants for both `full_hessian` and
+`contact_hessian`.
+
+Validation:
+
+- `git diff --check` passed before testing.
+- `uipc_test_sim_case_cuda_mixed_only
+  "86_cuda_mixed_linear_solver_selection_smoke" -s` passed: 207 assertions.
+- `SOCU_REPORT_COUNTERS=0 ... --variant fused_pcg --frames 20` passed.
+
+20-frame results:
+
+- `socu_rt1_full_hessian_diag` reached `final_frame=20`.
+- `socu_rt1_full_hessian_diag_lump` reached `final_frame=20`.
+- `socu_rt1_contact_hessian_diag` still failed at frame 16 with the known light
+  direction validation failure:
+  `finite=false`, `nonzero=false`, `descent=false`,
+  `nonfinite_count=6888`, `p_norm=0`.
+- `socu_rt1_contact_hessian_diag_lump` failed at the same frame 16 point with
+  the same validation mode.
+
+100-frame timing, counters disabled:
+
+| variant | final frame | wall time | Newton sum | Build/Solve calls | Build Linear System | Assemble Structured Chain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fused_pcg` | `100` | `17.619s` | `375` | `475 / 475` | `3.304 ms/call` | n/a |
+| `socu_rt1_full_hessian` | `100` | `35.031s` | `314` | `414 / 414` | `58.420 ms/call` | `57.835 ms/call` |
+| `socu_rt1_full_hessian_cached` | `100` | `29.948s` | `312` | `412 / 412` | `44.766 ms/call` | `44.180 ms/call` |
+| `socu_rt1_full_hessian_diag` | `100` | `36.013s` | `312` | `412 / 412` | `63.148 ms/call` | `62.545 ms/call` |
+| `socu_rt1_full_hessian_diag_lump` | `100` | `35.132s` | `312` | `412 / 412` | `57.268 ms/call` | `56.683 ms/call` |
+
+Decision: keep the prototype as an opt-in diagnostic / future tuning path, but
+do not make either policy a default. Because default `drop` remains unchanged
+and `full_hessian_cached` only replays the compact cache when the policy is
+`drop`, the existing cached performance path should not be affected unless the
+user explicitly selects `diag` or `diag_lump`. The full-Hessian fallback
+variants did not provide a stability advantage over exact `full_hessian` and
+were slower than `full_hessian_cached`. More importantly, applying the same
+policies to `contact_hessian` did not fix the frame-16 direction-validation
+failure. This suggests the known `contact_hessian` failure is not solved by
+simply replacing partially off-band contact stencils with exact diagonal or
+row-sum lumped diagonal contributions.
+
+Next direction: investigate what is missing from the `contact_hessian` runtime
+graph source relative to `full_hessian`, because `full_hessian` and
+`full_hessian_cached` pass while `contact_hessian` still produces a zero /
+nonfinite direction at frame 16.
+
+### Frame-16 No-Contact SPD Check
+
+2026-05-05: Added a debug-only structured-chain checkpoint before structured
+contact assembly. When `SOCU_DEBUG_DUMP=1` is enabled, the solver now writes
+both the existing final structured problem dump and a `_no_contact` dump taken
+after chain / dyTopo base assembly but before contact Hessian assembly.
+
+Run:
+
+```bash
+SOCU_DEBUG_DUMP=1 SOCU_REPORT_COUNTERS=1 \
+PYTHONPATH=build/build_impl_fp64/python/src \
+LD_LIBRARY_PATH=build/build_impl_fp64/python/src/uipc/_native:${LD_LIBRARY_PATH:-} \
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+python/examples/cuda_mixed_wrecking_ball_compare.py \
+  --variant socu_rt1_contact_hessian \
+  --frames 17 \
+  --output output/examples/wrecking_ball_no_contact_dump
+```
+
+The run reached the known frame-16 Newton-1 failure and produced:
+
+- `problem_no_contact.16.1.bin`
+- `problem.16.1.bin`
+
+CPU reference checks:
+
+```text
+problem_no_contact.16.1.bin: factor passed
+problem_no_contact.16.1.bin: factor_and_solve passed, residual=2.615262e-13
+problem.16.1.bin: CPU reference LLT failed
+```
+
+Conclusion: at the failing frame/Newton, the structured chain/base matrix before
+contact assembly is still LLT-factorable. The non-SPD matrix appears only after
+the contact structured contribution is assembled. This narrows the frame-16
+`contact_hessian` failure to contact contribution / contact-induced ordering
+effects rather than the pre-contact structured chain matrix.
+
+Follow-up check for `socu_rt1_contact_hessian_diag` at the same failure point:
+
+```text
+A_structured_no_contact.16.1.mtx: diag neg=0, min=1
+A_structured.16.1.mtx: diag neg=0, min=1
+contact-only diagonal delta: neg=0, min=0, max=151126.5462167073
+problem_no_contact.16.1.bin: CPU LLT factor passed
+problem.16.1.bin: CPU reference LLT failed
+```
+
+So the `diag` off-band policy does not introduce negative diagonal entries
+either. Its frame-16 failure is still a whole-matrix SPD issue after contact
+assembly, not a negative-diagonal issue.
+
+Correction: the run above did not actually enable the opt-in policy. The Python
+variant wrote `contact_offband_policy` into the initial config dictionary, but
+the scene config did not contain that path, so the solver still reported
+`contact_offband_policy = drop`.
+
+After creating the scene-config path explicitly, a rerun of
+`socu_rt1_contact_hessian_diag --frames 17` completed frame 17. The corrected
+frame-16 Newton-1 report shows:
+
+```text
+runtime_reorder.contact_offband_policy = diag
+contact_offband_diag_fallback_count = 6904
+structured_off_band_drop_count = 0
+dropped_hessian_contribution_count = 0
+contribution_off_band_ratio = 0
+problem_no_contact.16.1.bin: CPU LLT factor passed
+problem.16.1.bin: CPU LLT factor passed
+```
+
+Corrected conclusion: the user's SPD argument was right. Once `diag` is
+actually enabled, stencils that would otherwise partially drop off-band contact
+couplings are replaced by exact diagonal blocks, and the frame-16
+`contact_hessian` LLT failure disappears at least through the 17-frame debug
+run. The remaining work is to rerun the 20/100-frame timing and stability tests
+with the fixed variant configuration.
+
+### Corrected Offband Policy Sweep
+
+2026-05-05: Invalidated the earlier offband-policy timing section because
+`diag` / `diag_lump` were not actually enabled in the scene config. The Python
+benchmark now explicitly creates
+`linear_system/socu_approx/contact_offband_policy` on the post-`Scene(config)`
+config object, so the solver receives the intended policy.
+
+Retest setup:
+
+- No `SOCU_DEBUG_DUMP`.
+- `SOCU_REPORT_COUNTERS=0`.
+- Graph sources: `topology`, `contact_hessian`.
+- Runtime intervals: init-only (`0`), `1`, `2`, `5`, `10`.
+- Off-band policies: `diag`, `diag_lump`.
+- Output:
+  - `output/examples/wrecking_ball_offband_policy_sweep_20f`
+  - `output/examples/wrecking_ball_offband_policy_sweep_100f`
+
+20-frame sweep: all 20 combinations reached `final_frame=20`; no NaN was
+observed, so no debug dump rerun was needed.
+
+100-frame sweep:
+
+| graph | interval | policy | final | wall time | Newton | Build ms/call | Chain ms/call | Contact ms/call |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| topology | init | diag | 100 | 18.210s | 465 | 17.062 | 16.513 | 1.963 |
+| topology | init | diag_lump | 100 | 15.399s | 400 | 16.036 | 15.479 | 1.863 |
+| topology | 1 | diag | 100 | 27.746s | 507 | 33.239 | 32.691 | 2.134 |
+| topology | 1 | diag_lump | 100 | 20.881s | 436 | 27.116 | 26.561 | 1.549 |
+| topology | 2 | diag | 100 | 23.957s | 479 | 28.767 | 28.215 | 2.509 |
+| topology | 2 | diag_lump | 100 | 18.273s | 414 | 22.488 | 21.925 | 1.873 |
+| topology | 5 | diag | 100 | 22.820s | 473 | 25.527 | 24.971 | 2.682 |
+| topology | 5 | diag_lump | 100 | 17.696s | 401 | 21.970 | 21.397 | 2.305 |
+| topology | 10 | diag | 100 | 21.827s | 472 | 23.512 | 22.958 | 2.605 |
+| topology | 10 | diag_lump | 100 | 15.442s | 400 | 16.727 | 16.164 | 1.840 |
+| contact_hessian | init | diag | 100 | 17.650s | 465 | 17.252 | 16.696 | 1.986 |
+| contact_hessian | init | diag_lump | 100 | 15.205s | 400 | 16.237 | 15.674 | 1.886 |
+| contact_hessian | 1 | diag | 100 | 45.348s | 489 | 70.489 | 69.934 | 2.543 |
+| contact_hessian | 1 | diag_lump | 100 | 39.595s | 436 | 68.395 | 67.838 | 2.224 |
+| contact_hessian | 2 | diag | 100 | 34.541s | 504 | 46.764 | 46.207 | 2.762 |
+| contact_hessian | 2 | diag_lump | 100 | 26.805s | 428 | 41.375 | 40.823 | 2.119 |
+| contact_hessian | 5 | diag | 100 | 26.751s | 501 | 31.328 | 30.781 | 2.698 |
+| contact_hessian | 5 | diag_lump | 100 | 22.755s | 440 | 29.087 | 28.534 | 2.290 |
+| contact_hessian | 10 | diag | 100 | 25.639s | 513 | 28.491 | 27.936 | 2.849 |
+| contact_hessian | 10 | diag_lump | 100 | 22.195s | 447 | 28.050 | 27.482 | 2.543 |
+
+Observations:
+
+- All corrected `diag` and `diag_lump` variants are stable through 100 frames.
+- `diag_lump` is consistently faster than `diag` in this scene, largely because
+  it reduces Newton/build counts.
+- Runtime `contact_hessian` reordering is significantly more expensive than
+  runtime `topology` reordering at the same interval. The rt1 contact-hessian
+  path is the slowest tested configuration.
+- Among the tested runtime-reorder configurations, the best 100-frame wall time
+  is `topology + interval 10 + diag_lump` at `15.442s`, close to init-only
+  `diag_lump` at `15.399s`.
+- `contact_hessian + diag_lump` is stable, but slower than topology for all
+  tested runtime intervals in this 100-frame wrecking-ball run.
+
+### Extended Graph Source / Interval Sweep
+
+2026-05-05: Extended the corrected sweep with `full_hessian` ordering and
+larger runtime reorder intervals. Conditions remained:
+
+- No `SOCU_DEBUG_DUMP`.
+- `SOCU_REPORT_COUNTERS=0`.
+- 100 frames.
+- Policies: `diag`, `diag_lump`.
+- Output:
+  `output/examples/wrecking_ball_offband_policy_sweep_extended_100f`.
+
+All extended combinations reached `final_frame=100`; no NaN was observed, so no
+debug dump rerun was needed.
+
+| graph | interval | policy | wall time | Newton | Build ms/call | Chain ms/call | Contact ms/call |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| full_hessian | init | diag | 18.893s | 465 | 17.109 | 16.557 | 1.967 |
+| full_hessian | init | diag_lump | 15.041s | 400 | 16.112 | 15.541 | 1.869 |
+| full_hessian | 1 | diag | 33.231s | 410 | 58.639 | 58.075 | 1.906 |
+| full_hessian | 1 | diag_lump | 33.169s | 410 | 58.640 | 58.074 | 1.909 |
+| full_hessian | 2 | diag | 31.120s | 492 | 40.457 | 39.904 | 2.525 |
+| full_hessian | 2 | diag_lump | 26.090s | 417 | 39.994 | 39.435 | 2.028 |
+| full_hessian | 5 | diag | 33.778s | 670 | 27.985 | 27.442 | 2.651 |
+| full_hessian | 5 | diag_lump | 31.238s | 621 | 27.828 | 27.281 | 2.304 |
+| full_hessian | 10 | diag | 38.044s | 832 | 25.809 | 25.267 | 2.702 |
+| full_hessian | 10 | diag_lump | 33.736s | 790 | 22.950 | 22.402 | 2.219 |
+| full_hessian | 15 | diag | 38.318s | 895 | 22.804 | 22.937 | 2.576 |
+| full_hessian | 15 | diag_lump | 34.316s | 798 | 23.839 | 23.296 | 2.464 |
+| full_hessian | 20 | diag | 61.182s | 1432 | 23.855 | 23.315 | 2.640 |
+| full_hessian | 20 | diag_lump | 26.268s | 611 | 22.329 | 21.786 | 2.294 |
+| full_hessian | 25 | diag | 61.996s | 1415 | 24.177 | 23.643 | 2.768 |
+| full_hessian | 25 | diag_lump | 34.707s | 809 | 23.852 | 23.309 | 2.462 |
+| full_hessian | 50 | diag | 52.104s | 1256 | 22.595 | 22.060 | 2.603 |
+| full_hessian | 50 | diag_lump | 36.321s | 910 | 20.833 | 20.285 | 2.352 |
+| topology | 15 | diag | 21.602s | 472 | 23.115 | 22.561 | 2.630 |
+| topology | 15 | diag_lump | 17.178s | 399 | 21.798 | 21.233 | 2.479 |
+| topology | 20 | diag | 21.785s | 475 | 24.681 | 24.126 | 2.813 |
+| topology | 20 | diag_lump | 14.979s | 400 | 16.112 | 15.546 | 1.813 |
+| topology | 25 | diag | 22.389s | 478 | 25.548 | 24.994 | 2.909 |
+| topology | 25 | diag_lump | 15.165s | 400 | 16.381 | 15.812 | 1.857 |
+| topology | 50 | diag | 17.554s | 465 | 17.271 | 16.715 | 1.967 |
+| topology | 50 | diag_lump | 14.941s | 400 | 16.088 | 15.525 | 1.844 |
+| contact_hessian | 15 | diag | 24.127s | 485 | 28.501 | 27.949 | 2.921 |
+| contact_hessian | 15 | diag_lump | 18.704s | 410 | 22.721 | 22.156 | 2.316 |
+| contact_hessian | 20 | diag | 22.610s | 487 | 24.025 | 23.467 | 2.560 |
+| contact_hessian | 20 | diag_lump | 20.145s | 444 | 24.230 | 23.674 | 2.524 |
+| contact_hessian | 25 | diag | 22.242s | 474 | 24.562 | 24.003 | 2.470 |
+| contact_hessian | 25 | diag_lump | 20.227s | 429 | 24.879 | 24.282 | 2.558 |
+| contact_hessian | 50 | diag | 19.344s | 431 | 23.337 | 22.769 | 2.563 |
+| contact_hessian | 50 | diag_lump | 17.920s | 416 | 21.101 | 20.520 | 2.269 |
+
+Updated observations:
+
+- `full_hessian` ordering is stable with both fallback policies, but runtime
+  `full_hessian` reordering is not competitive in this scene. The rt1
+  `full_hessian` variants spend about `58 ms/call` in structured chain
+  assembly.
+- Large `full_hessian` intervals can severely increase Newton count. The worst
+  cases here are `full_hessian + interval 20/25 + diag`, with more than 1400
+  Newton iterations over 100 frames.
+- `full_hessian + init + diag_lump` is fast (`15.041s`) and stable, but it does
+  not exercise runtime reordering.
+- For runtime reordering, the best measured configurations are still
+  topology-based with `diag_lump`: interval 50 (`14.941s`), interval 20
+  (`14.979s`), and interval 25 (`15.165s`).
+- `contact_hessian + diag_lump` remains stable at larger intervals, but it is
+  slower than topology at every matching large interval tested here.
+
+### Fused PCG Comparison For Corrected Sweep
+
+Same command family and environment as the corrected 100-frame sweeps:
+
+```bash
+SOCU_REPORT_COUNTERS=0 \
+PYTHONPATH=build/build_impl_fp64/python/src \
+LD_LIBRARY_PATH=build/build_impl_fp64/python/src/uipc/_native:${LD_LIBRARY_PATH:-} \
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+python/examples/cuda_mixed_wrecking_ball_compare.py \
+  --variant fused_pcg \
+  --frames 100 \
+  --output output/examples/wrecking_ball_offband_policy_sweep_extended_100f
+```
+
+`fused_pcg` reached `final_frame=100` with:
+
+```text
+wall_time = 17.035s
+Newton count = 470
+Build Linear System = 3.114 ms/call
+Assemble Contact = 1.316 ms/call
+Solve Linear System = 7.964 ms/call
+```
+
+Fastest corrected SOCU variants versus this fused-PCG baseline:
+
+| variant | wall time | vs fused_pcg | Newton | Build ms/call | Contact ms/call | Solve ms/call |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `socu_rt50_topology_diag_lump` | 14.941s | -12.3% | 400 | 16.088 | 1.844 | 2.262 |
+| `socu_rt20_topology_diag_lump` | 14.979s | -12.1% | 400 | 16.112 | 1.813 | 2.259 |
+| `socu_init_full_hessian_diag_lump` | 15.041s | -11.7% | 400 | 16.112 | 1.869 | 2.330 |
+| `socu_rt25_topology_diag_lump` | 15.165s | -11.0% | 400 | 16.381 | 1.857 | 2.275 |
+| `socu_init_contact_hessian_diag_lump` | 15.205s | -10.7% | 400 | 16.237 | 1.886 | 2.365 |
+
+Takeaway: the best corrected SOCU configurations are about 10-12% faster than
+fused PCG on this 100-frame wrecking-ball run, mainly because SOCU has fewer
+Newton/build calls and a much cheaper solve stage. Fused PCG still assembles
+the system much faster per build; SOCU only wins when the solve-stage saving
+and reduced Newton count overcome the heavier structured build.

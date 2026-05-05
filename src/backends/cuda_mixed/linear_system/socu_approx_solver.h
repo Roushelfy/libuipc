@@ -3,9 +3,11 @@
 #include <linear_system/linear_solver.h>
 #include <linear_system/socu_approx_report.h>
 #include <linear_system/structured_chain_provider.h>
+#include <utils/structured_contact_offband_policy.h>
 #include <uipc/common/json.h>
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace uipc::backend::cuda_mixed
@@ -33,6 +35,9 @@ class SocuApproxSolver : public LinearSolver
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void finalize_structured_chain(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual void debug_dump_structured_chain_checkpoint(
+        GlobalLinearSystem::StructuredAssemblyInfo& info,
+        std::string_view                            label) override;
     virtual StructuredProbeAssembly prepare_structured_probe(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual bool finalize_structured_probe(
@@ -63,8 +68,10 @@ class SocuApproxSolver : public LinearSolver
 
     void validate_direction_light(cudaStream_t stream);
     void debug_validate_direction(cudaStream_t stream);
-    void dump_structured_matrix(const GlobalLinearSystem::StructuredAssemblyInfo& info);
-    void dump_problem_file(const GlobalLinearSystem::StructuredAssemblyInfo& info);
+    void dump_structured_matrix(const GlobalLinearSystem::StructuredAssemblyInfo& info,
+                                std::string_view label = {});
+    void dump_problem_file(const GlobalLinearSystem::StructuredAssemblyInfo& info,
+                           std::string_view label = {});
     void install_ordering_report_or_throw(const Json&                  report,
                                           const std::filesystem::path& ordering_report_path);
     bool try_install_ordering_report(const Json&                  report,
@@ -115,6 +122,8 @@ class SocuApproxSolver : public LinearSolver
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";
     std::string m_structured_scope = "multi_provider";
+    StructuredContactOffbandPolicy m_contact_offband_policy =
+        StructuredContactOffbandPolicy::Drop;
     double      m_damping_shift = 0.0;
     double      m_descent_eta = 1e-8;
     double      m_max_relative_residual = 1e-4;

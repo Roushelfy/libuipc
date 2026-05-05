@@ -527,6 +527,7 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     info.m_contact_sink.sink = contact_sink;
     info.m_contact_sink.counters = structured_info.contact_counters();
     info.m_contact_sink.hessian_cache = structured_info.contact_hessian_cache();
+    info.m_contact_sink.offband_policy = structured_info.contact_offband_policy();
 
     if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
     {

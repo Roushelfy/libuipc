@@ -11,6 +11,7 @@
 #include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
 #include <utils/structured_contact_hessian_cache.h>
+#include <utils/structured_contact_offband_policy.h>
 #include <energy_component_flags.h>
 #include <mixed_precision/policy.h>
 #include <cuda_runtime_api.h>
@@ -184,6 +185,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_hessian_cache;
         }
+        StructuredContactOffbandPolicy contact_offband_policy() const noexcept
+        {
+            return m_contact_offband_policy;
+        }
         SizeT contact_set_signature() const noexcept
         {
             return m_contact_set_signature;
@@ -226,6 +231,11 @@ class GlobalLinearSystem : public SimSystem
         {
             m_contact_hessian_cache = cache;
         }
+        void set_contact_offband_policy(
+            StructuredContactOffbandPolicy policy) noexcept
+        {
+            m_contact_offband_policy = policy;
+        }
         void set_contact_set_signature(SizeT signature) noexcept
         {
             m_contact_set_signature = signature;
@@ -248,12 +258,16 @@ class GlobalLinearSystem : public SimSystem
         void record_contact_band_stats(SizeT near_contact_count,
                                        SizeT off_band_contact_count,
                                        SizeT near_contribution_count,
-                                       SizeT off_band_contribution_count) noexcept
+                                       SizeT off_band_contribution_count,
+                                       SizeT diag_fallback_count = 0,
+                                       SizeT lump_fallback_count = 0) noexcept
         {
             m_near_band_contact_count += near_contact_count;
             m_off_band_contact_count += off_band_contact_count;
             m_near_band_contribution_count += near_contribution_count;
             m_off_band_contribution_count += off_band_contribution_count;
+            m_contact_diag_fallback_count += diag_fallback_count;
+            m_contact_lump_fallback_count += lump_fallback_count;
         }
         SizeT diag_write_count() const noexcept { return m_diag_write_count; }
         SizeT first_offdiag_write_count() const noexcept
@@ -284,6 +298,14 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_off_band_contribution_count;
         }
+        SizeT contact_diag_fallback_count() const noexcept
+        {
+            return m_contact_diag_fallback_count;
+        }
+        SizeT contact_lump_fallback_count() const noexcept
+        {
+            return m_contact_lump_fallback_count;
+        }
         bool configured() const noexcept { return m_configured; }
 
       private:
@@ -300,6 +322,8 @@ class GlobalLinearSystem : public SimSystem
         muda::BufferView<IndexT>   m_contact_counters;
         RuntimeOrderingCollector   m_runtime_ordering_collector;
         StructuredContactHessianCache<StoreScalar> m_contact_hessian_cache;
+        StructuredContactOffbandPolicy m_contact_offband_policy =
+            StructuredContactOffbandPolicy::Drop;
         SizeT                      m_contact_set_signature = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;
@@ -312,6 +336,8 @@ class GlobalLinearSystem : public SimSystem
         SizeT                      m_off_band_contact_count = 0;
         SizeT                      m_near_band_contribution_count = 0;
         SizeT                      m_off_band_contribution_count = 0;
+        SizeT                      m_contact_diag_fallback_count = 0;
+        SizeT                      m_contact_lump_fallback_count = 0;
         bool                       m_configured = false;
     };
 

@@ -116,6 +116,8 @@ struct SocuApproxSolveReport
     SizeT structured_diag_write_count          = 0;
     SizeT structured_first_offdiag_write_count = 0;
     SizeT structured_off_band_drop_count       = 0;
+    SizeT contact_offband_diag_fallback_count  = 0;
+    SizeT contact_offband_lump_fallback_count  = 0;
     double structured_diag_contact_abs_sum      = 0.0;
     double structured_first_offdiag_contact_abs_sum = 0.0;
     double structured_off_band_drop_abs_sum     = 0.0;
@@ -150,6 +152,7 @@ struct SocuApproxSolveReport
     SizeT       runtime_reorder_interval = 0;
     SizeT       runtime_reorder_edge_capacity = 0;
     std::string runtime_reorder_graph_source = "topology";
+    std::string contact_offband_policy = "drop";
     SizeT       runtime_reorder_collecting_frame = static_cast<SizeT>(-1);
     SizeT       runtime_reorder_last_applied_frame = static_cast<SizeT>(-1);
     SizeT       runtime_reorder_edge_count = 0;
