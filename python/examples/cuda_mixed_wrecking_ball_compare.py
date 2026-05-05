@@ -5,7 +5,7 @@ Example:
     LD_LIBRARY_PATH=build/build_impl_fp64/python/src/uipc/_native:$LD_LIBRARY_PATH \
     PYTHONPATH=build/build_impl_fp64/python/src \
     apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
-        python/examples/cuda_mixed_wrecking_ball_compare.py --variant all --frames 20
+        python/examples/cuda_mixed_wrecking_ball_compare.py --variant regression --frames 20
 """
 
 from __future__ import annotations
@@ -95,6 +95,70 @@ VARIANTS = {
     "socu_rt5": {"solver": "socu_approx", "runtime_interval": 5},
     "socu_rt10": {"solver": "socu_approx", "runtime_interval": 10},
 }
+
+VARIANTS.update(
+    {
+        "socu_init_topology_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 0,
+            "runtime_graph_source": "topology",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_init_contact_hessian_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 0,
+            "runtime_graph_source": "contact_hessian",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_init_full_hessian_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 0,
+            "runtime_graph_source": "full_hessian",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_rt20_topology_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 20,
+            "runtime_graph_source": "topology",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_rt25_topology_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 25,
+            "runtime_graph_source": "topology",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_rt50_topology_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 50,
+            "runtime_graph_source": "topology",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_rt20_contact_hessian_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 20,
+            "runtime_graph_source": "contact_hessian",
+            "contact_offband_policy": "diag_lump",
+        },
+        "socu_rt50_contact_hessian_diag_lump": {
+            "solver": "socu_approx",
+            "runtime_interval": 50,
+            "runtime_graph_source": "contact_hessian",
+            "contact_offband_policy": "diag_lump",
+        },
+    }
+)
+
+QUICK_VARIANTS = ["fused_pcg", "socu_init", "socu_rt1", "socu_rt5", "socu_rt10"]
+
+REGRESSION_VARIANTS = [
+    "fused_pcg",
+    "socu_rt1_full_hessian",
+    "socu_rt1_full_hessian_cached",
+    "socu_init_full_hessian_diag_lump",
+    "socu_rt20_topology_diag_lump",
+    "socu_rt50_topology_diag_lump",
+]
 
 
 def set_scene_config_path(config: Any, path: str, value: Any) -> None:
@@ -289,10 +353,9 @@ def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
     return result
 
 
-def run_all(args: argparse.Namespace) -> int:
+def run_variants(args: argparse.Namespace, variants: list[str]) -> int:
     output_root = Path(args.output).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    variants = ["fused_pcg", "socu_init", "socu_rt1", "socu_rt5", "socu_rt10"]
     summary = []
     for variant in variants:
         cmd = [
@@ -316,8 +379,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--variant",
-        choices=["all", *VARIANTS.keys()],
-        default="all",
+        choices=["quick", "regression", "all", *VARIANTS.keys()],
+        default="quick",
+        help=(
+            "'quick' runs the legacy smoke sweep, 'regression' runs the current "
+            "SOCU diag_lump regression sweep, and 'all' runs every defined variant."
+        ),
     )
     parser.add_argument("--frames", type=int, default=20)
     parser.add_argument(
@@ -326,8 +393,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.variant == "quick":
+        return run_variants(args, QUICK_VARIANTS)
+    if args.variant == "regression":
+        return run_variants(args, REGRESSION_VARIANTS)
     if args.variant == "all":
-        return run_all(args)
+        return run_variants(args, list(VARIANTS.keys()))
 
     result = run_one(args.variant, args.frames, Path(args.output).resolve())
     print(json.dumps({k: v for k, v in result.items() if k != "timer_frames"}, indent=2))

@@ -851,3 +851,56 @@ fused PCG on this 100-frame wrecking-ball run, mainly because SOCU has fewer
 Newton/build calls and a much cheaper solve stage. Fused PCG still assembles
 the system much faster per build; SOCU only wins when the solve-stage saving
 and reduced Newton count overcome the heavier structured build.
+
+## 2026-05-05 Milestone 0 Baseline Freeze
+
+Milestone 0 was rerun before starting the backend split. No implementation
+files were changed for this milestone; the only active code changes are the
+benchmark/debug script corrections and plan/journal updates.
+
+Static and smoke:
+
+```bash
+git diff --check -- \
+  docs/development/backend_cuda/socu_mixed_solver_integration_plan.md \
+  python/examples/cuda_mixed_wrecking_ball_compare.py \
+  scripts/debug_socu_repro.py
+
+build/build_impl_fp64/RelWithDebInfo/bin/uipc_test_sim_case_cuda_mixed_only \
+  "86_cuda_mixed_linear_solver_selection_smoke" -s
+```
+
+Result: `git diff --check` passed. The linear solver selection smoke passed
+with `207 assertions in 1 test case`.
+
+100-frame baseline command template:
+
+```bash
+SOCU_REPORT_COUNTERS=0 \
+PYTHONPATH=build/build_impl_fp64/python/src \
+LD_LIBRARY_PATH=build/build_impl_fp64/python/src/uipc/_native:${LD_LIBRARY_PATH} \
+apps/benchmarks/mixed/uipc_assets/.venv/bin/python \
+python/examples/cuda_mixed_wrecking_ball_compare.py \
+  --variant <variant> \
+  --frames 100 \
+  --output output/examples/cuda_mixed_wrecking_ball_compare_milestone0
+```
+
+Recorded outputs:
+
+```text
+output/examples/cuda_mixed_wrecking_ball_compare_milestone0/fused_pcg/result.json
+output/examples/cuda_mixed_wrecking_ball_compare_milestone0/socu_rt50_topology_diag_lump/result.json
+output/examples/cuda_mixed_wrecking_ball_compare_milestone0/logs/socu_rt50_topology_diag_lump_100.log
+```
+
+Results:
+
+| variant | final frame | wall time | mean frame |
+| --- | ---: | ---: | ---: |
+| `fused_pcg` | 100 | 18.806s | 162.696 ms |
+| `socu_rt50_topology_diag_lump` | 100 | 16.459s | 143.558 ms |
+
+Acceptance: both `fused_pcg` and the best current topology `diag_lump`
+candidate reached frame 100. This freezes the current baseline before any
+Milestone 1 backend split work.
