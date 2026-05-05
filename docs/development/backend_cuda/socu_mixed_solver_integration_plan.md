@@ -998,33 +998,54 @@ Fallback:
 
 #### Milestone 2: Restore `cuda_mixed` Baseline
 
-Goal: make `cuda_mixed` a clean fused-PCG / FullSparse baseline again.
+Goal: restore `cuda_mixed` to the pre-SOCU fused-PCG / FullSparse backend
+state. This milestone should use the last commit before SOCU integration as
+the behavioral and source-shape reference, not incrementally patch the current
+SOCU-enabled `cuda_mixed` into something similar.
 
 Deliverables:
 
-- Remove SOCU-specific compile dependencies from ordinary `cuda_mixed`
-  FullSparse contact files.
-- Ensure ordinary contact kernels do not include/capture SOCU structured sink
-  headers.
-- Move SOCU-specific structured contact and linear-system code under
-  `cuda_mixed_socu` or SOCU-only build targets.
-- Keep shared contact math functions in common code where useful.
+- Identify and record the exact pre-SOCU baseline commit used as the restore
+  reference.
+- Restore `cuda_mixed` files that existed before SOCU integration to that
+  baseline shape, including ordinary FullSparse contact assembly, linear solver
+  registration, CMake source lists, and any manager/reporter paths that were
+  only added for SOCU.
+- Remove SOCU-specific compile dependencies from `cuda_mixed`; this includes
+  SOCU structured contact files, `socu_approx` linear-system files,
+  `socu_native`/MathDx linkage, runtime ordering reports, structured contact
+  sink/cache/offband-policy code that is not present in the pre-SOCU backend,
+  and benchmark/config paths that imply SOCU is available through
+  `cuda_mixed`.
+- Keep only genuinely shared, pre-existing math/util code in `cuda_mixed`. Any
+  helper introduced solely for SOCU should live in `cuda_mixed_socu` or a
+  SOCU-only shared module.
+- Do not use shared public algorithm files such as `matrix_converter.inl` or
+  `fast_segmental_reduce.inl` to hide fused-PCG regressions; restore the
+  ordinary backend path first and compare behavior against the recorded
+  pre-SOCU reference.
 
 Acceptance:
 
 - `cuda_mixed fused_pcg --frames 100` passes and is not slower than the frozen
   baseline by more than 2% without explanation.
-- `cuda_mixed` build no longer compiles SOCU structured contact TUs when the
-  SOCU backend is disabled.
+- A source/build scan shows `cuda_mixed` no longer compiles or links
+  `socu_approx`, `socu_native`, MathDx, SOCU structured contact TUs, SOCU
+  runtime ordering, SOCU report, SOCU contact cache, or SOCU off-band policy
+  files.
+- Ordinary `cuda_mixed` contact files match the pre-SOCU reference except for
+  intentional, documented non-SOCU maintenance changes.
 - `cuda_mixed_socu` build no longer compiles fused-PCG-specific solver files or
   fused-PCG-only matrix conversion paths.
 - `cuda_mixed_socu` still passes the Milestone-1 SOCU 20-frame checks.
 
 Fallback:
 
-- If complete cleanup is too risky, first isolate only contact structured TUs
-  and `socu_native`/MathDx dependencies, then finish linear-system cleanup in a
-  follow-up milestone.
+- If restoring the entire backend in one patch is too broad, split the restore
+  by historical ownership boundaries but keep the same target state: first
+  restore ordinary contact/FullSparse files to the pre-SOCU commit, then remove
+  SOCU linear-system/build/report/config dependencies. Do not leave hidden SOCU
+  fallback paths in `cuda_mixed`.
 
 #### Milestone 3: SOCU-Native Storage Skeleton
 
