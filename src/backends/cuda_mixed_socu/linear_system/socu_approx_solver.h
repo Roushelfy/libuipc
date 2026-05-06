@@ -1,6 +1,7 @@
 #pragma once
 
 #include <linear_system/linear_solver.h>
+#include <linear_system/socu_native_descriptors.h>
 #include <linear_system/socu_approx_report.h>
 #include <linear_system/structured_chain_provider.h>
 #include <utils/structured_contact_offband_policy.h>
@@ -86,11 +87,13 @@ class SocuApproxSolver : public LinearSolver
     SocuApproxGateReport  m_gate_report;
     SocuApproxSolveReport m_report;
     std::vector<StructuredDofSlot> m_dof_slots;
+    std::vector<SocuNativeDofDescriptor> m_native_dof_descriptors;
     std::vector<IndexT> m_host_old_to_chain;
     std::vector<IndexT> m_host_chain_to_old;
     std::vector<IndexT> m_host_old_dof_to_atom;
     std::vector<IndexT> m_host_atom_dof_count;
     SizeT       m_line_search_reject_streak = 0;
+    IndexT      m_descriptor_epoch = 0;
     GlobalLinearSystem::LineSearchFeedback m_last_line_search_feedback;
     bool        m_has_line_search_feedback = false;
     bool        m_debug_validation = false;

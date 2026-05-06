@@ -654,6 +654,14 @@ bool SocuApproxSolver::install_ordering_report_impl(
         m_runtime_reorder_edge_capacity = 0;
     }
 
+    const IndexT next_descriptor_epoch = m_descriptor_epoch + 1;
+    auto native_dof_descriptors = build_socu_native_dof_descriptors(
+        span<const IndexT>{build_old_to_chain.data(), build_old_to_chain.size()},
+        span<const IndexT>{old_dof_to_atom.data(), old_dof_to_atom.size()},
+        block_layouts.size(),
+        block_size,
+        next_descriptor_epoch);
+
     SocuApproxGateReport next_gate = {};
     next_gate.ordering_report_path = ordering_report_path.string();
     next_gate.structured_scope     = m_structured_scope;
@@ -872,6 +880,7 @@ bool SocuApproxSolver::install_ordering_report_impl(
     next_report.structured_scope = m_structured_scope;
     next_report.block_size = block_size;
     next_report.block_count = block_layouts.size();
+    next_report.descriptor_epoch = next_descriptor_epoch;
     next_report.chain_atom_count = ordering->at("chain_to_old").size();
     next_report.ordering_dof_count = ordering_dof_count;
     next_report.structured_slot_count = provider->dof_slots().size();
@@ -916,6 +925,8 @@ bool SocuApproxSolver::install_ordering_report_impl(
     m_host_chain_to_old = std::move(build_chain_to_old);
     m_host_old_dof_to_atom = std::move(old_dof_to_atom);
     m_host_atom_dof_count = std::move(atom_dof_count);
+    m_descriptor_epoch = next_descriptor_epoch;
+    m_native_dof_descriptors = std::move(native_dof_descriptors);
     m_dof_slots.assign(provider->dof_slots().begin(), provider->dof_slots().end());
 #if UIPC_WITH_SOCU_NATIVE
     if(next_runtime)

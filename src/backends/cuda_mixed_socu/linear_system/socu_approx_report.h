@@ -76,6 +76,7 @@ struct SocuApproxSolveReport
 
     SizeT block_size            = 0;
     SizeT block_count           = 0;
+    IndexT descriptor_epoch     = 0;
     SizeT chain_atom_count      = 0;
     SizeT ordering_dof_count    = 0;
     SizeT structured_slot_count = 0;

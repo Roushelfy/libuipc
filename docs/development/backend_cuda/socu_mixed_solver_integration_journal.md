@@ -1207,3 +1207,54 @@ Acceptance: M3 remains a storage/test skeleton only. The generic recursive
 offdiag write path is covered by device-write tests, the local descriptor is
 checked against SOCU native's layout description, and no `cuda_mixed` baseline
 source was modified.
+
+## 2026-05-06 Milestone 4 Descriptor Infrastructure, First Slice
+
+This pass started M4 with reusable host-side SOCU descriptor infrastructure
+without migrating any production provider to the native matrix builder:
+
+- Added `SocuNativeDofDescriptor` and `SocuNativeVertexDescriptor` helpers for
+  old-DoF, block/lane, FEM/ABD kind, fixed state, ABD body/J index, and epoch
+  metadata.
+- Added band classification helpers for scalar DoF pairs, vertex half-blocks,
+  and stencil half-blocks. The classification mirrors the current structured
+  sink band model: same block is diagonal, adjacent blocks are first offdiag,
+  and longer distances are off-band.
+- Added descriptor table epoch helpers and unit tests for reorder epoch changes.
+- `SocuApproxSolver` now rebuilds the old-DoF descriptor table after each
+  successful init-time or runtime ordering install, increments
+  `descriptor_epoch`, and writes that epoch into the solve report JSON. The
+  current structured assembly path does not consume the descriptor table yet.
+
+Build handoff was performed by the user without `NVCC_APPEND_FLAGS` or
+`--Ofast-compile=max`:
+
+```bash
+unset NVCC_APPEND_FLAGS
+ninja -C build/build_impl_fp64 -j1 \
+  libuipc_backend_cuda_mixed_socu.so \
+  uipc_test_backend_cuda_mixed_socu
+```
+
+Static checks:
+
+```text
+git diff --check: passed
+matrix_converter.inl / fast_segmental_reduce.inl diff scan: no changes
+SocuNativeDescriptor reference scan over src/backends/cuda_mixed and
+  apps/tests/backends/cuda_mixed: no matches
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_descriptor]" -r compact` | passed, 70 assertions in 4 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, 891 assertions in 13 cases |
+| `socu_rt50_topology_diag_lump --frames 20 --backend cuda_mixed_socu` | `final_frame=20`, `wall_time=4.049s`, `mean_frame=73.139 ms` |
+
+Acceptance: M4 is still infrastructure-only. Descriptor construction and
+classification are covered for FEM/FEM, FEM/ABD, ABD/FEM, ABD/ABD, fixed
+vertices, off-band pairs, and reorder epochs. The default structured SOCU path
+continues to use the existing structured sink and still passes the 20-frame
+sanity run.
