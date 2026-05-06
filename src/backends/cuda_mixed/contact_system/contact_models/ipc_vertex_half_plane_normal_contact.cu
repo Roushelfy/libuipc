@@ -8,10 +8,6 @@
 
 namespace uipc::backend::cuda_mixed
 {
-void assemble_ipc_vertex_half_plane_normal_contact_structured(
-    VertexHalfPlaneNormalContact::ContactInfo& info,
-    const HalfPlane&                           half_plane);
-
 class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContact
 {
   public:
@@ -82,12 +78,6 @@ class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContac
         using namespace muda;
         using Alu = ActivePolicy::AluScalar;
         using Store = ActivePolicy::StoreScalar;
-
-        if(info.structured_hessian())
-        {
-            assemble_ipc_vertex_half_plane_normal_contact_structured(info, *half_plane);
-            return;
-        }
 
         if(info.PHs().size())
         {

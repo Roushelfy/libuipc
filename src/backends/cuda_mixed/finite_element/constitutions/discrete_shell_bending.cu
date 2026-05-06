@@ -3,6 +3,7 @@
 #include <finite_element/constitutions/discrete_shell_bending_function.h>
 #include <numbers>
 #include <utils/make_spd.h>
+#include <utils/matrix_assembler.h>
 #include <kernel_cout.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
@@ -263,9 +264,10 @@ class DiscreteShellBending final : public FiniteElementExtraConstitution
                     V_bars = V_bars.viewer().name("V_bar"),
                     L0s    = rest_lengths.viewer().name("rest_lengths"),
                     xs     = info.xs().viewer().name("xs"),
-                    sink   = info.sink(),
-                    dt     = info.dt()
-                    ] __device__(int I) mutable
+                    G3s    = info.gradients().viewer().name("gradients"),
+                    H3x3s  = info.hessians().viewer().name("hessians"),
+                    dt     = info.dt(),
+                    gradient_only = info.gradient_only()] __device__(int I) mutable
                    {
                        Vector4i stencil   = stencils(I);
                        const Alu kappa     = safe_cast<Alu>(bending_stiffnesses(I));
@@ -287,12 +289,10 @@ class DiscreteShellBending final : public FiniteElementExtraConstitution
                        DSB::dEdx(G12_alu, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
                        G12_alu *= Vdt2;
                        auto G12_store = downcast_gradient<Store>(G12_alu);
-                       sink.template write_gradient<StencilSize>(
-                           I * StencilSize,
-                           stencil,
-                           G12_store);
+                       DoubletVectorAssembler DVA{G3s};
+                       DVA.segment<StencilSize>(I * StencilSize).write(stencil, G12_store);
 
-                       if(sink.gradient_only)
+                       if(gradient_only)
                            return;
 
                        DSB::ddEddx(H12x12_alu, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
@@ -300,10 +300,8 @@ class DiscreteShellBending final : public FiniteElementExtraConstitution
                        make_spd(H12x12_alu);
                        auto H12x12_store = downcast_hessian<Store>(H12x12_alu);
 
-                       sink.template write_hessian_half<StencilSize>(
-                           I * HalfHessianSize,
-                           stencil,
-                           H12x12_store);
+                       TripletMatrixAssembler TMA{H3x3s};
+                       TMA.half_block<StencilSize>(I * HalfHessianSize).write(stencil, H12x12_store);
                    });
     }
 };

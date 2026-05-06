@@ -6,28 +6,6 @@
 
 namespace uipc::backend::cuda_mixed
 {
-namespace
-{
-template <int StencilSize, typename ContactSink, typename IndicesView>
-void record_contact_topology(ContactSink sink,
-                             IndicesView indices,
-                             const char* name)
-{
-    if(indices.size() == 0)
-        return;
-
-    using namespace muda;
-    ParallelFor()
-        .file_line(__FILE__, __LINE__)
-        .apply(indices.size(),
-               [sink, indices = indices.viewer().name(name)] __device__(
-                   int i) mutable
-               {
-                   sink.template write_topology_half<StencilSize>(indices(i));
-               });
-}
-}  // namespace
-
 void SimplexNormalContact::do_build(ContactReporter::BuildInfo& info)
 {
     m_impl.global_trajectory_filter = require<GlobalTrajectoryFilter>();
@@ -185,37 +163,6 @@ void SimplexNormalContact::do_assemble(GlobalContactManager::GradientHessianInfo
     }
 
     // let subclass to fill in the data
-    do_assemble(this_info);
-}
-
-bool SimplexNormalContact::do_supports_structured_hessian() const
-{
-    return true;
-}
-
-void SimplexNormalContact::do_assemble_structured_hessian(
-    GlobalDyTopoEffectManager::StructuredHessianInfo& info)
-{
-    ContactInfo this_info{&m_impl};
-    this_info.m_gradient_only      = false;
-    this_info.m_hessian_only       = true;
-    this_info.m_structured_hessian = true;
-    this_info.m_structured_sink    = info.contact_sink();
-
-    if(this_info.m_structured_sink.topology_probe_only())
-    {
-        record_contact_topology<4>(this_info.m_structured_sink, this_info.PTs(), "PTs");
-        record_contact_topology<4>(this_info.m_structured_sink, this_info.EEs(), "EEs");
-        record_contact_topology<3>(this_info.m_structured_sink, this_info.PEs(), "PEs");
-        record_contact_topology<2>(this_info.m_structured_sink, this_info.PPs(), "PPs");
-        return;
-    }
-
-    m_impl.PT_hessians = {};
-    m_impl.EE_hessians = {};
-    m_impl.PE_hessians = {};
-    m_impl.PP_hessians = {};
-
     do_assemble(this_info);
 }
 

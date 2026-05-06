@@ -16,13 +16,6 @@ target_link_libraries(cuda_mixed PUBLIC
     uipc_geometry
 )
 
-if(TARGET socu_native)
-    target_link_libraries(cuda_mixed PUBLIC socu_native)
-    target_compile_definitions(cuda_mixed PUBLIC UIPC_WITH_SOCU_NATIVE=1)
-else()
-    target_compile_definitions(cuda_mixed PUBLIC UIPC_WITH_SOCU_NATIVE=0)
-endif()
-
 # add CCCL include directory for CUDA 13.0 compatibility
 if(CUDAToolkit_VERSION_MAJOR GREATER_EQUAL 13)
     target_include_directories(cuda_mixed PUBLIC ${CUDAToolkit_INCLUDE_DIRS}/cccl)
@@ -53,30 +46,7 @@ if(UIPC_BUILD_TESTS)
 endif()
 
 # all files in this directory
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
-
-if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
-    set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE ${SOURCES})
-    list(LENGTH _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE)
-
-    set(_UIPC_CUDA_MIXED_MINIMAL_EXCLUDE_PATTERNS
-        ".*/affine_body/constitutions/affine_body_.*joint.*\\.cu$"
-        ".*/affine_body/constraints/(external_articulation_constraint|soft_transform_constraint|affine_body_.*joint_external_body_force_constraint)\\.cu$"
-        ".*/affine_body/affine_body_.*joint_external_body_force\\.cu$"
-        ".*/contact_system/al_.*\\.cu$"
-        ".*/contact_system/adaptive_strategies/.*\\.cu$"
-        ".*/coupling_system/.*\\.cu$"
-        ".*/finite_element/constitutions/(discrete_shell_bending|hookean_spring_1d|kirchhoff_rod_bending|neo_hookean_shell_2d|plastic_discrete_shell_bending|strain_limiting_baraff_witkin_shell_2d|stress_plastic_discrete_shell_bending)\\.cu$"
-        ".*/finite_element/constraints/soft_position_constraint\\.cu$"
-        ".*/inter_primitive_effect_system/constitutions/.*\\.cu$")
-
-    foreach(_UIPC_CUDA_MIXED_EXCLUDE_PATTERN IN LISTS _UIPC_CUDA_MIXED_MINIMAL_EXCLUDE_PATTERNS)
-        list(FILTER SOURCES EXCLUDE REGEX "${_UIPC_CUDA_MIXED_EXCLUDE_PATTERN}")
-    endforeach()
-
-    list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER)
-    uipc_info("cuda_mixed wrecking_ball minimal build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER} source entries")
-endif()
+file(GLOB_RECURSE SOURCES "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
 
 target_sources(cuda_mixed PRIVATE ${SOURCES})
 uipc_target_set_relative_source_file(cuda_mixed)
@@ -84,5 +54,5 @@ uipc_target_set_relative_source_file(cuda_mixed)
 # ------------------------------------------------------------------------------
 # setup source group for the IDE
 # ------------------------------------------------------------------------------
-file(GLOB_RECURSE SOURCE_GROUP_FILES CONFIGURE_DEPENDS "*.h" "*.hpp" "*.cpp" "*.cu" "*.inl")
+file(GLOB_RECURSE SOURCE_GROUP_FILES "*.h" "*.hpp" "*.cpp" "*.cu" "*.inl")
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/.." FILES ${SOURCE_GROUP_FILES})

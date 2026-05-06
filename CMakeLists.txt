@@ -43,7 +43,7 @@ option(UIPC_WITH_CUDA_MIXED_SOCU_BACKEND
 option(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD
     "Compile a reduced cuda_mixed backend surface for wrecking_ball SOCU regression tests" OFF)
 set(UIPC_WITH_SOCU_NATIVE "AUTO"
-    CACHE STRING "Enable optional socu_native integration for cuda_mixed: AUTO|ON|OFF")
+    CACHE STRING "Enable optional socu_native integration for cuda_mixed_socu: AUTO|ON|OFF")
 set_property(CACHE UIPC_WITH_SOCU_NATIVE PROPERTY STRINGS AUTO ON OFF)
 set(UIPC_CUDA_MIXED_PRECISION_LEVEL "fp64"
     CACHE STRING "Mixed precision level for cuda_mixed: fp64|path1|path2|path3|path4|path5|path6")
@@ -64,7 +64,7 @@ endif()
 
 string(TOUPPER "${UIPC_WITH_SOCU_NATIVE}" UIPC_WITH_SOCU_NATIVE)
 set(UIPC_WITH_SOCU_NATIVE "${UIPC_WITH_SOCU_NATIVE}"
-    CACHE STRING "Enable optional socu_native integration for cuda_mixed: AUTO|ON|OFF" FORCE)
+    CACHE STRING "Enable optional socu_native integration for cuda_mixed_socu: AUTO|ON|OFF" FORCE)
 if(NOT UIPC_WITH_SOCU_NATIVE MATCHES "^(AUTO|ON|OFF)$")
     message(FATAL_ERROR
         "UIPC_WITH_SOCU_NATIVE='${UIPC_WITH_SOCU_NATIVE}' is invalid. "

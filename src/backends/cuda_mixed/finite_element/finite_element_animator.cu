@@ -33,12 +33,7 @@ void FiniteElementAnimator::assemble(FEMLinearSubsystemReporter::AssembleInfo& i
             info.dt(),
             info.gradients(),
             info.hessians(),
-            info.gradient_only(),
-            info.structured_sink(),
-            info.old_dof_offset(),
-            info.fixed_vertices(),
-            info.identity_fixed_diagonal(),
-            info.write_gradients()};
+            info.gradient_only()};
         constraint->compute_gradient_hessian(this_info);
     }
 }
@@ -210,18 +205,12 @@ muda::BufferView<FiniteElementAnimator::EnergyScalar> FiniteElementAnimator::Com
 
 muda::DoubletVectorView<FiniteElementAnimator::StoreScalar, 3> FiniteElementAnimator::ComputeGradientHessianInfo::gradients() const noexcept
 {
-    if(structured_assembly() && !m_write_gradients)
-        return {};
-
     auto [offset, count] = m_impl->constraint_gradient_offsets_counts[m_index];
     return m_gradients.subview(offset, count);
 }
 
 muda::TripletMatrixView<FiniteElementAnimator::StoreScalar, 3> FiniteElementAnimator::ComputeGradientHessianInfo::hessians() const noexcept
 {
-    if(structured_assembly())
-        return muda::TripletMatrixView<StoreScalar, 3>{};
-
     auto [offset, count] = m_impl->constraint_hessian_offsets_counts[m_index];
     return m_hessians.subview(offset, count);
 }

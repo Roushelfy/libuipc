@@ -12,9 +12,6 @@
 #include <utils/report_extent_check.h>
 #include <mixed_precision/policy.h>
 #include <mixed_precision/cast.h>
-#include <uipc/common/exception.h>
-#include <fmt/format.h>
-#include <array>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -42,11 +39,6 @@ using StoreMat12x12 = ABDLinearSubsystem::StoreMat12x12;
 
 // ref: https://github.com/spiriMirror/libuipc/issues/271
 constexpr U64 ABDLinearSubsystemUID = 0ull;
-
-SizeT ABDLinearSubsystem::body_count() const noexcept
-{
-    return m_impl.affine_body_dynamics ? m_impl.abd().body_count() : SizeT{0};
-}
 
 void ABDLinearSubsystem::do_build(DiagLinearSubsystem::BuildInfo& info)
 {
@@ -208,79 +200,6 @@ void ABDLinearSubsystem::Impl::assemble(GlobalLinearSystem::DiagInfo& info)
                 "Hessian size mismatch: expected {}, got {}",
                 info.hessians().triplet_count(),
                 hess_offset);
-}
-
-void ABDLinearSubsystem::Impl::assemble_structured(
-    GlobalLinearSystem::StructuredAssemblyInfo& info)
-{
-    using namespace muda;
-    using Alu = ActivePolicy::AluScalar;
-
-    ABDLinearSubsystem::ComputeGradientHessianInfo kinetic_info{
-        false, body_id_to_kinetic_gradient, body_id_to_kinetic_hessian, dt};
-    abd().kinetic->compute_gradient_hessian(kinetic_info);
-
-    for(auto&& [i, cst] : enumerate(abd().constitutions.view()))
-    {
-        ABDLinearSubsystem::ComputeGradientHessianInfo cst_info{
-            false,
-            abd().subview(body_id_to_shape_gradient, cst->m_index),
-            abd().subview(body_id_to_shape_hessian, cst->m_index),
-            dt};
-        cst->compute_gradient_hessian(cst_info);
-    }
-
-    const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
-    auto         sink           = info.sink();
-    ParallelFor(256, 0, info.stream())
-        .file_line(__FILE__, __LINE__)
-        .apply(abd().body_count(),
-               [sink,
-                old_dof_offset,
-                is_fixed = abd().body_id_to_is_fixed.cviewer().name("is_fixed"),
-                is_external_kinetic =
-                    abd().body_id_to_external_kinetic.cviewer().name("external_kinetic"),
-                shape_hessian = body_id_to_shape_hessian.cviewer().name("shape_hessian"),
-                kinetic_hessian =
-                    body_id_to_kinetic_hessian.cviewer().name("kinetic_hessian")] __device__(
-                   int I) mutable
-               {
-                   Eigen::Matrix<Alu, 12, 12> H12x12_alu;
-                   if(is_fixed(I))
-                   {
-                       H12x12_alu.setIdentity();
-                   }
-                   else
-                   {
-                       H12x12_alu = shape_hessian(I).template cast<Alu>();
-                       if(!is_external_kinetic(I)) [[likely]]
-                           H12x12_alu += kinetic_hessian(I).template cast<Alu>();
-                   }
-
-                   const auto H12x12_store = downcast_hessian<StoreScalar>(H12x12_alu);
-                   sink.template add_dense_block_upper_subblocks_fixed<3, 4>(
-                       old_dof_offset + I * 12,
-                       H12x12_store);
-               });
-
-    info.record_diag_writes(abd().body_count() * 12 * 12);
-
-    auto reporter_view = reporters.view();
-    if(!reporter_view.empty())
-    {
-        auto fixed_bodies = abd().body_id_to_is_fixed.view();
-        for(auto& R : reporter_view)
-        {
-            AssembleInfo assemble_info{this,
-                                       R->m_index,
-                                       false,
-                                       sink,
-                                       old_dof_offset,
-                                       fixed_bodies,
-                                       /* write_gradients */ false};
-            R->assemble(assemble_info);
-        }
-    }
 }
 
 void ABDLinearSubsystem::Impl::_assemble_kinetic_shape(IndexT& hess_offset,
@@ -684,17 +603,6 @@ void ABDLinearSubsystem::do_assemble(GlobalLinearSystem::DiagInfo& info)
     m_impl.assemble(info);
 }
 
-bool ABDLinearSubsystem::do_supports_structured_assembly() const
-{
-    return true;
-}
-
-void ABDLinearSubsystem::do_assemble_structured(
-    GlobalLinearSystem::StructuredAssemblyInfo& info)
-{
-    m_impl.assemble_structured(info);
-}
-
 void ABDLinearSubsystem::do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info)
 {
     m_impl.accuracy_check(info);
@@ -727,38 +635,21 @@ void ABDLinearSubsystem::do_receive_init_dof_info(GlobalLinearSystem::InitDofInf
     m_impl.receive_init_dof_info(world(), info);
 }
 
-ABDLinearSubsystem::AssembleInfo::AssembleInfo(
-    Impl* impl,
-    IndexT index,
-    bool   gradient_only,
-    StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> structured_sink,
-    IndexT old_dof_offset,
-    muda::CBufferView<IndexT> fixed_bodies,
-    bool write_gradients) noexcept
+ABDLinearSubsystem::AssembleInfo::AssembleInfo(Impl* impl, IndexT index, bool gradient_only) noexcept
     : m_impl(impl)
     , m_index(index)
     , m_gradient_only(gradient_only)
-    , m_structured_sink(structured_sink)
-    , m_old_dof_offset(old_dof_offset)
-    , m_fixed_bodies(fixed_bodies)
-    , m_write_gradients(write_gradients)
 {
 }
 
 muda::DoubletVectorView<ABDLinearSubsystem::StoreScalar, 12> ABDLinearSubsystem::AssembleInfo::gradients() const
 {
-    if(structured_assembly() && !write_gradients())
-        return {};
-
     auto [offset, count] = m_impl->reporter_gradient_offsets_counts[m_index];
     return m_impl->reporter_gradients.view().subview(offset, count);
 }
 
 muda::TripletMatrixView<ABDLinearSubsystem::StoreScalar, 12, 12> ABDLinearSubsystem::AssembleInfo::hessians() const
 {
-    if(structured_assembly())
-        return muda::TripletMatrixView<StoreScalar, 12, 12>{};
-
     auto [offset, count] = m_impl->reporter_hessian_offsets_counts[m_index];
     return m_impl->reporter_hessians.view().subview(offset, count);
 }

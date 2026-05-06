@@ -3,25 +3,13 @@
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
 #include <dytopo_effect_system/dytopo_effect_receiver.h>
 #include <contact_system/contact_reporter.h>
-#include <contact_system/simplex_frictional_contact.h>
-#include <contact_system/simplex_normal_contact.h>
-#include <contact_system/vertex_half_plane_frictional_contact.h>
-#include <contact_system/vertex_half_plane_normal_contact.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution_manager.h>
-#include <affine_body/abd_linear_subsystem.h>
-#include <affine_body/affine_body_dynamics.h>
-#include <affine_body/affine_body_vertex_reporter.h>
-#include <finite_element/fem_linear_subsystem.h>
-#include <finite_element/finite_element_method.h>
-#include <finite_element/finite_element_vertex_reporter.h>
 #include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
 #include <kernel_cout.h>
 #include <uipc/common/unit.h>
 #include <uipc/common/zip.h>
 #include <energy_component_flags.h>
-#include <fmt/format.h>
-#include <vector>
 
 namespace uipc::backend
 {
@@ -58,37 +46,6 @@ const char* dytopo_assemble_timer_name(const DyTopoEffectReporter& reporter)
         return "Assemble Inter-Primitive";
     return "Assemble Unclassified DyTopo";
 }
-
-constexpr SizeT ContactSignatureFnvOffset =
-    static_cast<SizeT>(1469598103934665603ull);
-constexpr SizeT ContactSignatureFnvPrime =
-    static_cast<SizeT>(1099511628211ull);
-
-void mix_contact_signature(SizeT& signature, SizeT value) noexcept
-{
-    signature ^= value;
-    signature *= ContactSignatureFnvPrime;
-}
-
-template <typename ValueT>
-void mix_contact_vector_view(SizeT& signature,
-                             SizeT  tag,
-                             muda::CBufferView<ValueT> view)
-{
-    mix_contact_signature(signature, tag);
-    mix_contact_signature(signature, view.size());
-    if(view.size() == 0)
-        return;
-
-    std::vector<ValueT> host(view.size());
-    view.copy_to(host.data());
-    for(const auto& item : host)
-    {
-        for(Eigen::Index i = 0; i < item.size(); ++i)
-            mix_contact_signature(signature, static_cast<SizeT>(item(i)));
-    }
-}
-
 }  // namespace
 
 REGISTER_SIM_SYSTEM(GlobalDyTopoEffectManager);
@@ -110,12 +67,6 @@ void GlobalDyTopoEffectManager::do_build()
     const auto& config = world().scene().config();
 
     m_impl.global_vertex_manager = require<GlobalVertexManager>();
-    m_impl.abd_linear_subsystem = find<ABDLinearSubsystem>();
-    m_impl.fem_linear_subsystem = find<FEMLinearSubsystem>();
-    m_impl.affine_body_dynamics = find<AffineBodyDynamics>();
-    m_impl.finite_element_method = find<FiniteElementMethod>();
-    m_impl.affine_body_vertex_reporter = find<AffineBodyVertexReporter>();
-    m_impl.finite_element_vertex_reporter = find<FiniteElementVertexReporter>();
 }
 
 void GlobalDyTopoEffectManager::Impl::init(WorldVisitor& world)
@@ -145,7 +96,7 @@ void GlobalDyTopoEffectManager::Impl::init(WorldVisitor& world)
 void GlobalDyTopoEffectManager::Impl::compute_dytopo_effect(ComputeDyTopoEffectInfo& info)
 {
     _assemble(info);
-    _convert_matrix(info);
+    _convert_matrix();
     _distribute(info);
 }
 
@@ -157,14 +108,11 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
 
     auto reporter_gradient_counts = reporter_gradient_offsets_counts.counts();
     auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
-    const bool structured_hessian_direct =
-        info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian;
-    bool gradient_only = info.m_gradient_only || structured_hessian_direct;
+    bool gradient_only            = info.m_gradient_only;
 
-    logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}, AssemblyMode={}",
+    logger::info("DyTopo Effect Assembly: GradientOnly={}, ComponentFlags={}",
                  info.m_gradient_only,
-                 enum_flags_name(info.m_component_flags),
-                 newton_assembly_mode_name(info.m_assembly_mode));
+                 enum_flags_name(info.m_component_flags));
 
     for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
     {
@@ -173,14 +121,6 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
 
         if(!has_flags(info.m_component_flags, reporter->component_flags()))
             continue;
-
-        if(structured_hessian_direct && !reporter->supports_structured_hessian())
-        {
-            throw SimSystemException{fmt::format(
-                "structured_dytopo_reporter_not_supported: reporter '{}' does not "
-                "support direct StructuredAssemblySink Hessian writes",
-                reporter->name())};
-        }
 
         GradientHessianExtentInfo extent_info;
         extent_info.m_gradient_only = gradient_only;
@@ -232,20 +172,11 @@ void GlobalDyTopoEffectManager::Impl::_assemble(ComputeDyTopoEffectInfo& info)
     }
 }
 
-void GlobalDyTopoEffectManager::Impl::_convert_matrix(ComputeDyTopoEffectInfo& info)
+void GlobalDyTopoEffectManager::Impl::_convert_matrix()
 {
     Timer timer{"Convert Dytopo Matrix"};
 
-    if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
-    {
-        loose_resize_entries(sorted_dytopo_effect_hessian, 0);
-        auto vertex_count = global_vertex_manager->positions().size();
-        sorted_dytopo_effect_hessian.reshape(vertex_count, vertex_count);
-    }
-    else
-    {
-        matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
-    }
+    matrix_converter.convert(collected_dytopo_effect_hessian, sorted_dytopo_effect_hessian);
     matrix_converter.convert(collected_dytopo_effect_gradient, sorted_dytopo_effect_gradient);
 }
 
@@ -256,8 +187,6 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
     using namespace muda;
 
     auto vertex_count = global_vertex_manager->positions().size();
-    const bool structured_hessian_direct =
-        info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian;
 
     for(auto&& [i, receiver] : enumerate(dytopo_effect_receivers.view()))
     {
@@ -352,284 +281,81 @@ void GlobalDyTopoEffectManager::Impl::_distribute(ComputeDyTopoEffectInfo& info)
         }
 
         // 2) report hessian
-        if(!structured_hessian_direct && !info.m_gradient_only
-           && !classify_info.is_empty())
+        if(!info.m_gradient_only && !classify_info.is_empty())
         {
-            if(info.m_assembly_mode == NewtonAssemblyMode::GradientStructuredHessian)
+            const auto N = sorted_dytopo_effect_hessian.triplet_count();
+
+            // +1 for calculate the total count
+            loose_resize(selected_hessian, N + 1);
+            loose_resize(selected_hessian_offsets, N + 1);
+
+            // select
+            ParallelFor()
+                .file_line(__FILE__, __LINE__)
+                .apply(
+                    N,
+                    [selected_hessian = selected_hessian.view(0, N).viewer().name("selected_hessian"),
+                     last =
+                         VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
+                     dytopo_effect_hessian =
+                         sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
+                     i_range = classify_info.hessian_i_range(),
+                     j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                    {
+                        auto&& [i, j, H] = dytopo_effect_hessian(I);
+
+                        auto in_range = [](int i, const Vector2i& range)
+                        { return i >= range.x() && i < range.y(); };
+
+                        selected_hessian(I) =
+                            in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
+
+                        // fill the last one as 0, so that we can calculate the total count
+                        // during the exclusive scan
+                        if(I == 0)
+                            last = 0;
+                    });
+
+            // scan
+            DeviceScan().ExclusiveSum(selected_hessian.data(),
+                                      selected_hessian_offsets.data(),
+                                      selected_hessian.size());
+
+            IndexT h_total_count = 0;
+            VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
+
+            loose_resize_entries(classified_hessians, h_total_count);
+
+            // fill
+            if(h_total_count > 0)
             {
-                const auto N = collected_dytopo_effect_hessian.triplet_count();
-
-                // +1 for calculate the total count
-                loose_resize(selected_hessian, N + 1);
-                loose_resize(selected_hessian_offsets, N + 1);
-
-                // select
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
-                    .apply(
-                        N,
-                        [selected_hessian =
-                             selected_hessian.view(0, N).viewer().name("selected_hessian"),
-                         last =
-                             VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
-                         dytopo_effect_hessian = collected_dytopo_effect_hessian.cviewer().name(
-                             "dytopo_effect_hessian"),
-                         i_range = classify_info.hessian_i_range(),
-                         j_range = classify_info.hessian_j_range()] __device__(int I) mutable
-                        {
-                            auto&& [i, j, H] = dytopo_effect_hessian(I);
-
-                            auto in_range = [](int i, const Vector2i& range)
-                            { return i >= range.x() && i < range.y(); };
-
-                            selected_hessian(I) =
-                                in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
-
-                            // fill the last one as 0, so that we can calculate the total count
-                            // during the exclusive scan
-                            if(I == 0)
-                                last = 0;
-                        });
-
-                // scan
-                DeviceScan().ExclusiveSum(selected_hessian.data(),
-                                          selected_hessian_offsets.data(),
-                                          selected_hessian.size());
-
-                IndexT h_total_count = 0;
-                VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
-
-                loose_resize_entries(classified_hessians, h_total_count);
-
-                // fill
-                if(h_total_count > 0)
-                {
-                    ParallelFor()
-                        .file_line(__FILE__, __LINE__)
-                        .apply(N,
-                               [selected_hessian =
-                                    selected_hessian.cviewer().name("selected_hessian"),
-                                selected_hessian_offsets =
-                                    selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
-                                dytopo_effect_hessian =
-                                    collected_dytopo_effect_hessian.cviewer().name(
-                                        "dytopo_effect_hessian"),
-                                classified_hessian =
-                                    classified_hessians.viewer().name("classified_hessian"),
-                                i_range = classify_info.hessian_i_range(),
-                                j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                    .apply(N,
+                           [selected_hessian = selected_hessian.cviewer().name("selected_hessian"),
+                            selected_hessian_offsets =
+                                selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
+                            dytopo_effect_hessian =
+                                sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
+                            classified_hessian = classified_hessians.viewer().name("classified_hessian"),
+                            i_range = classify_info.hessian_i_range(),
+                            j_range = classify_info.hessian_j_range()] __device__(int I) mutable
+                           {
+                               if(selected_hessian(I))
                                {
-                                   if(selected_hessian(I))
-                                   {
-                                       auto&& [i, j, H] = dytopo_effect_hessian(I);
-                                       auto offset = selected_hessian_offsets(I);
+                                   auto&& [i, j, H] = dytopo_effect_hessian(I);
+                                   auto offset = selected_hessian_offsets(I);
 
-                                       classified_hessian(offset).write(i, j, H);
-                                   }
-                               });
-                }
-
-                classified_info.m_hessians = classified_hessians.view();
+                                   classified_hessian(offset).write(i, j, H);
+                               }
+                           });
             }
-            else
-            {
-                const auto N = sorted_dytopo_effect_hessian.triplet_count();
 
-                // +1 for calculate the total count
-                loose_resize(selected_hessian, N + 1);
-                loose_resize(selected_hessian_offsets, N + 1);
-
-                // select
-                ParallelFor()
-                    .file_line(__FILE__, __LINE__)
-                    .apply(
-                        N,
-                        [selected_hessian =
-                             selected_hessian.view(0, N).viewer().name("selected_hessian"),
-                         last =
-                             VarView<IndexT>{selected_hessian.data() + N}.viewer().name("last"),
-                         dytopo_effect_hessian =
-                             sorted_dytopo_effect_hessian.cviewer().name("dytopo_effect_hessian"),
-                         i_range = classify_info.hessian_i_range(),
-                         j_range = classify_info.hessian_j_range()] __device__(int I) mutable
-                        {
-                            auto&& [i, j, H] = dytopo_effect_hessian(I);
-
-                            auto in_range = [](int i, const Vector2i& range)
-                            { return i >= range.x() && i < range.y(); };
-
-                            selected_hessian(I) =
-                                in_range(i, i_range) && in_range(j, j_range) ? 1 : 0;
-
-                            // fill the last one as 0, so that we can calculate the total count
-                            // during the exclusive scan
-                            if(I == 0)
-                                last = 0;
-                        });
-
-                // scan
-                DeviceScan().ExclusiveSum(selected_hessian.data(),
-                                          selected_hessian_offsets.data(),
-                                          selected_hessian.size());
-
-                IndexT h_total_count = 0;
-                VarView<IndexT>{selected_hessian_offsets.data() + N}.copy_to(&h_total_count);
-
-                loose_resize_entries(classified_hessians, h_total_count);
-
-                // fill
-                if(h_total_count > 0)
-                {
-                    ParallelFor()
-                        .file_line(__FILE__, __LINE__)
-                        .apply(N,
-                               [selected_hessian =
-                                    selected_hessian.cviewer().name("selected_hessian"),
-                                selected_hessian_offsets =
-                                    selected_hessian_offsets.cviewer().name("selected_hessian_offsets"),
-                                dytopo_effect_hessian =
-                                    sorted_dytopo_effect_hessian.cviewer().name(
-                                        "dytopo_effect_hessian"),
-                                classified_hessian =
-                                    classified_hessians.viewer().name("classified_hessian"),
-                                i_range = classify_info.hessian_i_range(),
-                                j_range = classify_info.hessian_j_range()] __device__(int I) mutable
-                               {
-                                   if(selected_hessian(I))
-                                   {
-                                       auto&& [i, j, H] = dytopo_effect_hessian(I);
-                                       auto offset = selected_hessian_offsets(I);
-
-                                       classified_hessian(offset).write(i, j, H);
-                                   }
-                               });
-                }
-
-                classified_info.m_hessians = classified_hessians.view();
-            }
+            classified_info.m_hessians = classified_hessians.view();
         }
 
         receiver->receive(classified_info);
     }
-}
-
-void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
-    GlobalLinearSystem::StructuredAssemblyInfo& structured_info)
-{
-    using namespace muda;
-
-    if(dytopo_effect_reporters.view().empty())
-        return;
-
-    StructuredHessianInfo info;
-    info.m_stream = structured_info.stream();
-    auto contact_sink = structured_info.sink();
-    info.m_contact_sink.sink = contact_sink;
-    info.m_contact_sink.counters = structured_info.contact_counters();
-    info.m_contact_sink.hessian_cache = structured_info.contact_hessian_cache();
-    info.m_contact_sink.offband_policy = structured_info.contact_offband_policy();
-
-    if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
-    {
-        info.m_contact_sink.abd_vertex_offset =
-            affine_body_vertex_reporter->vertex_offset();
-        info.m_contact_sink.abd_vertex_count =
-            affine_body_vertex_reporter->vertex_count();
-        auto abd_body_is_fixed = affine_body_dynamics->body_is_fixed();
-        info.m_contact_sink.abd_body_count =
-            static_cast<IndexT>(abd_body_is_fixed.size());
-        info.m_contact_sink.abd_old_dof_offset =
-            abd_linear_subsystem->dof_offset();
-        info.m_contact_sink.abd_vertex_to_body =
-            affine_body_dynamics->v2b();
-        info.m_contact_sink.abd_vertex_to_J =
-            affine_body_dynamics->Js();
-        info.m_contact_sink.abd_body_is_fixed = abd_body_is_fixed;
-    }
-
-    if(fem_linear_subsystem && finite_element_method && finite_element_vertex_reporter)
-    {
-        info.m_contact_sink.fem_vertex_offset =
-            finite_element_vertex_reporter->vertex_offset();
-        info.m_contact_sink.fem_vertex_count =
-            finite_element_vertex_reporter->vertex_count();
-        info.m_contact_sink.fem_old_dof_offset =
-            fem_linear_subsystem->dof_offset();
-        info.m_contact_sink.fem_vertex_is_fixed =
-            finite_element_method->is_fixed();
-    }
-
-    if(info.m_contact_sink.hessian_cache.replay_valid())
-    {
-        Timer timer{"Replay Structured Contact Hessian Cache"};
-        replay_structured_contact_hessian_cache(structured_info.stream(),
-                                                info.m_contact_sink);
-        return;
-    }
-
-    for(auto&& reporter : dytopo_effect_reporters.view())
-    {
-        if(!reporter->supports_structured_hessian())
-        {
-            throw SimSystemException{fmt::format(
-                "structured_dytopo_reporter_not_supported: reporter '{}' does not "
-                "support direct StructuredAssemblySink Hessian writes",
-                reporter->name())};
-        }
-
-        Timer timer{dytopo_assemble_timer_name(*reporter)};
-        reporter->assemble_structured_hessian(info);
-    }
-}
-
-SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()
-{
-    SizeT signature = ContactSignatureFnvOffset;
-
-    SizeT reporter_index = 0;
-    for(auto&& reporter : dytopo_effect_reporters.view())
-    {
-        if(!has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
-            continue;
-
-        GradientHessianExtentInfo extent_info;
-        extent_info.m_gradient_only = false;
-        reporter->report_gradient_hessian_extent(extent_info);
-
-        mix_contact_signature(signature, reporter_index++);
-
-        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
-        {
-            mix_contact_vector_view(signature, SizeT{0x1001}, normal->PTs());
-            mix_contact_vector_view(signature, SizeT{0x1002}, normal->EEs());
-            mix_contact_vector_view(signature, SizeT{0x1003}, normal->PEs());
-            mix_contact_vector_view(signature, SizeT{0x1004}, normal->PPs());
-            continue;
-        }
-        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
-        {
-            mix_contact_vector_view(signature, SizeT{0x2001}, friction->PTs());
-            mix_contact_vector_view(signature, SizeT{0x2002}, friction->EEs());
-            mix_contact_vector_view(signature, SizeT{0x2003}, friction->PEs());
-            mix_contact_vector_view(signature, SizeT{0x2004}, friction->PPs());
-            continue;
-        }
-        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-        {
-            mix_contact_vector_view(signature, SizeT{0x3001}, normal->PHs());
-            continue;
-        }
-        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
-        {
-            mix_contact_vector_view(signature, SizeT{0x4001}, friction->PHs());
-            continue;
-        }
-
-        mix_contact_signature(signature, extent_info.m_gradient_count);
-        mix_contact_signature(signature, extent_info.m_hessian_count);
-    }
-    mix_contact_signature(signature, reporter_index);
-    return signature;
 }
 
 void GlobalDyTopoEffectManager::Impl::loose_resize_entries(
@@ -666,17 +392,6 @@ void GlobalDyTopoEffectManager::init()
 void GlobalDyTopoEffectManager::compute_dytopo_effect(ComputeDyTopoEffectInfo& info)
 {
     m_impl.compute_dytopo_effect(info);
-}
-
-void GlobalDyTopoEffectManager::assemble_structured_hessian(
-    GlobalLinearSystem::StructuredAssemblyInfo& info)
-{
-    m_impl.assemble_structured_hessian(info);
-}
-
-SizeT GlobalDyTopoEffectManager::contact_set_signature()
-{
-    return m_impl.contact_set_signature();
 }
 
 void GlobalDyTopoEffectManager::compute_dytopo_effect()

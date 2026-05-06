@@ -225,7 +225,8 @@ Edge             = ({}, {}))",
                  strength_ratio = strength_ratio.cviewer().name("strength_ratio"),
                  body_masses = info.body_masses().viewer().name("body_masses"),
                  qs          = info.qs().viewer().name("qs"),
-                 sink        = info.sink(),
+                 G12s        = info.gradients().viewer().name("G12s"),
+                 H12x12s     = info.hessians().viewer().name("H12x12s"),
                  gradient_only] __device__(int I)
                 {
                     using Alu   = ActivePolicy::AluScalar;
@@ -258,10 +259,9 @@ Edge             = ({}, {}))",
                     RJ::JaxisT_Gaxis<Alu>(G24, dEdF, qi0_bar, qi1_bar, qj0_bar, qj1_bar);
 
                     // Fill Body Gradient
-                    sink.template write_gradient<StencilSize>(
-                        StencilSize * I,
-                        bids,
-                        downcast_gradient<Store>(G24));
+                    DoubletVectorAssembler DVA{G12s};
+                    DVA.segment<StencilSize>(StencilSize * I)
+                        .write(bids, downcast_gradient<Store>(G24));
 
                     if(gradient_only)
                         return;
@@ -274,10 +274,9 @@ Edge             = ({}, {}))",
                     Eigen::Matrix<Alu, 24, 24> H24;
                     RJ::JaxisT_Haxis_Jaxis<Alu>(H24, ddEddF, qi0_bar, qi1_bar, qj0_bar, qj1_bar);
 
-                    sink.template write_hessian_half<StencilSize>(
-                        HalfHessianSize * I,
-                        bids,
-                        downcast_hessian<Store>(H24));
+                    TripletMatrixAssembler TMA{H12x12s};
+                    TMA.half_block<StencilSize>(HalfHessianSize * I)
+                        .write(bids, downcast_hessian<Store>(H24));
                 });
     }
 

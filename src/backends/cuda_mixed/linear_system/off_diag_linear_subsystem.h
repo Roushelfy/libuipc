@@ -36,8 +36,6 @@ class OffDiagLinearSubsystem : public SimSystem
   protected:
     virtual void report_extent(GlobalLinearSystem::OffDiagExtentInfo& info) = 0;
     virtual void assemble(GlobalLinearSystem::OffDiagInfo&)                 = 0;
-    virtual bool do_supports_structured_assembly() const { return false; }
-    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
     virtual void do_build(BuildInfo& info)                                  = 0;
     virtual void do_init(InitInfo& info);
 
@@ -47,7 +45,5 @@ class OffDiagLinearSubsystem : public SimSystem
     DiagLinearSubsystem* m_r = nullptr;
     virtual void         do_build() final override;
     void                 init();  // only be called by GlobalLinearSystem
-    bool                 supports_structured_assembly() const;
-    void                 assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
 };
 }  // namespace uipc::backend::cuda_mixed

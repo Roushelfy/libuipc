@@ -11,9 +11,6 @@
 
 namespace uipc::backend::cuda_mixed
 {
-void assemble_ipc_simplex_normal_contact_structured(
-    SimplexNormalContact::ContactInfo& info);
-
 class IPCSimplexNormalContact final : public SimplexNormalContact
 {
   public:
@@ -316,12 +313,6 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
         using Mat9A = Eigen::Matrix<Alu, 9, 9>;
         using Vec6A = Eigen::Matrix<Alu, 6, 1>;
         using Mat6A = Eigen::Matrix<Alu, 6, 6>;
-
-        if(info.structured_hessian())
-        {
-            assemble_ipc_simplex_normal_contact_structured(info);
-            return;
-        }
 
         if(info.PTs().size())
         {

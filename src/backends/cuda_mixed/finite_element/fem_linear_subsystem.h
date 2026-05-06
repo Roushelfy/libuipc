@@ -3,7 +3,6 @@
 #include <linear_system/diag_linear_subsystem.h>
 #include <finite_element/finite_element_method.h>
 #include <finite_element/finite_element_vertex_reporter.h>
-#include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
 
 namespace uipc::backend::cuda_mixed
@@ -23,66 +22,17 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         ComputeGradientHessianInfo(bool                                     gradient_only,
                                    muda::DoubletVectorView<StoreScalar, 3>  gradients,
                                    muda::TripletMatrixView<StoreScalar, 3, 3> hessians,
-                                   Float                                    dt,
-                                   StructuredDeviceAssemblySink<
-                                       StoreScalar,
-                                       GlobalLinearSystem::SolveScalar> structured_sink = {},
-                                   IndexT old_dof_offset = 0,
-                                   muda::CBufferView<IndexT> fixed_vertices = {},
-                                   bool identity_fixed_diagonal = false,
-                                   bool write_gradients = true) noexcept
+                                   Float                                    dt) noexcept
             : m_gradient_only(gradient_only)
             , m_gradients(gradients)
             , m_hessians(hessians)
             , m_dt(dt)
-            , m_structured_sink(structured_sink)
-            , m_old_dof_offset(old_dof_offset)
-            , m_fixed_vertices(fixed_vertices)
-            , m_identity_fixed_diagonal(identity_fixed_diagonal)
-            , m_write_gradients(write_gradients)
         {
         }
 
         auto gradient_only() const noexcept { return m_gradient_only; }
-        auto gradients() const noexcept
-        {
-            return structured_assembly() && !m_write_gradients
-                       ? muda::DoubletVectorView<StoreScalar, 3>{}
-                       : m_gradients;
-        }
-        auto hessians() const noexcept
-        {
-            return structured_assembly()
-                       ? muda::TripletMatrixView<StoreScalar, 3, 3>{}
-                       : m_hessians;
-        }
-        bool structured_assembly() const noexcept
-        {
-            return m_structured_sink.valid();
-        }
-        auto structured_sink() const noexcept { return m_structured_sink; }
-        IndexT old_dof_offset() const noexcept { return m_old_dof_offset; }
-        auto fixed_vertices() const noexcept { return m_fixed_vertices; }
-        bool identity_fixed_diagonal() const noexcept
-        {
-            return m_identity_fixed_diagonal;
-        }
-        bool write_gradients() const noexcept { return m_write_gradients; }
-        auto sink() const noexcept
-        {
-            auto hessian_view =
-                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 3, 3>{}
-                                      : m_hessians;
-            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 3>{
-                gradients(),
-                hessian_view,
-                m_gradient_only,
-                m_structured_sink,
-                m_old_dof_offset,
-                m_fixed_vertices,
-                m_identity_fixed_diagonal,
-                m_write_gradients};
-        }
+        auto gradients() const noexcept { return m_gradients; }
+        auto hessians() const noexcept { return m_hessians; }
         auto dt() const noexcept { return m_dt; }
 
       private:
@@ -90,11 +40,6 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         muda::DoubletVectorView<StoreScalar, 3>  m_gradients;
         muda::TripletMatrixView<StoreScalar, 3, 3> m_hessians;
         Float                                    m_dt = 0.0;
-        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
-        IndexT                                  m_old_dof_offset = 0;
-        muda::CBufferView<IndexT>               m_fixed_vertices;
-        bool                                    m_identity_fixed_diagonal = false;
-        bool                                    m_write_gradients = true;
     };
 
     class ReportExtentInfo
@@ -128,23 +73,11 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         AssembleInfo(Impl*                                impl,
                      IndexT                               index,
                      GlobalLinearSystem::TripletMatrixView hessians,
-                     bool                                 gradient_only,
-                     StructuredDeviceAssemblySink<
-                         StoreScalar,
-                         GlobalLinearSystem::SolveScalar> structured_sink = {},
-                     IndexT old_dof_offset = 0,
-                     muda::CBufferView<IndexT> fixed_vertices = {},
-                     bool identity_fixed_diagonal = false,
-                     bool write_gradients = true) noexcept
+                     bool                                 gradient_only) noexcept
             : m_impl(impl)
             , m_index(index)
             , m_hessians(hessians)
             , m_gradient_only(gradient_only)
-            , m_structured_sink(structured_sink)
-            , m_old_dof_offset(old_dof_offset)
-            , m_fixed_vertices(fixed_vertices)
-            , m_identity_fixed_diagonal(identity_fixed_diagonal)
-            , m_write_gradients(write_gradients)
         {
         }
 
@@ -152,33 +85,6 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         GlobalLinearSystem::TripletMatrixView hessians() const;
         Float                                dt() const noexcept;
         bool                                 gradient_only() const noexcept;
-        bool structured_assembly() const noexcept
-        {
-            return m_structured_sink.valid();
-        }
-        auto structured_sink() const noexcept { return m_structured_sink; }
-        IndexT old_dof_offset() const noexcept { return m_old_dof_offset; }
-        auto fixed_vertices() const noexcept { return m_fixed_vertices; }
-        bool identity_fixed_diagonal() const noexcept
-        {
-            return m_identity_fixed_diagonal;
-        }
-        bool write_gradients() const noexcept { return m_write_gradients; }
-        auto sink() const noexcept
-        {
-            auto hessian_view =
-                structured_assembly() ? GlobalLinearSystem::TripletMatrixView{}
-                                      : hessians();
-            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 3>{
-                gradients(),
-                hessian_view,
-                m_gradient_only,
-                m_structured_sink,
-                m_old_dof_offset,
-                m_fixed_vertices,
-                m_identity_fixed_diagonal,
-                m_write_gradients};
-        }
 
       private:
         friend class FEMLinearSubsystem;
@@ -187,11 +93,6 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         IndexT                               m_index         = ~0;
         GlobalLinearSystem::TripletMatrixView m_hessians;
         bool                                 m_gradient_only = false;
-        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
-        IndexT                               m_old_dof_offset = 0;
-        muda::CBufferView<IndexT>            m_fixed_vertices;
-        bool                                 m_identity_fixed_diagonal = false;
-        bool                                 m_write_gradients = true;
     };
 
     class Impl
@@ -238,7 +139,6 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
         muda::DeviceDoubletVector<StoreScalar, 3> reporter_gradients;
 
         void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);
-        void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
     };
 
   private:
@@ -246,8 +146,6 @@ class FEMLinearSubsystem final : public DiagLinearSubsystem
     virtual void do_init(DiagLinearSubsystem::InitInfo& info) override;
     virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) override;
     virtual void do_assemble(GlobalLinearSystem::DiagInfo& info) override;
-    virtual bool do_supports_structured_assembly() const override;
-    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info) override;
     virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) override;
     virtual void do_report_init_extent(GlobalLinearSystem::InitDofExtentInfo& info) override;

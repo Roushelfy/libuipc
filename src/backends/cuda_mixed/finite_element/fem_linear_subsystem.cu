@@ -140,8 +140,13 @@ void FEMLinearSubsystem::Impl::report_extent(GlobalLinearSystem::DiagExtentInfo&
     if(dytopo_effect_receiver)  // if dytopo_effect enabled
     {
         grad_offset += dytopo_effect_receiver->gradients().doublet_count();
-        if(!gradient_only)
-            hess_offset += dytopo_effect_receiver->hessians().triplet_count();
+        hess_offset += dytopo_effect_receiver->hessians().triplet_count();
+
+        UIPC_ASSERT(!(gradient_only
+                      && !dytopo_effect_receiver->hessians().triplet_count() == 0),
+                    "When gradient_only is true, hessian_offset must be 0, yours {}.\n"
+                    "Ref: https://github.com/spiriMirror/libuipc/issues/295",
+                    dytopo_effect_receiver->hessians().triplet_count());
     }
 
     // 2) Gradient Count
@@ -373,48 +378,6 @@ void FEMLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& hess_offset,
     hess_offset += hess_count;
 }
 
-void FEMLinearSubsystem::Impl::assemble_structured(
-    GlobalLinearSystem::StructuredAssemblyInfo& info)
-{
-    using namespace muda;
-
-    auto reporter_view = reporters.view();
-
-    const IndexT old_dof_offset = static_cast<IndexT>(info.old_dof_offset());
-    auto         structured_sink = info.sink();
-    auto         fixed_vertices  = fem().is_fixed.view();
-    auto         gradients       = muda::DoubletVectorView<StoreScalar, 3>{};
-    auto         hessians        = GlobalLinearSystem::TripletMatrixView{};
-
-    {
-        FEMLinearSubsystem::ComputeGradientHessianInfo kinetic_info{
-            false,
-            gradients,
-            hessians,
-            dt,
-            structured_sink,
-            old_dof_offset,
-            fixed_vertices,
-            true,
-            false};
-        kinetic->compute_gradient_hessian(kinetic_info);
-    }
-
-    for(auto& R : reporter_view)
-    {
-        AssembleInfo assemble_info{this,
-                                   R->m_index,
-                                   hessians,
-                                   false,
-                                   structured_sink,
-                                   old_dof_offset,
-                                   fixed_vertices,
-                                   true,
-                                   false};
-        R->assemble(assemble_info);
-    }
-}
-
 void FEMLinearSubsystem::Impl::accuracy_check(GlobalLinearSystem::AccuracyInfo& info)
 {
     info.satisfied(true);
@@ -456,17 +419,6 @@ void FEMLinearSubsystem::do_assemble(GlobalLinearSystem::DiagInfo& info)
     m_impl.assemble(info);
 }
 
-bool FEMLinearSubsystem::do_supports_structured_assembly() const
-{
-    return true;
-}
-
-void FEMLinearSubsystem::do_assemble_structured(
-    GlobalLinearSystem::StructuredAssemblyInfo& info)
-{
-    m_impl.assemble_structured(info);
-}
-
 void FEMLinearSubsystem::do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info)
 {
     m_impl.accuracy_check(info);
@@ -489,18 +441,12 @@ void FEMLinearSubsystem::do_receive_init_dof_info(GlobalLinearSystem::InitDofInf
 
 muda::DoubletVectorView<FEMLinearSubsystem::StoreScalar, 3> FEMLinearSubsystem::AssembleInfo::gradients() const
 {
-    if(structured_assembly() && !write_gradients())
-        return {};
-
     auto [offset, count] = m_impl->reporter_gradient_offsets_counts[m_index];
     return m_impl->reporter_gradients.view().subview(offset, count);
 }
 
 GlobalLinearSystem::TripletMatrixView FEMLinearSubsystem::AssembleInfo::hessians() const
 {
-    if(structured_assembly())
-        return GlobalLinearSystem::TripletMatrixView{};
-
     auto [offset, count] = m_impl->reporter_hessian_offsets_counts[m_index];
     return m_hessians.subview(offset, count);
 }

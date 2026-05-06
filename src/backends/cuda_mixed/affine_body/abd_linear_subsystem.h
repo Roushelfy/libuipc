@@ -3,7 +3,6 @@
 #include <affine_body/affine_body_dynamics.h>
 #include <affine_body/abd_dytopo_effect_receiver.h>
 #include <affine_body/affine_body_vertex_reporter.h>
-#include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
 
 namespace uipc::backend::cuda_mixed
@@ -21,8 +20,6 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
     {
         return m_impl.diag_hessian.view();
     }
-
-    SizeT body_count() const noexcept;
 
     class ComputeGradientHessianInfo
     {
@@ -78,41 +75,10 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
     class AssembleInfo
     {
       public:
-        AssembleInfo(Impl* impl,
-                     IndexT index,
-                     bool   gradient_only,
-                     StructuredDeviceAssemblySink<
-                         StoreScalar,
-                         GlobalLinearSystem::SolveScalar> structured_sink = {},
-                     IndexT old_dof_offset = 0,
-                     muda::CBufferView<IndexT> fixed_bodies = {},
-                     bool write_gradients = true) noexcept;
+        AssembleInfo(Impl* impl, IndexT index, bool gradient_only) noexcept;
         muda::DoubletVectorView<StoreScalar, 12>     gradients() const;
         muda::TripletMatrixView<StoreScalar, 12, 12> hessians() const;
         bool                                   gradient_only() const noexcept;
-        bool structured_assembly() const noexcept
-        {
-            return m_structured_sink.valid();
-        }
-        auto structured_sink() const noexcept { return m_structured_sink; }
-        IndexT old_dof_offset() const noexcept { return m_old_dof_offset; }
-        auto fixed_bodies() const noexcept { return m_fixed_bodies; }
-        bool write_gradients() const noexcept { return m_write_gradients; }
-        auto sink() const noexcept
-        {
-            auto hessian_view =
-                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 12, 12>{}
-                                      : hessians();
-            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 12>{
-                gradients(),
-                hessian_view,
-                m_gradient_only,
-                m_structured_sink,
-                m_old_dof_offset,
-                m_fixed_bodies,
-                false,
-                m_write_gradients};
-        }
 
       private:
         friend class ABDLinearSubsystem;
@@ -120,10 +86,6 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         Impl*  m_impl          = nullptr;
         IndexT m_index         = ~0;
         bool   m_gradient_only = false;
-        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
-        IndexT m_old_dof_offset = 0;
-        muda::CBufferView<IndexT> m_fixed_bodies;
-        bool m_write_gradients = true;
     };
 
     class Impl
@@ -136,7 +98,6 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         void receive_init_dof_info(WorldVisitor& w, GlobalLinearSystem::InitDofInfo& info);
 
         void assemble(GlobalLinearSystem::DiagInfo& info);
-        void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
         void _assemble_kinetic_shape(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_reporters(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_dytopo_effect(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
@@ -166,7 +127,6 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
 
         // diag hessian for preconditioner
         muda::DeviceBuffer<StoreMat12x12> diag_hessian;
-        muda::DeviceBuffer<IndexT>        structured_contact_counts;
 
         Float dt = 0.0f;  // time step, used in assemble
     };
@@ -180,8 +140,6 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
 
     virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) override;
     virtual void do_assemble(GlobalLinearSystem::DiagInfo& info) override;
-    virtual bool do_supports_structured_assembly() const override;
-    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info) override;
     virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) override;
 

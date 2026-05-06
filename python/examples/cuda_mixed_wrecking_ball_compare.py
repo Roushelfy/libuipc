@@ -245,6 +245,14 @@ def build_mesh(
     return mesh
 
 
+def backend_for_variant(requested_backend: str, variant: str) -> str:
+    if requested_backend != "auto":
+        return requested_backend
+    if VARIANTS[variant]["solver"] == "socu_approx":
+        return "cuda_mixed_socu"
+    return "cuda_mixed"
+
+
 def build_scene(variant: str, backend: str, workspace: Path) -> tuple[Engine, World]:
     init_cuda_mixed_module_dir(backend)
     Logger.set_level(Logger.Level.Info)
@@ -318,7 +326,8 @@ def output_dir_for(output_root: Path, backend: str, variant: str) -> Path:
     return output_root / backend / variant
 
 
-def run_one(variant: str, frames: int, output_root: Path, backend: str) -> dict[str, Any]:
+def run_one(variant: str, frames: int, output_root: Path, requested_backend: str) -> dict[str, Any]:
+    backend = backend_for_variant(requested_backend, variant)
     out_dir = output_dir_for(output_root, backend, variant)
     workspace = out_dir / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -340,6 +349,7 @@ def run_one(variant: str, frames: int, output_root: Path, backend: str) -> dict[
     _ = engine
     result = {
         "backend": backend,
+        "requested_backend": requested_backend,
         "variant": variant,
         "runtime_graph_source": VARIANTS[variant].get(
             "runtime_graph_source",
@@ -402,9 +412,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=["cuda_mixed", "cuda_mixed_socu"],
-        default="cuda_mixed",
-        help="Backend module to load for the scene.",
+        choices=["auto", "cuda_mixed", "cuda_mixed_socu"],
+        default="auto",
+        help=(
+            "Backend module to load. 'auto' uses cuda_mixed for fused_pcg and "
+            "cuda_mixed_socu for SOCU variants."
+        ),
     )
     args = parser.parse_args()
 

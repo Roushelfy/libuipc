@@ -11,9 +11,6 @@
 
 namespace uipc::backend::cuda_mixed
 {
-void assemble_ipc_simplex_frictional_contact_structured(
-    SimplexFrictionalContact::ContactInfo& info);
-
 class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 {
   public:
@@ -330,12 +327,6 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
         using Mat9A = Eigen::Matrix<Alu, 9, 9>;
         using Vec6A = Eigen::Matrix<Alu, 6, 1>;
         using Mat6A = Eigen::Matrix<Alu, 6, 6>;
-
-        if(info.structured_hessian())
-        {
-            assemble_ipc_simplex_frictional_contact_structured(info);
-            return;
-        }
 
         // Compute Point-Triangle Gradient and Hessian
         ParallelFor()

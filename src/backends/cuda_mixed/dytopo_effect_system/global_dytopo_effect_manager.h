@@ -6,21 +6,12 @@
 #include <utils/offset_count_collection.h>
 #include <algorithm/matrix_converter.h>
 #include <dytopo_effect_system/dytopo_classify_info.h>
-#include <linear_system/assembly_mode.h>
-#include <linear_system/global_linear_system.h>
 #include <mixed_precision/policy.h>
-#include <utils/structured_contact_assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
 {
 class DyTopoEffectReporter;
 class DyTopoEffectReceiver;
-class ABDLinearSubsystem;
-class FEMLinearSubsystem;
-class AffineBodyDynamics;
-class FiniteElementMethod;
-class AffineBodyVertexReporter;
-class FiniteElementVertexReporter;
 
 class GlobalDyTopoEffectManager final : public SimSystem
 {
@@ -111,21 +102,6 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::CTripletMatrixView<StoreScalar, 3> m_hessians;
     };
 
-    class StructuredHessianInfo
-    {
-      public:
-        using ContactSink =
-            StructuredContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar>;
-
-        ContactSink contact_sink() const noexcept { return m_contact_sink; }
-        cudaStream_t stream() const noexcept { return m_stream; }
-
-      private:
-        friend class Impl;
-        ContactSink  m_contact_sink;
-        cudaStream_t m_stream = cudaStreamLegacy;
-    };
-
     class ComputeDyTopoEffectInfo
     {
       public:
@@ -134,13 +110,11 @@ class GlobalDyTopoEffectManager final : public SimSystem
         {
             m_component_flags = v;
         }
-        void assembly_mode(NewtonAssemblyMode v) noexcept { m_assembly_mode = v; }
 
       private:
         friend class Impl;
         bool                 m_gradient_only   = false;
         EnergyComponentFlags m_component_flags = EnergyComponentFlags::All;
-        NewtonAssemblyMode   m_assembly_mode   = NewtonAssemblyMode::FullSparse;
     };
 
     class Impl
@@ -149,19 +123,10 @@ class GlobalDyTopoEffectManager final : public SimSystem
         void init(WorldVisitor& world);
         void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
         void _assemble(ComputeDyTopoEffectInfo& info);
-        void _convert_matrix(ComputeDyTopoEffectInfo& info);
+        void _convert_matrix();
         void _distribute(ComputeDyTopoEffectInfo& info);
-        void assemble_structured_hessian(
-            GlobalLinearSystem::StructuredAssemblyInfo& info);
-        SizeT contact_set_signature();
 
         SimSystemSlot<GlobalVertexManager> global_vertex_manager;
-        SimSystemSlot<ABDLinearSubsystem> abd_linear_subsystem;
-        SimSystemSlot<FEMLinearSubsystem> fem_linear_subsystem;
-        SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
-        SimSystemSlot<FiniteElementMethod> finite_element_method;
-        SimSystemSlot<AffineBodyVertexReporter> affine_body_vertex_reporter;
-        SimSystemSlot<FiniteElementVertexReporter> finite_element_vertex_reporter;
 
         Float reserve_ratio = 1.1;
 
@@ -215,8 +180,6 @@ class GlobalDyTopoEffectManager final : public SimSystem
     muda::CBCOOMatrixView<StoreScalar, 3> hessians() const noexcept;
 
     void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
-    void assemble_structured_hessian(GlobalLinearSystem::StructuredAssemblyInfo& info);
-    SizeT contact_set_signature();
 
   protected:
     virtual void do_build() override;

@@ -6,7 +6,6 @@
 #include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
-#include <dytopo_effect_system/global_dytopo_effect_manager.h>
 #include <affine_body/abd_linear_subsystem.h>
 #include <finite_element/fem_linear_subsystem.h>
 #include <sim_engine.h>
@@ -65,7 +64,6 @@ SubsystemTimerClass classify_subsystem(const OffDiagLinearSubsystem& subsystem)
         return SubsystemTimerClass::AbdFemCoupling;
     return SubsystemTimerClass::Unclassified;
 }
-
 }  // namespace
 
 REGISTER_SIM_SYSTEM(GlobalLinearSystem);
@@ -88,13 +86,11 @@ void GlobalLinearSystem::do_build()
         dump_linear_system_attr ? dump_linear_system_attr->view()[0] : false;
     m_impl.need_solution_x_dump =
         dump_solution_x_attr ? dump_solution_x_attr->view()[0] : false;
-    m_impl.global_dytopo_effect_manager = find<GlobalDyTopoEffectManager>();
-
 }
 
-void GlobalLinearSystem::_dump_A()
+void GlobalLinearSystem::_dump_A_b()
 {
-    auto path_tool    = BackendPathTool(workspace());
+    auto path_tool = BackendPathTool(workspace());
     auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
     auto output_path_A = fmt::format("{}A.{}.{}.mtx",
                                      output_folder.string(),
@@ -102,12 +98,7 @@ void GlobalLinearSystem::_dump_A()
                                      engine().newton_iter());
     export_matrix_market(output_path_A, m_impl.bcoo_A.cview());
     logger::info("Dumped global linear system matrix A to {}", output_path_A);
-}
 
-void GlobalLinearSystem::_dump_b()
-{
-    auto path_tool    = BackendPathTool(workspace());
-    auto output_folder = path_tool.workspace(UIPC_RELATIVE_SOURCE_FILE, "debug");
     auto output_path_b = fmt::format("{}b.{}.{}.mtx",
                                      output_folder.string(),
                                      engine().frame(),
@@ -135,26 +126,12 @@ void GlobalLinearSystem::solve()
     if(m_impl.empty_system) [[unlikely]]
         return;
 
-    const auto requirements =
-        m_impl.selected_linear_solver
-            ? m_impl.selected_linear_solver->assembly_requirements()
-            : LinearSolver::AssemblyRequirements{};
-    if(requirements.needs_full_sparse_A)
-    {
-        logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
-                     m_impl.b.size(),
-                     m_impl.bcoo_A.triplet_count());
-    }
-    else
-    {
-        logger::info("GlobalLinearSystem has {} DoFs, full sparse A skipped by selected solver requirements",
-                     m_impl.b.size());
-    }
+    logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
+                 m_impl.b.size(),
+                 m_impl.bcoo_A.triplet_count());
 
-    if(m_impl.need_debug_dump && requirements.needs_gradient_b) [[unlikely]]
-        _dump_b();
-    if(m_impl.need_debug_dump && requirements.needs_full_sparse_A) [[unlikely]]
-        _dump_A();
+    if(m_impl.need_debug_dump) [[unlikely]]
+        _dump_A_b();
 
     m_impl.solve_linear_system();
 
@@ -284,36 +261,7 @@ void GlobalLinearSystem::Impl::init()
 void GlobalLinearSystem::Impl::build_linear_system()
 {
     Timer timer{"Build Linear System"};
-    const auto requirements =
-        selected_linear_solver ? selected_linear_solver->assembly_requirements()
-                               : LinearSolver::AssemblyRequirements{};
-
-    if(requirements.assembly_mode == NewtonAssemblyMode::FullSparse
-       && !requirements.needs_full_sparse_A)
-    {
-        throw SimSystemException{
-            "FullSparse assembly mode requires needs_full_sparse_A=true"};
-    }
-
-    if(requirements.assembly_mode == NewtonAssemblyMode::GradientStructuredHessian
-       && (requirements.needs_full_sparse_A || !requirements.needs_structured_chain))
-    {
-        throw SimSystemException{
-            "GradientStructuredHessian assembly mode requires "
-            "needs_full_sparse_A=false and needs_structured_chain=true"};
-    }
-    if(requirements.assembly_mode == NewtonAssemblyMode::FullSparseAndStructuredHessian
-       && (!requirements.needs_full_sparse_A || !requirements.needs_structured_chain))
-    {
-        throw SimSystemException{
-            "FullSparseAndStructuredHessian assembly mode requires "
-            "needs_full_sparse_A=true and needs_structured_chain=true"};
-    }
-
-    if(requirements.needs_structured_chain)
-        _validate_structured_chain_subsystems();
-
-    empty_system = !_update_subsystem_extent(requirements.needs_full_sparse_A);
+    empty_system = !_update_subsystem_extent();
 
     if(empty_system) [[unlikely]]
     {
@@ -321,219 +269,28 @@ void GlobalLinearSystem::Impl::build_linear_system()
         return;
     }
 
-    if(requirements.needs_gradient_b && !requirements.needs_full_sparse_A)
-    {
-        Timer timer{"Assemble Gradient Vector"};
-        _assemble_gradient_vector();
-    }
-
-    if(!requirements.needs_gradient_b)
-    {
-        b.view().buffer_view().fill(0.0);
-    }
-
-    if(requirements.needs_full_sparse_A)
     {
         Timer timer{"Assemble Linear System"};
         _assemble_linear_system();
     }
 
-    if(requirements.needs_structured_chain)
-    {
-        Timer timer{"Assemble Structured Chain"};
-        _assemble_structured_chain();
-    }
-
-    if(requirements.needs_full_sparse_A)
     {
         Timer timer{"Convert Matrix"};
         converter.ge2sym(triplet_A);
         converter.convert(triplet_A, bcoo_A);
     }
 
-    if(requirements.needs_preconditioner)
     {
         Timer timer{"Assemble Preconditioner"};
         _assemble_preconditioner();
     }
 
+    logger::info("GlobalLinearSystem has {} DoFs, Unique Triplet Count: {}",
+                 b.size(),
+                 bcoo_A.triplet_count());
 }
 
-void GlobalLinearSystem::Impl::_validate_structured_chain_subsystems()
-{
-    auto diag_subsystem_view     = diag_subsystems.view();
-    auto off_diag_subsystem_view = off_diag_subsystems.view();
-    const auto requirements =
-        selected_linear_solver ? selected_linear_solver->assembly_requirements()
-                               : LinearSolver::AssemblyRequirements{};
-
-    if(!off_diag_subsystem_view.empty())
-    {
-        if(!requirements.allows_structured_offdiag)
-        {
-            throw SimSystemException{
-                "structured_offdiag_not_allowed: selected solver does not allow structured off-diagonal assembly"};
-        }
-        for(auto& off_diag_subsystem : off_diag_subsystem_view)
-        {
-            if(!off_diag_subsystem->supports_structured_assembly())
-            {
-                throw SimSystemException{fmt::format(
-                    "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
-                    off_diag_subsystem->name())};
-            }
-        }
-    }
-
-    for(auto& diag_subsystem : diag_subsystem_view)
-    {
-        if(!diag_subsystem->supports_structured_assembly())
-        {
-            throw SimSystemException{fmt::format(
-                "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
-                diag_subsystem->name())};
-        }
-    }
-}
-
-void GlobalLinearSystem::Impl::_assemble_structured_chain()
-{
-    if(!selected_linear_solver)
-        throw SimSystemException{
-            "Structured chain assembly requires a selected linear solver"};
-
-    auto diag_subsystem_view     = diag_subsystems.view();
-    auto off_diag_subsystem_view = off_diag_subsystems.view();
-    const auto requirements = selected_linear_solver->assembly_requirements();
-    if(!off_diag_subsystem_view.empty())
-    {
-        if(!requirements.allows_structured_offdiag)
-        {
-            throw SimSystemException{
-                "structured_offdiag_not_allowed: selected solver does not allow structured off-diagonal assembly"};
-        }
-    }
-
-    auto diag_dof_counts  = diag_dof_offsets_counts.counts();
-    auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
-
-    auto assemble_into = [&](StructuredAssemblyInfo& info,
-                             LinearSolver::StructuredProbeAssembly probe)
-    {
-        const bool contact_only =
-            probe == LinearSolver::StructuredProbeAssembly::ContactOnly;
-
-        if(!contact_only)
-        {
-            for(const auto& subsystem_info : subsystem_infos)
-            {
-                if(!subsystem_info.is_diag)
-                    continue;
-
-                auto& diag_subsystem =
-                    diag_subsystem_view[subsystem_info.local_index];
-                if(!diag_subsystem->supports_structured_assembly())
-                {
-                    throw SimSystemException{fmt::format(
-                        "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
-                        diag_subsystem->name())};
-                }
-
-                info.set_subsystem_extent(
-                    diag_dof_offsets[subsystem_info.local_index],
-                    diag_dof_counts[subsystem_info.local_index]);
-                Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
-                diag_subsystem->assemble_structured(info);
-            }
-
-            for(const auto& subsystem_info : subsystem_infos)
-            {
-                if(subsystem_info.is_diag)
-                    continue;
-
-                auto& off_diag_subsystem =
-                    off_diag_subsystem_view[subsystem_info.local_index];
-                if(!off_diag_subsystem->supports_structured_assembly())
-                {
-                    throw SimSystemException{fmt::format(
-                        "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
-                        off_diag_subsystem->name())};
-                }
-
-                Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
-                off_diag_subsystem->assemble_structured(info);
-            }
-
-            if(probe == LinearSolver::StructuredProbeAssembly::None)
-            {
-                selected_linear_solver->debug_dump_structured_chain_checkpoint(
-                    info,
-                    "no_contact");
-            }
-        }
-
-        if(global_dytopo_effect_manager)
-        {
-            Timer timer{contact_only ? "Probe Structured DyTopo Hessian Graph"
-                                      : "Assemble Structured DyTopo Hessian"};
-            global_dytopo_effect_manager->assemble_structured_hessian(info);
-        }
-    };
-
-    {
-        StructuredAssemblyInfo probe_info{this};
-        probe_info.m_b = b.cview();
-        const SizeT frame =
-            selected_linear_solver->system().engine().frame();
-        if(global_dytopo_effect_manager
-           && selected_linear_solver->needs_contact_set_signature_for_probe(frame))
-            probe_info.set_contact_set_signature(
-                global_dytopo_effect_manager->contact_set_signature());
-        const auto probe =
-            selected_linear_solver->prepare_structured_probe(probe_info);
-        if(probe != LinearSolver::StructuredProbeAssembly::None)
-        {
-            if(!probe_info.configured())
-            {
-                throw SimSystemException{
-                    "Selected solver requested structured probe but did not configure a structured workspace"};
-            }
-            assemble_into(probe_info, probe);
-            const bool installed =
-                selected_linear_solver->finalize_structured_probe(probe_info);
-            if(installed)
-            {
-                StructuredAssemblyInfo info{this};
-                info.m_b = b.cview();
-                selected_linear_solver->prepare_structured_chain(info);
-                if(!info.configured())
-                {
-                    throw SimSystemException{
-                        "Selected solver requested structured chain assembly but did not configure a structured workspace"};
-                }
-                assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
-                selected_linear_solver->finalize_structured_chain(info);
-                return;
-            }
-        }
-    }
-
-    {
-        StructuredAssemblyInfo info{this};
-        info.m_b = b.cview();
-        selected_linear_solver->prepare_structured_chain(info);
-        if(!info.configured())
-        {
-            throw SimSystemException{
-                "Selected solver requested structured chain assembly but did not configure a structured workspace"};
-        }
-
-        assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
-        selected_linear_solver->finalize_structured_chain(info);
-    }
-}
-
-bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A)
+bool GlobalLinearSystem::Impl::_update_subsystem_extent()
 {
     bool dof_count_changed     = false;
     bool triplet_count_changed = false;
@@ -553,35 +310,28 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A
             auto           triplet_i      = subsystem_info.index;
             auto&          diag_subsystem = diag_subsystem_view[dof_i];
             DiagExtentInfo info;
-            info.m_gradient_only = !needs_full_sparse_A;
             diag_subsystem->report_extent(info);
 
             dof_count_changed |= diag_dof_counts[dof_i] != info.m_dof_count;
             diag_dof_counts[dof_i] = info.m_dof_count;
 
-            const auto block_count = needs_full_sparse_A ? info.m_block_count : SizeT{0};
-            triplet_count_changed |= subsystem_triplet_counts[triplet_i] != block_count;
-            subsystem_triplet_counts[triplet_i] = block_count;
+
+            triplet_count_changed |= subsystem_triplet_counts[triplet_i] != info.m_block_count;
+            subsystem_triplet_counts[triplet_i] = info.m_block_count;
         }
         else
         {
             auto triplet_i = subsystem_info.index;
-            SizeT2 off_diag_counts{0, 0};
-            if(needs_full_sparse_A)
-            {
-                auto& off_diag_subsystem =
-                    off_diag_subsystem_view[subsystem_info.local_index];
-                OffDiagExtentInfo info;
-                off_diag_subsystem->report_extent(info);
-                off_diag_counts = SizeT2{info.m_lr_block_count, info.m_rl_block_count};
-            }
+            auto& off_diag_subsystem = off_diag_subsystem_view[subsystem_info.local_index];
+            OffDiagExtentInfo info;
+            off_diag_subsystem->report_extent(info);
 
-            auto total_block_count = off_diag_counts.x + off_diag_counts.y;
+            auto total_block_count = info.m_lr_block_count + info.m_rl_block_count;
 
             triplet_count_changed |= subsystem_triplet_counts[triplet_i] != total_block_count;
             subsystem_triplet_counts[triplet_i] = total_block_count;
             off_diag_lr_triplet_counts[subsystem_info.local_index] =
-                off_diag_counts;
+                SizeT2{info.m_lr_block_count, info.m_rl_block_count};
         }
     }
 
@@ -600,10 +350,9 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A
         b.reserve(reserve_count);
     }
     auto blocked_dof = total_dof / DoFBlockSize;
+    triplet_A.reshape(blocked_dof, blocked_dof);
     x.resize(total_dof);
     b.resize(total_dof);
-    if(needs_full_sparse_A)
-        triplet_A.reshape(blocked_dof, blocked_dof);
 
     if(triplet_count_changed) [[likely]]
     {
@@ -611,51 +360,20 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent(bool needs_full_sparse_A
     }
     total_triplet = subsystem_triplet_offsets_counts.total_count();
 
-    if(needs_full_sparse_A && triplet_A.triplet_capacity() < total_triplet)
+    if(triplet_A.triplet_capacity() < total_triplet)
     {
         auto reserve_count = total_triplet * reserve_ratio;
         triplet_A.reserve_triplets(reserve_count);
         bcoo_A.reserve_triplets(reserve_count);
     }
-    if(needs_full_sparse_A)
-        triplet_A.resize_triplets(total_triplet);
+    triplet_A.resize_triplets(total_triplet);
 
-    if(total_dof == 0 || (needs_full_sparse_A && total_triplet == 0)) [[unlikely]]
+    if(total_dof == 0 || total_triplet == 0) [[unlikely]]
     {
         return false;
     }
 
     return true;
-}
-
-void GlobalLinearSystem::Impl::_assemble_gradient_vector()
-{
-    auto B = b.view();
-    B.buffer_view().fill(0.0);
-
-    auto diag_subsystem_view = diag_subsystems.view();
-    auto diag_dof_counts     = diag_dof_offsets_counts.counts();
-    auto diag_dof_offsets    = diag_dof_offsets_counts.offsets();
-
-    for(const auto& subsystem_info : subsystem_infos)
-    {
-        if(!subsystem_info.is_diag)
-            continue;
-
-        auto  dof_i          = subsystem_info.local_index;
-        auto  subsystem_i    = subsystem_info.index;
-        auto& diag_subsystem = diag_subsystem_view[dof_i];
-
-        DiagInfo info{this};
-        info.m_index         = subsystem_i;
-        info.m_gradients     = B.subview(diag_dof_offsets[dof_i], diag_dof_counts[dof_i]);
-        info.m_hessians      = TripletMatrixView{};
-        info.m_gradient_only = true;
-        info.m_component_flags = ComponentFlags::All;
-
-        Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
-        diag_subsystem->assemble(info);
-    }
 }
 
 void GlobalLinearSystem::Impl::_assemble_linear_system()
@@ -907,13 +625,6 @@ void GlobalLinearSystem::Impl::compute_gradient(ComputeGradientInfo& info)
     }
 }
 
-void GlobalLinearSystem::Impl::notify_line_search_result(
-    const LineSearchFeedback& feedback)
-{
-    if(selected_linear_solver)
-        selected_linear_solver->notify_line_search_result(feedback);
-}
-
 void GlobalLinearSystem::DiagExtentInfo::extent(SizeT hessian_count, SizeT dof_count) noexcept
 {
 
@@ -936,36 +647,6 @@ void GlobalLinearSystem::OffDiagExtentInfo::extent(SizeT lr_hessian_block_count,
     m_lr_block_count = lr_hessian_block_count;
     m_rl_block_count = rl_hassian_block_count;
 }
-
-void GlobalLinearSystem::StructuredAssemblyInfo::set_workspace(
-    StructuredChainShape          shape,
-    span<const StructuredDofSlot> dof_slots,
-    muda::BufferView<SolveScalar> diag,
-    muda::BufferView<SolveScalar> first_offdiag,
-    muda::BufferView<SolveScalar> rhs,
-    muda::CBufferView<IndexT>     old_to_chain,
-    muda::CBufferView<IndexT>     chain_to_old,
-    cudaStream_t                  stream) noexcept
-{
-    m_shape         = shape;
-    m_dof_slots     = dof_slots;
-    m_diag          = diag;
-    m_first_offdiag = first_offdiag;
-    m_rhs           = rhs;
-    m_old_to_chain  = old_to_chain;
-    m_chain_to_old  = chain_to_old;
-    m_stream        = stream;
-    m_configured    = true;
-}
-
-void GlobalLinearSystem::StructuredAssemblyInfo::set_subsystem_extent(
-    SizeT old_dof_offset,
-    SizeT old_dof_count) noexcept
-{
-    m_old_dof_offset = old_dof_offset;
-    m_old_dof_count  = old_dof_count;
-}
-
 auto GlobalLinearSystem::AssemblyInfo::A() const -> CBCOOMatrixView
 {
     return m_impl->bcoo_A.cview();
@@ -986,20 +667,6 @@ SizeT GlobalLinearSystem::LocalPreconditionerAssemblyInfo::dof_count() const
 void GlobalLinearSystem::compute_gradient(ComputeGradientInfo& info)
 {
     m_impl.compute_gradient(info);
-}
-
-void GlobalLinearSystem::notify_line_search_result(
-    const LineSearchFeedback& feedback)
-{
-    m_impl.notify_line_search_result(feedback);
-}
-
-NewtonAssemblyMode GlobalLinearSystem::newton_assembly_mode() const
-{
-    const auto* solver = m_impl.selected_linear_solver;
-    if(!solver)
-        return NewtonAssemblyMode::FullSparse;
-    return solver->assembly_requirements().assembly_mode;
 }
 }  // namespace uipc::backend::cuda_mixed
 

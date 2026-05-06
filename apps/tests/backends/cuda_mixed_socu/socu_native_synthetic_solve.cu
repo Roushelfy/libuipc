@@ -279,7 +279,7 @@ std::filesystem::path default_mathdx_manifest_path()
 }  // namespace
 
 TEST_CASE("cuda_mixed_socu_native_synthetic_solve_smoke",
-          "[cuda_mixed][contract][socu_native][m6]")
+          "[cuda_mixed_socu][contract][socu_native][m6]")
 {
 #if !UIPC_WITH_SOCU_NATIVE
     SKIP("socu_native is not enabled in this build");

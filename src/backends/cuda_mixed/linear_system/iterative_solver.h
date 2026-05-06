@@ -12,12 +12,8 @@ class IterativeSolver : public LinearSolver
     virtual AssemblyRequirements assembly_requirements() const override
     {
         AssemblyRequirements requirements;
-        requirements.needs_dof_extent       = true;
-        requirements.needs_gradient_b       = true;
-        requirements.needs_full_sparse_A    = true;
-        requirements.needs_structured_chain = false;
-        requirements.needs_preconditioner   = true;
-        requirements.assembly_mode = NewtonAssemblyMode::FullSparse;
+        requirements.full_sparse_matrix = true;
+        requirements.preconditioner     = true;
         return requirements;
     }
 

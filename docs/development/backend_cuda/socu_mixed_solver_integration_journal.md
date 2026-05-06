@@ -960,3 +960,65 @@ Acceptance: Milestone 1 passes. The copied SOCU backend loads and runs the
 current structured SOCU baseline, while the original `cuda_mixed` backend still
 runs fused PCG. Milestone 2 can now restore the original `cuda_mixed` directory
 to the recorded pre-SOCU baseline without removing the SOCU implementation.
+
+## 2026-05-06 Milestone 2 cuda_mixed Restore
+
+Milestone 2 restored the original `src/backends/cuda_mixed` directory to the
+pre-SOCU source baseline:
+
+```text
+bca61ac6 Add cuda_mixed linear solver abstraction
+```
+
+The copied `src/backends/cuda_mixed_socu` tree remains the SOCU implementation
+surface. `socu_native` CMake integration is now gated by
+`UIPC_WITH_CUDA_MIXED_SOCU_BACKEND`, so the restored `cuda_mixed` backend no
+longer links or configures SOCU native code. The mixed backend policy/sim tests
+were restored to their pre-SOCU shape, and SOCU-specific backend contract tests
+were moved under `apps/tests/backends/cuda_mixed_socu`.
+
+Build handoff was performed without `NVCC_APPEND_FLAGS` or
+`--Ofast-compile=max`:
+
+```bash
+unset NVCC_APPEND_FLAGS
+cmake -S . -B build/build_impl_fp64 \
+  -DCMAKE_CUDA_ARCHITECTURES=120-real \
+  -DUIPC_CUDA_ARCHITECTURES=120-real \
+  -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
+  -DUIPC_WITH_CUDA_MIXED_SOCU_BACKEND=ON
+ninja -C build/build_impl_fp64 -j1 \
+  libuipc_backend_cuda_mixed.so \
+  libuipc_backend_cuda_mixed_socu.so \
+  uipc_test_backend_cuda_mixed \
+  uipc_test_backend_cuda_mixed_socu \
+  uipc_test_sim_case_cuda_mixed_only
+```
+
+Static/config checks:
+
+```text
+git diff --check: passed
+python3 -m py_compile python/examples/cuda_mixed_wrecking_ball_compare.py: passed
+SOCU reference scan over src/backends/cuda_mixed,
+  apps/tests/backends/cuda_mixed, and
+  apps/tests/sim_case/86_cuda_mixed_precision_contracts.cpp: no matches
+matrix_converter.inl / fast_segmental_reduce.inl: no diff
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed "[cuda_mixed][contract]" -s` | passed, 1 assertion |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -s` | passed, 102 assertions |
+| `uipc_test_sim_case_cuda_mixed_only "86_cuda_mixed_linear_solver_selection_smoke" -s` | passed, 9 assertions |
+| `--variant fused_pcg --frames 20 --backend auto` | `backend=cuda_mixed`, `final_frame=20`, `wall_time=4.820s`, `mean_frame=112.914 ms` |
+| `--variant socu_init_topology_diag_lump --frames 20 --backend auto` | `backend=cuda_mixed_socu`, `final_frame=20`, `wall_time=3.624s`, `mean_frame=71.318 ms` |
+| `--variant socu_rt20_topology_diag_lump --frames 20 --backend auto` | `backend=cuda_mixed_socu`, `final_frame=20`, `wall_time=3.599s`, `mean_frame=77.860 ms` |
+| `--variant fused_pcg --frames 1 --backend cuda_mixed_socu` | rejected during init with `cuda_mixed_socu only supports linear_system/solver='socu_approx', got 'fused_pcg'` |
+
+Acceptance: Milestone 2 passes. The original `cuda_mixed` tree is again a
+FullSparse/fused-PCG backend with no effective SOCU source or test dependency,
+while the copied `cuda_mixed_socu` backend keeps the current SOCU solver and
+continues to run the selected 20-frame baselines.

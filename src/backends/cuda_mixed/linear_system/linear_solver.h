@@ -1,7 +1,6 @@
 #pragma once
 #include <sim_system.h>
 #include <linear_system/global_linear_system.h>
-#include <linear_system/assembly_mode.h>
 #include <string_view>
 
 namespace uipc::backend::cuda_mixed
@@ -13,13 +12,8 @@ class LinearSolver : public SimSystem
 
     struct AssemblyRequirements
     {
-        bool needs_dof_extent       = true;
-        bool needs_gradient_b       = true;
-        bool needs_full_sparse_A    = true;
-        bool needs_structured_chain = false;
-        bool allows_structured_offdiag = false;
-        bool needs_preconditioner   = true;
-        NewtonAssemblyMode assembly_mode = NewtonAssemblyMode::FullSparse;
+        bool full_sparse_matrix = true;
+        bool preconditioner     = false;
     };
 
     class BuildInfo
@@ -35,54 +29,6 @@ class LinearSolver : public SimSystem
     virtual std::string_view iteration_counter_name() const { return {}; }
 
     GlobalLinearSystem& system() const noexcept { return *m_system; }
-
-    virtual void prepare_structured_chain(
-        GlobalLinearSystem::StructuredAssemblyInfo& info)
-    {
-    }
-
-    virtual void finalize_structured_chain(
-        GlobalLinearSystem::StructuredAssemblyInfo& info)
-    {
-    }
-
-    virtual void debug_dump_structured_chain_checkpoint(
-        GlobalLinearSystem::StructuredAssemblyInfo& info,
-        std::string_view                            label)
-    {
-        (void)info;
-        (void)label;
-    }
-
-    enum class StructuredProbeAssembly
-    {
-        None,
-        ContactOnly,
-        Full,
-    };
-
-    virtual StructuredProbeAssembly prepare_structured_probe(
-        GlobalLinearSystem::StructuredAssemblyInfo& info)
-    {
-        return StructuredProbeAssembly::None;
-    }
-
-    virtual bool finalize_structured_probe(
-        GlobalLinearSystem::StructuredAssemblyInfo& info)
-    {
-        return false;
-    }
-
-    virtual bool needs_contact_set_signature_for_probe(SizeT frame) const noexcept
-    {
-        (void)frame;
-        return false;
-    }
-
-    virtual void notify_line_search_result(
-        const GlobalLinearSystem::LineSearchFeedback& feedback)
-    {
-    }
 
   protected:
     virtual void do_build(BuildInfo& info) = 0;

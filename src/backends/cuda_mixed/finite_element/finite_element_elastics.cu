@@ -64,16 +64,13 @@ void FiniteElementElastics::init()
 
 muda::DoubletVectorView<FiniteElementElastics::StoreScalar, 3> FiniteElementElastics::ComputeGradientHessianInfo::gradients() const noexcept
 {
-    if(structured_assembly() && !m_write_gradients)
-        return {};
-
     auto [offset, count] = m_impl->constitution_gradient_offsets_counts[m_index];
     return m_gradients.subview(offset, count);
 }
 
 muda::TripletMatrixView<FiniteElementElastics::StoreScalar, 3> FiniteElementElastics::ComputeGradientHessianInfo::hessians() const noexcept
 {
-    if(m_gradient_only || structured_assembly())
+    if(m_gradient_only)
         return muda::TripletMatrixView<StoreScalar, 3>{};
 
     auto [offset, count] = m_impl->constitution_hessian_offsets_counts[m_index];
@@ -90,17 +87,7 @@ void FiniteElementElastics::Impl::assemble(FEMLinearSubsystem::AssembleInfo& inf
     for(auto&& [I, c] : enumerate(constitutions))
     {
         ComputeGradientHessianInfo this_info{
-            this,
-            I,
-            info.gradient_only(),
-            info.dt(),
-            info.gradients(),
-            info.hessians(),
-            info.structured_sink(),
-            info.old_dof_offset(),
-            info.fixed_vertices(),
-            info.identity_fixed_diagonal(),
-            info.write_gradients()};
+            this, I, info.gradient_only(), info.dt(), info.gradients(), info.hessians()};
 
         c->compute_gradient_hessian(this_info);
     }
@@ -109,17 +96,7 @@ void FiniteElementElastics::Impl::assemble(FEMLinearSubsystem::AssembleInfo& inf
     for(auto&& [I, c] : enumerate(extras))
     {
         ComputeGradientHessianInfo this_info{
-            this,
-            offset + I,
-            info.gradient_only(),
-            info.dt(),
-            info.gradients(),
-            info.hessians(),
-            info.structured_sink(),
-            info.old_dof_offset(),
-            info.fixed_vertices(),
-            info.identity_fixed_diagonal(),
-            info.write_gradients()};
+            this, offset + I, info.gradient_only(), info.dt(), info.gradients(), info.hessians()};
         c->compute_gradient_hessian(this_info);
     }
     offset += extras.size();

@@ -200,16 +200,7 @@ void InterAffineBodyConstitutionManager::Impl::compute_gradient_hessian(ABDLinea
     for(auto&& [i, c] : enumerate(constitution_view))
     {
         GradientHessianInfo this_info{
-            this,
-            c->m_index,
-            dt,
-            info.gradients(),
-            info.hessians(),
-            info.gradient_only(),
-            info.structured_sink(),
-            info.old_dof_offset(),
-            info.fixed_bodies(),
-            info.write_gradients()};
+            this, c->m_index, dt, info.gradients(), info.hessians(), info.gradient_only()};
         c->compute_gradient_hessian(this_info);
     }
 }
@@ -257,9 +248,6 @@ muda::DoubletVectorView<InterAffineBodyConstitutionManager::StoreScalar, 12> Int
 
 muda::TripletMatrixView<InterAffineBodyConstitutionManager::StoreScalar, 12> InterAffineBodyConstitutionManager::GradientHessianInfo::hessians() const noexcept
 {
-    if(structured_assembly())
-        return muda::TripletMatrixView<StoreScalar, 12>{};
-
     auto [offset, count] = m_impl->constitution_hessian_offsets_counts[m_index];
     return m_hessians.subview(offset, count);
 }

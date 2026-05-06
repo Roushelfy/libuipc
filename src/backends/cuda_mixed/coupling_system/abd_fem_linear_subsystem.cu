@@ -19,7 +19,6 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
 {
   public:
     using OffDiagLinearSubsystem::OffDiagLinearSubsystem;
-    using StoreScalar = GlobalLinearSystem::StoreScalar;
 
     SimSystemSlot<GlobalLinearSystem> global_linear_system;
 
@@ -135,19 +134,6 @@ class ABDFEMLinearSubsystem final : public OffDiagLinearSubsystem
                            }
                        });
         }
-    }
-
-    virtual bool do_supports_structured_assembly() const override
-    {
-        return true;
-    }
-
-    virtual void do_assemble_structured(
-        GlobalLinearSystem::StructuredAssemblyInfo& info) override
-    {
-        (void)info;
-        // Runtime contact Hessians, including ABD-FEM cross terms, are written
-        // directly by GlobalDyTopoEffectManager::assemble_structured_hessian().
     }
 };
 

@@ -11,10 +11,6 @@
 
 namespace uipc::backend::cuda_mixed
 {
-void assemble_ipc_vertex_half_plane_frictional_contact_structured(
-    VertexHalfPlaneFrictionalContact::ContactInfo& info,
-    const HalfPlane&                               half_plane);
-
 class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFrictionalContact
 {
   public:
@@ -96,14 +92,6 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
         using namespace sym::ipc_vertex_half_contact;
         using Alu = ActivePolicy::AluScalar;
         using Store = ActivePolicy::StoreScalar;
-
-        if(info.structured_hessian())
-        {
-            assemble_ipc_vertex_half_plane_frictional_contact_structured(
-                info,
-                *half_plane);
-            return;
-        }
 
         if(info.friction_PHs().size())
         {
