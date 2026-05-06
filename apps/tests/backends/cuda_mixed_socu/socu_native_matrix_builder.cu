@@ -71,6 +71,8 @@ __global__ void write_storage_fixture(SocuNativeMatrixView<Scalar> view)
     view.add_diag_block3_row_major(1, 0, 1, h);
     view.add_first_offdiag_scalar(0, 2, 1, Scalar{7});
     view.add_first_offdiag_block3_row_major(1, 1, 0, h);
+    view.add_offdiag_scalar(6, 0, 0, Scalar{11});
+    view.add_offdiag_block3_row_major(7, 0, 1, h);
     view.add_rhs_scalar(2, 3, 0, Scalar{4.25});
     view.add_rhs_scalar(2, 3, 0, Scalar{0.75});
 }
@@ -127,12 +129,54 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_layout",
     CHECK(layout.offdiag_levels[2].stride == 4);
     CHECK(layout.offdiag_levels[2].block_offset == 8);
     CHECK(layout.offdiag_levels[2].block_count == 0);
+    CHECK(socu_native_offdiag_storage_block(layout, 1, 0) == 6);
+    CHECK(socu_native_offdiag_storage_block(layout, 1, 1) == 7);
 
     const auto single = make_socu_native_storage_layout(1, 4, 1);
     REQUIRE(single.offdiag_block_count == 0);
     REQUIRE(single.first_offdiag_block_count == 0);
     REQUIRE(single.offdiag_element_count == 0);
 }
+
+#if UIPC_WITH_SOCU_NATIVE
+TEST_CASE("cuda_mixed_socu_native_matrix_builder_layout_matches_socu_native",
+          "[cuda_mixed_socu][contract][socu_native_builder][socu_native]")
+{
+    for(const int horizon : {1, 2, 7, 8, 16})
+    {
+        for(const int block_size : {12, 32, 64})
+        {
+            for(const int nrhs : {1, 2})
+            {
+                const auto local = make_socu_native_storage_layout(
+                    static_cast<uipc::SizeT>(horizon),
+                    static_cast<uipc::SizeT>(block_size),
+                    static_cast<uipc::SizeT>(nrhs));
+                const auto native = socu_native::describe_problem_layout(
+                    socu_native::ProblemShape{horizon, block_size, nrhs});
+
+                CAPTURE(horizon, block_size, nrhs);
+                CHECK(local.diag_block_count == native.diag_block_count);
+                CHECK(local.offdiag_block_count == native.off_diag_block_count);
+                CHECK(local.rhs_block_count == native.rhs_block_count);
+                CHECK(local.diag_element_count == native.diag_element_count);
+                CHECK(local.offdiag_element_count == native.off_diag_element_count);
+                CHECK(local.rhs_element_count == native.rhs_element_count);
+                REQUIRE(local.offdiag_levels.size() == native.off_diag_levels.size());
+                for(std::size_t i = 0; i < local.offdiag_levels.size(); ++i)
+                {
+                    CHECK(local.offdiag_levels[i].stride
+                          == native.off_diag_levels[i].stride);
+                    CHECK(local.offdiag_levels[i].block_offset
+                          == native.off_diag_levels[i].block_offset);
+                    CHECK(local.offdiag_levels[i].block_count
+                          == native.off_diag_levels[i].block_count);
+                }
+            }
+        }
+    }
+}
+#endif
 
 TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
           "[cuda_mixed_socu][contract][socu_native_builder]")
@@ -149,12 +193,12 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
 
     StreamGuard stream;
     SocuNativeMatrixBuilder<Scalar> builder;
-    builder.reserve(3, 4, 1);
+    builder.reserve(7, 4, 1);
     builder.clear(stream.stream);
 
-    std::vector<SocuNativeBlockMeta> metadata(3);
+    std::vector<SocuNativeBlockMeta> metadata(7);
     metadata[0] = SocuNativeBlockMeta{0, 4, 4, 0};
-    metadata[1] = SocuNativeBlockMeta{4, 3, 3, 1};
+    metadata[1] = SocuNativeBlockMeta{4, 3, 3, 1, 42};
     metadata[2] = SocuNativeBlockMeta{8, 2, 2, 2};
     builder.set_block_metadata(metadata, stream.stream);
 
@@ -192,6 +236,19 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
         }
     }
 
+    CHECK(snapshot.E[(6 * layout.block_size + 0) * layout.block_size + 0]
+          == Catch::Approx(11.0));
+    for(uipc::SizeT row = 0; row < 3; ++row)
+    {
+        for(uipc::SizeT col = 0; col < 3; ++col)
+        {
+            const uipc::SizeT index =
+                (7 * layout.block_size + row) * layout.block_size + (1 + col);
+            CHECK(snapshot.E[index]
+                  == Catch::Approx(static_cast<double>(1 + row * 3 + col)));
+        }
+    }
+
     CHECK(snapshot.rhs[(2 * layout.block_size + 3) * layout.nrhs]
           == Catch::Approx(5.0));
     REQUIRE(snapshot.blocks.size() == metadata.size());
@@ -199,6 +256,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
     CHECK(snapshot.blocks[1].active_lane_count == 3);
     CHECK(snapshot.blocks[1].padding_lane_begin == 3);
     CHECK(snapshot.blocks[1].padding_lane_count == 1);
+    CHECK(snapshot.blocks[1].ordering_epoch == 42);
 }
 
 TEST_CASE("cuda_mixed_socu_native_matrix_builder_solver_contract",

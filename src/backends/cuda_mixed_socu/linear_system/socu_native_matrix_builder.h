@@ -96,12 +96,28 @@ make_socu_native_storage_layout(SizeT block_count, SizeT block_size, SizeT nrhs 
     return layout;
 }
 
+inline SizeT socu_native_offdiag_storage_block(
+    const SocuNativeStorageLayout& layout,
+    SizeT                          level,
+    SizeT                          level_block)
+{
+    if(level >= layout.offdiag_levels.size())
+        throw std::out_of_range("SOCU native offdiag level out of range");
+
+    const auto& level_layout = layout.offdiag_levels[level];
+    if(level_block >= static_cast<SizeT>(level_layout.block_count))
+        throw std::out_of_range("SOCU native offdiag block out of range");
+
+    return static_cast<SizeT>(level_layout.block_offset) + level_block;
+}
+
 struct SocuNativeBlockMeta
 {
     IndexT old_dof_begin     = -1;
     IndexT active_lane_count = 0;
     IndexT padding_lane_begin = 0;
     IndexT padding_lane_count = 0;
+    IndexT ordering_epoch     = 0;
 };
 
 template <typename Scalar>
@@ -125,6 +141,7 @@ struct SocuNativeMatrixView
     SizeT block_size                = 0;
     SizeT nrhs                      = 0;
     SizeT first_offdiag_block_count = 0;
+    SizeT offdiag_block_count       = 0;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -142,6 +159,13 @@ struct SocuNativeMatrixView
                                            SizeT col) const noexcept
     {
         return (left_block * block_size + row) * block_size + col;
+    }
+
+    MUDA_GENERIC SizeT offdiag_index(SizeT offdiag_block,
+                                     SizeT row,
+                                     SizeT col) const noexcept
+    {
+        return (offdiag_block * block_size + row) * block_size + col;
     }
 
     MUDA_GENERIC SizeT rhs_index(SizeT block, SizeT lane, SizeT rhs_col) const noexcept
@@ -167,6 +191,18 @@ struct SocuNativeMatrixView
         if(left_block >= first_offdiag_block_count)
             return;
         const SizeT index = first_offdiag_index(left_block, row, col);
+        if(index < E.size())
+            muda::atomic_add(E.data(index), value);
+    }
+
+    MUDA_DEVICE void add_offdiag_scalar(SizeT offdiag_block,
+                                        SizeT row,
+                                        SizeT col,
+                                        Scalar value) const noexcept
+    {
+        if(offdiag_block >= offdiag_block_count)
+            return;
+        const SizeT index = offdiag_index(offdiag_block, row, col);
         if(index < E.size())
             muda::atomic_add(E.data(index), value);
     }
@@ -216,6 +252,25 @@ struct SocuNativeMatrixView
                                          row_begin + row,
                                          col_begin + col,
                                          values[row * 3 + col]);
+            }
+        }
+    }
+
+    MUDA_DEVICE void add_offdiag_block3_row_major(SizeT offdiag_block,
+                                                  SizeT row_begin,
+                                                  SizeT col_begin,
+                                                  const Scalar* values) const noexcept
+    {
+#pragma unroll
+        for(SizeT row = 0; row < 3; ++row)
+        {
+#pragma unroll
+            for(SizeT col = 0; col < 3; ++col)
+            {
+                add_offdiag_scalar(offdiag_block,
+                                   row_begin + row,
+                                   col_begin + col,
+                                   values[row * 3 + col]);
             }
         }
     }
@@ -273,7 +328,8 @@ class SocuNativeMatrixBuilder
                     m_layout.block_count,
                     m_layout.block_size,
                     m_layout.nrhs,
-                    m_layout.first_offdiag_block_count};
+                    m_layout.first_offdiag_block_count,
+                    m_layout.offdiag_block_count};
     }
 
     void set_block_metadata(const std::vector<SocuNativeBlockMeta>& metadata,

@@ -1169,3 +1169,41 @@ Acceptance: the SOCU-only backend no longer exposes PCG/fused-PCG
 implementation code, `cuda_mixed_socu` rejects `fused_pcg` clearly at init,
 both backend contract suites pass, and both 100-frame closure simulations reach
 frame 100.
+
+## 2026-05-06 Milestone 3 Native Storage Refinement
+
+This pass extended the M3 native matrix storage skeleton without migrating any
+production structured assembly path:
+
+- Added a host helper for mapping recursive off-diagonal level/block pairs to
+  the flat SOCU-native offdiag storage block index.
+- Added generic device writes for recursive offdiag scalar and 3x3 row-major
+  block updates.
+- Carried `ordering_epoch` through `SocuNativeBlockMeta` so future descriptor
+  rebuild tests can verify epoch propagation.
+- Added a layout contract test comparing the local storage descriptor against
+  `socu_native::describe_problem_layout()` for several horizon, block-size, and
+  rhs combinations.
+
+Build handoff was performed by the user without `NVCC_APPEND_FLAGS` or
+`--Ofast-compile=max`.
+
+Static checks:
+
+```text
+git diff --check: passed
+SocuNativeMatrixBuilder reference scan over src/backends/cuda_mixed and
+  apps/tests/backends/cuda_mixed: no matches
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_builder]" -r compact` | passed, 719 assertions in 4 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, 821 assertions in 9 cases |
+
+Acceptance: M3 remains a storage/test skeleton only. The generic recursive
+offdiag write path is covered by device-write tests, the local descriptor is
+checked against SOCU native's layout description, and no `cuda_mixed` baseline
+source was modified.
