@@ -245,11 +245,11 @@ def build_mesh(
     return mesh
 
 
-def build_scene(variant: str, workspace: Path) -> tuple[Engine, World]:
-    init_cuda_mixed_module_dir()
+def build_scene(variant: str, backend: str, workspace: Path) -> tuple[Engine, World]:
+    init_cuda_mixed_module_dir(backend)
     Logger.set_level(Logger.Level.Info)
 
-    engine = Engine("cuda_mixed", str(workspace))
+    engine = Engine(backend, str(workspace))
     world = World(engine)
 
     config = Scene.default_config()
@@ -312,11 +312,18 @@ def build_scene(variant: str, workspace: Path) -> tuple[Engine, World]:
     return engine, world
 
 
-def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
-    workspace = output_root / variant / "workspace"
+def output_dir_for(output_root: Path, backend: str, variant: str) -> Path:
+    if backend == "cuda_mixed":
+        return output_root / variant
+    return output_root / backend / variant
+
+
+def run_one(variant: str, frames: int, output_root: Path, backend: str) -> dict[str, Any]:
+    out_dir = output_dir_for(output_root, backend, variant)
+    workspace = out_dir / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    engine, world = build_scene(variant, workspace)
+    engine, world = build_scene(variant, backend, workspace)
     stats = SimulationStats()
 
     frame_times: list[float] = []
@@ -332,6 +339,7 @@ def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
 
     _ = engine
     result = {
+        "backend": backend,
         "variant": variant,
         "runtime_graph_source": VARIANTS[variant].get(
             "runtime_graph_source",
@@ -347,7 +355,6 @@ def run_one(variant: str, frames: int, output_root: Path) -> dict[str, Any]:
         "mean_frame_ms": 1000.0 * sum(frame_times) / max(len(frame_times), 1),
         "timer_frames": list(getattr(stats, "_frames", [])),
     }
-    out_dir = output_root / variant
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
@@ -367,6 +374,8 @@ def run_variants(args: argparse.Namespace, variants: list[str]) -> int:
             str(args.frames),
             "--output",
             str(output_root),
+            "--backend",
+            args.backend,
         ]
         print("RUN", " ".join(cmd))
         completed = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[2], text=True)
@@ -391,6 +400,12 @@ def main() -> int:
         "--output",
         default=str(Path("output") / "examples" / "cuda_mixed_wrecking_ball_compare"),
     )
+    parser.add_argument(
+        "--backend",
+        choices=["cuda_mixed", "cuda_mixed_socu"],
+        default="cuda_mixed",
+        help="Backend module to load for the scene.",
+    )
     args = parser.parse_args()
 
     if args.variant == "quick":
@@ -400,7 +415,7 @@ def main() -> int:
     if args.variant == "all":
         return run_variants(args, list(VARIANTS.keys()))
 
-    result = run_one(args.variant, args.frames, Path(args.output).resolve())
+    result = run_one(args.variant, args.frames, Path(args.output).resolve(), args.backend)
     print(json.dumps({k: v for k, v in result.items() if k != "timer_frames"}, indent=2))
     return 0
 

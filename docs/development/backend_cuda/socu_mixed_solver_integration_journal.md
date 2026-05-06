@@ -904,3 +904,59 @@ Results:
 Acceptance: both `fused_pcg` and the best current topology `diag_lump`
 candidate reached frame 100. This freezes the current baseline before any
 Milestone 1 backend split work.
+
+## 2026-05-06 Milestone 1 Backend Split Scaffold
+
+Milestone 1 was implemented with the full-copy split plan:
+
+- Copied the current `src/backends/cuda_mixed` tree to
+  `src/backends/cuda_mixed_socu`.
+- Added the `cuda_mixed_socu` backend target behind
+  `UIPC_WITH_CUDA_MIXED_SOCU_BACKEND`.
+- Left the original `src/backends/cuda_mixed` source tree unchanged.
+- Excluded `linear_system/linear_fused_pcg.cu` from the copied SOCU backend.
+- Added a SOCU-only init guard so `cuda_mixed_socu` rejects any solver other
+  than `socu_approx`.
+- Added `--backend cuda_mixed|cuda_mixed_socu` support to the wrecking-ball
+  comparison script.
+
+Build was performed without `NVCC_APPEND_FLAGS` or `--Ofast-compile=max`:
+
+```bash
+unset NVCC_APPEND_FLAGS
+cmake -S . -B build/build_impl_fp64 \
+  -DCMAKE_CUDA_ARCHITECTURES=120-real \
+  -DUIPC_CUDA_ARCHITECTURES=120-real \
+  -DUIPC_WITH_CUDA_MIXED_BACKEND=ON \
+  -DUIPC_WITH_CUDA_MIXED_SOCU_BACKEND=ON
+ninja -C build/build_impl_fp64 -j1 libuipc_backend_cuda_mixed.so
+ninja -C build/build_impl_fp64 -j1 libuipc_backend_cuda_mixed_socu.so
+ninja -C build/build_impl_fp64 -j1 uipc_test_sim_case_cuda_mixed_only
+```
+
+Static/config checks:
+
+```text
+git diff --check: passed
+python3 -m py_compile python/examples/cuda_mixed_runtime.py \
+  python/examples/cuda_mixed_wrecking_ball_compare.py: passed
+CMake target generation: cuda_mixed_socu and
+  libuipc_backend_cuda_mixed_socu.so present
+Ninja command scan: cuda_mixed_socu contains UIPC_CUDA_MIXED_SOCU_ONLY=1 and
+  does not compile linear_fused_pcg
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_sim_case_cuda_mixed_only "86_cuda_mixed_linear_solver_selection_smoke" -s` | passed, 207 assertions |
+| `cuda_mixed fused_pcg --frames 20` | `final_frame=20`, `wall_time=4.174s`, `mean_frame=94.260 ms` |
+| `cuda_mixed_socu socu_init_topology_diag_lump --frames 20` | `final_frame=20`, `wall_time=3.918s`, `mean_frame=75.999 ms` |
+| `cuda_mixed_socu socu_rt20_topology_diag_lump --frames 20` | `final_frame=20`, `wall_time=3.448s`, `mean_frame=72.316 ms` |
+| `cuda_mixed_socu fused_pcg --frames 1` | rejected during init with `cuda_mixed_socu only supports linear_system/solver='socu_approx', got 'fused_pcg'` |
+
+Acceptance: Milestone 1 passes. The copied SOCU backend loads and runs the
+current structured SOCU baseline, while the original `cuda_mixed` backend still
+runs fused PCG. Milestone 2 can now restore the original `cuda_mixed` directory
+to the recorded pre-SOCU baseline without removing the SOCU implementation.

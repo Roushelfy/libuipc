@@ -38,6 +38,8 @@ set(UIPC_USD_INSTALL_DIR "" CACHE PATH
 # =========================================================================
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
 option(UIPC_WITH_CUDA_MIXED_BACKEND "Build with CUDA mixed backend" OFF)
+option(UIPC_WITH_CUDA_MIXED_SOCU_BACKEND
+    "Build with the SOCU-only CUDA mixed backend copy" OFF)
 option(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD
     "Compile a reduced cuda_mixed backend surface for wrecking_ball SOCU regression tests" OFF)
 set(UIPC_WITH_SOCU_NATIVE "AUTO"
@@ -51,6 +53,7 @@ if(APPLE)
     # Force OFF
     set(UIPC_WITH_CUDA_BACKEND OFF CACHE BOOL "Build with CUDA backend" FORCE)
     set(UIPC_WITH_CUDA_MIXED_BACKEND OFF CACHE BOOL "Build with CUDA mixed backend" FORCE)
+    set(UIPC_WITH_CUDA_MIXED_SOCU_BACKEND OFF CACHE BOOL "Build with CUDA mixed SOCU backend" FORCE)
 endif()
 
 if(NOT UIPC_CUDA_MIXED_PRECISION_LEVEL MATCHES "^(fp64|path1|path2|path3|path4|path5|path6)$")

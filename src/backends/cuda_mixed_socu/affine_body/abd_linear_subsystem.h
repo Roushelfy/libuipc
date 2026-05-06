@@ -1,0 +1,195 @@
+#pragma once
+#include <linear_system/diag_linear_subsystem.h>
+#include <affine_body/affine_body_dynamics.h>
+#include <affine_body/abd_dytopo_effect_receiver.h>
+#include <affine_body/affine_body_vertex_reporter.h>
+#include <utils/assembly_sink.h>
+#include <utils/offset_count_collection.h>
+
+namespace uipc::backend::cuda_mixed
+{
+class ABDLinearSubsystemReporter;
+class ABDLinearSubsystem final : public DiagLinearSubsystem
+{
+  public:
+    using DiagLinearSubsystem::DiagLinearSubsystem;
+    using StoreScalar = GlobalLinearSystem::StoreScalar;
+    using StoreVec12 = Eigen::Matrix<StoreScalar, 12, 1>;
+    using StoreMat12x12 = Eigen::Matrix<StoreScalar, 12, 12>;
+
+    muda::CBufferView<StoreMat12x12> diag_hessian() const noexcept
+    {
+        return m_impl.diag_hessian.view();
+    }
+
+    SizeT body_count() const noexcept;
+
+    class ComputeGradientHessianInfo
+    {
+      public:
+        ComputeGradientHessianInfo(bool                          gradient_only,
+                                   muda::BufferView<StoreVec12>  gradient,
+                                   muda::BufferView<StoreMat12x12> hessians,
+                                   Float                         dt) noexcept
+            : m_gradient_only(gradient_only)
+            , m_gradients(gradient)
+            , m_hessians(hessians)
+            , m_dt(dt)
+        {
+        }
+
+        auto gradient_only() const noexcept { return m_gradient_only; }
+        auto hessians() const noexcept { return m_hessians; }
+        auto gradients() const noexcept { return m_gradients; }
+        auto dt() const noexcept { return m_dt; }
+
+      private:
+        bool                          m_gradient_only = false;
+        muda::BufferView<StoreMat12x12> m_hessians;
+        muda::BufferView<StoreVec12>    m_gradients;
+        Float                         m_dt = 0.0;
+    };
+
+    class ReportExtentInfo
+    {
+      public:
+        // DoubletVector12 count
+        void gradient_count(SizeT size);
+        // TripletMatrix12x12 count
+        void hessian_count(SizeT size);
+        bool gradient_only() const noexcept
+        {
+            m_gradient_only_checked = true;
+            return m_gradient_only;
+        }
+        void check(std::string_view name) const;
+
+      private:
+        friend class ABDLinearSubsystem;
+        friend class ABDLinearSubsystemReporter;
+        SizeT m_gradient_count = 0;
+        SizeT m_hessian_count  = 0;
+        bool  m_gradient_only  = false;
+        mutable bool m_gradient_only_checked = false;
+    };
+
+    class Impl;
+
+    class AssembleInfo
+    {
+      public:
+        AssembleInfo(Impl* impl,
+                     IndexT index,
+                     bool   gradient_only,
+                     StructuredDeviceAssemblySink<
+                         StoreScalar,
+                         GlobalLinearSystem::SolveScalar> structured_sink = {},
+                     IndexT old_dof_offset = 0,
+                     muda::CBufferView<IndexT> fixed_bodies = {},
+                     bool write_gradients = true) noexcept;
+        muda::DoubletVectorView<StoreScalar, 12>     gradients() const;
+        muda::TripletMatrixView<StoreScalar, 12, 12> hessians() const;
+        bool                                   gradient_only() const noexcept;
+        bool structured_assembly() const noexcept
+        {
+            return m_structured_sink.valid();
+        }
+        auto structured_sink() const noexcept { return m_structured_sink; }
+        IndexT old_dof_offset() const noexcept { return m_old_dof_offset; }
+        auto fixed_bodies() const noexcept { return m_fixed_bodies; }
+        bool write_gradients() const noexcept { return m_write_gradients; }
+        auto sink() const noexcept
+        {
+            auto hessian_view =
+                structured_assembly() ? muda::TripletMatrixView<StoreScalar, 12, 12>{}
+                                      : hessians();
+            return LocalAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar, 12>{
+                gradients(),
+                hessian_view,
+                m_gradient_only,
+                m_structured_sink,
+                m_old_dof_offset,
+                m_fixed_bodies,
+                false,
+                m_write_gradients};
+        }
+
+      private:
+        friend class ABDLinearSubsystem;
+
+        Impl*  m_impl          = nullptr;
+        IndexT m_index         = ~0;
+        bool   m_gradient_only = false;
+        StructuredDeviceAssemblySink<StoreScalar, GlobalLinearSystem::SolveScalar> m_structured_sink;
+        IndexT m_old_dof_offset = 0;
+        muda::CBufferView<IndexT> m_fixed_bodies;
+        bool m_write_gradients = true;
+    };
+
+    class Impl
+    {
+      public:
+        void init();
+        void report_extent(GlobalLinearSystem::DiagExtentInfo& info);
+
+        void report_init_extent(GlobalLinearSystem::InitDofExtentInfo& info);
+        void receive_init_dof_info(WorldVisitor& w, GlobalLinearSystem::InitDofInfo& info);
+
+        void assemble(GlobalLinearSystem::DiagInfo& info);
+        void assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info);
+        void _assemble_kinetic_shape(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
+        void _assemble_reporters(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
+        void _assemble_dytopo_effect(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
+
+        void accuracy_check(GlobalLinearSystem::AccuracyInfo& info);
+        void retrieve_solution(GlobalLinearSystem::SolutionInfo& info);
+
+        SimSystemSlot<AffineBodyDynamics>       affine_body_dynamics;
+        AffineBodyDynamics::Impl&               abd() const noexcept;
+        SimSystemSlot<ABDDyTopoEffectReceiver>  dytopo_effect_receiver;
+        SimSystemSlot<AffineBodyVertexReporter> affine_body_vertex_reporter;
+
+        Float reserve_ratio = 1.5;
+
+        SimSystemSlotCollection<ABDLinearSubsystemReporter> reporters;
+        OffsetCountCollection<IndexT> reporter_gradient_offsets_counts;
+        OffsetCountCollection<IndexT> reporter_hessian_offsets_counts;
+
+        muda::DeviceTripletMatrix<StoreScalar, 12, 12> reporter_hessians;
+        muda::DeviceDoubletVector<StoreScalar, 12>     reporter_gradients;
+
+        // intermediate gradient/hessian buffers for kinetic/shape
+        muda::DeviceBuffer<StoreMat12x12> body_id_to_shape_hessian;
+        muda::DeviceBuffer<StoreVec12>    body_id_to_shape_gradient;
+        muda::DeviceBuffer<StoreMat12x12> body_id_to_kinetic_hessian;
+        muda::DeviceBuffer<StoreVec12>    body_id_to_kinetic_gradient;
+
+        // diag hessian for preconditioner
+        muda::DeviceBuffer<StoreMat12x12> diag_hessian;
+        muda::DeviceBuffer<IndexT>        structured_contact_counts;
+
+        Float dt = 0.0f;  // time step, used in assemble
+    };
+
+  private:
+    virtual void do_build(DiagLinearSubsystem::BuildInfo& info) override;
+    virtual void do_init(InitInfo& info) override;
+
+    virtual void do_report_init_extent(GlobalLinearSystem::InitDofExtentInfo& info) override;
+    virtual void do_receive_init_dof_info(GlobalLinearSystem::InitDofInfo& info) override;
+
+    virtual void do_report_extent(GlobalLinearSystem::DiagExtentInfo& info) override;
+    virtual void do_assemble(GlobalLinearSystem::DiagInfo& info) override;
+    virtual bool do_supports_structured_assembly() const override;
+    virtual void do_assemble_structured(GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual void do_accuracy_check(GlobalLinearSystem::AccuracyInfo& info) override;
+    virtual void do_retrieve_solution(GlobalLinearSystem::SolutionInfo& info) override;
+
+    virtual U64 get_uid() const noexcept override;
+
+    friend class ABDLinearSubsystemReporter;
+    void add_reporter(ABDLinearSubsystemReporter* reporter);  // only be called by ABDLinearSubsystemReporter
+
+    Impl m_impl;
+};
+}  // namespace uipc::backend::cuda_mixed

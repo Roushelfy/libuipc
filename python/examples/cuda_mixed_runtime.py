@@ -8,12 +8,12 @@ from pathlib import Path
 import uipc
 
 
-def _backend_library_name() -> str:
+def _backend_library_name(backend_name: str = "cuda_mixed") -> str:
     if os.name == "nt":
-        return "uipc_backend_cuda_mixed.dll"
+        return f"uipc_backend_{backend_name}.dll"
     if os.name == "darwin":
-        return "libuipc_backend_cuda_mixed.dylib"
-    return "libuipc_backend_cuda_mixed.so"
+        return f"libuipc_backend_{backend_name}.dylib"
+    return f"libuipc_backend_{backend_name}.so"
 
 
 def _runtime_library_path_key() -> str:
@@ -33,7 +33,7 @@ def _path_is_on_runtime_library_path(path: Path) -> bool:
     }
 
 
-def _candidate_module_dirs() -> list[tuple[Path, bool]]:
+def _candidate_module_dirs(backend_name: str = "cuda_mixed") -> list[tuple[Path, bool]]:
     candidates: list[tuple[Path, bool]] = []
 
     env_module_dir = os.environ.get("UIPC_MODULE_DIR")
@@ -43,7 +43,7 @@ def _candidate_module_dirs() -> list[tuple[Path, bool]]:
     package_file = getattr(uipc, "__file__", None)
     if package_file is not None:
         package_path = Path(package_file).resolve()
-        lib_name = _backend_library_name()
+        lib_name = _backend_library_name(backend_name)
         configs = [
             os.environ.get("UIPC_CONFIG"),
             "Release",
@@ -62,10 +62,10 @@ def _candidate_module_dirs() -> list[tuple[Path, bool]]:
     return candidates
 
 
-def init_cuda_mixed_module_dir() -> Path | None:
+def init_cuda_mixed_module_dir(backend_name: str = "cuda_mixed") -> Path | None:
     """Prefer the backend library in build/<level>/Release/bin over stale _native copies."""
-    lib_name = _backend_library_name()
-    for module_dir, explicit in _candidate_module_dirs():
+    lib_name = _backend_library_name(backend_name)
+    for module_dir, explicit in _candidate_module_dirs(backend_name):
         module_dir = module_dir.resolve()
         if (module_dir / lib_name).exists():
             if not explicit and not _path_is_on_runtime_library_path(module_dir):

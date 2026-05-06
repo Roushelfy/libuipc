@@ -1,0 +1,11 @@
+#pragma once
+#include <muda/ext/eigen/eigen_core_cxx20.h>
+
+namespace uipc::backend::cuda_mixed
+{
+namespace sym::soft_vertex_triangle_stitch
+{
+#include "details/soft_vertex_triangle_stitch.inl"
+}
+}  // namespace uipc::backend::cuda_mixed
+

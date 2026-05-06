@@ -335,8 +335,11 @@ same large SOCU-specific template headers.
 
 Recommended first split:
 
-1. Copy the current `cuda_mixed` backend to a SOCU backend directory and rename
-   the backend registration/module name.
+1. Copy the entire current `src/backends/cuda_mixed` directory to a new
+   SOCU-owned backend directory, initially `src/backends/cuda_mixed_socu`.
+   Milestone 1 should not use a same-directory dual-target scaffold because
+   that keeps the two backends coupled through the same source layout and
+   headers.
 2. Restore the ordinary `cuda_mixed` FullSparse/fused-PCG contact and linear
    paths to the pre-SOCU behavior.
 3. Remove or disable fused-PCG-specific code from the copied SOCU backend. The
@@ -964,16 +967,30 @@ Fallback:
 #### Milestone 1: Backend Split Scaffold
 
 Goal: create a SOCU-owned backend target without changing solver semantics.
+This milestone uses a full backend directory copy. It deliberately avoids a
+same-directory `cuda_mixed`/`cuda_mixed_socu` dual-target CMake setup so the
+original backend can later be restored to a historical pre-SOCU commit without
+dragging the SOCU backend with it.
 
 Deliverables:
 
-- Add a `cuda_mixed_socu` backend target/module registration.
-- Copy or factor the minimum current `cuda_mixed` code needed for the SOCU
-  backend to build.
+- Copy the entire current `src/backends/cuda_mixed` directory to
+  `src/backends/cuda_mixed_socu`.
+- Add a `cuda_mixed_socu` backend target/module registration from the copied
+  directory.
+- Keep copied file contents as close as possible to current `cuda_mixed` during
+  this milestone; only rename backend/module identifiers, CMake target names,
+  include paths, generated source definitions, and Python benchmark selection
+  glue required for the new backend to load.
 - Keep `cuda_mixed` fused-PCG behavior unchanged.
 - Keep `cuda_mixed_socu` running the current structured-SOCU path.
-- Remove fused-PCG solver registration, fused-PCG-specific linear-system code,
-  and fused-PCG-only build/config paths from `cuda_mixed_socu`.
+- Do not restore or clean up original `cuda_mixed` yet; that is Milestone 2.
+- Do not redesign SOCU matrix build yet; `cuda_mixed_socu` starts as a copied
+  baseline that reproduces current SOCU behavior.
+- Remove or hard-disable only the minimum fused-PCG exposure needed so
+  `cuda_mixed_socu` cannot silently run `"solver": "fused_pcg"`. Larger
+  deletion of fused-PCG source files from the SOCU copy may be done after the
+  copied backend builds and passes the acceptance checks.
 - `cuda_mixed_socu` should reject or not expose `"solver": "fused_pcg"`; fused
   PCG remains available only through `cuda_mixed`.
 - Add benchmark-script support for selecting `cuda_mixed` vs
@@ -991,10 +1008,10 @@ Acceptance:
 
 Fallback:
 
-- If a full backend copy is too broad, switch to a thinner target that reuses
-  shared libraries but owns SOCU-specific linear/contact build files.
-- If registration conflicts appear, keep the new backend disabled by default
-  behind a CMake option until naming is stable.
+- If copying the full backend creates registration or symbol conflicts, keep
+  the new backend disabled by default behind a CMake option while resolving the
+  naming issue. Do not switch back to a same-directory dual target unless the
+  full-copy approach is proven impossible.
 
 #### Milestone 2: Restore `cuda_mixed` Baseline
 
@@ -1007,6 +1024,10 @@ Deliverables:
 
 - Identify and record the exact pre-SOCU baseline commit used as the restore
   reference.
+- Start this milestone only after `src/backends/cuda_mixed_socu` exists and
+  preserves the current SOCU structured path. The restore should modify the
+  original `src/backends/cuda_mixed` tree only; SOCU-specific code should remain
+  available in the copied backend.
 - Restore `cuda_mixed` files that existed before SOCU integration to that
   baseline shape, including ordinary FullSparse contact assembly, linear solver
   registration, CMake source lists, and any manager/reporter paths that were

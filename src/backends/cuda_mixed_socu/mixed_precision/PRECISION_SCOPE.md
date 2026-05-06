@@ -1,0 +1,202 @@
+# PRECISION_SCOPE — cuda_mixed 后端精度范围文档
+
+> 版本：V3.1 | 对应计划：`claude_plan.md`
+> 约束：`src/backends/cuda` 不可修改；编译期精度切换；运行期不切换（V1）
+
+---
+
+## 一、精度维度定义
+
+精度由 5 个独立维度控制，均通过 `ActivePolicy`（`mixed_precision/policy.h`）暴露：
+
+| 类型别名 | 含义 | fp32 路径 |
+|---|---|---|
+| `AluScalar` | 计算/ALU 精度（梯度、Hessian 内核计算） | Path1/2/3/4/5/6 |
+| `StoreScalar` | 存储精度（Hessian Triplet/BCOO、梯度向量） | Path2/3/4/5/6 |
+| `EnergyScalar` | 共享 energy / line-search / reporter 精度 | Path1/2/3/4/5/6 |
+| `PcgAuxScalar` | PCG 辅助向量（r/z/p/Ap） | Path3/4/5/6 |
+| `SolveScalar` | 求解向量 x | Path5/6 |
+| `PcgIterScalar` | PCG 迭代标量（rz, alpha, beta） | Path5 only |
+
+附加编译期 flag：
+
+| Flag | 含义 | 激活路径 |
+|---|---|---|
+| `preconditioner_no_double_intermediate` | 预条件子无 double 中间量 | Path4/5/6 |
+| `full_pcg_fp32` | 完整 PCG 全 fp32（含 x） | Path5 only |
+
+---
+
+## 二、路径矩阵
+
+| Path | AluScalar | StoreScalar | PcgAuxScalar | SolveScalar | PcgIterScalar |
+|------|-----------|-------------|--------------|-------------|---------------|
+| fp64 | double | double | double | double | double |
+| path1 | **float** | double | double | double | double |
+| path2 | **float** | **float** | double | double | double |
+| path3 | **float** | **float** | **float** | double | double |
+| path4 | **float** | **float** | **float** | double | double |
+| path5 | **float** | **float** | **float** | **float** | **float** |
+| path6 | **float** | **float** | **float** | **float** | double |
+
+> path4 与 path3 类型相同，但额外启用 `preconditioner_no_double_intermediate`
+>
+> path6 是 path5 的诊断拆分路径：保留 `SolveScalar=float`，但把 `PcgIterScalar` 恢复为 `double`，用于隔离 PCG 迭代标量精度的影响。
+
+---
+
+## 三、精度组件范围表
+
+### AluScalar 组件（path1 起激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 1 | IPC Contact 法向 ALU 梯度 | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
+| 2 | IPC Contact 法向 ALU Hessian | `contact_system/contact_models/ipc_simplex_normal_contact.cu` | ✅ |
+| 3 | IPC Contact 摩擦/半平面 ALU | `contact_system/contact_models/ipc_simplex_frictional_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu`<br>`contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu` | ✅（active mixed path；不是旧的 `ipc_simplex_frictional_contact_function.h`） |
+| 3b | AL-IPC Contact / Half-plane ALU | `contact_system/al_simplex_normal_contact.cu`<br>`contact_system/al_simplex_frictional_contact.cu`<br>`contact_system/al_vertex_half_plane_normal_contact.cu`<br>`contact_system/al_vertex_half_plane_frictional_contact.cu` | ✅ |
+| 4 | FEM SNH 变形梯度 F ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
+| 5 | FEM SNH 能量梯度 G ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
+| 6 | FEM SNH Hessian H ALU | `finite_element/constitutions/stable_neo_hookean_3d.cu` | ⚠️ |
+| 6b | FEM PlasticDiscreteShellBending ALU (strain, UID=31) | `finite_element/constitutions/plastic_discrete_shell_bending.cu` | ✅ |
+| 6c | FEM StressPlasticDiscreteShellBending ALU (stress, UID=32) | `finite_element/constitutions/stress_plastic_discrete_shell_bending.cu` | ✅ |
+| 7 | ABD OrthoPotential ALU | `affine_body/constitutions/ortho_potential.cu` | ✅ |
+| 8 | ABD ARAP ALU | `affine_body/constitutions/arap.cu` | ✅ |
+| 9 | ABD RevoluteJoint ALU | `affine_body/constitutions/affine_body_revolute_joint.cu` | ✅ |
+| 10 | ABD PrismaticJoint ALU | `affine_body/constitutions/affine_body_prismatic_joint.cu` | ✅ |
+| 11 | ABD RevoluteJointLimit ALU | `affine_body/constitutions/affine_body_revolute_joint_limit.cu` | ✅ |
+| 12 | ABD PrismaticJointLimit ALU | `affine_body/constitutions/affine_body_prismatic_joint_limit.cu` | ✅ |
+| 13 | ABD BDF1 动能 ALU | `affine_body/bdf/affine_body_bdf1_kinetic.cu` | ✅ |
+| 13b | ABD BDF2 动能 ALU | `affine_body/bdf/affine_body_bdf2_kinetic.cu` | ✅ |
+| 14 | ABD SoftTransformConstraint ALU | `affine_body/constraints/soft_transform_constraint.cu` | ✅ |
+| 15 | ABD ExternalArticulationConstraint ALU | `affine_body/constraints/external_articulation_constraint.cu` | ✅ |
+| 15b | ABD FixedJoint ALU | `affine_body/constitutions/affine_body_fixed_joint.cu` | ✅ |
+| 15e | ABD SphericalJoint ALU | `affine_body/constitutions/affine_body_spherical_joint.cu` | ✅ |
+| 15c | ABD Driving Revolute External Force ALU | `affine_body/affine_body_revolute_joint_external_body_force.cu` | ✅ |
+| 15d | ABD Driving Prismatic External Force ALU | `affine_body/affine_body_prismatic_joint_external_body_force.cu` | ✅ |
+| 16 | ABDJacobi J^T H J ALU domain | `affine_body/abd_jacobi_matrix.h/.cu` | ✅ |
+| 17 | ABDJacobiStack mat-vec / to_mat ALU | `affine_body/details/abd_jacobi_matrix.inl` | ✅ |
+| 18 | ABD 线性子系统 kinetic+shape | `affine_body/abd_linear_subsystem.cu` | ✅ |
+| 19 | ABD 线性子系统 Reporter | `affine_body/abd_linear_subsystem.cu` | ✅ |
+| 20 | ABD 线性子系统 DyTopo | `affine_body/abd_linear_subsystem.cu` | ✅ |
+| 21 | ABD-FEM 耦合 | `coupling_system/abd_fem_linear_subsystem.cu` | ✅ |
+
+### StoreScalar 组件（path2 起激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 22 | Reporter/Assembler 局部缓冲区 | `affine_body/abd_linear_subsystem.h`<br>`finite_element/fem_linear_subsystem.h` | ✅ |
+| 23 | Global Triplet Hessian A_triplet | `linear_system/global_linear_system.h` | ✅ |
+| 24 | Global BCOO Hessian A_bcoo | `linear_system/global_linear_system.h` | ✅ |
+| 25 | Global 梯度向量 b | `linear_system/global_linear_system.h` | ✅ |
+
+### EnergyScalar 组件（与 AluScalar 同步激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 25b | Shared energy / line search / reporter buffers | `line_search/line_searcher.h/.cu`<br>`affine_body/abd_line_search_reporter.h/.cu`<br>`finite_element/fem_line_search_reporter.h/.cu`<br>`dytopo_effect_system/*line_search_reporter*`<br>`contact_system/contact_reporter.h` | ✅ |
+
+### PcgAuxScalar 组件（path3 起激活）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h`<br>`linear_system/linear_fused_pcg.h` | ✅ |
+| 26b | FEM MAS 预条件器（mixed-compatible） | `finite_element/fem_mas_preconditioner.cu`<br>`finite_element/mas_preconditioner_engine.h/.cu` | ✅ |
+
+### SolveScalar 组件（path5/path6 起激活）
+
+| # | 组件 | 文件 | 说明 |
+|---|------|------|------|
+| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu` | ✅（path5/6） |
+
+### PcgIterScalar 组件（path5 起激活；path6 回退到 double）
+
+| # | 组件 | 文件 | 状态 |
+|---|------|------|------|
+| 28 | PCG 迭代标量 rz/alpha/beta + SpMV 标量接口 | `linear_system/global_linear_system.h/.cu`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu`<br>`linear_system/iterative_solver.h/.cu` | ✅（path5 为 float，path6 回到 double） |
+
+### 保留 Float 的非计算桥接
+
+| # | 组件 | 文件 | 说明 |
+|---|------|------|------|
+| 29 | External force constraint host bridge | `affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu`<br>`affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu` | 保留 `Float`：仅负责 host 侧 attribute 采集/回写与 scene bridge，不参与 kernel 计算 |
+
+---
+
+## 四、插入点速查
+
+修改内核时对照此表确认在哪个层次操作：
+
+| 插入点 | 含义 | 适用维度 |
+|--------|------|---------|
+| A | IPC barrier 核心计算 | AluScalar |
+| B | Contact 法向梯度/Hessian 写入前 | AluScalar |
+| C | Matrix assembler 写入接口（最通用） | StoreScalar |
+| D | FEM 能量标量 | AluScalar |
+| E | FEM 梯度/Hessian 写入前 | AluScalar |
+| F | FEM 内核模板特化（.inl 文件） | AluScalar |
+| G | SpMV（混合精度矩阵-向量乘） | StoreScalar × PcgAuxScalar |
+
+---
+
+## 五、新功能合并检查清单
+
+当 `main` 分支（`cuda` 后端）新增功能后，rebase 到 `mipc` 前后按以下步骤检查：
+
+### Step 1 — 扫描新增的计算代码
+
+```bash
+# rebase 后查看 main 新带来的 cuda 后端改动
+git diff ORIG_HEAD..HEAD -- src/backends/cuda/ \
+  | grep '^+' \
+  | grep -vE '^(\+\+\+|---)'
+```
+
+### Step 2 — 判断新功能属于哪类计算
+
+- **新 constitution / constraint**（新的 `.cu` 能量/梯度/Hessian 计算）
+  → 检查是否需要 `AluScalar` 适配（参考第三节 #7–#21 的现有模式）
+
+- **新 Reporter / Assembler 缓冲区**
+  → 检查是否需要 `StoreScalar` 适配（参考 #22–#25）
+
+- **新线性子系统或 PCG 变体**
+  → 检查 PCG 辅助向量是否需要 `PcgAuxScalar`（参考 #26）
+
+- **纯非计算性变动**（IO、调度、geometry、UI）
+  → 通常无需精度适配，可跳过
+
+### Step 3 — 更新本文档
+
+在第三节对应维度的表格中添加新行，状态标为 `❌`（待实现）或直接实现后标为 `✅`。
+
+### Step 4 — 运行 quality benchmark 验证
+
+```bash
+python apps/benchmarks/mixed/uipc_assets/cli.py run \
+  --manifest apps/benchmarks/mixed/uipc_assets/manifests/full.json \
+  --levels fp64 path1 path2 path3 path4 path5 path6 \
+  --build fp64=build/build_impl_fp64 \
+  --build path1=build/build_impl_path1 \
+  --build path2=build/build_impl_path2 \
+  --build path3=build/build_impl_path3 \
+  --build path4=build/build_impl_path4 \
+  --build path5=build/build_impl_path5 \
+  --build path6=build/build_impl_path6 \
+  --run_root output/benchmarks/mixed/uipc_assets/<run_id>
+```
+
+在输出的 `summary.md` 中确认各 path 的误差在阈值内：
+- `rel_l2_x.max < 1e-5`
+- `abs_linf_x.max < 5e-4`
+- `nan_inf_count = 0`
+
+---
+
+## 六、状态说明
+
+| 符号 | 含义 |
+|------|------|
+| ✅ | 已实现，通过 quality benchmark 验证 |
+| ⚠️ | 部分实现（存在 bridge gap 或接口未完整覆盖） |
+| ❌ | 尚未实现 |
