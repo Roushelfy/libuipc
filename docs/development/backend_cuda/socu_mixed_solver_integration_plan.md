@@ -1,15 +1,17 @@
 # SOCU Mixed Structured Direct Solver
 
-This document records the current `cuda_mixed` SOCU integration. Historical
-checkpoint notes have been retired from this file so the documented behavior
-matches the production path.
+This document records the current split mixed-backend SOCU integration.
+Historical checkpoint notes have been retired from this file so the documented
+behavior matches the production path.
 
 ## Scope
 
-`socu_approx` is a structured-band direct direction solver for the
-`cuda_mixed` backend. Local linear build providers assemble directly into a
-`StructuredAssemblySink`; the solver does not build, filter, or redistribute a
-full Hessian triplet for the SOCU path.
+`cuda_mixed` is the restored FullSparse/fused-PCG baseline backend.
+`cuda_mixed_socu` is the SOCU-owned backend. `socu_approx` is a
+structured-band direct direction solver for `cuda_mixed_socu`. Local linear
+build providers assemble directly into a `StructuredAssemblySink`; the solver
+does not build, filter, or redistribute a full Hessian triplet for the SOCU
+path.
 
 The assembled matrix contains the diagonal block band and the first
 off-diagonal block band accepted by `socu_native`. If a scene's true Hessian is
@@ -41,9 +43,9 @@ The final solve path is:
    `factor_and_solve`, runs lightweight direction validation, and scatters the
    direction back to the global vector.
 
-The fused PCG path keeps using the normal full sparse assembly route. Shared
-local Hessian evaluation code may feed either sink, but the SOCU path writes
-its structured destination directly.
+The fused PCG path in `cuda_mixed` keeps using the normal full sparse assembly
+route. Shared local Hessian evaluation code may feed either sink, but the SOCU
+path in `cuda_mixed_socu` writes its structured destination directly.
 
 Runtime Hessian-based RCM reordering is optional and disabled by default. When
 enabled, a matching frame first runs a graph-only structured probe, records the
@@ -927,6 +929,11 @@ Commit discipline:
   using their results as a new baseline.
 - A commit that changes behavior should include the relevant smoke/regression
   commands in the final message or journal entry.
+- Every milestone must strictly satisfy the global constraints, design
+  boundaries, correctness gates, test strategy, file-organization goals, and its
+  own acceptance criteria described earlier in this document. Any exception must
+  be documented in the journal as a planned exception before the milestone is
+  committed.
 
 #### Milestone 0: Freeze Current Baselines
 
@@ -958,6 +965,9 @@ Acceptance:
 - `uipc_test_sim_case_cuda_mixed_only "86_cuda_mixed_linear_solver_selection_smoke" -s`.
 - `fused_pcg --frames 100` reaches frame 100.
 - best SOCU topology `diag_lump` variant reaches frame 100.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1005,6 +1015,9 @@ Acceptance:
 - Attempting to request fused PCG from `cuda_mixed_socu` fails clearly at config
   or solver-selection time instead of silently using shared fused-PCG code.
 - Unit tests and solver-selection smoke pass.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1059,6 +1072,9 @@ Acceptance:
 - `cuda_mixed_socu` build no longer compiles fused-PCG-specific solver files or
   fused-PCG-only matrix conversion paths.
 - `cuda_mixed_socu` still passes the Milestone-1 SOCU 20-frame checks.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1090,6 +1106,9 @@ Acceptance:
 - Current structured-SOCU path remains the default.
 - No performance requirement beyond negligible overhead when the native
   skeleton is disabled.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1120,6 +1139,9 @@ Acceptance:
   and reorder epoch cases.
 - Current structured-SOCU path remains numerically unchanged.
 - Reorder reports expose descriptor epoch in debug/report mode if useful.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1144,6 +1166,9 @@ Acceptance:
 - 20-frame SOCU regression passes with native diagonal/RHS enabled.
 - 100-frame best SOCU variant does not regress by more than 2%, or the
   milestone is marked infrastructure-only and left disabled by default.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1168,6 +1193,9 @@ Acceptance:
 - `cuda_mixed_socu` 20-frame topology `diag_lump` regression passes.
 - 100-frame best SOCU variant is not slower; target improvement is measurable
   reduction in `Assemble Structured Chain` or replacement native timer.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1190,6 +1218,9 @@ Acceptance:
 - Provider matrix/RHS diffs pass.
 - Existing constraint policy contract tests pass.
 - Short/medium scenes using joints/constraints match structured baseline.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1218,6 +1249,9 @@ Acceptance:
 - No frame-16 `contact_hessian` NaN in diagnostic variants.
 - Native contact build reduces contact/chain build timer or total wall time
   versus structured contact baseline.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1243,6 +1277,9 @@ Acceptance:
 - `contact_hessian + diag_lump` diagnostics pass 100 frames.
 - Runtime reorder failure leaves previous descriptors and solver plan active.
 - No stale-descriptor use after reorder.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1266,6 +1303,9 @@ Acceptance:
 - No collector overflow on benchmark scenes, or graceful fallback if overflowed.
 - At least 5% reduction in native build time for the targeted provider or a
   documented reason to reject/revert.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1286,6 +1326,9 @@ Acceptance:
 - Correctness tests match provider reference.
 - No nvcc OOM or unacceptable register spill.
 - At least 5% total native build improvement for the targeted provider.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
@@ -1310,6 +1353,9 @@ Acceptance:
 - `cuda_mixed_socu` default SOCU variant passes 100-frame regressions.
 - Unit/component/native provider tests are part of normal test workflow.
 - Documentation matches code and benchmark names.
+- All global constraints, design requirements, correctness gates, and acceptance
+  rules defined above remain satisfied unless explicitly documented as a planned
+  exception before commit.
 
 Fallback:
 
