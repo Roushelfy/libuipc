@@ -3,7 +3,6 @@
 #include <linear_system/off_diag_linear_subsystem.h>
 #include <uipc/common/range.h>
 #include <linear_system/linear_solver.h>
-#include <linear_system/iterative_solver.h>
 #include <linear_system/global_preconditioner.h>
 #include <linear_system/local_preconditioner.h>
 #include <dytopo_effect_system/global_dytopo_effect_manager.h>
@@ -250,30 +249,12 @@ void GlobalLinearSystem::Impl::init()
             diag_subsystem->receive_init_dof_info(info);
         }
     }
-    accuracy_statisfied_flags.resize(diag_subsystem_view.size());
-
     // 3) Triplet Offsets/Counts
     subsystem_triplet_offsets_counts.resize(total_count);
     off_diag_lr_triplet_counts.resize(off_diag_subsystem_view.size());
 
     // 4) Preconditioner
-    // find out diag systems that don't have preconditioner
     auto local_preconditioner_view = local_preconditioners.view();
-
-    for(auto precond : local_preconditioner_view)
-    {
-        auto index = precond->m_subsystem->m_index;
-        diag_span[index].has_local_preconditioner = true;
-    }
-
-    no_precond_diag_subsystem_indices.reserve(diag_span.size());
-    for(auto&& [i, diag_info] : enumerate(diag_span))
-    {
-        if(!diag_info.has_local_preconditioner)
-        {
-            no_precond_diag_subsystem_indices.push_back(i);
-        }
-    }
 
     for(auto precond : local_preconditioner_view)
     {
@@ -794,91 +775,6 @@ void GlobalLinearSystem::Impl::distribute_solution()
         info.m_solution = x.view().subview(diag_dof_offsets[i], diag_dof_counts[i]);
         diag_subsystem->retrieve_solution(info);
     }
-}
-
-void GlobalLinearSystem::Impl::apply_preconditioner(
-    GlobalLinearSystem::PcgDenseVectorView  z,
-    GlobalLinearSystem::CPcgDenseVectorView r,
-    muda::CVarView<IndexT>                  converged)
-{
-    auto diag_dof_counts  = diag_dof_offsets_counts.counts();
-    auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
-
-    if(global_preconditioner)
-    {
-        ApplyPreconditionerInfo info{this};
-        info.m_z = z;
-        info.m_r = r;
-        info.m_converged = converged;
-        global_preconditioner->apply(info);
-    }
-
-    for(auto& preconditioner : local_preconditioners.view())
-    {
-        ApplyPreconditionerInfo info{this};
-        auto                    index  = preconditioner->m_subsystem->m_index;
-        auto                    offset = diag_dof_offsets[index];
-        auto                    count  = diag_dof_counts[index];
-        info.m_z                       = z.subview(offset, count);
-        info.m_r                       = r.subview(offset, count);
-        info.m_converged               = converged;
-        preconditioner->apply(info);
-    }
-
-    if(!global_preconditioner)
-    {
-        // For diag subsystems without local preconditioner, just copy r to z
-        for(auto i : no_precond_diag_subsystem_indices)
-        {
-            auto offset = diag_dof_offsets[i];
-            auto count  = diag_dof_counts[i];
-            auto z_sub  = z.subview(offset, count);
-            auto r_sub  = r.subview(offset, count);
-            z_sub.buffer_view().copy_from(r_sub.buffer_view());
-        }
-    }
-}
-
-void GlobalLinearSystem::Impl::spmv(ActivePolicy::PcgIterScalar             a,
-                                    GlobalLinearSystem::CPcgDenseVectorView x,
-                                    ActivePolicy::PcgIterScalar             b,
-                                    GlobalLinearSystem::PcgDenseVectorView  y)
-{
-    if constexpr(ActivePolicy::store_is_fp32)
-    {
-        spmver.rbk_sym_spmv(a, bcoo_A.cview(), x, b, y);
-    }
-    else
-    {
-        spmver.rbk_sym_spmv(static_cast<Float>(a),
-                            bcoo_A.cview(),
-                            x,
-                            static_cast<Float>(b),
-                            y);
-    }
-
-    // Just some debug options
-    //  * spmver.sym_spmv(a, bcoo_A.cview(), x, b, y);      // Slightly slower
-    //  * spmver.cpu_sym_spmv(a, bcoo_A.cview(), x, b, y);  // Much slower
-}
-
-bool GlobalLinearSystem::Impl::accuracy_statisfied(
-    GlobalLinearSystem::PcgDenseVectorView r)
-{
-    auto diag_dof_counts  = diag_dof_offsets_counts.counts();
-    auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
-
-    for(auto&& [i, diag_subsystems] : enumerate(diag_subsystems.view()))
-    {
-        AccuracyInfo info{this};
-        info.m_r = r.subview(diag_dof_offsets[i], diag_dof_counts[i]);
-        diag_subsystems->accuracy_check(info);
-
-        accuracy_statisfied_flags[i] = info.m_statisfied ? 1 : 0;
-    }
-
-    return std::ranges::all_of(accuracy_statisfied_flags,
-                               [](bool flag) { return flag; });
 }
 
 void GlobalLinearSystem::Impl::compute_gradient(ComputeGradientInfo& info)

@@ -55,7 +55,6 @@ endif()
 
 # all files in this directory
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
-list(FILTER SOURCES EXCLUDE REGEX ".*/linear_system/linear_fused_pcg\\.cu$")
 
 if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
     set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE ${SOURCES})

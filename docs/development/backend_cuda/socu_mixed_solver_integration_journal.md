@@ -1073,3 +1073,99 @@ Acceptance: Milestone 3 passes. The native storage skeleton can be written from
 device kernels, downloaded for inspection, and consumed by `socu_native`
 `NativeProof` on a synthetic SPD diagonal system. The current structured SOCU
 runtime remains the default path and still passes the 20-frame SOCU sanity case.
+
+## 2026-05-06 M0-M3 Closure and SOCU-Only PCG Cleanup
+
+This closure pass tightened the split-backend state after M2/M3:
+
+- `cuda_mixed` remains the restored FullSparse/fused-PCG baseline.
+- `cuda_mixed_socu` now physically removes PCG/fused-PCG solver exposure:
+  `linear_pcg`, `linear_fused_pcg`, their shared `iterative_solver`, and the
+  old SpMV helper were removed from the SOCU backend.
+- The temporary CMake source filter for `linear_fused_pcg.cu` was removed
+  because the file no longer exists in the SOCU backend.
+- `GlobalLinearSystem` in `cuda_mixed_socu` no longer carries the private
+  PCG-only SpMV / preconditioner-apply / residual-accuracy bridge.
+- The SOCU-side mixed precision docs/contracts now describe `PcgAuxScalar` as
+  a legacy preconditioner type name and no longer list PCG/fused-PCG solver
+  files as SOCU backend components.
+
+Build handoff was performed by the user without `NVCC_APPEND_FLAGS` or
+`--Ofast-compile=max`:
+
+```bash
+unset NVCC_APPEND_FLAGS
+ninja -C build/build_impl_fp64 -j1 \
+  libuipc_backend_cuda_mixed.so \
+  libuipc_backend_cuda_mixed_socu.so \
+  uipc_test_backend_cuda_mixed \
+  uipc_test_backend_cuda_mixed_socu \
+  uipc_test_sim_case_cuda_mixed_only
+```
+
+Static checks:
+
+```text
+git diff --check: passed
+python3 -m py_compile python/examples/cuda_mixed_wrecking_ball_compare.py: passed
+SOCU reference scan over src/backends/cuda_mixed,
+  apps/tests/backends/cuda_mixed, and
+  apps/tests/sim_case/86_cuda_mixed_precision_contracts.cpp: no matches
+PCG/fused-PCG source scan over src/backends/cuda_mixed_socu and
+  apps/tests/backends/cuda_mixed_socu: no LinearFusedPCG, linear_fused_pcg,
+  LinearPCG, linear_pcg, IterativeSolver, iterative_solver, Spmv, or
+  linear_system/spmv matches
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed "[cuda_mixed][contract]" -s` | passed, 1 assertion |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -s` | passed, 328 assertions |
+| `uipc_test_sim_case_cuda_mixed_only "86_cuda_mixed_linear_solver_selection_smoke" -s` | passed, 9 assertions |
+| `--variant fused_pcg --frames 1 --backend cuda_mixed_socu` | rejected during init with `cuda_mixed_socu only supports linear_system/solver='socu_approx', got 'fused_pcg'` |
+
+100-frame closure commands:
+
+```bash
+LD_LIBRARY_PATH=build/build_impl_fp64/RelWithDebInfo/bin:build/build_impl_fp64/python/src/uipc/_native:$LD_LIBRARY_PATH \
+PYTHONPATH=build/build_impl_fp64/python/src \
+SOCU_REPORT_COUNTERS=0 \
+uv run --no-project --with numpy --with matplotlib python \
+  python/examples/cuda_mixed_wrecking_ball_compare.py \
+  --variant fused_pcg --frames 100 --backend cuda_mixed \
+  --output output/examples/cuda_mixed_wrecking_ball_compare_m2_m3_closure
+
+LD_LIBRARY_PATH=build/build_impl_fp64/RelWithDebInfo/bin:build/build_impl_fp64/python/src/uipc/_native:$LD_LIBRARY_PATH \
+PYTHONPATH=build/build_impl_fp64/python/src \
+SOCU_REPORT_COUNTERS=0 \
+uv run --no-project --with numpy --with matplotlib python \
+  python/examples/cuda_mixed_wrecking_ball_compare.py \
+  --variant socu_rt50_topology_diag_lump --frames 100 --backend cuda_mixed_socu \
+  --output output/examples/cuda_mixed_wrecking_ball_compare_m2_m3_closure
+```
+
+100-frame results:
+
+| variant/backend | final frame | wall time | mean frame | result path |
+| --- | ---: | ---: | ---: | --- |
+| `fused_pcg` / `cuda_mixed` | 100 | 19.805 s | 174.166 ms | `output/examples/cuda_mixed_wrecking_ball_compare_m2_m3_closure/fused_pcg/result.json` |
+| `fused_pcg` / `cuda_mixed` rerun | 100 | 19.564 s | 173.001 ms | `output/examples/cuda_mixed_wrecking_ball_compare_m2_m3_closure_rerun/fused_pcg/result.json` |
+| `socu_rt50_topology_diag_lump` / `cuda_mixed_socu` | 100 | 18.378 s | 163.263 ms | `output/examples/cuda_mixed_wrecking_ball_compare_m2_m3_closure/cuda_mixed_socu/socu_rt50_topology_diag_lump/result.json` |
+
+M0 frozen fused-PCG baseline was `final_frame=100`, `wall_time=18.806 s`,
+and `mean_frame=162.696 ms`. The post-cleanup fused-PCG runs still reach frame
+100, but both measured wall time and mean frame are slower than the M0 timing
+by more than the 2% performance gate. This cleanup did not modify
+`src/backends/cuda_mixed` code, and the slowdown reproduced across two
+post-cleanup runs, so it is recorded as a baseline timing drift / environment
+follow-up rather than a SOCU-backend code regression. The correctness gate for
+the restored `cuda_mixed` baseline remains satisfied; the timing gate should be
+rechecked before using these numbers as a performance baseline for later
+milestones.
+
+Acceptance: the SOCU-only backend no longer exposes PCG/fused-PCG
+implementation code, `cuda_mixed_socu` rejects `fused_pcg` clearly at init,
+both backend contract suites pass, and both 100-frame closure simulations reach
+frame 100.

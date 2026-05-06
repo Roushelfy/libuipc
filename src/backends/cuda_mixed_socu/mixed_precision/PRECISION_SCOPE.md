@@ -1,7 +1,10 @@
-# PRECISION_SCOPE — cuda_mixed 后端精度范围文档
+# PRECISION_SCOPE — cuda_mixed_socu 后端精度范围文档
 
 > 版本：V3.1 | 对应计划：`claude_plan.md`
 > 约束：`src/backends/cuda` 不可修改；编译期精度切换；运行期不切换（V1）
+> 说明：`cuda_mixed_socu` 不包含 PCG / fused-PCG 求解器实现；相关
+> `Pcg*Scalar` 类型名仅作为复制后端中预条件器和历史 mixed-precision
+> policy 的内部命名保留。
 
 ---
 
@@ -14,16 +17,16 @@
 | `AluScalar` | 计算/ALU 精度（梯度、Hessian 内核计算） | Path1/2/3/4/5/6 |
 | `StoreScalar` | 存储精度（Hessian Triplet/BCOO、梯度向量） | Path2/3/4/5/6 |
 | `EnergyScalar` | 共享 energy / line-search / reporter 精度 | Path1/2/3/4/5/6 |
-| `PcgAuxScalar` | PCG 辅助向量（r/z/p/Ap） | Path3/4/5/6 |
+| `PcgAuxScalar` | 预条件器辅助向量类型（历史 PCG 命名） | Path3/4/5/6 |
 | `SolveScalar` | 求解向量 x | Path5/6 |
-| `PcgIterScalar` | PCG 迭代标量（rz, alpha, beta） | Path5 only |
+| `PcgIterScalar` | legacy policy 迭代标量；SOCU 后端无 PCG solver consumer | Path5 only |
 
 附加编译期 flag：
 
 | Flag | 含义 | 激活路径 |
 |---|---|---|
 | `preconditioner_no_double_intermediate` | 预条件子无 double 中间量 | Path4/5/6 |
-| `full_pcg_fp32` | 完整 PCG 全 fp32（含 x） | Path5 only |
+| `full_pcg_fp32` | legacy policy flag；`cuda_mixed_socu` 不暴露 PCG solver | Path5 only |
 
 ---
 
@@ -41,7 +44,9 @@
 
 > path4 与 path3 类型相同，但额外启用 `preconditioner_no_double_intermediate`
 >
-> path6 是 path5 的诊断拆分路径：保留 `SolveScalar=float`，但把 `PcgIterScalar` 恢复为 `double`，用于隔离 PCG 迭代标量精度的影响。
+> path6 是 path5 的诊断拆分路径：保留 `SolveScalar=float`，但把
+> `PcgIterScalar` 恢复为 `double`。在 `cuda_mixed_socu` 中该维度只保留
+> legacy policy 可编译性，不对应一个可选择的 PCG 求解器。
 
 ---
 
@@ -96,24 +101,17 @@
 |---|------|------|------|
 | 25b | Shared energy / line search / reporter buffers | `line_search/line_searcher.h/.cu`<br>`affine_body/abd_line_search_reporter.h/.cu`<br>`finite_element/fem_line_search_reporter.h/.cu`<br>`dytopo_effect_system/*line_search_reporter*`<br>`contact_system/contact_reporter.h` | ✅ |
 
-### PcgAuxScalar 组件（path3 起激活）
+### PcgAuxScalar 组件（path3 起激活，legacy 命名）
 
 | # | 组件 | 文件 | 状态 |
 |---|------|------|------|
-| 26 | PCG 辅助向量 r/z/p/Ap | `linear_system/linear_pcg.h`<br>`linear_system/linear_fused_pcg.h` | ✅ |
 | 26b | FEM MAS 预条件器（mixed-compatible） | `finite_element/fem_mas_preconditioner.cu`<br>`finite_element/mas_preconditioner_engine.h/.cu` | ✅ |
 
 ### SolveScalar 组件（path5/path6 起激活）
 
 | # | 组件 | 文件 | 说明 |
 |---|------|------|------|
-| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu` | ✅（path5/6） |
-
-### PcgIterScalar 组件（path5 起激活；path6 回退到 double）
-
-| # | 组件 | 文件 | 状态 |
-|---|------|------|------|
-| 28 | PCG 迭代标量 rz/alpha/beta + SpMV 标量接口 | `linear_system/global_linear_system.h/.cu`<br>`linear_system/linear_pcg.h/.cu`<br>`linear_system/linear_fused_pcg.h/.cu`<br>`linear_system/iterative_solver.h/.cu` | ✅（path5 为 float，path6 回到 double） |
+| 27 | 求解向量 x | `linear_system/global_linear_system.h`<br>`linear_system/socu_approx_solver.h/.cu` | ✅（path5/6） |
 
 ### 保留 Float 的非计算桥接
 
@@ -135,7 +133,7 @@
 | D | FEM 能量标量 | AluScalar |
 | E | FEM 梯度/Hessian 写入前 | AluScalar |
 | F | FEM 内核模板特化（.inl 文件） | AluScalar |
-| G | SpMV（混合精度矩阵-向量乘） | StoreScalar × PcgAuxScalar |
+| G | SOCU native 求解输入/输出向量 | StoreScalar × SolveScalar |
 
 ---
 
@@ -160,8 +158,9 @@ git diff ORIG_HEAD..HEAD -- src/backends/cuda/ \
 - **新 Reporter / Assembler 缓冲区**
   → 检查是否需要 `StoreScalar` 适配（参考 #22–#25）
 
-- **新线性子系统或 PCG 变体**
-  → 检查 PCG 辅助向量是否需要 `PcgAuxScalar`（参考 #26）
+- **新线性子系统或 SOCU solver 变体**
+  → 检查求解向量、structured matrix builder、以及预条件器辅助类型是否需要
+  `SolveScalar` / `PcgAuxScalar` 适配（参考 #26b/#27）
 
 - **纯非计算性变动**（IO、调度、geometry、UI）
   → 通常无需精度适配，可跳过

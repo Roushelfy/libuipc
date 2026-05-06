@@ -5,7 +5,6 @@
 #include <uipc/common/vector.h>
 #include <muda/ext/linear_system.h>
 #include <algorithm/matrix_converter.h>
-#include <linear_system/spmv.h>
 #include <linear_system/assembly_mode.h>
 #include <linear_system/structured_chain_provider.h>
 #include <utils/assembly_sink.h>
@@ -28,7 +27,6 @@ struct SizeT2
 class DiagLinearSubsystem;
 class OffDiagLinearSubsystem;
 class LinearSolver;
-class IterativeSolver;
 class LocalPreconditioner;
 class GlobalPreconditioner;
 class GlobalDyTopoEffectManager;
@@ -488,10 +486,9 @@ class GlobalLinearSystem : public SimSystem
     class LinearSubsytemInfo
     {
       public:
-        bool  is_diag                  = false;
-        bool  has_local_preconditioner = false;
-        SizeT local_index              = ~0ull;
-        SizeT index                    = ~0ull;
+        bool  is_diag     = false;
+        SizeT local_index = ~0ull;
+        SizeT index       = ~0ull;
     };
 
   public:
@@ -520,9 +517,6 @@ class GlobalLinearSystem : public SimSystem
         std::vector<SizeT2> off_diag_lr_triplet_counts;
 
 
-        std::vector<int> accuracy_statisfied_flags;
-        std::vector<int> no_precond_diag_subsystem_indices;
-
         // Containers
         SimSystemSlotCollection<DiagLinearSubsystem>    diag_subsystems;
         SimSystemSlotCollection<OffDiagLinearSubsystem> off_diag_subsystems;
@@ -542,20 +536,9 @@ class GlobalLinearSystem : public SimSystem
         muda::DeviceBCOOMatrix<StoreScalar, 3>    bcoo_A;
         muda::DeviceDenseMatrix<StoreScalar>      debug_A;  // dense A for debug
 
-        Spmv                      spmver;
         MatrixConverter<StoreScalar, 3> converter;
 
         bool empty_system = true;
-        void apply_preconditioner(PcgDenseVectorView z,
-                                  CPcgDenseVectorView r,
-                                  muda::CVarView<IndexT> converged);
-
-        void spmv(ActivePolicy::PcgIterScalar a,
-                  CPcgDenseVectorView         x,
-                  ActivePolicy::PcgIterScalar b,
-                  PcgDenseVectorView          y);
-
-        bool accuracy_statisfied(PcgDenseVectorView r);
 
         void compute_gradient(ComputeGradientInfo& info);
         void notify_line_search_result(const LineSearchFeedback& feedback);
@@ -587,7 +570,6 @@ class GlobalLinearSystem : public SimSystem
   private:
     friend class SimEngine;
     friend class LinearSolver;
-    friend class IterativeSolver;
     friend class DiagLinearSubsystem;
     friend class OffDiagLinearSubsystem;
     friend class LocalPreconditioner;

@@ -1,7 +1,7 @@
 {
   "contract_version": 1,
   "source_roots": [
-    "src/backends/cuda_mixed"
+    "src/backends/cuda_mixed_socu"
   ],
   "components": [
     {
@@ -9,7 +9,7 @@
       "name": "IPC Contact normal ALU gradient",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_normal_contact.cu"
+        "src/backends/cuda_mixed_socu/contact_system/contact_models/ipc_simplex_normal_contact.cu"
       ]
     },
     {
@@ -17,7 +17,7 @@
       "name": "IPC Contact normal ALU Hessian",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_normal_contact.cu"
+        "src/backends/cuda_mixed_socu/contact_system/contact_models/ipc_simplex_normal_contact.cu"
       ]
     },
     {
@@ -25,9 +25,9 @@
       "name": "IPC Contact friction and half-plane ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/contact_system/contact_models/ipc_simplex_frictional_contact.cu",
-        "src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu",
-        "src/backends/cuda_mixed/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu"
+        "src/backends/cuda_mixed_socu/contact_system/contact_models/ipc_simplex_frictional_contact.cu",
+        "src/backends/cuda_mixed_socu/contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu",
+        "src/backends/cuda_mixed_socu/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu"
       ]
     },
     {
@@ -35,10 +35,10 @@
       "name": "AL-IPC contact and half-plane ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/contact_system/al_simplex_normal_contact.cu",
-        "src/backends/cuda_mixed/contact_system/al_simplex_frictional_contact.cu",
-        "src/backends/cuda_mixed/contact_system/al_vertex_half_plane_normal_contact.cu",
-        "src/backends/cuda_mixed/contact_system/al_vertex_half_plane_frictional_contact.cu"
+        "src/backends/cuda_mixed_socu/contact_system/al_simplex_normal_contact.cu",
+        "src/backends/cuda_mixed_socu/contact_system/al_simplex_frictional_contact.cu",
+        "src/backends/cuda_mixed_socu/contact_system/al_vertex_half_plane_normal_contact.cu",
+        "src/backends/cuda_mixed_socu/contact_system/al_vertex_half_plane_frictional_contact.cu"
       ]
     },
     {
@@ -46,7 +46,7 @@
       "name": "FEM SNH deformation gradient ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+        "src/backends/cuda_mixed_socu/finite_element/constitutions/stable_neo_hookean_3d.cu"
       ]
     },
     {
@@ -54,7 +54,7 @@
       "name": "FEM SNH energy gradient ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+        "src/backends/cuda_mixed_socu/finite_element/constitutions/stable_neo_hookean_3d.cu"
       ]
     },
     {
@@ -62,7 +62,7 @@
       "name": "FEM SNH Hessian ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/constitutions/stable_neo_hookean_3d.cu"
+        "src/backends/cuda_mixed_socu/finite_element/constitutions/stable_neo_hookean_3d.cu"
       ]
     },
     {
@@ -70,7 +70,7 @@
       "name": "FEM plastic discrete shell bending ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/constitutions/plastic_discrete_shell_bending.cu"
+        "src/backends/cuda_mixed_socu/finite_element/constitutions/plastic_discrete_shell_bending.cu"
       ]
     },
     {
@@ -78,7 +78,7 @@
       "name": "FEM stress plastic discrete shell bending ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/constitutions/stress_plastic_discrete_shell_bending.cu"
+        "src/backends/cuda_mixed_socu/finite_element/constitutions/stress_plastic_discrete_shell_bending.cu"
       ]
     },
     {
@@ -86,7 +86,7 @@
       "name": "ABD OrthoPotential ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/ortho_potential.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/ortho_potential.cu"
       ]
     },
     {
@@ -94,7 +94,7 @@
       "name": "ABD ARAP ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/arap.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/arap.cu"
       ]
     },
     {
@@ -102,7 +102,7 @@
       "name": "ABD RevoluteJoint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_revolute_joint.cu"
       ]
     },
     {
@@ -110,7 +110,7 @@
       "name": "ABD PrismaticJoint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_prismatic_joint.cu"
       ]
     },
     {
@@ -118,7 +118,7 @@
       "name": "ABD RevoluteJointLimit ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_revolute_joint_limit.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_revolute_joint_limit.cu"
       ]
     },
     {
@@ -126,7 +126,7 @@
       "name": "ABD PrismaticJointLimit ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_prismatic_joint_limit.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_prismatic_joint_limit.cu"
       ]
     },
     {
@@ -134,7 +134,7 @@
       "name": "ABD BDF1 kinetic ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf1_kinetic.cu"
+        "src/backends/cuda_mixed_socu/affine_body/bdf/affine_body_bdf1_kinetic.cu"
       ]
     },
     {
@@ -142,7 +142,7 @@
       "name": "ABD BDF2 kinetic ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf2_kinetic.cu"
+        "src/backends/cuda_mixed_socu/affine_body/bdf/affine_body_bdf2_kinetic.cu"
       ]
     },
     {
@@ -150,7 +150,7 @@
       "name": "ABD SoftTransformConstraint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constraints/soft_transform_constraint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constraints/soft_transform_constraint.cu"
       ]
     },
     {
@@ -158,7 +158,7 @@
       "name": "ABD ExternalArticulationConstraint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constraints/external_articulation_constraint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constraints/external_articulation_constraint.cu"
       ]
     },
     {
@@ -166,7 +166,7 @@
       "name": "ABD FixedJoint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_fixed_joint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_fixed_joint.cu"
       ]
     },
     {
@@ -174,7 +174,7 @@
       "name": "ABD Driving revolute external force ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/affine_body_revolute_joint_external_body_force.cu"
+        "src/backends/cuda_mixed_socu/affine_body/affine_body_revolute_joint_external_body_force.cu"
       ]
     },
     {
@@ -182,7 +182,7 @@
       "name": "ABD Driving prismatic external force ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/affine_body_prismatic_joint_external_body_force.cu"
+        "src/backends/cuda_mixed_socu/affine_body/affine_body_prismatic_joint_external_body_force.cu"
       ]
     },
     {
@@ -190,7 +190,7 @@
       "name": "ABD SphericalJoint ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constitutions/affine_body_spherical_joint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constitutions/affine_body_spherical_joint.cu"
       ]
     },
     {
@@ -198,8 +198,8 @@
       "name": "ABDJacobi JT_H_J ALU domain",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h",
-        "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl"
+        "src/backends/cuda_mixed_socu/affine_body/abd_jacobi_matrix.h",
+        "src/backends/cuda_mixed_socu/affine_body/details/abd_jacobi_matrix.inl"
       ]
     },
     {
@@ -207,7 +207,7 @@
       "name": "ABDJacobiStack mat-vec and to_mat ALU",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl"
+        "src/backends/cuda_mixed_socu/affine_body/details/abd_jacobi_matrix.inl"
       ]
     },
     {
@@ -215,7 +215,7 @@
       "name": "ABD linear subsystem kinetic and shape",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+        "src/backends/cuda_mixed_socu/affine_body/abd_linear_subsystem.cu"
       ]
     },
     {
@@ -223,7 +223,7 @@
       "name": "ABD linear subsystem reporter",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+        "src/backends/cuda_mixed_socu/affine_body/abd_linear_subsystem.cu"
       ]
     },
     {
@@ -231,7 +231,7 @@
       "name": "ABD linear subsystem DyTopo",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.cu"
+        "src/backends/cuda_mixed_socu/affine_body/abd_linear_subsystem.cu"
       ]
     },
     {
@@ -239,7 +239,7 @@
       "name": "ABD-FEM coupling",
       "dimension": "AluScalar",
       "files": [
-        "src/backends/cuda_mixed/coupling_system/abd_fem_linear_subsystem.cu"
+        "src/backends/cuda_mixed_socu/coupling_system/abd_fem_linear_subsystem.cu"
       ]
     },
     {
@@ -247,8 +247,8 @@
       "name": "Reporter and assembler local buffers",
       "dimension": "StoreScalar",
       "files": [
-        "src/backends/cuda_mixed/affine_body/abd_linear_subsystem.h",
-        "src/backends/cuda_mixed/finite_element/fem_linear_subsystem.h"
+        "src/backends/cuda_mixed_socu/affine_body/abd_linear_subsystem.h",
+        "src/backends/cuda_mixed_socu/finite_element/fem_linear_subsystem.h"
       ]
     },
     {
@@ -256,7 +256,7 @@
       "name": "Global triplet Hessian A_triplet",
       "dimension": "StoreScalar",
       "files": [
-        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+        "src/backends/cuda_mixed_socu/linear_system/global_linear_system.h"
       ]
     },
     {
@@ -264,7 +264,7 @@
       "name": "Global BCOO Hessian A_bcoo",
       "dimension": "StoreScalar",
       "files": [
-        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+        "src/backends/cuda_mixed_socu/linear_system/global_linear_system.h"
       ]
     },
     {
@@ -272,7 +272,7 @@
       "name": "Global gradient vector b",
       "dimension": "StoreScalar",
       "files": [
-        "src/backends/cuda_mixed/linear_system/global_linear_system.h"
+        "src/backends/cuda_mixed_socu/linear_system/global_linear_system.h"
       ]
     },
     {
@@ -280,22 +280,13 @@
       "name": "Shared energy and line-search buffers",
       "dimension": "EnergyScalar",
       "files": [
-        "src/backends/cuda_mixed/line_search/line_searcher.cu",
-        "src/backends/cuda_mixed/line_search/line_searcher.h",
-        "src/backends/cuda_mixed/affine_body/abd_line_search_reporter.cu",
-        "src/backends/cuda_mixed/affine_body/abd_line_search_reporter.h",
-        "src/backends/cuda_mixed/finite_element/fem_line_search_reporter.cu",
-        "src/backends/cuda_mixed/finite_element/fem_line_search_reporter.h",
-        "src/backends/cuda_mixed/contact_system/contact_reporter.h"
-      ]
-    },
-    {
-      "id": "26",
-      "name": "PCG auxiliary vectors",
-      "dimension": "PcgAuxScalar",
-      "files": [
-        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
-        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h"
+        "src/backends/cuda_mixed_socu/line_search/line_searcher.cu",
+        "src/backends/cuda_mixed_socu/line_search/line_searcher.h",
+        "src/backends/cuda_mixed_socu/affine_body/abd_line_search_reporter.cu",
+        "src/backends/cuda_mixed_socu/affine_body/abd_line_search_reporter.h",
+        "src/backends/cuda_mixed_socu/finite_element/fem_line_search_reporter.cu",
+        "src/backends/cuda_mixed_socu/finite_element/fem_line_search_reporter.h",
+        "src/backends/cuda_mixed_socu/contact_system/contact_reporter.h"
       ]
     },
     {
@@ -303,9 +294,9 @@
       "name": "FEM MAS preconditioner",
       "dimension": "PcgAuxScalar",
       "files": [
-        "src/backends/cuda_mixed/finite_element/fem_mas_preconditioner.cu",
-        "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.h",
-        "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.cu"
+        "src/backends/cuda_mixed_socu/finite_element/fem_mas_preconditioner.cu",
+        "src/backends/cuda_mixed_socu/finite_element/mas_preconditioner_engine.h",
+        "src/backends/cuda_mixed_socu/finite_element/mas_preconditioner_engine.cu"
       ]
     },
     {
@@ -313,26 +304,9 @@
       "name": "Solve vector x",
       "dimension": "SolveScalar",
       "files": [
-        "src/backends/cuda_mixed/linear_system/global_linear_system.h",
-        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
-        "src/backends/cuda_mixed/linear_system/linear_pcg.cu",
-        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h",
-        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.cu"
-      ]
-    },
-    {
-      "id": "28",
-      "name": "PCG iteration scalars and SpMV scalar interface",
-      "dimension": "PcgIterScalar",
-      "files": [
-        "src/backends/cuda_mixed/linear_system/global_linear_system.h",
-        "src/backends/cuda_mixed/linear_system/global_linear_system.cu",
-        "src/backends/cuda_mixed/linear_system/linear_pcg.h",
-        "src/backends/cuda_mixed/linear_system/linear_pcg.cu",
-        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.h",
-        "src/backends/cuda_mixed/linear_system/linear_fused_pcg.cu",
-        "src/backends/cuda_mixed/linear_system/iterative_solver.h",
-        "src/backends/cuda_mixed/linear_system/iterative_solver.cu"
+        "src/backends/cuda_mixed_socu/linear_system/global_linear_system.h",
+        "src/backends/cuda_mixed_socu/linear_system/socu_approx_solver.h",
+        "src/backends/cuda_mixed_socu/linear_system/socu_approx_solver.cu"
       ]
     },
     {
@@ -340,8 +314,8 @@
       "name": "Host bridge float attributes for external force constraints",
       "dimension": "BridgeFloat",
       "files": [
-        "src/backends/cuda_mixed/affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu",
-        "src/backends/cuda_mixed/affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu"
+        "src/backends/cuda_mixed_socu/affine_body/constraints/affine_body_revolute_joint_external_body_force_constraint.cu",
+        "src/backends/cuda_mixed_socu/affine_body/constraints/affine_body_prismatic_joint_external_body_force_constraint.cu"
       ]
     }
   ],
@@ -357,7 +331,7 @@
   ],
   "file_rules": [
     {
-      "path": "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf1_kinetic.cu",
+      "path": "src/backends/cuda_mixed_socu/affine_body/bdf/affine_body_bdf1_kinetic.cu",
       "required_patterns": [
         {
           "pattern": "to_mat_t<Alu>",
@@ -372,7 +346,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/affine_body/bdf/affine_body_bdf2_kinetic.cu",
+      "path": "src/backends/cuda_mixed_socu/affine_body/bdf/affine_body_bdf2_kinetic.cu",
       "required_patterns": [
         {
           "pattern": "to_mat_t<Alu>",
@@ -387,7 +361,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/affine_body/constraints/soft_transform_constraint.cu",
+      "path": "src/backends/cuda_mixed_socu/affine_body/constraints/soft_transform_constraint.cu",
       "required_patterns": [
         {
           "pattern": "to_mat_t<T>",
@@ -402,7 +376,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/affine_body/abd_jacobi_matrix.h",
+      "path": "src/backends/cuda_mixed_socu/affine_body/abd_jacobi_matrix.h",
       "required_patterns": [
         {
           "pattern": "template <typename Scalar>\\s+MUDA_GENERIC Matrix<Scalar, 3, 12> to_mat_t\\(\\) const;",
@@ -415,7 +389,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/affine_body/details/abd_jacobi_matrix.inl",
+      "path": "src/backends/cuda_mixed_socu/affine_body/details/abd_jacobi_matrix.inl",
       "required_patterns": [
         {
           "pattern": "return to_mat_t<Float>\\(\\);",
@@ -434,7 +408,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/affine_body/constraints/external_articulation_constraint.cu",
+      "path": "src/backends/cuda_mixed_socu/affine_body/constraints/external_articulation_constraint.cu",
       "required_patterns": [
         {
           "pattern": "DeviceBuffer<InternalScalar> joint_id_to_delta_theta;",
@@ -457,7 +431,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/finite_element/fem_diag_preconditioner.cu",
+      "path": "src/backends/cuda_mixed_socu/finite_element/fem_diag_preconditioner.cu",
       "forbidden_patterns": [
         {
           "pattern": "static_cast<double>",
@@ -474,7 +448,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/finite_element/fem_mas_preconditioner.cu",
+      "path": "src/backends/cuda_mixed_socu/finite_element/fem_mas_preconditioner.cu",
       "forbidden_patterns": [
         {
           "pattern": "static_cast<double>",
@@ -491,7 +465,7 @@
       ]
     },
     {
-      "path": "src/backends/cuda_mixed/finite_element/mas_preconditioner_engine.cu",
+      "path": "src/backends/cuda_mixed_socu/finite_element/mas_preconditioner_engine.cu",
       "forbidden_patterns": [
         {
           "pattern": "static_cast<double>",
