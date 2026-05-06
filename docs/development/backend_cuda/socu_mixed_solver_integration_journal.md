@@ -1022,3 +1022,54 @@ Acceptance: Milestone 2 passes. The original `cuda_mixed` tree is again a
 FullSparse/fused-PCG backend with no effective SOCU source or test dependency,
 while the copied `cuda_mixed_socu` backend keeps the current SOCU solver and
 continues to run the selected 20-frame baselines.
+
+## 2026-05-06 Milestone 3 SOCU-Native Storage Skeleton
+
+Milestone 3 added an isolated SOCU-native matrix storage builder under the
+copied SOCU backend only:
+
+```text
+src/backends/cuda_mixed_socu/linear_system/socu_native_matrix_builder.h
+apps/tests/backends/cuda_mixed_socu/socu_native_matrix_builder.cu
+```
+
+The builder owns native `D`, `E`, `rhs`, and block metadata buffers, computes
+the same recursive off-diagonal layout shape expected by `socu_native`, exposes
+a device write view for scalar and 3x3 writes, and provides a host snapshot
+helper for debug/unit tests. It is not wired into the default structured SOCU
+solver path yet.
+
+Build handoff was performed by the user without `NVCC_APPEND_FLAGS` or
+`--Ofast-compile=max`:
+
+```bash
+unset NVCC_APPEND_FLAGS
+ninja -C build/build_impl_fp64 -j1 libuipc_backend_cuda_mixed_socu.so
+ninja -C build/build_impl_fp64 -j1 uipc_test_backend_cuda_mixed_socu
+```
+
+Static checks:
+
+```text
+git diff --check: passed
+SocuNativeMatrixBuilder reference scan over src/backends/cuda_mixed and
+  apps/tests/backends/cuda_mixed: no matches
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_builder]" -s` | passed, 226 assertions |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -s` | passed, 328 assertions |
+| `socu_rt20_topology_diag_lump --frames 20 --backend auto` | `backend=cuda_mixed_socu`, `final_frame=20`, `wall_time=4.182s`, `mean_frame=75.353 ms` |
+
+For the Python wrecking-ball check, the system `python3` and repository
+`.venv` did not have `numpy`/`matplotlib`. The check was run with
+`uv run --no-project --with numpy --with matplotlib` plus the existing build
+`PYTHONPATH`/`LD_LIBRARY_PATH`, avoiding an editable `pyuipc` rebuild.
+
+Acceptance: Milestone 3 passes. The native storage skeleton can be written from
+device kernels, downloaded for inspection, and consumed by `socu_native`
+`NativeProof` on a synthetic SPD diagonal system. The current structured SOCU
+runtime remains the default path and still passes the 20-frame SOCU sanity case.
