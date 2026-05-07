@@ -1,6 +1,7 @@
 #include <app/app.h>
 #include <linear_system/socu_native_matrix_builder.h>
 #include <mixed_precision/policy.h>
+#include <utils/assembly_sink.h>
 
 #include <cuda_runtime.h>
 
@@ -103,6 +104,61 @@ __global__ void fill_spd_diagonal_fixture(SocuNativeMatrixView<Scalar> view)
 
     view.add_diag_scalar(block, lane, lane, Scalar{2});
     view.add_rhs_scalar(block, lane, 0, Scalar{1});
+}
+
+template <typename StoreT, typename SolveT>
+__global__ void write_native_diag_rhs_provider_fixture(
+    SocuNativeMatrixView<SolveT>              native,
+    StructuredDeviceMatrixSink<StoreT, SolveT> structured,
+    muda::CBufferView<SocuNativeDofDescriptor> dofs,
+    muda::CBufferView<SocuNativeVertexDescriptor> vertices)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    const SolveT fem_H[9] = {SolveT{1},
+                             SolveT{2},
+                             SolveT{3},
+                             SolveT{4},
+                             SolveT{5},
+                             SolveT{6},
+                             SolveT{7},
+                             SolveT{8},
+                             SolveT{9}};
+    native.add_vertex_diag_block_row_major(vertices[0], fem_H);
+    for(uipc::IndexT row = 0; row < 3; ++row)
+    {
+        for(uipc::IndexT col = 0; col < 3; ++col)
+        {
+            structured.add_hessian_scalar(row,
+                                          col,
+                                          static_cast<StoreT>(
+                                              fem_H[row * 3 + col]));
+        }
+    }
+
+    const SolveT fem_rhs[3] = {SolveT{10}, SolveT{20}, SolveT{30}};
+    native.add_vertex_rhs_vector(vertices[0], 0, fem_rhs);
+
+    const SolveT fixed_H[9] = {SolveT{100},
+                               SolveT{101},
+                               SolveT{102},
+                               SolveT{103},
+                               SolveT{104},
+                               SolveT{105},
+                               SolveT{106},
+                               SolveT{107},
+                               SolveT{108}};
+    const SolveT fixed_rhs[3] = {SolveT{1000}, SolveT{1001}, SolveT{1002}};
+    native.add_vertex_diag_block_row_major(vertices[1], fixed_H);
+    native.add_vertex_rhs_vector(vertices[1], 0, fixed_rhs);
+
+    native.add_diag_scalar(dofs[7], SolveT{4.5});
+    native.add_rhs_scalar(dofs[7], 1, SolveT{-2.5});
+    structured.add_hessian_scalar(7, 7, StoreT{4.5});
+
+    native.add_diag_scalar(dofs[6], SolveT{999});
+    native.add_rhs_scalar(dofs[6], 0, SolveT{999});
 }
 
 template <typename Scalar>
@@ -282,6 +338,130 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
     CHECK(snapshot.blocks[1].padding_lane_begin == 3);
     CHECK(snapshot.blocks[1].padding_lane_count == 1);
     CHECK(snapshot.blocks[1].ordering_epoch == 42);
+}
+
+TEST_CASE("cuda_mixed_socu_native_diag_rhs_provider_matches_structured_sink",
+          "[cuda_mixed_socu][contract][socu_native_builder][socu_native_provider][m5]")
+{
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        SKIP("no CUDA device is available for SOCU native storage tests");
+    }
+
+    constexpr uipc::SizeT  Horizon   = 2;
+    constexpr uipc::SizeT  BlockSize = 4;
+    constexpr uipc::SizeT  Nrhs      = 2;
+    constexpr uipc::IndexT Epoch     = 23;
+
+    const std::vector<uipc::IndexT> old_to_chain{0, 1, 2, 4, 5, 6, -1, 7};
+    const std::vector<uipc::IndexT> old_dof_to_atom(old_to_chain.size(), -1);
+    auto dofs = build_socu_native_dof_descriptors(
+        uipc::span<const uipc::IndexT>{old_to_chain.data(), old_to_chain.size()},
+        uipc::span<const uipc::IndexT>{old_dof_to_atom.data(),
+                                       old_dof_to_atom.size()},
+        Horizon,
+        BlockSize,
+        Epoch);
+    const auto dof_span =
+        uipc::span<const SocuNativeDofDescriptor>{dofs.data(), dofs.size()};
+
+    std::vector<SocuNativeVertexDescriptor> vertices;
+    vertices.push_back(make_socu_native_vertex_descriptor(
+        SocuNativeDescriptorKind::Fem, false, 0, 3, -1, -1, Epoch, dof_span));
+    vertices.push_back(make_socu_native_vertex_descriptor(
+        SocuNativeDescriptorKind::Fem, true, 3, 3, -1, -1, Epoch, dof_span));
+    REQUIRE(vertices[0].writable());
+    REQUIRE(!vertices[1].writable());
+    REQUIRE(!dofs[6].active);
+    REQUIRE(dofs[7].active);
+
+    StreamGuard stream;
+    SocuNativeMatrixBuilder<Solve> builder;
+    builder.reserve(Horizon, BlockSize, Nrhs);
+    builder.clear(stream.stream);
+
+    const auto& layout = builder.layout();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices_device{vertices};
+    muda::DeviceBuffer<Solve> structured_diag;
+    muda::DeviceBuffer<Solve> structured_first_offdiag;
+    structured_diag.resize(layout.diag_element_count);
+    structured_first_offdiag.resize(layout.first_offdiag_block_count * BlockSize
+                                    * BlockSize);
+    REQUIRE(cudaMemsetAsync(structured_diag.data(),
+                            0,
+                            structured_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(structured_first_offdiag.data(),
+                            0,
+                            structured_first_offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+
+    StructuredDeviceMatrixSink<Store, Solve> structured{
+        structured_diag.view(),
+        structured_first_offdiag.view(),
+        old_to_chain_device.view(),
+        Horizon,
+        BlockSize,
+        {}};
+
+    write_native_diag_rhs_provider_fixture<Store, Solve>
+        <<<1, 1, 0, stream.stream>>>(builder.view(),
+                                     structured,
+                                     dofs_device.view(),
+                                     vertices_device.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    const auto snapshot = builder.snapshot(stream.stream);
+    std::vector<Solve> structured_diag_host;
+    std::vector<Solve> structured_first_offdiag_host;
+    structured_diag.copy_to(structured_diag_host);
+    structured_first_offdiag.copy_to(structured_first_offdiag_host);
+
+    REQUIRE(snapshot.D.size() == structured_diag_host.size());
+    REQUIRE(snapshot.E.size() == structured_first_offdiag_host.size());
+    for(std::size_t i = 0; i < snapshot.D.size(); ++i)
+    {
+        CHECK(static_cast<double>(snapshot.D[i])
+              == Catch::Approx(static_cast<double>(structured_diag_host[i]))
+                     .margin(1e-8));
+    }
+    for(std::size_t i = 0; i < snapshot.E.size(); ++i)
+    {
+        CHECK(static_cast<double>(snapshot.E[i])
+              == Catch::Approx(static_cast<double>(
+                                    structured_first_offdiag_host[i]))
+                     .margin(1e-8));
+    }
+
+    std::vector<Solve> expected_rhs(snapshot.rhs.size(), Solve{0});
+    const auto rhs_index = [&](uipc::SizeT block,
+                               uipc::SizeT lane,
+                               uipc::SizeT rhs_col)
+    {
+        return (block * layout.block_size + lane) * layout.nrhs + rhs_col;
+    };
+    expected_rhs[rhs_index(0, 0, 0)] = Solve{10};
+    expected_rhs[rhs_index(0, 1, 0)] = Solve{20};
+    expected_rhs[rhs_index(0, 2, 0)] = Solve{30};
+    expected_rhs[rhs_index(1, 3, 1)] = Solve{-2.5};
+    REQUIRE(snapshot.rhs.size() == expected_rhs.size());
+    for(std::size_t i = 0; i < snapshot.rhs.size(); ++i)
+    {
+        CHECK(static_cast<double>(snapshot.rhs[i])
+              == Catch::Approx(static_cast<double>(expected_rhs[i]))
+                     .margin(1e-8));
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_native_matrix_builder_bounds_and_clear_contract",

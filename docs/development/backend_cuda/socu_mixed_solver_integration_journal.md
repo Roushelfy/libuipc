@@ -1324,3 +1324,43 @@ structured SOCU path remains unchanged and still does not consume the native
 descriptor table for matrix assembly. Provider migration, contact stencil
 descriptors, native graph/reorder collection, and native contact writes remain
 future milestones rather than hidden M4 requirements.
+
+## 2026-05-07 Milestone 5 Native Diagonal/RHS Infrastructure Slice
+
+This pass starts M5 with the smallest provider-write surface that can be
+validated without switching production assembly to the native builder:
+
+- Made `SocuNativeVertexDescriptor::mapped()` and `writable()` callable from
+  device code.
+- Added descriptor-aware write helpers to `SocuNativeMatrixView`:
+  - active DoF descriptor -> scalar diagonal entry.
+  - active DoF descriptor -> packed RHS entry.
+  - writable vertex descriptor -> scalar diagonal entry.
+  - writable vertex descriptor -> row-major dense diagonal block.
+  - writable vertex descriptor -> scalar/vector RHS entries.
+- Fixed, unmapped, inactive, and padding descriptors are skipped by the helper
+  layer before touching native storage.
+- Added an M5 provider-style CUDA fixture that writes the same deterministic
+  diagonal block through `SocuNativeMatrixView` and the current
+  `StructuredDeviceMatrixSink`, then compares downloaded `D/E`. RHS packing is
+  compared against an explicit expected packed vector because the current
+  structured matrix sink does not own gradient/RHS packing.
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `ninja -C build/build_impl_fp64 -j4 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m5]" -s` | passed, 76 assertions in 1 case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_builder]"` | passed, 916 assertions in 6 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 1142 assertions in 17 cases |
+| `git diff --check` | passed |
+
+Acceptance status: this is an infrastructure slice, not the full M5 provider
+migration. It proves the native builder can accept descriptor-driven
+diagonal/RHS writes and match the current structured sink for diagonal matrix
+storage, while preserving all existing SOCU contracts. The production structured
+SOCU assembly path remains unchanged and disabled from the new helpers by
+default. Full M5 still needs actual mass/inertia/regularization provider
+migration, a runtime dual-assembly diff option for `D/E/rhs`, and the 20-frame
+and 100-frame native-enabled scene gates.

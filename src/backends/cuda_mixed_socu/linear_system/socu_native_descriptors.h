@@ -50,13 +50,16 @@ struct SocuNativeVertexDescriptor
     IndexT                   epoch = 0;
     bool                     active = false;
 
-    bool mapped() const noexcept
+    MUDA_GENERIC bool mapped() const noexcept
     {
         return kind != SocuNativeDescriptorKind::None && old_dof >= 0
                && dof_count > 0;
     }
 
-    bool writable() const noexcept { return mapped() && active && !fixed; }
+    MUDA_GENERIC bool writable() const noexcept
+    {
+        return mapped() && active && !fixed;
+    }
 };
 
 struct SocuNativeDescriptorTable

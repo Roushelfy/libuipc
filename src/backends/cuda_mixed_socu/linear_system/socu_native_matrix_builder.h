@@ -1,5 +1,6 @@
 #pragma once
 
+#include <linear_system/socu_native_descriptors.h>
 #include <uipc/common/type_define.h>
 
 #include <cuda_runtime.h>
@@ -185,6 +186,21 @@ struct SocuNativeMatrixView
         return block < block_count && row < block_size && col < block_size;
     }
 
+    MUDA_GENERIC bool valid_dof_descriptor(
+        const SocuNativeDofDescriptor& dof) const noexcept
+    {
+        return dof.active && dof.chain_dof >= 0 && valid_block_lane(dof.block, dof.lane);
+    }
+
+    MUDA_GENERIC bool valid_vertex_lane(
+        const SocuNativeVertexDescriptor& vertex,
+        SizeT                             local_lane) const noexcept
+    {
+        return vertex.writable()
+               && local_lane < static_cast<SizeT>(vertex.dof_count)
+               && valid_block_lane(vertex.block, vertex.lane + local_lane);
+    }
+
     MUDA_DEVICE void add_diag_scalar(SizeT block,
                                      SizeT row,
                                      SizeT col,
@@ -233,6 +249,88 @@ struct SocuNativeMatrixView
         const SizeT index = rhs_index(block, lane, rhs_col);
         if(index < rhs.size())
             muda::atomic_add(rhs.data(index), value);
+    }
+
+    MUDA_DEVICE void add_diag_scalar(const SocuNativeDofDescriptor& dof,
+                                     Scalar value) const noexcept
+    {
+        if(!valid_dof_descriptor(dof))
+            return;
+        add_diag_scalar(dof.block, dof.lane, dof.lane, value);
+    }
+
+    MUDA_DEVICE void add_rhs_scalar(const SocuNativeDofDescriptor& dof,
+                                    SizeT                         rhs_col,
+                                    Scalar                        value) const noexcept
+    {
+        if(!valid_dof_descriptor(dof))
+            return;
+        add_rhs_scalar(dof.block, dof.lane, rhs_col, value);
+    }
+
+    MUDA_DEVICE void add_vertex_diag_scalar(
+        const SocuNativeVertexDescriptor& vertex,
+        SizeT                             local_lane,
+        Scalar                            value) const noexcept
+    {
+        if(!valid_vertex_lane(vertex, local_lane))
+            return;
+        add_diag_scalar(vertex.block,
+                        vertex.lane + local_lane,
+                        vertex.lane + local_lane,
+                        value);
+    }
+
+    MUDA_DEVICE void add_vertex_rhs_scalar(
+        const SocuNativeVertexDescriptor& vertex,
+        SizeT                             local_lane,
+        SizeT                             rhs_col,
+        Scalar                            value) const noexcept
+    {
+        if(!valid_vertex_lane(vertex, local_lane))
+            return;
+        add_rhs_scalar(vertex.block, vertex.lane + local_lane, rhs_col, value);
+    }
+
+    MUDA_DEVICE void add_vertex_diag_block_row_major(
+        const SocuNativeVertexDescriptor& vertex,
+        const Scalar*                     values) const noexcept
+    {
+        if(!vertex.writable())
+            return;
+
+        const SizeT dof_count = static_cast<SizeT>(vertex.dof_count);
+        for(SizeT row = 0; row < dof_count; ++row)
+        {
+            for(SizeT col = 0; col < dof_count; ++col)
+            {
+                if(!valid_vertex_lane(vertex, row)
+                   || !valid_vertex_lane(vertex, col))
+                    continue;
+                add_diag_scalar(vertex.block,
+                                vertex.lane + row,
+                                vertex.lane + col,
+                                values[row * dof_count + col]);
+            }
+        }
+    }
+
+    MUDA_DEVICE void add_vertex_rhs_vector(
+        const SocuNativeVertexDescriptor& vertex,
+        SizeT                             rhs_col,
+        const Scalar*                     values) const noexcept
+    {
+        if(!vertex.writable())
+            return;
+
+        const SizeT dof_count = static_cast<SizeT>(vertex.dof_count);
+        for(SizeT local_lane = 0; local_lane < dof_count; ++local_lane)
+        {
+            add_vertex_rhs_scalar(vertex,
+                                  local_lane,
+                                  rhs_col,
+                                  values[local_lane]);
+        }
     }
 
     MUDA_DEVICE void add_diag_block3_row_major(SizeT block,
