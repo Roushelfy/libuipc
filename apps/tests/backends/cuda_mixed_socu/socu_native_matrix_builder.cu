@@ -1,5 +1,6 @@
 #include <app/app.h>
 #include <linear_system/socu_native_matrix_builder.h>
+#include <linear_system/socu_approx_kernels.h>
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
 
@@ -462,6 +463,143 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_provider_matches_structured_sink",
               == Catch::Approx(static_cast<double>(expected_rhs[i]))
                      .margin(1e-8));
     }
+}
+
+TEST_CASE("cuda_mixed_socu_native_diag_rhs_workspace_matches_legacy_init",
+          "[cuda_mixed_socu][contract][socu_native_builder][socu_native_provider][m5]")
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    SKIP("socu_native is not enabled in this build");
+#else
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        SKIP("no CUDA device is available for SOCU native storage tests");
+    }
+
+    constexpr uipc::SizeT  Horizon   = 3;
+    constexpr uipc::SizeT  BlockSize = 4;
+    constexpr uipc::SizeT  Nrhs      = 1;
+    constexpr uipc::IndexT Epoch     = 24;
+    const StructuredChainShape shape{Horizon, BlockSize, Nrhs, true};
+    const auto layout = make_socu_native_storage_layout(Horizon, BlockSize, Nrhs);
+
+    const std::vector<uipc::IndexT> old_to_chain{0, 2, 4, 5, 8, 11};
+    std::vector<uipc::IndexT> chain_to_old(Horizon * BlockSize, -1);
+    for(std::size_t old = 0; old < old_to_chain.size(); ++old)
+        chain_to_old[static_cast<std::size_t>(old_to_chain[old])] =
+            static_cast<uipc::IndexT>(old);
+    const std::vector<uipc::IndexT> old_dof_to_atom(old_to_chain.size(), -1);
+    auto dofs = build_socu_native_dof_descriptors(
+        uipc::span<const uipc::IndexT>{old_to_chain.data(), old_to_chain.size()},
+        uipc::span<const uipc::IndexT>{old_dof_to_atom.data(),
+                                       old_dof_to_atom.size()},
+        Horizon,
+        BlockSize,
+        Epoch);
+
+    const std::vector<Store> b_host{Store{1.25},
+                                    Store{-2.5},
+                                    Store{3.75},
+                                    Store{-4.0},
+                                    Store{5.5},
+                                    Store{-6.25}};
+    StreamGuard stream;
+    muda::DeviceDenseVector<Store> b;
+    b.resize(b_host.size());
+    b.buffer_view().copy_from(b_host.data());
+
+    muda::DeviceBuffer<uipc::IndexT> chain_to_old_device{chain_to_old};
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dof_device{dofs};
+
+    muda::DeviceBuffer<Solve> legacy_diag;
+    muda::DeviceBuffer<Solve> legacy_offdiag;
+    muda::DeviceBuffer<Solve> legacy_rhs;
+    muda::DeviceBuffer<Solve> legacy_rhs_original;
+    muda::DeviceBuffer<Solve> native_diag;
+    muda::DeviceBuffer<Solve> native_offdiag;
+    muda::DeviceBuffer<Solve> native_rhs;
+    muda::DeviceBuffer<Solve> native_rhs_original;
+    legacy_diag.resize(layout.diag_element_count);
+    legacy_offdiag.resize(layout.offdiag_element_count);
+    legacy_rhs.resize(layout.rhs_element_count);
+    legacy_rhs_original.resize(layout.rhs_element_count);
+    native_diag.resize(layout.diag_element_count);
+    native_offdiag.resize(layout.offdiag_element_count);
+    native_rhs.resize(layout.rhs_element_count);
+    native_rhs_original.resize(layout.rhs_element_count);
+
+    constexpr double DampingShift = 0.125;
+    socu_approx::initialize_structured_workspace<Store, Solve>(
+        stream.stream,
+        shape,
+        b.view(),
+        legacy_diag.view(),
+        legacy_offdiag.view(),
+        legacy_rhs.view(),
+        legacy_rhs_original.view(),
+        chain_to_old_device.view(),
+        DampingShift);
+    socu_approx::initialize_socu_native_diag_rhs_workspace<Store, Solve>(
+        stream.stream,
+        shape,
+        b.view(),
+        native_diag.view(),
+        native_offdiag.view(),
+        native_rhs.view(),
+        native_rhs_original.view(),
+        chain_to_old_device.view(),
+        dof_device.view(),
+        DampingShift);
+
+    muda::DeviceBuffer<double> diff_sums;
+    muda::DeviceBuffer<uipc::IndexT> mismatch_count;
+    diff_sums.resize(3);
+    mismatch_count.resize(1);
+    socu_approx::compare_socu_native_diag_rhs_workspace<Solve>(
+        stream.stream,
+        legacy_diag.view(),
+        legacy_offdiag.view(),
+        legacy_rhs.view(),
+        native_diag.view(),
+        native_offdiag.view(),
+        native_rhs.view(),
+        diff_sums.view(),
+        mismatch_count.view(),
+        1e-9,
+        1e-10);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<uipc::IndexT> mismatch_host;
+    std::vector<double>       diff_sums_host;
+    mismatch_count.copy_to(mismatch_host);
+    diff_sums.copy_to(diff_sums_host);
+    REQUIRE(mismatch_host.size() == 1);
+    REQUIRE(diff_sums_host.size() == 3);
+    CHECK(mismatch_host[0] == 0);
+    CHECK(diff_sums_host[0] == Catch::Approx(0.0).margin(1e-12));
+    CHECK(diff_sums_host[1] == Catch::Approx(0.0).margin(1e-12));
+    CHECK(diff_sums_host[2] == Catch::Approx(0.0).margin(1e-12));
+
+    std::vector<Solve> legacy_rhs_original_host;
+    std::vector<Solve> native_rhs_original_host;
+    legacy_rhs_original.copy_to(legacy_rhs_original_host);
+    native_rhs_original.copy_to(native_rhs_original_host);
+    REQUIRE(legacy_rhs_original_host.size() == native_rhs_original_host.size());
+    for(std::size_t i = 0; i < legacy_rhs_original_host.size(); ++i)
+    {
+        CHECK(static_cast<double>(legacy_rhs_original_host[i])
+              == Catch::Approx(static_cast<double>(
+                                    native_rhs_original_host[i]))
+                     .margin(1e-12));
+    }
+#endif
 }
 
 TEST_CASE("cuda_mixed_socu_native_matrix_builder_bounds_and_clear_contract",

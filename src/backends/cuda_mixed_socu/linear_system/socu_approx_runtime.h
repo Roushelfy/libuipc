@@ -1,5 +1,6 @@
 #pragma once
 
+#include <linear_system/socu_native_descriptors.h>
 #include <linear_system/socu_approx_report.h>
 #include <mixed_precision/policy.h>
 #include <utils/runtime_ordering_collector.h>
@@ -60,9 +61,13 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<Scalar> device_off_diag_original;
     muda::DeviceBuffer<Scalar> device_rhs;
     muda::DeviceBuffer<Scalar> device_rhs_original;
+    muda::DeviceBuffer<Scalar> device_diag_rhs_compare_diag;
+    muda::DeviceBuffer<Scalar> device_diag_rhs_compare_off_diag;
+    muda::DeviceBuffer<Scalar> device_diag_rhs_compare_rhs;
     muda::DeviceBuffer<IndexT> device_old_to_chain;
     muda::DeviceBuffer<IndexT> device_chain_to_old;
     muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> device_dof_descriptors;
     muda::DeviceBuffer<RuntimeOrderingEdge> runtime_ordering_edges;
     muda::DeviceBuffer<IndexT> runtime_ordering_cursor;
     muda::DeviceBuffer<StructuredContactHessianRecord<ActivePolicy::StoreScalar>>
@@ -157,6 +162,21 @@ struct SocuApproxRuntime
         }
     }
 
+    void reserve_diag_rhs_compare(bool enabled)
+    {
+        if(!enabled)
+            return;
+        if(device_diag_rhs_compare_diag.capacity() < layout.diag_element_count)
+            device_diag_rhs_compare_diag.reserve(layout.diag_element_count);
+        if(device_diag_rhs_compare_off_diag.capacity() < layout.off_diag_element_count)
+            device_diag_rhs_compare_off_diag.reserve(layout.off_diag_element_count);
+        if(device_diag_rhs_compare_rhs.capacity() < layout.rhs_element_count)
+            device_diag_rhs_compare_rhs.reserve(layout.rhs_element_count);
+        device_diag_rhs_compare_diag.resize(layout.diag_element_count);
+        device_diag_rhs_compare_off_diag.resize(layout.off_diag_element_count);
+        device_diag_rhs_compare_rhs.resize(layout.rhs_element_count);
+    }
+
     void download_validation_sums(cudaStream_t stream)
     {
         SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(host_validation_sums,
@@ -205,6 +225,14 @@ struct SocuApproxRuntime
         device_old_dof_to_atom.resize(old_dof_to_atom.size());
         if(!old_dof_to_atom.empty())
             device_old_dof_to_atom.view().copy_from(old_dof_to_atom.data());
+    }
+
+    void upload_dof_descriptors(
+        const std::vector<SocuNativeDofDescriptor>& descriptors)
+    {
+        device_dof_descriptors.resize(descriptors.size());
+        if(!descriptors.empty())
+            device_dof_descriptors.view().copy_from(descriptors.data());
     }
 
     void reserve_runtime_ordering(SizeT edge_capacity)

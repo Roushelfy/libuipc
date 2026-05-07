@@ -259,6 +259,15 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_compare_full_sparse =
         debug_compare_full_sparse_attr
         && debug_compare_full_sparse_attr->view()[0] != 0;
+    auto native_diag_rhs_attr =
+        config.find<IndexT>("linear_system/socu_approx/native_diag_rhs");
+    m_native_diag_rhs_enabled =
+        native_diag_rhs_attr && native_diag_rhs_attr->view()[0] != 0;
+    auto debug_compare_native_diag_rhs_attr =
+        config.find<IndexT>("linear_system/socu_approx/debug_compare_native_diag_rhs");
+    m_debug_compare_native_diag_rhs =
+        debug_compare_native_diag_rhs_attr
+        && debug_compare_native_diag_rhs_attr->view()[0] != 0;
     auto debug_write_runtime_ordering_report_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/debug_write_runtime_ordering_report");
@@ -844,8 +853,10 @@ bool SocuApproxSolver::install_ordering_report_impl(
         }
 
         runtime->reserve(m_debug_validation, m_report_counters_enabled);
+        runtime->reserve_diag_rhs_compare(m_debug_compare_native_diag_rhs);
         runtime->upload_mappings(build_old_to_chain, build_chain_to_old);
         runtime->upload_old_dof_to_atom(old_dof_to_atom);
+        runtime->upload_dof_descriptors(native_dof_descriptors);
         if(m_runtime_reorder_edge_capacity > 0)
             runtime->reserve_runtime_ordering(m_runtime_reorder_edge_capacity);
         if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
@@ -1204,25 +1215,128 @@ void SocuApproxSolver::prepare_structured_chain(
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         muda::BufferLaunch(stream).fill<IndexT>(m_runtime->report_counters.view(), 0);
 
-    initialize_structured_workspace<GlobalLinearSystem::StoreScalar, Runtime::Scalar>(
-        stream,
-        StructuredChainShape{static_cast<SizeT>(m_runtime->shape.horizon),
-                             static_cast<SizeT>(m_runtime->shape.n),
-                             static_cast<SizeT>(m_runtime->shape.nrhs),
-                             true},
-        info.b(),
-        m_runtime->device_diag.view(),
-        m_runtime->device_off_diag.view(),
-        m_runtime->device_rhs.view(),
-        m_runtime->device_rhs_original.view(),
-        m_runtime->device_chain_to_old.view(),
-        m_report.damping_shift);
+    const StructuredChainShape structured_shape{
+        static_cast<SizeT>(m_runtime->shape.horizon),
+        static_cast<SizeT>(m_runtime->shape.n),
+        static_cast<SizeT>(m_runtime->shape.nrhs),
+        true};
+    auto initialize_legacy = [&](muda::BufferView<Runtime::Scalar> diag,
+                                 muda::BufferView<Runtime::Scalar> off_diag,
+                                 muda::BufferView<Runtime::Scalar> rhs,
+                                 muda::BufferView<Runtime::Scalar> rhs_original)
+    {
+        initialize_structured_workspace<GlobalLinearSystem::StoreScalar, Runtime::Scalar>(
+            stream,
+            structured_shape,
+            info.b(),
+            diag,
+            off_diag,
+            rhs,
+            rhs_original,
+            m_runtime->device_chain_to_old.view(),
+            m_report.damping_shift);
+    };
+    auto initialize_native = [&](muda::BufferView<Runtime::Scalar> diag,
+                                 muda::BufferView<Runtime::Scalar> off_diag,
+                                 muda::BufferView<Runtime::Scalar> rhs,
+                                 muda::BufferView<Runtime::Scalar> rhs_original)
+    {
+        initialize_socu_native_diag_rhs_workspace<GlobalLinearSystem::StoreScalar,
+                                                  Runtime::Scalar>(
+            stream,
+            structured_shape,
+            info.b(),
+            diag,
+            off_diag,
+            rhs,
+            rhs_original,
+            m_runtime->device_chain_to_old.view(),
+            m_runtime->device_dof_descriptors.view(),
+            m_report.damping_shift);
+    };
+
+    m_report.native_diag_rhs_enabled = m_native_diag_rhs_enabled;
+    m_report.native_diag_rhs_diff_enabled = m_debug_compare_native_diag_rhs;
+    m_report.native_diag_rhs_diff_mismatch_count = 0;
+    m_report.native_diag_rhs_diff_diag_abs_sum = 0.0;
+    m_report.native_diag_rhs_diff_offdiag_abs_sum = 0.0;
+    m_report.native_diag_rhs_diff_rhs_abs_sum = 0.0;
+    if(m_debug_compare_native_diag_rhs)
+    {
+        if(m_native_diag_rhs_enabled)
+        {
+            initialize_legacy(m_runtime->device_diag_rhs_compare_diag.view(),
+                              m_runtime->device_diag_rhs_compare_off_diag.view(),
+                              m_runtime->device_diag_rhs_compare_rhs.view(),
+                              {});
+            initialize_native(m_runtime->device_diag.view(),
+                              m_runtime->device_off_diag.view(),
+                              m_runtime->device_rhs.view(),
+                              m_runtime->device_rhs_original.view());
+        }
+        else
+        {
+            initialize_native(m_runtime->device_diag_rhs_compare_diag.view(),
+                              m_runtime->device_diag_rhs_compare_off_diag.view(),
+                              m_runtime->device_diag_rhs_compare_rhs.view(),
+                              {});
+            initialize_legacy(m_runtime->device_diag.view(),
+                              m_runtime->device_off_diag.view(),
+                              m_runtime->device_rhs.view(),
+                              m_runtime->device_rhs_original.view());
+        }
+
+        compare_socu_native_diag_rhs_workspace<Runtime::Scalar>(
+            stream,
+            m_runtime->device_diag_rhs_compare_diag.view(),
+            m_runtime->device_diag_rhs_compare_off_diag.view(),
+            m_runtime->device_diag_rhs_compare_rhs.view(),
+            m_runtime->device_diag.view(),
+            m_runtime->device_off_diag.view(),
+            m_runtime->device_rhs.view(),
+            m_runtime->validation_sums.view(),
+            m_runtime->validation_status.view(),
+            1e-9,
+            1e-10);
+        m_runtime->download_validation_status(stream);
+        m_runtime->download_validation_sums(stream);
+        m_report.native_diag_rhs_diff_mismatch_count =
+            static_cast<SizeT>(std::max<IndexT>(0,
+                                                m_runtime->host_validation_status[0]));
+        m_report.native_diag_rhs_diff_diag_abs_sum =
+            m_runtime->host_validation_sums[0];
+        m_report.native_diag_rhs_diff_offdiag_abs_sum =
+            m_runtime->host_validation_sums[1];
+        m_report.native_diag_rhs_diff_rhs_abs_sum =
+            m_runtime->host_validation_sums[2];
+        if(m_report.native_diag_rhs_diff_mismatch_count != 0)
+        {
+            throw Exception{fmt::format(
+                "SOCU native diagonal/RHS diff failed: mismatches={}, "
+                "diag_abs_sum={}, offdiag_abs_sum={}, rhs_abs_sum={}",
+                m_report.native_diag_rhs_diff_mismatch_count,
+                m_report.native_diag_rhs_diff_diag_abs_sum,
+                m_report.native_diag_rhs_diff_offdiag_abs_sum,
+                m_report.native_diag_rhs_diff_rhs_abs_sum)};
+        }
+    }
+    else if(m_native_diag_rhs_enabled)
+    {
+        initialize_native(m_runtime->device_diag.view(),
+                          m_runtime->device_off_diag.view(),
+                          m_runtime->device_rhs.view(),
+                          m_runtime->device_rhs_original.view());
+    }
+    else
+    {
+        initialize_legacy(m_runtime->device_diag.view(),
+                          m_runtime->device_off_diag.view(),
+                          m_runtime->device_rhs.view(),
+                          m_runtime->device_rhs_original.view());
+    }
 
     info.set_workspace(
-        StructuredChainShape{static_cast<SizeT>(m_runtime->shape.horizon),
-                             static_cast<SizeT>(m_runtime->shape.n),
-                             static_cast<SizeT>(m_runtime->shape.nrhs),
-                             true},
+        structured_shape,
         span<const StructuredDofSlot>{m_dof_slots},
         m_runtime->device_diag.view(),
         m_runtime->device_off_diag.view(),
@@ -1256,7 +1370,10 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.diag_block_count = m_runtime->layout.diag_block_count;
     m_report.first_offdiag_block_count =
         m_runtime->layout.off_diag_block_count;
-    m_report.stream_source = "mixed_backend_current_stream";
+    m_report.stream_source =
+        m_native_diag_rhs_enabled
+            ? "mixed_backend_current_stream_native_diag_rhs"
+            : "mixed_backend_current_stream";
 #endif
 }
 

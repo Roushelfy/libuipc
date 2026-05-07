@@ -56,6 +56,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/debug_dump_structured_matrix", IndexT{0});
     config.create("linear_system/socu_approx/debug_dump_problem_file", IndexT{0});
     config.create("linear_system/socu_approx/debug_compare_full_sparse", IndexT{0});
+    config.create("linear_system/socu_approx/native_diag_rhs", IndexT{0});
+    config.create("linear_system/socu_approx/debug_compare_native_diag_rhs", IndexT{0});
     config.create("linear_system/socu_approx/debug_write_runtime_ordering_report",
                   IndexT{0});
     config.create("linear_system/socu_approx/debug_validation", IndexT{0});

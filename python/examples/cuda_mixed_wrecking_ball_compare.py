@@ -203,6 +203,10 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     socu["ordering_source"] = "init_time"
     socu["ordering_block_size"] = "64"
     socu["damping_shift"] = float(os.environ.get("SOCU_DAMPING_SHIFT", "0.0"))
+    socu["native_diag_rhs"] = 1 if os.environ.get("SOCU_NATIVE_DIAG_RHS") == "1" else 0
+    socu["debug_compare_native_diag_rhs"] = (
+        1 if os.environ.get("SOCU_NATIVE_DIAG_RHS_DIFF") == "1" else 0
+    )
     socu["runtime_reorder_frame_interval"] = int(spec["runtime_interval"])
     socu["runtime_reorder_graph_source"] = spec.get(
         "runtime_graph_source",

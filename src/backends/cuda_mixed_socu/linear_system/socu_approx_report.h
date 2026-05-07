@@ -127,6 +127,12 @@ struct SocuApproxSolveReport
     double socu_factor_solve_time_ms = 0.0;
     double scatter_time_ms = 0.0;
     std::string stream_source;
+    bool native_diag_rhs_enabled = false;
+    bool native_diag_rhs_diff_enabled = false;
+    SizeT native_diag_rhs_diff_mismatch_count = 0;
+    double native_diag_rhs_diff_diag_abs_sum = 0.0;
+    double native_diag_rhs_diff_offdiag_abs_sum = 0.0;
+    double native_diag_rhs_diff_rhs_abs_sum = 0.0;
     bool plan_created_this_solve = false;
     bool debug_validation_enabled = false;
     bool debug_timing_enabled = false;

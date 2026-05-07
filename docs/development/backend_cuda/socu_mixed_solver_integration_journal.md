@@ -1364,3 +1364,64 @@ SOCU assembly path remains unchanged and disabled from the new helpers by
 default. Full M5 still needs actual mass/inertia/regularization provider
 migration, a runtime dual-assembly diff option for `D/E/rhs`, and the 20-frame
 and 100-frame native-enabled scene gates.
+
+## 2026-05-07 Milestone 5 Native Diagonal/RHS Production Path
+
+This pass completes M5 under the refined provider boundary now documented in
+the plan: native initialization covers solver-owned diagonal workspace writes
+(`damping_shift`/regularization and padding identity) plus packed RHS writes.
+FEM/ABD kinetic, inertia, and shape Hessian assembly remain in the existing
+structured chain/base provider path and are deferred to M6, where the provider
+API itself moves to native writes.
+
+Implementation notes:
+
+- Added default scene config keys
+  `linear_system/socu_approx/native_diag_rhs` and
+  `linear_system/socu_approx/debug_compare_native_diag_rhs`. Without default
+  schema entries, Python-side config assignments are ignored before they reach
+  `SocuApproxSolver`.
+- Added `SOCU_NATIVE_DIAG_RHS=1` and `SOCU_NATIVE_DIAG_RHS_DIFF=1` hooks to
+  `python/examples/cuda_mixed_wrecking_ball_compare.py`.
+- Added `initialize_socu_native_diag_rhs_workspace(...)` and
+  `compare_socu_native_diag_rhs_workspace(...)`. The production native path
+  clears `D/E/rhs`, writes damping/padding through `SocuNativeMatrixView`, packs
+  RHS from `SocuNativeDofDescriptor`, and copies `rhs_original`.
+- Added runtime compare buffers and solver report fields for native diag/RHS
+  parity. In diff mode, the solver assembles both legacy and native init paths
+  and throws if any `D/E/rhs` mismatch exceeds tolerance.
+- Kept native diag/RHS opt-in and default-off. The legacy structured path is
+  still the fallback and comparison source.
+
+Build note:
+
+For full scene acceptance the build was reconfigured with
+`UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF`, because the current contact fallback
+still requires legacy structured contact TUs. The full fallback target rebuilt
+successfully with `ninja -C build/build_impl_fp64 -j1
+RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu`; the old
+`ipc_simplex_frictional_contact_structured.cu` TU dominated compile time and
+memory, so single-job build remains the safer path for this configuration.
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `ninja -C build/build_impl_fp64 -j4 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed after adding the scene config schema keys |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m5]" -s` | passed, 98 assertions in 2 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 1164 assertions in 18 cases |
+| `SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 ... cuda_mixed_wrecking_ball_compare.py --variant socu_rt50_topology_diag_lump --frames 20` | `final_frame=20`, report shows `native_diag_rhs_enabled=true`, `native_diag_rhs_diff_enabled=true`, `native_diag_rhs_diff_mismatch_count=0`, and all three diff abs sums are `0.0` |
+| `SOCU_REPORT_COUNTERS=0 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 ... --frames 5` | passed, `final_frame=5`; verifies the diff path does not depend on debug/report counters being enabled |
+| default 100-frame `socu_rt50_topology_diag_lump` | `final_frame=100`, `wall_time_s=17.216184758988675`, `mean_frame_ms=152.9752541182097` |
+| native diag/RHS 100-frame `socu_rt50_topology_diag_lump` | `final_frame=100`, `wall_time_s=16.569126201968174`, `mean_frame_ms=148.57842522033025` |
+
+Performance gate: native diag/RHS was `-2.87%` in mean frame time relative to
+the default path on this run, so the 2% regression gate passes. Since this is an
+opt-in path and not a default behavior change, the default solver remains
+unchanged while M6 migrates the larger chain/base Hessian providers.
+
+Acceptance: M5 is complete for the documented diagonal/RHS production scope.
+The native builder is now used by an opt-in production path, has a runtime
+legacy diff gate, passes provider and full backend contracts, and reaches both
+20-frame parity and 100-frame performance acceptance on the chosen
+`topology + diag_lump` wrecking-ball variant.

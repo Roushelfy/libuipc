@@ -1152,9 +1152,19 @@ Fallback:
 
 Goal: migrate the lowest-risk provider writes first.
 
+Implementation boundary after the 2026-05-07 completion pass:
+
+- M5 covers solver-owned diagonal workspace initialization
+  (`damping_shift`/regularization and padding identity) plus packed RHS/gradient
+  writes through `SocuNativeMatrixView`.
+- FEM/ABD kinetic, inertia, and shape Hessian contributions still enter through
+  the existing structured chain/base provider assembly. They are not separable
+  from that provider API without the Milestone 6 native chain/base Hessian
+  migration.
+
 Deliverables:
 
-- Native mass/inertia/damping/regularization writes.
+- Native damping/regularization/padding writes.
 - Native RHS/gradient packing.
 - Provider tests comparing native output to current structured sink output.
 - Debug option to assemble both native and structured paths and diff `D/E/rhs`.

@@ -1,13 +1,16 @@
 #pragma once
 
 #include <linear_system/global_linear_system.h>
+#include <linear_system/socu_native_matrix_builder.h>
 #include <linear_system/structured_chain_provider.h>
 
 #include <cuda_runtime.h>
 #include <muda/atomic.h>
 #include <muda/launch/parallel_for.h>
 
+#include <cmath>
 #include <limits>
+#include <stdexcept>
 
 #ifndef UIPC_WITH_SOCU_NATIVE
 #define UIPC_WITH_SOCU_NATIVE 0
@@ -37,6 +40,29 @@ MUDA_DEVICE __forceinline__ void atomic_add_double(double* address,
 #else
     atomicAdd(address, value);
 #endif
+}
+
+template <typename SolveScalar>
+SocuNativeMatrixView<SolveScalar> make_socu_native_matrix_view(
+    StructuredChainShape          shape,
+    muda::BufferView<SolveScalar> diag,
+    muda::BufferView<SolveScalar> off_diag,
+    muda::BufferView<SolveScalar> rhs) noexcept
+{
+    const SizeT block_elements = shape.block_size * shape.block_size;
+    const SizeT offdiag_block_count =
+        block_elements == 0 ? SizeT{0} : off_diag.size() / block_elements;
+    return SocuNativeMatrixView<SolveScalar>{diag,
+                                             off_diag,
+                                             rhs,
+                                             {},
+                                             shape.horizon,
+                                             shape.block_size,
+                                             shape.nrhs,
+                                             shape.horizon > 0
+                                                 ? shape.horizon - 1
+                                                 : SizeT{0},
+                                             offdiag_block_count};
 }
 
 template <typename StoreScalar, typename SolveScalar>
@@ -99,6 +125,165 @@ void initialize_structured_workspace(
                                                cudaMemcpyDeviceToDevice,
                                                stream));
     }
+}
+
+template <typename StoreScalar, typename SolveScalar>
+void initialize_socu_native_diag_rhs_workspace(
+    cudaStream_t                                stream,
+    StructuredChainShape                        shape,
+    GlobalLinearSystem::CDenseVectorView        b,
+    muda::BufferView<SolveScalar>               diag,
+    muda::BufferView<SolveScalar>               off_diag,
+    muda::BufferView<SolveScalar>               rhs,
+    muda::BufferView<SolveScalar>               rhs_original,
+    muda::CBufferView<IndexT>                   chain_to_old,
+    muda::CBufferView<SocuNativeDofDescriptor>  dof_descriptors,
+    double                                      damping_shift)
+{
+    if(static_cast<SizeT>(b.size()) > dof_descriptors.size())
+        throw std::runtime_error(
+            "SOCU native diagonal/RHS init requires one DoF descriptor per global RHS entry");
+
+    const auto diag_bytes = diag.size() * sizeof(SolveScalar);
+    const auto off_bytes  = off_diag.size() * sizeof(SolveScalar);
+    const auto rhs_bytes  = rhs.size() * sizeof(SolveScalar);
+    if(diag_bytes)
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(diag.data(), 0, diag_bytes, stream));
+    if(off_bytes)
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(off_diag.data(), 0, off_bytes, stream));
+    if(rhs_bytes)
+        SOCU_NATIVE_CHECK_CUDA(cudaMemsetAsync(rhs.data(), 0, rhs_bytes, stream));
+
+    auto native = make_socu_native_matrix_view(shape, diag, off_diag, rhs);
+    const SizeT chain_scalar_count = shape.horizon * shape.block_size;
+    muda::ParallelFor(256, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(static_cast<int>(chain_scalar_count),
+               [shape,
+                native,
+                chain_to_old = chain_to_old.cviewer().name("chain_to_old"),
+                damping_shift = static_cast<SolveScalar>(damping_shift)] __device__(int chain) mutable
+               {
+                   const SizeT block = static_cast<SizeT>(chain) / shape.block_size;
+                   const SizeT lane  = static_cast<SizeT>(chain) % shape.block_size;
+
+                   if(damping_shift != SolveScalar{0})
+                       native.add_diag_scalar(block, lane, lane, damping_shift);
+
+                   const IndexT old = chain_to_old(chain);
+                   if(old < 0)
+                       native.add_diag_scalar(block, lane, lane, SolveScalar{1});
+               });
+
+    muda::ParallelFor(256, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(b.size(),
+               [native,
+                b = b.cviewer().name("global_b"),
+                dof_descriptors = dof_descriptors.cviewer().name(
+                    "socu_native_dof_descriptors")] __device__(int old) mutable
+               {
+                   const auto value = static_cast<SolveScalar>(b(old));
+                   native.add_rhs_scalar(dof_descriptors(old), SizeT{0}, value);
+               });
+
+    if(rhs_bytes && rhs_original.data() != nullptr)
+    {
+        SOCU_NATIVE_CHECK_CUDA(cudaMemcpyAsync(rhs_original.data(),
+                                               rhs.data(),
+                                               rhs_bytes,
+                                               cudaMemcpyDeviceToDevice,
+                                               stream));
+    }
+}
+
+template <typename SolveScalar>
+void compare_socu_native_diag_rhs_workspace(
+    cudaStream_t                         stream,
+    muda::CBufferView<SolveScalar>       reference_diag,
+    muda::CBufferView<SolveScalar>       reference_off_diag,
+    muda::CBufferView<SolveScalar>       reference_rhs,
+    muda::CBufferView<SolveScalar>       actual_diag,
+    muda::CBufferView<SolveScalar>       actual_off_diag,
+    muda::CBufferView<SolveScalar>       actual_rhs,
+    muda::BufferView<double>             diff_sums,
+    muda::BufferView<IndexT>             mismatch_count,
+    double                               abs_tolerance,
+    double                               rel_tolerance)
+{
+    if(reference_diag.size() != actual_diag.size()
+       || reference_off_diag.size() != actual_off_diag.size()
+       || reference_rhs.size() != actual_rhs.size())
+    {
+        throw std::runtime_error(
+            "SOCU native diagonal/RHS diff requires matching buffer sizes");
+    }
+    if(diff_sums.size() < 3 || mismatch_count.size() < 1)
+        throw std::runtime_error(
+            "SOCU native diagonal/RHS diff requires at least 3 sums and 1 status slot");
+
+    SOCU_NATIVE_CHECK_CUDA(
+        cudaMemsetAsync(diff_sums.data(),
+                        0,
+                        diff_sums.size() * sizeof(double),
+                        stream));
+    SOCU_NATIVE_CHECK_CUDA(
+        cudaMemsetAsync(mismatch_count.data(),
+                        0,
+                        mismatch_count.size() * sizeof(IndexT),
+                        stream));
+
+    const SizeT diag_size = reference_diag.size();
+    const SizeT off_size  = reference_off_diag.size();
+    const SizeT rhs_size  = reference_rhs.size();
+    const SizeT total_size = diag_size + off_size + rhs_size;
+    muda::ParallelFor(256, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(static_cast<int>(total_size),
+               [diag_size,
+                off_size,
+                abs_tolerance,
+                rel_tolerance,
+                reference_diag,
+                reference_off_diag,
+                reference_rhs,
+                actual_diag,
+                actual_off_diag,
+                actual_rhs,
+                diff_sums,
+                mismatch_count] __device__(int linear) mutable
+               {
+                   const SizeT index = static_cast<SizeT>(linear);
+                   double      reference = 0.0;
+                   double      actual = 0.0;
+                   SizeT       channel = 0;
+                   if(index < diag_size)
+                   {
+                       reference = static_cast<double>(reference_diag[index]);
+                       actual    = static_cast<double>(actual_diag[index]);
+                       channel   = 0;
+                   }
+                   else if(index < diag_size + off_size)
+                   {
+                       const SizeT local = index - diag_size;
+                       reference = static_cast<double>(reference_off_diag[local]);
+                       actual    = static_cast<double>(actual_off_diag[local]);
+                       channel   = 1;
+                   }
+                   else
+                   {
+                       const SizeT local = index - diag_size - off_size;
+                       reference = static_cast<double>(reference_rhs[local]);
+                       actual    = static_cast<double>(actual_rhs[local]);
+                       channel   = 2;
+                   }
+
+                   const double diff = fabs(actual - reference);
+                   const double scale = fmax(fabs(reference), fabs(actual));
+                   atomic_add_double(diff_sums.data(channel), diff);
+                   if(diff > abs_tolerance + rel_tolerance * scale)
+                       muda::atomic_add(mismatch_count.data(0), IndexT{1});
+               });
 }
 
 template <typename SolveScalar>

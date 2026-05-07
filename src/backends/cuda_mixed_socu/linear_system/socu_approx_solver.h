@@ -101,6 +101,8 @@ class SocuApproxSolver : public LinearSolver
     bool        m_debug_dump_structured_matrix = false;
     bool        m_debug_dump_problem_file = false;
     bool        m_debug_compare_full_sparse = false;
+    bool        m_native_diag_rhs_enabled = false;
+    bool        m_debug_compare_native_diag_rhs = false;
     bool        m_debug_write_runtime_ordering_report = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
