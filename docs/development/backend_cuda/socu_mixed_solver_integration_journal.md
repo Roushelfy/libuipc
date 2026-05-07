@@ -1515,11 +1515,48 @@ Validation:
 | same no-contact native-only scene with `--frames 20` and report counters on | passed, `final_frame=20`, `wall_time_s=2.5994132080231793`, `mean_frame_ms=30.93939629616216`; final report still shows mismatch count `0`, all diff sums `0.0`, and target counters hit `492`, miss `82`, scalar fallback `82` |
 | restore CMake cache with `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` | passed; `CMakeCache.txt` reports `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY:BOOL=OFF` |
 
-Acceptance status: this M6b slice is correct as a guarded ABD base Hessian fast
-target and is actually exercised by the no-contact wrecking-ball scene. The
+Acceptance status: this first M6b slice is correct as a guarded ABD base Hessian
+fast target and is actually exercised by the no-contact wrecking-ball scene. The
 ordering probe showed 168 of 191 ABD bodies are same-block but none are
-contiguous; the arbitrary-lane target is therefore the right first target, while
-the remaining cross-block bodies require the planned adjacent-block target. It
-is not yet the complete high-performance native builder: FEM block targets,
-first-offdiag target precomputation, and native contact builder work remain open
-under the M6b/M8 split.
+contiguous; the arbitrary-lane target is therefore the right first target. The
+follow-up entry below closes the observed cross-block miss class with an
+adjacent-block target. This is still not the complete high-performance native
+builder: FEM block targets, general first-offdiag target precomputation, and
+native contact builder work remain open under the M6b/M8 split.
+
+### M6b ABD Adjacent-Block Target
+
+Implemented the next ABD `12x12` fast-path slice:
+
+- The dense ABD target now classifies the whole body once as same-block,
+  adjacent-block, or miss.
+- Same-block bodies keep writing directly to native `D` with arbitrary lanes.
+- Adjacent-block bodies gather per-local-DoF `block/lane` descriptors, write
+  same-block pieces to `D`, and write cross-boundary pieces to first-offdiag
+  `E` with the same SOCU orientation as the scalar native sink.
+- Counters now distinguish
+  `native_chain_base_same_block_dense_hit_count`,
+  `native_chain_base_adjacent_dense_hit_count`,
+  `native_chain_base_dense_miss_count`, and
+  `native_chain_base_scalar_fallback_count`.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| native-only incremental build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6b]" -s` | passed, 711 assertions in 2 cases; same-block and adjacent-block fixtures both matched legacy `D/E` and reported the expected hit/miss/fallback counters |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 800 assertions in 3 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider]"` | passed, 898 assertions in 5 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_descriptor]"` | passed, 124 assertions in 6 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` in native-only build | passed, 1964 assertions in 21 cases |
+| `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 SOCU_REPORT_COUNTERS=1 ... --frames 20` | passed, `final_frame=20`, `wall_time_s=2.8978309520171024`, `mean_frame_ms=30.47051320609171`; report shows native chain/base diff mismatch `0`, all diff sums `0.0`, same-block hits `492`, adjacent hits `82`, dense misses `0`, scalar fallbacks `0` |
+
+Acceptance status: the ABD base Hessian portion of M6b is now much tighter than
+the previous same-block-only slice. The real no-contact scene exercises both
+the arbitrary-lane same-block target and the adjacent-block first-offdiag
+target, and the previous 82 dense misses/scalar fallbacks are gone. Remaining
+M6b work is still FEM `3x3`/pair targets, general first-offdiag target
+precomputation, diff-off performance timing, and keeping production native
+single-write mode clean. Native contact builder work remains M8.

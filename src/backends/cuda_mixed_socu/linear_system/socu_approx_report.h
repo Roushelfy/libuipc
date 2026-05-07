@@ -140,7 +140,8 @@ struct SocuApproxSolveReport
     double native_chain_base_hessian_diff_offdiag_abs_sum = 0.0;
     double native_chain_base_hessian_diff_rhs_abs_sum = 0.0;
     SizeT native_chain_base_same_block_dense_hit_count = 0;
-    SizeT native_chain_base_same_block_dense_miss_count = 0;
+    SizeT native_chain_base_adjacent_dense_hit_count = 0;
+    SizeT native_chain_base_dense_miss_count = 0;
     SizeT native_chain_base_scalar_fallback_count = 0;
     bool plan_created_this_solve = false;
     bool debug_validation_enabled = false;

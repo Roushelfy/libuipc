@@ -1335,9 +1335,10 @@ Implementation split:
   drop-in replacement, not the final performance shape.
 - **M6b: fast native chain/base targets.** Move hot providers from
   scalar-by-scalar classification to block/stencil targets that already know
-  `block/lane` destinations. M6b owns FEM `3x3` block targets, ABD contiguous
-  `12x12` block-diagonal targets, first-offdiag target precomputation, and
-  production native single-write with mirror diff kept debug-only.
+  `block/lane` destinations. M6b owns ABD `12x12` same-block and
+  adjacent-block targets, FEM `3x3` block targets, first-offdiag target
+  precomputation, and production native single-write with mirror diff kept
+  debug-only.
 
 Current implementation status (2026-05-07):
 
@@ -1355,22 +1356,25 @@ Current implementation status (2026-05-07):
   `ipc_simplex_frictional_contact_structured.cu` enters very high memory/swap
   usage during `cicc`, so the full contact 20/100-frame acceptance remains a
   pending M6 gate rather than a completed one.
-- M6b starts with the ABD base Hessian fast path: if a 12-DoF ABD body maps to
-  one native block, even with arbitrary RCM lane order, the sink writes the upper
-  `3x3` subblocks directly to native `D` and mirrors only in debug compare mode.
-  If the body spans unsupported blocks, runtime ordering is being collected, or
-  native storage is disabled, the provider falls back to the scalar structured
-  sink.
+- M6b currently includes ABD base Hessian fast paths for 12-DoF bodies that map
+  to one native block or exactly two adjacent native blocks, even with arbitrary
+  RCM lane order inside each block. Same-block pieces write directly to native
+  `D`; cross-boundary adjacent-block pieces write directly to first-offdiag
+  `E`; debug compare mirrors to the legacy structured representation only when
+  requested. If the body spans unsupported blocks, runtime ordering is being
+  collected, or native storage is disabled, the provider falls back to the
+  scalar structured sink.
 
 Detailed M6b execution plan:
 
 1. **Instrumentation first.**
    - Add native chain/base target counters:
      `native_chain_base_same_block_dense_hit_count`,
-     `native_chain_base_same_block_dense_miss_count`,
+     `native_chain_base_adjacent_dense_hit_count`,
+     `native_chain_base_dense_miss_count`,
      `native_chain_base_scalar_fallback_count`, then extend the same counter
-     family with ABD adjacent, FEM `3x3`, and first-offdiag target counters as
-     those target families land.
+     family with FEM `3x3` and first-offdiag target counters as those target
+     families land.
    - Add a replacement timer for the old `Assemble Structured Chain` signal:
      `native_chain_base_target_build_time_ms` and
      `native_chain_base_assembly_time_ms`.
@@ -1387,14 +1391,14 @@ Detailed M6b execution plan:
      hot path.
 
 3. **ABD base Hessian targets.**
-   - Same-block target: current M6b first slice. A 12-DoF ABD body fully inside
+   - Same-block target: implemented M6b slice. A 12-DoF ABD body fully inside
      one native block writes the upper `3x3` subblocks directly to `D` using the
      descriptor lanes as-is; lane contiguity is not required because RCM commonly
      reverses or permutes lanes inside the block.
-   - Adjacent-block target: if the 12 DoFs span exactly two adjacent SOCU
-     blocks, precompute the left block and per-local-DoF lanes, then write
-     same-block pieces to `D` and cross-boundary pieces to first-offdiag `E`
-     without per-scalar band checks.
+   - Adjacent-block target: implemented M6b slice. If the 12 DoFs span exactly
+     two adjacent SOCU blocks, gather the left block and per-local-DoF lanes,
+     then write same-block pieces to `D` and cross-boundary pieces to
+     first-offdiag `E` without falling back to scalar band classification.
    - Non-adjacent ABD bodies keep scalar native fallback.
 
 4. **FEM `3x3` and stencil targets.**
@@ -1420,8 +1424,9 @@ Detailed M6b execution plan:
      performance-complete.
 
 7. **M6b completion criteria.**
-   - Provider unit tests cover same-block, adjacent first-offdiag, off-band, and
-     skipped descriptors.
+   - Provider unit tests cover ABD same-block and adjacent first-offdiag fast
+     paths, and the remaining target families add off-band/skipped descriptor
+     coverage as they land.
    - No-contact 20-frame scene passes with native chain/base targets and diff
      enabled.
    - Diff-off 100-frame no-contact performance run shows either measurable
@@ -1436,7 +1441,8 @@ Deliverables:
 - Native projected ABD/FEM block writes.
 - Provider-level fast targets:
   - FEM `3x3` block/lane target writes for vertex-local Hessian contributions.
-  - ABD `12x12` same-block arbitrary-lane write for kinetic/shape/base Hessian.
+  - ABD `12x12` same-block and adjacent-block arbitrary-lane writes for
+    kinetic/shape/base Hessian.
   - First-offdiag target descriptors that avoid per-scalar band checks when the
     provider already knows adjacent block pairs.
 - Matrix diff tests for synthetic chain fixtures.

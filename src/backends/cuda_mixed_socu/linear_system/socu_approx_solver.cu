@@ -1613,8 +1613,10 @@ void SocuApproxSolver::finalize_structured_chain(
                 StructuredAssemblyCounterSlot::ContactOffBandLumpFallbackStencil));
         m_report.native_chain_base_same_block_dense_hit_count =
             counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseHit);
-        m_report.native_chain_base_same_block_dense_miss_count =
-            counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseMiss);
+        m_report.native_chain_base_adjacent_dense_hit_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseAdjacentDenseHit);
+        m_report.native_chain_base_dense_miss_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseDenseMiss);
         m_report.native_chain_base_scalar_fallback_count =
             counter(StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback);
     }

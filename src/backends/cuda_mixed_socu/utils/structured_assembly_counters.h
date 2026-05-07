@@ -14,9 +14,10 @@ enum class StructuredAssemblyCounterSlot : IndexT
     ContactOffBandDiagFallbackStencil  = 5,
     ContactOffBandLumpFallbackStencil  = 6,
     NativeChainBaseSameBlockDenseHit   = 7,
-    NativeChainBaseSameBlockDenseMiss  = 8,
-    NativeChainBaseScalarFallback      = 9,
+    NativeChainBaseAdjacentDenseHit    = 8,
+    NativeChainBaseDenseMiss           = 9,
+    NativeChainBaseScalarFallback      = 10,
 };
 
-inline constexpr SizeT kStructuredAssemblyCounterCount = 10;
+inline constexpr SizeT kStructuredAssemblyCounterCount = 11;
 }  // namespace uipc::backend::cuda_mixed
