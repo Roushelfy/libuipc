@@ -1492,13 +1492,14 @@ Implemented first M6b slice:
 
 - Added a descriptor-validated ABD `12x12` fast path for
   `add_dense_block_upper_subblocks_fixed<3, 4>`.
-- The fast path requires the 12 old DoFs for one ABD body to be active,
-  contiguous, and located inside one native SOCU block. It writes directly to
-  native `D` using the prevalidated base block/lane and only mirrors scalar
-  writes into the debug compare buffer.
-- If native storage is disabled, the descriptor range is not contiguous, or
-  runtime ordering collection is enabled, ABD assembly falls back to the
-  existing scalar structured sink.
+- The fast path requires the 12 old DoFs for one ABD body to be active and
+  located inside one native SOCU block. It writes directly to native `D` using
+  the prevalidated per-DoF lanes and only mirrors scalar writes into the debug
+  compare buffer. Lane contiguity is deliberately not required: the real RCM
+  ordering commonly reverses or permutes ABD lanes within a block.
+- If native storage is disabled, the body spans unsupported blocks, or runtime
+  ordering collection is enabled, ABD assembly falls back to the existing scalar
+  structured sink.
 - The M6 plan now separates M6a parity from M6b fast targets and places native
   contact hotspot migration under M8.
 
@@ -1507,14 +1508,18 @@ Validation:
 | check | result |
 | --- | --- |
 | native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; the already-built `-j1` objects were reused after switching to `-j2`; device link completed |
-| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6b]" -s` | passed, 299 assertions in 1 case; the fast-path status flag was `1` and native primary/legacy mirror/legacy reference `D` matched |
-| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 388 assertions in 2 cases |
-| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` in native-only build | passed, 1552 assertions in 20 cases |
-| `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 ... --frames 1` | passed; report timing shows native chain/base enabled, diff enabled, mismatch count `0`, and `D/E/rhs` diff sums all `0.0` |
-| same no-contact native-only scene with `--frames 20` and report counters off | passed, `final_frame=20`, `wall_time_s=2.6779193060356192`, `mean_frame_ms=31.1532106512459`; final report still shows native chain/base mismatch count `0` and all diff sums `0.0` |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6b]"` | passed, 304 assertions in 1 case; the fixture now uses reverse lane order, the fast-path status flag was `1`, native primary/legacy mirror/legacy reference `D` matched, and counters reported hit `1`, miss `0`, fallback `0` |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 393 assertions in 2 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` in native-only build | passed, 1557 assertions in 20 cases |
+| `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 SOCU_REPORT_COUNTERS=1 ... --frames 1` | passed; report timing shows native chain/base enabled, diff enabled, mismatch count `0`, all `D/E/rhs` diff sums `0.0`, and target counters hit `492`, miss `82`, scalar fallback `82` |
+| same no-contact native-only scene with `--frames 20` and report counters on | passed, `final_frame=20`, `wall_time_s=2.5994132080231793`, `mean_frame_ms=30.93939629616216`; final report still shows mismatch count `0`, all diff sums `0.0`, and target counters hit `492`, miss `82`, scalar fallback `82` |
 | restore CMake cache with `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` | passed; `CMakeCache.txt` reports `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY:BOOL=OFF` |
 
 Acceptance status: this M6b slice is correct as a guarded ABD base Hessian fast
-target. It is not yet the complete high-performance native builder: FEM block
-targets, first-offdiag target precomputation, and native contact builder work
-remain open under the M6b/M8 split.
+target and is actually exercised by the no-contact wrecking-ball scene. The
+ordering probe showed 168 of 191 ABD bodies are same-block but none are
+contiguous; the arbitrary-lane target is therefore the right first target, while
+the remaining cross-block bodies require the planned adjacent-block target. It
+is not yet the complete high-performance native builder: FEM block targets,
+first-offdiag target precomputation, and native contact builder work remain open
+under the M6b/M8 split.

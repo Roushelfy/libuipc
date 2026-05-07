@@ -1587,17 +1587,36 @@ void SocuApproxSolver::finalize_structured_chain(
 {
     if(info.report_counters_enabled())
     {
-        std::array<IndexT, Runtime::kReportCounterCount> contact_counts{};
-        info.contact_counters().copy_to(contact_counts.data());
-        info.record_contact_diag_writes(static_cast<SizeT>(contact_counts[0]));
-        info.record_contact_first_offdiag_writes(static_cast<SizeT>(contact_counts[1]));
+        std::array<IndexT, Runtime::kReportCounterCount> assembly_counts{};
+        info.contact_counters().copy_to(assembly_counts.data());
+        const auto counter = [&](StructuredAssemblyCounterSlot slot) -> SizeT
+        {
+            const auto index = static_cast<SizeT>(static_cast<IndexT>(slot));
+            return index < assembly_counts.size()
+                       ? static_cast<SizeT>(assembly_counts[index])
+                       : SizeT{0};
+        };
+        info.record_contact_diag_writes(
+            counter(StructuredAssemblyCounterSlot::ContactDiagScalarWrite));
+        info.record_contact_first_offdiag_writes(counter(
+            StructuredAssemblyCounterSlot::ContactFirstOffdiagScalarWrite));
         info.record_contact_band_stats(
-            static_cast<SizeT>(contact_counts[3]),
-            static_cast<SizeT>(contact_counts[4]),
-            static_cast<SizeT>(contact_counts[0] + contact_counts[1]),
-            static_cast<SizeT>(contact_counts[2]),
-            static_cast<SizeT>(contact_counts[5]),
-            static_cast<SizeT>(contact_counts[6]));
+            counter(StructuredAssemblyCounterSlot::ContactNearBandPair),
+            counter(StructuredAssemblyCounterSlot::ContactOffBandPair),
+            counter(StructuredAssemblyCounterSlot::ContactDiagScalarWrite)
+                + counter(
+                    StructuredAssemblyCounterSlot::ContactFirstOffdiagScalarWrite),
+            counter(StructuredAssemblyCounterSlot::ContactOffBandScalarDrop),
+            counter(
+                StructuredAssemblyCounterSlot::ContactOffBandDiagFallbackStencil),
+            counter(
+                StructuredAssemblyCounterSlot::ContactOffBandLumpFallbackStencil));
+        m_report.native_chain_base_same_block_dense_hit_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseHit);
+        m_report.native_chain_base_same_block_dense_miss_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseMiss);
+        m_report.native_chain_base_scalar_fallback_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback);
     }
 
     m_report.structured_diag_write_count =

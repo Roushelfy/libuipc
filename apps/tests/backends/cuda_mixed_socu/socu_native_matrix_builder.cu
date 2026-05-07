@@ -692,7 +692,8 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
     const auto layout = make_socu_native_storage_layout(Horizon, BlockSize, Nrhs);
     std::vector<uipc::IndexT> old_to_chain(BlockSize);
     for(uipc::IndexT i = 0; i < static_cast<uipc::IndexT>(BlockSize); ++i)
-        old_to_chain[static_cast<std::size_t>(i)] = i;
+        old_to_chain[static_cast<std::size_t>(i)] =
+            static_cast<uipc::IndexT>(BlockSize - 1) - i;
     const std::vector<uipc::IndexT> old_dof_to_atom(old_to_chain.size(), -1);
     auto dofs = build_socu_native_dof_descriptors(
         uipc::span<const uipc::IndexT>{old_to_chain.data(), old_to_chain.size()},
@@ -709,10 +710,12 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
     muda::DeviceBuffer<Solve> compare_diag;
     muda::DeviceBuffer<Solve> legacy_diag;
     muda::DeviceBuffer<uipc::IndexT> status;
+    muda::DeviceBuffer<uipc::IndexT> counters;
     native_diag.resize(layout.diag_element_count);
     compare_diag.resize(layout.diag_element_count);
     legacy_diag.resize(layout.diag_element_count);
     status.resize(1);
+    counters.resize(kStructuredAssemblyCounterCount);
 
     REQUIRE(cudaMemsetAsync(native_diag.data(),
                             0,
@@ -734,6 +737,11 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
                             status.size() * sizeof(uipc::IndexT),
                             stream.stream)
             == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(counters.data(),
+                            0,
+                            counters.size() * sizeof(uipc::IndexT),
+                            stream.stream)
+            == cudaSuccess);
 
     muda::DeviceBuffer<Solve> empty_offdiag;
     StructuredDeviceAssemblySink<Store, Solve> fast_sink{
@@ -742,7 +750,7 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
         old_to_chain_device.view(),
         Horizon,
         BlockSize,
-        {},
+        counters.view(),
         {}};
     fast_sink.matrix.use_native_matrix = true;
     fast_sink.matrix.native_matrix =
@@ -775,13 +783,25 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
     std::vector<Solve> native_diag_host;
     std::vector<Solve> compare_diag_host;
     std::vector<Solve> legacy_diag_host;
+    std::vector<uipc::IndexT> counters_host;
     status.copy_to(status_host);
     native_diag.copy_to(native_diag_host);
     compare_diag.copy_to(compare_diag_host);
     legacy_diag.copy_to(legacy_diag_host);
+    counters.copy_to(counters_host);
 
     REQUIRE(status_host.size() == 1);
     REQUIRE(status_host[0] == 1);
+    REQUIRE(counters_host.size() == kStructuredAssemblyCounterCount);
+    const auto counter = [&](StructuredAssemblyCounterSlot slot) -> uipc::IndexT
+    {
+        return counters_host[static_cast<std::size_t>(slot)];
+    };
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseHit)
+          == 1);
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseMiss)
+          == 0);
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback) == 0);
     REQUIRE(native_diag_host.size() == legacy_diag_host.size());
     REQUIRE(compare_diag_host.size() == legacy_diag_host.size());
     for(std::size_t i = 0; i < legacy_diag_host.size(); ++i)

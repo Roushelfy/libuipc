@@ -263,6 +263,7 @@ void ABDLinearSubsystem::Impl::assemble_structured(
                           3,
                           4>(old_body_dof, H12x12_store))
                    {
+                       sink.record_native_chain_base_scalar_fallback();
                        sink.template add_dense_block_upper_subblocks_fixed<3, 4>(
                            old_body_dof,
                            H12x12_store);

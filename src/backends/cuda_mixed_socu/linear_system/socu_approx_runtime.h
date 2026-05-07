@@ -4,6 +4,7 @@
 #include <linear_system/socu_approx_report.h>
 #include <mixed_precision/policy.h>
 #include <utils/runtime_ordering_collector.h>
+#include <utils/structured_assembly_counters.h>
 #include <utils/structured_contact_hessian_cache.h>
 
 #include <cuda_runtime.h>
@@ -38,7 +39,7 @@ std::string socu_dtype_name()
 struct SocuApproxRuntime
 {
     static constexpr SizeT kValidationSumCount = 5;
-    static constexpr SizeT kReportCounterCount = 7;
+    static constexpr SizeT kReportCounterCount = kStructuredAssemblyCounterCount;
 
 #if UIPC_WITH_SOCU_NATIVE
     using Scalar = ActivePolicy::SolveScalar;

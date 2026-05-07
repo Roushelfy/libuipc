@@ -1355,10 +1355,10 @@ Current implementation status (2026-05-07):
   `ipc_simplex_frictional_contact_structured.cu` enters very high memory/swap
   usage during `cicc`, so the full contact 20/100-frame acceptance remains a
   pending M6 gate rather than a completed one.
-- M6b starts with the ABD base Hessian fast path: if a 12-DoF ABD body maps to a
-  contiguous range inside one native block, the sink writes the upper `3x3`
-  subblocks directly to native `D` and mirrors only in debug compare mode. If the
-  descriptor shape is not contiguous, runtime ordering is being collected, or
+- M6b starts with the ABD base Hessian fast path: if a 12-DoF ABD body maps to
+  one native block, even with arbitrary RCM lane order, the sink writes the upper
+  `3x3` subblocks directly to native `D` and mirrors only in debug compare mode.
+  If the body spans unsupported blocks, runtime ordering is being collected, or
   native storage is disabled, the provider falls back to the scalar structured
   sink.
 
@@ -1366,9 +1366,11 @@ Detailed M6b execution plan:
 
 1. **Instrumentation first.**
    - Add native chain/base target counters:
-     `abd_same_block_fast_hit_count`, `abd_adjacent_fast_hit_count`,
-     `abd_fast_miss_count`, `fem_block3_fast_hit_count`,
-     `first_offdiag_target_hit_count`, and `scalar_fallback_count`.
+     `native_chain_base_same_block_dense_hit_count`,
+     `native_chain_base_same_block_dense_miss_count`,
+     `native_chain_base_scalar_fallback_count`, then extend the same counter
+     family with ABD adjacent, FEM `3x3`, and first-offdiag target counters as
+     those target families land.
    - Add a replacement timer for the old `Assemble Structured Chain` signal:
      `native_chain_base_target_build_time_ms` and
      `native_chain_base_assembly_time_ms`.
@@ -1386,12 +1388,14 @@ Detailed M6b execution plan:
 
 3. **ABD base Hessian targets.**
    - Same-block target: current M6b first slice. A 12-DoF ABD body fully inside
-     one native block writes the upper `3x3` subblocks directly to `D`.
-   - Adjacent-block target: if the 12 DoFs are contiguous but cross exactly one
-     SOCU block boundary, precompute the left block and lane split, then write
+     one native block writes the upper `3x3` subblocks directly to `D` using the
+     descriptor lanes as-is; lane contiguity is not required because RCM commonly
+     reverses or permutes lanes inside the block.
+   - Adjacent-block target: if the 12 DoFs span exactly two adjacent SOCU
+     blocks, precompute the left block and per-local-DoF lanes, then write
      same-block pieces to `D` and cross-boundary pieces to first-offdiag `E`
      without per-scalar band checks.
-   - Non-contiguous or non-adjacent ABD bodies keep scalar native fallback.
+   - Non-adjacent ABD bodies keep scalar native fallback.
 
 4. **FEM `3x3` and stencil targets.**
    - Add vertex-local `3x3` diag targets for FEM kinetic/mass-style blocks.
@@ -1432,7 +1436,7 @@ Deliverables:
 - Native projected ABD/FEM block writes.
 - Provider-level fast targets:
   - FEM `3x3` block/lane target writes for vertex-local Hessian contributions.
-  - ABD `12x12` contiguous block-diagonal write for kinetic/shape/base Hessian.
+  - ABD `12x12` same-block arbitrary-lane write for kinetic/shape/base Hessian.
   - First-offdiag target descriptors that avoid per-scalar band checks when the
     provider already knows adjacent block pairs.
 - Matrix diff tests for synthetic chain fixtures.

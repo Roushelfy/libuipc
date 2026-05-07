@@ -2,6 +2,7 @@
 
 #include <utils/matrix_assembler.h>
 #include <utils/runtime_ordering_collector.h>
+#include <utils/structured_assembly_counters.h>
 #include <linear_system/socu_native_matrix_builder.h>
 #include <linear_system/structured_chain_provider.h>
 #include <muda/atomic.h>
@@ -382,8 +383,38 @@ struct StructuredDeviceMatrixSink
 
     MUDA_DEVICE __forceinline__ void record_off_band_drop() const noexcept
     {
-        if(counters.data() != nullptr && counters.size() > 2)
-            muda::atomic_add(counters.data(2), IndexT{1});
+        record_counter(StructuredAssemblyCounterSlot::ContactOffBandScalarDrop);
+    }
+
+    MUDA_DEVICE __forceinline__ void record_counter(
+        StructuredAssemblyCounterSlot slot,
+        IndexT amount = 1) const noexcept
+    {
+        const IndexT index = static_cast<IndexT>(slot);
+        if(counters.data() != nullptr && index >= 0
+           && static_cast<SizeT>(index) < counters.size())
+            muda::atomic_add(counters.data(static_cast<SizeT>(index)), amount);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_same_block_dense_hit() const noexcept
+    {
+        record_counter(
+            StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseHit);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_same_block_dense_miss() const noexcept
+    {
+        record_counter(
+            StructuredAssemblyCounterSlot::NativeChainBaseSameBlockDenseMiss);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_scalar_fallback() const noexcept
+    {
+        record_counter(
+            StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback);
     }
 
     template <typename HMat>
@@ -484,10 +515,9 @@ struct StructuredDeviceMatrixSink
            || first.old_dof != old_dof_begin)
             return false;
 
-        const SizeT block     = first.block;
-        const SizeT base_lane = first.lane;
-        if(base_lane + static_cast<SizeT>(Rows) > native_matrix.block_size)
-            return false;
+        const SizeT block = first.block;
+        SizeT       lanes[Rows];
+        lanes[0] = first.lane;
 
 #pragma unroll
         for(IndexT local = 1; local < Rows; ++local)
@@ -496,12 +526,14 @@ struct StructuredDeviceMatrixSink
                 native_dof_descriptors[old_begin + static_cast<SizeT>(local)];
             if(!native_matrix.valid_dof_descriptor(dof)
                || dof.old_dof != old_dof_begin + local || dof.block != block
-               || dof.lane != base_lane + static_cast<SizeT>(local))
+               || dof.lane >= native_matrix.block_size)
                 return false;
+            lanes[local] = dof.lane;
         }
 
-        const SizeT last_lane = base_lane + static_cast<SizeT>(Rows - 1);
-        if(native_matrix.diag_index(block, last_lane, last_lane)
+        if(native_matrix.diag_index(block,
+                                    native_matrix.block_size - 1,
+                                    native_matrix.block_size - 1)
            >= native_matrix.D.size())
             return false;
 
@@ -519,10 +551,8 @@ struct StructuredDeviceMatrixSink
                     {
                         const IndexT local_i = row_block * SubBlockDim + row;
                         const IndexT local_j = col_block * SubBlockDim + col;
-                        const SizeT row_lane =
-                            base_lane + static_cast<SizeT>(local_i);
-                        const SizeT col_lane =
-                            base_lane + static_cast<SizeT>(local_j);
+                        const SizeT row_lane = lanes[local_i];
+                        const SizeT col_lane = lanes[local_j];
                         const auto value = static_cast<StoreT>(H(local_i, local_j));
                         const auto v     = static_cast<SolveT>(value);
                         muda::atomic_add(
@@ -651,6 +681,12 @@ struct StructuredDeviceAssemblySink
         matrix.record_off_band_drop();
     }
 
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_scalar_fallback() const noexcept
+    {
+        matrix.record_native_chain_base_scalar_fallback();
+    }
+
     template <typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
                                                      const HMat& H) const noexcept
@@ -736,9 +772,15 @@ struct StructuredDeviceAssemblySink
     {
         if(runtime_ordering.enabled)
             return false;
-        return matrix.template try_add_native_dense_block_upper_subblocks_fixed<
-            SubBlockDim,
-            SubBlockCount>(old_dof_begin, H);
+        const bool used =
+            matrix.template try_add_native_dense_block_upper_subblocks_fixed<
+                SubBlockDim,
+                SubBlockCount>(old_dof_begin, H);
+        if(used)
+            matrix.record_native_chain_base_same_block_dense_hit();
+        else
+            matrix.record_native_chain_base_same_block_dense_miss();
+        return used;
     }
 
     template <int Rows, int Cols, typename HMat>

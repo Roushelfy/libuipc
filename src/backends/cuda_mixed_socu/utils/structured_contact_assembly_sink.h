@@ -28,9 +28,8 @@ struct StructuredContactAssemblySink
     IndexT fem_old_dof_offset = -1;
     muda::CBufferView<IndexT> fem_vertex_is_fixed;
 
-    // [diag scalar writes, first-offdiag scalar writes, off-band scalar drops,
-    //  near contact pairs, off-band contact pairs, diag fallback stencils,
-    //  lump fallback stencils]
+    // Shared StructuredAssemblyCounterSlot buffer. Contact currently owns the
+    // first seven slots; native chain/base instrumentation starts after them.
     muda::BufferView<IndexT> counters;
     StructuredContactHessianCache<StoreT> hessian_cache;
     StructuredContactOffbandPolicy offband_policy =
@@ -110,18 +109,19 @@ struct StructuredContactAssemblySink
 
     MUDA_DEVICE void add_counter(StructuredSinkWriteClass cls) const noexcept
     {
-        if(counters.data() == nullptr || counters.size() < 3)
-            return;
         switch(cls)
         {
             case StructuredSinkWriteClass::Diag:
-                muda::atomic_add(counters.data(0), IndexT{1});
+                add_counter_slot(
+                    StructuredAssemblyCounterSlot::ContactDiagScalarWrite);
                 break;
             case StructuredSinkWriteClass::FirstOffdiag:
-                muda::atomic_add(counters.data(1), IndexT{1});
+                add_counter_slot(StructuredAssemblyCounterSlot::
+                                     ContactFirstOffdiagScalarWrite);
                 break;
             case StructuredSinkWriteClass::OffBand:
-                muda::atomic_add(counters.data(2), IndexT{1});
+                add_counter_slot(
+                    StructuredAssemblyCounterSlot::ContactOffBandScalarDrop);
                 break;
             case StructuredSinkWriteClass::Skipped:
             default:
@@ -129,28 +129,33 @@ struct StructuredContactAssemblySink
         }
     }
 
+    MUDA_DEVICE void add_counter_slot(StructuredAssemblyCounterSlot slot) const noexcept
+    {
+        const IndexT index = static_cast<IndexT>(slot);
+        if(counters.data() == nullptr || index < 0
+           || static_cast<SizeT>(index) >= counters.size())
+            return;
+        muda::atomic_add(counters.data(static_cast<SizeT>(index)), IndexT{1});
+    }
+
     MUDA_DEVICE void add_pair_counter(bool saw_near, bool saw_off_band) const noexcept
     {
-        if(counters.data() == nullptr || counters.size() < 5)
-            return;
         if(saw_off_band)
-            muda::atomic_add(counters.data(4), IndexT{1});
+            add_counter_slot(StructuredAssemblyCounterSlot::ContactOffBandPair);
         else if(saw_near)
-            muda::atomic_add(counters.data(3), IndexT{1});
+            add_counter_slot(StructuredAssemblyCounterSlot::ContactNearBandPair);
     }
 
     MUDA_DEVICE void add_diag_fallback_counter() const noexcept
     {
-        if(counters.data() == nullptr || counters.size() < 7)
-            return;
-        muda::atomic_add(counters.data(5), IndexT{1});
+        add_counter_slot(
+            StructuredAssemblyCounterSlot::ContactOffBandDiagFallbackStencil);
     }
 
     MUDA_DEVICE void add_lump_fallback_counter() const noexcept
     {
-        if(counters.data() == nullptr || counters.size() < 7)
-            return;
-        muda::atomic_add(counters.data(6), IndexT{1});
+        add_counter_slot(
+            StructuredAssemblyCounterSlot::ContactOffBandLumpFallbackStencil);
     }
 
     MUDA_GENERIC bool matrix_offband_policy_active() const noexcept
