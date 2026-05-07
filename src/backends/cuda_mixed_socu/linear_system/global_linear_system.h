@@ -53,6 +53,12 @@ class GlobalLinearSystem : public SimSystem
 
     class Impl;
 
+    enum class StructuredAssemblyPhase
+    {
+        ChainBase,
+        Contact,
+    };
+
     struct LineSearchFeedback
     {
         bool  accepted       = true;
@@ -156,6 +162,7 @@ class GlobalLinearSystem : public SimSystem
         cudaStream_t stream() const noexcept { return m_stream; }
         SizeT old_dof_offset() const noexcept { return m_old_dof_offset; }
         SizeT old_dof_count() const noexcept { return m_old_dof_count; }
+        StructuredAssemblyPhase phase() const noexcept { return m_phase; }
 
         muda::BufferView<SolveScalar> diag() const noexcept { return m_diag; }
         muda::BufferView<SolveScalar> first_offdiag() const noexcept
@@ -199,7 +206,7 @@ class GlobalLinearSystem : public SimSystem
 
         StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
         {
-            return StructuredDeviceAssemblySink<StoreScalar, SolveScalar>{
+            auto sink = StructuredDeviceAssemblySink<StoreScalar, SolveScalar>{
                 m_diag,
                 m_first_offdiag,
                 m_old_to_chain,
@@ -207,6 +214,27 @@ class GlobalLinearSystem : public SimSystem
                 m_shape.block_size,
                 m_contact_counters,
                 m_runtime_ordering_collector};
+            if(m_phase == StructuredAssemblyPhase::ChainBase)
+            {
+                const auto native_view =
+                    native_matrix_view(m_diag, m_first_offdiag, m_rhs);
+                sink.matrix.native_matrix          = native_view;
+                sink.matrix.native_dof_descriptors = m_native_dof_descriptors;
+                sink.matrix.use_native_matrix =
+                    m_native_chain_base_hessian_enabled;
+                sink.matrix.compare_enabled =
+                    m_chain_base_compare_enabled;
+                sink.matrix.compare_uses_native_matrix =
+                    m_chain_base_compare_uses_native;
+                sink.matrix.compare_diag          = m_chain_base_compare_diag;
+                sink.matrix.compare_first_offdiag =
+                    m_chain_base_compare_first_offdiag;
+                sink.matrix.compare_native_matrix =
+                    native_matrix_view(m_chain_base_compare_diag,
+                                       m_chain_base_compare_first_offdiag,
+                                       m_chain_base_compare_rhs);
+            }
+            return sink;
         }
 
         void set_workspace(StructuredChainShape       shape,
@@ -242,6 +270,30 @@ class GlobalLinearSystem : public SimSystem
         void set_descriptor_epoch(IndexT epoch) noexcept
         {
             m_descriptor_epoch = epoch;
+        }
+        void set_phase(StructuredAssemblyPhase phase) noexcept
+        {
+            m_phase = phase;
+        }
+        void set_native_chain_base_hessian(
+            bool enabled,
+            muda::CBufferView<SocuNativeDofDescriptor> dof_descriptors) noexcept
+        {
+            m_native_chain_base_hessian_enabled = enabled;
+            m_native_dof_descriptors = dof_descriptors;
+        }
+        void set_native_chain_base_compare_workspace(
+            muda::BufferView<SolveScalar> compare_diag,
+            muda::BufferView<SolveScalar> compare_first_offdiag,
+            muda::BufferView<SolveScalar> compare_rhs,
+            bool compare_uses_native) noexcept
+        {
+            m_chain_base_compare_diag          = compare_diag;
+            m_chain_base_compare_first_offdiag = compare_first_offdiag;
+            m_chain_base_compare_rhs           = compare_rhs;
+            m_chain_base_compare_uses_native   = compare_uses_native;
+            m_chain_base_compare_enabled =
+                compare_diag.data() != nullptr;
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
@@ -342,7 +394,36 @@ class GlobalLinearSystem : public SimSystem
         SizeT                      m_off_band_contribution_count = 0;
         SizeT                      m_contact_diag_fallback_count = 0;
         SizeT                      m_contact_lump_fallback_count = 0;
+        StructuredAssemblyPhase    m_phase = StructuredAssemblyPhase::ChainBase;
+        muda::CBufferView<SocuNativeDofDescriptor> m_native_dof_descriptors;
+        bool                       m_native_chain_base_hessian_enabled = false;
+        muda::BufferView<SolveScalar> m_chain_base_compare_diag;
+        muda::BufferView<SolveScalar> m_chain_base_compare_first_offdiag;
+        muda::BufferView<SolveScalar> m_chain_base_compare_rhs;
+        bool                       m_chain_base_compare_enabled = false;
+        bool                       m_chain_base_compare_uses_native = false;
         bool                       m_configured = false;
+
+        SocuNativeMatrixView<SolveScalar> native_matrix_view(
+            muda::BufferView<SolveScalar> diag,
+            muda::BufferView<SolveScalar> first_offdiag,
+            muda::BufferView<SolveScalar> rhs) const noexcept
+        {
+            const SizeT block_elements = m_shape.block_size * m_shape.block_size;
+            const SizeT offdiag_block_count =
+                block_elements == 0 ? SizeT{0}
+                                    : first_offdiag.size() / block_elements;
+            return SocuNativeMatrixView<SolveScalar>{
+                diag,
+                first_offdiag,
+                rhs,
+                {},
+                m_shape.horizon,
+                m_shape.block_size,
+                m_shape.nrhs,
+                m_shape.horizon > 0 ? m_shape.horizon - 1 : SizeT{0},
+                offdiag_block_count};
+        }
     };
 
     class OffDiagExtentInfo

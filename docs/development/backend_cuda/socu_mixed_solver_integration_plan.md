@@ -432,6 +432,132 @@ high-contention atomics with compact records, block-local accumulation,
 segmented reduction, or warp aggregation. The first goal is a clear direct
 storage path with matrix equivalence, not immediate maximum performance.
 
+### Native Target Model
+
+The end-state production path should not expose the old structured sink as the
+provider-facing abstraction. A provider kernel should receive a small native
+target view, compute its local contribution, and write directly to SOCU storage.
+The structured sink should remain as a debug/reference/fallback adapter only.
+
+Target vocabulary:
+
+```cpp
+struct NativeDiagBlockTarget
+{
+    SizeT block;
+    SizeT row_lane;
+    SizeT col_lane;
+};
+
+struct NativeFirstOffdiagBlockTarget
+{
+    SizeT left_block;
+    SizeT row_lane;
+    SizeT col_lane;
+    bool  transposed; // old pair order differs from SOCU E orientation
+};
+
+struct NativeDenseStencilTarget
+{
+    SocuNativeBandClass cls; // Diag, FirstOffdiag, OffBand, Skipped
+    SizeT               block_or_left_block;
+    SizeT               row_lane;
+    SizeT               col_lane;
+    bool                mirror_symmetric_entry;
+};
+
+struct NativeContactStencilTarget
+{
+    IndexT              contact_id;
+    SocuNativeBandClass half_block_class;
+    SizeT               block_or_left_block;
+    SizeT               row_lane;
+    SizeT               col_lane;
+    IndexT              local_row_vertex;
+    IndexT              local_col_vertex;
+    SocuNativeDescriptorKind row_kind;
+    SocuNativeDescriptorKind col_kind;
+    IndexT              row_jacobian_index;
+    IndexT              col_jacobian_index;
+    StructuredContactOffbandPolicy fallback_policy;
+};
+```
+
+These targets are addresses and policies, not cached physics values. They may
+store descriptor indices, old DoFs, local vertex slots, ABD body/J indices, and
+SOCU block/lane destinations. They should not store time-varying Jacobian,
+position, material, friction basis, or Hessian values unless a later benchmark
+proves that doing so is safe and beneficial.
+
+The intended provider kernel shape is:
+
+```text
+load provider data
+load precomputed native target(s)
+compute local Hessian/RHS
+if target is exact in-band:
+    write native D/E/rhs directly
+else if policy allows diagonal/lump fallback:
+    write fallback native diagonal contribution
+else:
+    count skipped/off-band contribution
+```
+
+Debug and migration modes may additionally mirror the same contribution into
+the legacy structured representation and diff the two matrices. Production
+performance runs should use native single-write only.
+
+The old `StructuredDeviceAssemblySink` remains useful during migration, but its
+long-term role should narrow to:
+
+- reference assembly for matrix/RHS diff tests;
+- fallback for a provider family that has not received native targets yet;
+- runtime-ordering graph collection when the graph path still depends on old
+  DoF/atom scalar edges;
+- diagnostic mirror writes behind explicit debug flags.
+
+It should not be the performance-critical abstraction once a provider has a
+validated native target table.
+
+### Target Build Lifecycle
+
+Native target tables are tied to an ordering epoch and, for contact, to a
+contact-set signature:
+
+```text
+ordering install or runtime reorder install
+    -> rebuild DoF and vertex descriptors
+    -> rebuild static chain/base targets
+    -> rebuild constraint/joint targets
+active contact set changes
+    -> rebuild contact stencil targets
+linear solve begins
+    -> clear native storage
+    -> provider kernels compute and write through native targets
+    -> optional debug mirror/diff
+    -> factor/solve/scatter
+```
+
+Each target table should report both coverage and fast-path hit rates. At
+minimum, reports should include:
+
+```text
+native_target_epoch
+native_chain_base_fast_hit_count
+native_chain_base_fast_miss_count
+native_chain_base_scalar_fallback_count
+native_contact_exact_count
+native_contact_diag_fallback_count
+native_contact_lump_fallback_count
+native_contact_structured_fallback_count
+native_build_time_ms
+native_target_build_time_ms
+```
+
+These counters are part of the acceptance signal. A native target implementation
+that is correct but rarely hit should not be treated as a completed performance
+milestone.
+
 ### Ordering And Descriptor Tables
 
 After init ordering install or runtime reorder install, SOCU should build
@@ -491,12 +617,15 @@ current `ABDJacobi` values during assembly.
 The target per-linear-build pipeline is:
 
 ```text
+ensure native descriptors match ordering epoch
+ensure provider target tables are valid for this epoch/signature
 clear SOCU D/E/rhs
-assemble_mass_and_inertia_socu()
-assemble_chain_hessian_socu()
-assemble_constraints_and_joints_socu()
-assemble_contact_socu()
-assemble_rhs_socu()
+assemble_mass_and_inertia_socu(targets)
+assemble_chain_hessian_socu(targets)
+assemble_constraints_and_joints_socu(targets)
+assemble_contact_socu(contact_targets)
+assemble_rhs_socu(targets)
+optional_debug_mirror_or_diff()
 factor_and_solve_socu()
 scatter_direction()
 validate_direction()
@@ -510,6 +639,15 @@ write through StructuredAssemblySink / StructuredContactAssemblySink
 classify/scatter per scalar
 solve SOCU band matrix
 ```
+
+The direct-write definition for this plan is intentionally precise:
+
+- provider kernels may still compute the local Hessian/RHS exactly where they do
+  today;
+- the write side should use precomputed native block/lane targets;
+- the production write side should not classify old DoF pairs per scalar;
+- debug mirror and legacy fallback may use structured sinks, but those paths
+  must be disabled in performance runs.
 
 ### Provider Migration Order
 
@@ -1189,10 +1327,114 @@ Fallback:
 
 Goal: move the always-present structured chain/base Hessian to native writes.
 
+Implementation split:
+
+- **M6a: parity native sink.** Keep the existing FEM/ABD provider call surface,
+  route scalar chain/base writes through native DoF descriptors, and prove exact
+  pre-contact `D/E/rhs` parity. This is the bridge that makes the native matrix a
+  drop-in replacement, not the final performance shape.
+- **M6b: fast native chain/base targets.** Move hot providers from
+  scalar-by-scalar classification to block/stencil targets that already know
+  `block/lane` destinations. M6b owns FEM `3x3` block targets, ABD contiguous
+  `12x12` block-diagonal targets, first-offdiag target precomputation, and
+  production native single-write with mirror diff kept debug-only.
+
+Current implementation status (2026-05-07):
+
+- Implemented as an opt-in descriptor-backed backend inside the existing
+  structured assembly sink API. Existing FEM/ABD providers keep their current
+  call surface, but chain/base matrix scalars can be routed through native DoF
+  descriptors.
+- `StructuredAssemblyInfo` now marks chain/base and contact phases explicitly.
+  Native chain/base writes are only enabled during the chain/base phase; DyTopo
+  contact remains on the legacy structured path.
+- Runtime diff mode assembles the chain/base Hessian into both native and
+  legacy buffers at the pre-contact checkpoint and compares `D/E/rhs`.
+- Contact-enabled scene acceptance still requires a successful fallback build
+  with legacy structured contact TUs. On the current machine,
+  `ipc_simplex_frictional_contact_structured.cu` enters very high memory/swap
+  usage during `cicc`, so the full contact 20/100-frame acceptance remains a
+  pending M6 gate rather than a completed one.
+- M6b starts with the ABD base Hessian fast path: if a 12-DoF ABD body maps to a
+  contiguous range inside one native block, the sink writes the upper `3x3`
+  subblocks directly to native `D` and mirrors only in debug compare mode. If the
+  descriptor shape is not contiguous, runtime ordering is being collected, or
+  native storage is disabled, the provider falls back to the scalar structured
+  sink.
+
+Detailed M6b execution plan:
+
+1. **Instrumentation first.**
+   - Add native chain/base target counters:
+     `abd_same_block_fast_hit_count`, `abd_adjacent_fast_hit_count`,
+     `abd_fast_miss_count`, `fem_block3_fast_hit_count`,
+     `first_offdiag_target_hit_count`, and `scalar_fallback_count`.
+   - Add a replacement timer for the old `Assemble Structured Chain` signal:
+     `native_chain_base_target_build_time_ms` and
+     `native_chain_base_assembly_time_ms`.
+   - Report counters even when debug matrix diff is disabled, because perf runs
+     must be diff-off.
+
+2. **Target API split.**
+   - Introduce a narrow header for native chain/base targets, separate from the
+     legacy structured contact sink headers.
+   - Keep `StructuredDeviceAssemblySink` as a fallback adapter, but make new
+     provider code call native target writers directly where possible.
+   - The writer API should accept `SocuNativeMatrixView`, target arrays, and
+     provider-local Hessian/RHS values. It should not need `old_to_chain` in the
+     hot path.
+
+3. **ABD base Hessian targets.**
+   - Same-block target: current M6b first slice. A 12-DoF ABD body fully inside
+     one native block writes the upper `3x3` subblocks directly to `D`.
+   - Adjacent-block target: if the 12 DoFs are contiguous but cross exactly one
+     SOCU block boundary, precompute the left block and lane split, then write
+     same-block pieces to `D` and cross-boundary pieces to first-offdiag `E`
+     without per-scalar band checks.
+   - Non-contiguous or non-adjacent ABD bodies keep scalar native fallback.
+
+4. **FEM `3x3` and stencil targets.**
+   - Add vertex-local `3x3` diag targets for FEM kinetic/mass-style blocks.
+   - Add pair targets for FEM element/report contributions that naturally know
+     their local vertex pair. Each pair target should classify once at descriptor
+     build time as diag, first-offdiag, off-band, or skipped.
+   - For fixed vertices, use the descriptor fixed flag to choose identity or
+     skip/write policy before entering the hot write loop.
+
+5. **First-offdiag target precomputation.**
+   - Store SOCU orientation explicitly: `left_block`, `row_lane`, `col_lane`,
+     and whether the provider-local pair order is transposed.
+   - Provider kernels must not recompute `abs(block_i - block_j)` per scalar
+     once this target exists.
+
+6. **Production single-write mode.**
+   - Default production path for enabled native targets writes only native
+     `D/E/rhs`.
+   - Mirror diff is debug-only and must be disabled for performance gates.
+   - If a provider has both a native target and scalar fallback, report the
+     fallback count; a high fallback rate blocks declaring that provider
+     performance-complete.
+
+7. **M6b completion criteria.**
+   - Provider unit tests cover same-block, adjacent first-offdiag, off-band, and
+     skipped descriptors.
+   - No-contact 20-frame scene passes with native chain/base targets and diff
+     enabled.
+   - Diff-off 100-frame no-contact performance run shows either measurable
+     native chain/base assembly reduction or documents why the bottleneck has
+     moved elsewhere.
+   - Hit-rate report shows the optimized target family is actually exercised on
+     the benchmark scene.
+
 Deliverables:
 
 - Static descriptors for chain/base Hessian contributions.
 - Native projected ABD/FEM block writes.
+- Provider-level fast targets:
+  - FEM `3x3` block/lane target writes for vertex-local Hessian contributions.
+  - ABD `12x12` contiguous block-diagonal write for kinetic/shape/base Hessian.
+  - First-offdiag target descriptors that avoid per-scalar band checks when the
+    provider already knows adjacent block pairs.
 - Matrix diff tests for synthetic chain fixtures.
 - Scene-level diff for small deterministic scenes.
 
@@ -1203,6 +1445,9 @@ Acceptance:
 - `cuda_mixed_socu` 20-frame topology `diag_lump` regression passes.
 - 100-frame best SOCU variant is not slower; target improvement is measurable
   reduction in `Assemble Structured Chain` or replacement native timer.
+- M6b target hit-rate counters prove that the benchmark exercises the optimized
+  target family; otherwise the benchmark is not accepted as a performance gate
+  for that target.
 - All global constraints, design requirements, correctness gates, and acceptance
   rules defined above remain satisfied unless explicitly documented as a planned
   exception before commit.
@@ -1211,6 +1456,9 @@ Fallback:
 
 - If exact parity fails only for a specific provider type, split that provider
   back to structured fallback and continue migrating the rest.
+- If a fast target's descriptor assumptions are not satisfied, keep the scalar
+  native sink fallback active and record the missed fast-target condition in the
+  M6 journal.
 
 #### Milestone 7: Native Constraints / Joints / External Forces
 
@@ -1240,6 +1488,72 @@ Fallback:
 #### Milestone 8: Native Contact Build V1
 
 Goal: replace contact structured sink hot path with SOCU-native contact build.
+
+M8 design requirements:
+
+- Contact kernels should compute the same local IPC Hessian/RHS quantities as
+  today, but the write side should consume `NativeContactStencilTarget` records
+  instead of `StructuredContactAssemblySink`.
+- A contact target table is valid only for the current ordering epoch and active
+  contact-set signature. If either changes, rebuild before the next matrix
+  assembly.
+- Exact in-band writes must preserve the full projected SPD stencil. Partial
+  off-band writes are not allowed because they can destroy the SPD behavior that
+  motivated `diag_lump`.
+- The native contact path should be family-scoped. Normal contacts can ship
+  before frictional contacts if frictional compilation cost or register pressure
+  is too high.
+
+Detailed M8 execution plan:
+
+1. **Contact target schema and policy tests.**
+   - Build target records for PT, EE, PE, PP, and PH stencils.
+   - For each half-block, store target class, SOCU orientation, local vertex
+     pair, FEM/ABD projection kind, ABD Jacobian indices, and fallback policy.
+   - Add synthetic descriptor tests for all combinations: fully in-band,
+     adjacent first-offdiag, off-band, skipped/fixed, FEM/ABD, and ABD/ABD.
+
+2. **Normal contact exact native write.**
+   - Implement simplex normal and PH normal native writes first.
+   - The kernel computes local normal Hessian as today and writes only through
+     exact in-band targets or approved diagonal fallback.
+   - Compare native matrix against structured contact matrix for fully in-band
+     cases.
+
+3. **Off-band fallback path.**
+   - Implement native `diag` and `diag_lump` fallback for off-band contact
+     stencils.
+   - For `diag_lump`, prove the fallback reference is the current policy result,
+     not the exact structured matrix, because the policy intentionally changes
+     off-band behavior.
+   - Report `native_contact_exact_count`, `native_contact_diag_fallback_count`,
+     `native_contact_lump_fallback_count`, and
+     `native_contact_structured_fallback_count`.
+
+4. **Frictional contact migration.**
+   - Add simplex frictional and PH frictional native writes after normal contact
+     is stable.
+   - Track register count, spills, compile time, and object size. If frictional
+     native kernels become compile-time bottlenecks, split by contact family and
+     keep structured fallback for the heaviest family.
+
+5. **Runtime reorder integration.**
+   - Rebuild contact targets after runtime ordering install.
+   - If the contact-set signature changes inside an eligible frame, rebuild the
+     contact target table for the new signature before using it.
+   - Keep graph-probe targets distinct from final matrix-write targets so graph
+     collection can stay cheap.
+
+6. **M8 completion criteria.**
+   - Native contact policy tests pass for every family that is enabled.
+   - Fully in-band contact provider matrix diff passes against structured
+     reference.
+   - Off-band `diag_lump` tests pass against policy reference.
+   - `socu_rt20_topology_diag_lump --frames 20` and
+     `socu_rt50_topology_diag_lump --frames 100` pass with native contact
+     enabled.
+   - Native contact build shows reduced contact assembly timer or documents a
+     clear non-contact bottleneck that now dominates.
 
 Deliverables:
 

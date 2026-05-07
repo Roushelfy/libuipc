@@ -406,6 +406,7 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
 
         if(!contact_only)
         {
+            info.set_phase(StructuredAssemblyPhase::ChainBase);
             for(const auto& subsystem_info : subsystem_infos)
             {
                 if(!subsystem_info.is_diag)
@@ -455,6 +456,7 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
 
         if(global_dytopo_effect_manager)
         {
+            info.set_phase(StructuredAssemblyPhase::Contact);
             Timer timer{contact_only ? "Probe Structured DyTopo Hessian Graph"
                                       : "Assemble Structured DyTopo Hessian"};
             global_dytopo_effect_manager->assemble_structured_hessian(info);
@@ -851,6 +853,7 @@ void GlobalLinearSystem::StructuredAssemblyInfo::set_workspace(
     m_old_to_chain  = old_to_chain;
     m_chain_to_old  = chain_to_old;
     m_stream        = stream;
+    m_phase         = StructuredAssemblyPhase::ChainBase;
     m_configured    = true;
 }
 

@@ -64,6 +64,9 @@ struct SocuApproxRuntime
     muda::DeviceBuffer<Scalar> device_diag_rhs_compare_diag;
     muda::DeviceBuffer<Scalar> device_diag_rhs_compare_off_diag;
     muda::DeviceBuffer<Scalar> device_diag_rhs_compare_rhs;
+    muda::DeviceBuffer<Scalar> device_chain_base_compare_diag;
+    muda::DeviceBuffer<Scalar> device_chain_base_compare_off_diag;
+    muda::DeviceBuffer<Scalar> device_chain_base_compare_rhs;
     muda::DeviceBuffer<IndexT> device_old_to_chain;
     muda::DeviceBuffer<IndexT> device_chain_to_old;
     muda::DeviceBuffer<IndexT> device_old_dof_to_atom;
@@ -175,6 +178,22 @@ struct SocuApproxRuntime
         device_diag_rhs_compare_diag.resize(layout.diag_element_count);
         device_diag_rhs_compare_off_diag.resize(layout.off_diag_element_count);
         device_diag_rhs_compare_rhs.resize(layout.rhs_element_count);
+    }
+
+    void reserve_chain_base_compare(bool enabled)
+    {
+        if(!enabled)
+            return;
+        if(device_chain_base_compare_diag.capacity() < layout.diag_element_count)
+            device_chain_base_compare_diag.reserve(layout.diag_element_count);
+        if(device_chain_base_compare_off_diag.capacity()
+           < layout.off_diag_element_count)
+            device_chain_base_compare_off_diag.reserve(layout.off_diag_element_count);
+        if(device_chain_base_compare_rhs.capacity() < layout.rhs_element_count)
+            device_chain_base_compare_rhs.reserve(layout.rhs_element_count);
+        device_chain_base_compare_diag.resize(layout.diag_element_count);
+        device_chain_base_compare_off_diag.resize(layout.off_diag_element_count);
+        device_chain_base_compare_rhs.resize(layout.rhs_element_count);
     }
 
     void download_validation_sums(cudaStream_t stream)

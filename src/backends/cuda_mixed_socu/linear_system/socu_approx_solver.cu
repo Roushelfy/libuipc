@@ -268,6 +268,17 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_compare_native_diag_rhs =
         debug_compare_native_diag_rhs_attr
         && debug_compare_native_diag_rhs_attr->view()[0] != 0;
+    auto native_chain_base_hessian_attr =
+        config.find<IndexT>("linear_system/socu_approx/native_chain_base_hessian");
+    m_native_chain_base_hessian_enabled =
+        native_chain_base_hessian_attr
+        && native_chain_base_hessian_attr->view()[0] != 0;
+    auto debug_compare_native_chain_base_hessian_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/debug_compare_native_chain_base_hessian");
+    m_debug_compare_native_chain_base_hessian =
+        debug_compare_native_chain_base_hessian_attr
+        && debug_compare_native_chain_base_hessian_attr->view()[0] != 0;
     auto debug_write_runtime_ordering_report_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/debug_write_runtime_ordering_report");
@@ -854,6 +865,8 @@ bool SocuApproxSolver::install_ordering_report_impl(
 
         runtime->reserve(m_debug_validation, m_report_counters_enabled);
         runtime->reserve_diag_rhs_compare(m_debug_compare_native_diag_rhs);
+        runtime->reserve_chain_base_compare(
+            m_debug_compare_native_chain_base_hessian);
         runtime->upload_mappings(build_old_to_chain, build_chain_to_old);
         runtime->upload_old_dof_to_atom(old_dof_to_atom);
         runtime->upload_dof_descriptors(native_dof_descriptors);
@@ -1335,6 +1348,32 @@ void SocuApproxSolver::prepare_structured_chain(
                           m_runtime->device_rhs_original.view());
     }
 
+    m_report.native_chain_base_hessian_enabled =
+        m_native_chain_base_hessian_enabled;
+    m_report.native_chain_base_hessian_diff_enabled =
+        m_debug_compare_native_chain_base_hessian;
+    m_report.native_chain_base_hessian_diff_mismatch_count = 0;
+    m_report.native_chain_base_hessian_diff_diag_abs_sum = 0.0;
+    m_report.native_chain_base_hessian_diff_offdiag_abs_sum = 0.0;
+    m_report.native_chain_base_hessian_diff_rhs_abs_sum = 0.0;
+    if(m_debug_compare_native_chain_base_hessian)
+    {
+        if(m_native_diag_rhs_enabled)
+        {
+            initialize_native(m_runtime->device_chain_base_compare_diag.view(),
+                              m_runtime->device_chain_base_compare_off_diag.view(),
+                              m_runtime->device_chain_base_compare_rhs.view(),
+                              {});
+        }
+        else
+        {
+            initialize_legacy(m_runtime->device_chain_base_compare_diag.view(),
+                              m_runtime->device_chain_base_compare_off_diag.view(),
+                              m_runtime->device_chain_base_compare_rhs.view(),
+                              {});
+        }
+    }
+
     info.set_workspace(
         structured_shape,
         span<const StructuredDofSlot>{m_dof_slots},
@@ -1344,6 +1383,17 @@ void SocuApproxSolver::prepare_structured_chain(
         m_runtime->device_old_to_chain.view(),
         m_runtime->device_chain_to_old.view(),
         stream);
+    info.set_native_chain_base_hessian(
+        m_native_chain_base_hessian_enabled,
+        m_runtime->device_dof_descriptors.view());
+    if(m_debug_compare_native_chain_base_hessian)
+    {
+        info.set_native_chain_base_compare_workspace(
+            m_runtime->device_chain_base_compare_diag.view(),
+            m_runtime->device_chain_base_compare_off_diag.view(),
+            m_runtime->device_chain_base_compare_rhs.view(),
+            !m_native_chain_base_hessian_enabled);
+    }
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
@@ -1371,8 +1421,12 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.first_offdiag_block_count =
         m_runtime->layout.off_diag_block_count;
     m_report.stream_source =
-        m_native_diag_rhs_enabled
+        m_native_diag_rhs_enabled && m_native_chain_base_hessian_enabled
+            ? "mixed_backend_current_stream_native_diag_rhs_native_chain_base"
+        : m_native_diag_rhs_enabled
             ? "mixed_backend_current_stream_native_diag_rhs"
+        : m_native_chain_base_hessian_enabled
+            ? "mixed_backend_current_stream_native_chain_base"
             : "mixed_backend_current_stream";
 #endif
 }
@@ -1634,12 +1688,57 @@ void SocuApproxSolver::debug_dump_structured_chain_checkpoint(
     std::string_view                            label)
 {
 #if UIPC_WITH_SOCU_NATIVE
-    if(!(m_debug_dump_structured_matrix || m_debug_dump_problem_file))
+    const bool compare_chain_base =
+        m_debug_compare_native_chain_base_hessian && label == "no_contact";
+    const bool dump_checkpoint =
+        m_debug_dump_structured_matrix || m_debug_dump_problem_file;
+    if(!compare_chain_base && !dump_checkpoint)
         return;
     if(!m_runtime)
         return;
     if(info.runtime_ordering_collector().valid()
        && info.runtime_ordering_collector().graph_only)
+        return;
+
+    if(compare_chain_base)
+    {
+        compare_socu_native_diag_rhs_workspace<Runtime::Scalar>(
+            info.stream(),
+            m_runtime->device_chain_base_compare_diag.view(),
+            m_runtime->device_chain_base_compare_off_diag.view(),
+            m_runtime->device_chain_base_compare_rhs.view(),
+            m_runtime->device_diag.view(),
+            m_runtime->device_off_diag.view(),
+            m_runtime->device_rhs.view(),
+            m_runtime->validation_sums.view(),
+            m_runtime->validation_status.view(),
+            1e-9,
+            1e-10);
+        m_runtime->download_validation_status(info.stream());
+        m_runtime->download_validation_sums(info.stream());
+        m_report.native_chain_base_hessian_diff_mismatch_count =
+            static_cast<SizeT>(std::max<IndexT>(
+                0,
+                m_runtime->host_validation_status[0]));
+        m_report.native_chain_base_hessian_diff_diag_abs_sum =
+            m_runtime->host_validation_sums[0];
+        m_report.native_chain_base_hessian_diff_offdiag_abs_sum =
+            m_runtime->host_validation_sums[1];
+        m_report.native_chain_base_hessian_diff_rhs_abs_sum =
+            m_runtime->host_validation_sums[2];
+        if(m_report.native_chain_base_hessian_diff_mismatch_count != 0)
+        {
+            throw Exception{fmt::format(
+                "SOCU native chain/base Hessian diff failed: mismatches={}, "
+                "diag_abs_sum={}, offdiag_abs_sum={}, rhs_abs_sum={}",
+                m_report.native_chain_base_hessian_diff_mismatch_count,
+                m_report.native_chain_base_hessian_diff_diag_abs_sum,
+                m_report.native_chain_base_hessian_diff_offdiag_abs_sum,
+                m_report.native_chain_base_hessian_diff_rhs_abs_sum)};
+        }
+    }
+
+    if(!dump_checkpoint)
         return;
 
     cudaStreamSynchronize(info.stream());

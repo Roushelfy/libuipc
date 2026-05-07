@@ -1425,3 +1425,96 @@ The native builder is now used by an opt-in production path, has a runtime
 legacy diff gate, passes provider and full backend contracts, and reaches both
 20-frame parity and 100-frame performance acceptance on the chosen
 `topology + diag_lump` wrecking-ball variant.
+
+## 2026-05-07 Milestone 6 Native Chain/Base Hessian Provider
+
+This pass migrates the always-present non-contact chain/base Hessian write
+surface behind an opt-in native path while keeping the provider API stable:
+
+- Extended `StructuredDeviceMatrixSink` with a descriptor-backed native D/E
+  writer. It uses `SocuNativeDofDescriptor` block/lane addresses and preserves
+  the existing diagonal and first-offdiagonal storage orientation.
+- Added a mirror compare mode to the same sink. A primary native write can be
+  mirrored into legacy structured buffers, or a primary legacy write can be
+  mirrored into native buffers, without recording runtime ordering twice.
+- Added `StructuredAssemblyPhase` to `StructuredAssemblyInfo`. FEM/ABD
+  subsystem assembly runs in the `ChainBase` phase; DyTopo/contact assembly
+  runs in the `Contact` phase and remains legacy structured fallback.
+- Added solver config/report fields
+  `linear_system/socu_approx/native_chain_base_hessian` and
+  `linear_system/socu_approx/debug_compare_native_chain_base_hessian`.
+- Added runtime compare buffers and a pre-contact checkpoint diff. The diff
+  compares `D/E/rhs` after chain/base assembly and before contact Hessian
+  assembly, so contact does not pollute the M6 parity signal.
+- Added wrecking-ball environment hooks `SOCU_NATIVE_CHAIN_BASE=1`,
+  `SOCU_NATIVE_CHAIN_BASE_DIFF=1`, and `SOCU_CONTACT_ENABLE=0`. The contact
+  switch is only for no-contact native-only smoke validation; default scene
+  behavior is unchanged.
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| direct object build for `scene_default_config.cpp.o`, `global_linear_system.cu.o`, `socu_approx_solver.cu.o`, and `socu_native_matrix_builder.cu.o` | passed |
+| native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; device link completed; legacy structured contact TUs excluded |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]" -s` | passed, 89 assertions in 1 case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` in native-only build | passed, 1253 assertions in 19 cases |
+| `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 ... --frames 1` | passed; report shows native chain/base enabled, diff enabled, mismatch count `0`, and `D/E/rhs` diff sums all `0.0` |
+| same no-contact native-only scene with `--frames 20` and report counters off | passed, `final_frame=20`, `wall_time_s=2.857510956004262`, `mean_frame_ms=30.889609490986913` |
+
+Fallback/contact build note:
+
+The contact-enabled fallback build was attempted with
+`UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` and `-j1`, but
+`ipc_simplex_frictional_contact_structured.cu` reached about `55GB` RSS and
+entered heavy swap during `cicc` (observed swap usage about `97GB`). The build
+was interrupted to avoid destabilizing the workstation. A native-only
+contact-enabled 1-frame smoke reaches the expected explicit unsupported path:
+`SOCU native-only build excludes legacy vertex-half-plane frictional structured
+contact assembly`.
+
+Acceptance status: M6 implementation and no-contact native chain/base parity are
+complete, including provider tests, runtime diff wiring, report fields, and
+device link validation. The full contact-enabled 20-frame `topology +
+diag_lump` regression and the 100-frame performance gate are not yet rigorously
+closed, because they require the fallback build to finish the legacy structured
+contact TU. Until that build/scene gate passes, keep
+`native_chain_base_hessian` opt-in and default-off.
+
+### M6b Fast Native Chain/Base Target Start
+
+The parity path above is correct but still shaped like the legacy structured
+sink: each scalar write classifies old DoF pairs at the moment of insertion.
+The performance-oriented builder work is therefore split into M6b.
+
+Implemented first M6b slice:
+
+- Added a descriptor-validated ABD `12x12` fast path for
+  `add_dense_block_upper_subblocks_fixed<3, 4>`.
+- The fast path requires the 12 old DoFs for one ABD body to be active,
+  contiguous, and located inside one native SOCU block. It writes directly to
+  native `D` using the prevalidated base block/lane and only mirrors scalar
+  writes into the debug compare buffer.
+- If native storage is disabled, the descriptor range is not contiguous, or
+  runtime ordering collection is enabled, ABD assembly falls back to the
+  existing scalar structured sink.
+- The M6 plan now separates M6a parity from M6b fast targets and places native
+  contact hotspot migration under M8.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; the already-built `-j1` objects were reused after switching to `-j2`; device link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6b]" -s` | passed, 299 assertions in 1 case; the fast-path status flag was `1` and native primary/legacy mirror/legacy reference `D` matched |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 388 assertions in 2 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` in native-only build | passed, 1552 assertions in 20 cases |
+| `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 ... --frames 1` | passed; report timing shows native chain/base enabled, diff enabled, mismatch count `0`, and `D/E/rhs` diff sums all `0.0` |
+| same no-contact native-only scene with `--frames 20` and report counters off | passed, `final_frame=20`, `wall_time_s=2.6779193060356192`, `mean_frame_ms=31.1532106512459`; final report still shows native chain/base mismatch count `0` and all diff sums `0.0` |
+| restore CMake cache with `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` | passed; `CMakeCache.txt` reports `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY:BOOL=OFF` |
+
+Acceptance status: this M6b slice is correct as a guarded ABD base Hessian fast
+target. It is not yet the complete high-performance native builder: FEM block
+targets, first-offdiag target precomputation, and native contact builder work
+remain open under the M6b/M8 split.

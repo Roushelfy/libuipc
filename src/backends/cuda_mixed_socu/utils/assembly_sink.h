@@ -2,6 +2,7 @@
 
 #include <utils/matrix_assembler.h>
 #include <utils/runtime_ordering_collector.h>
+#include <linear_system/socu_native_matrix_builder.h>
 #include <linear_system/structured_chain_provider.h>
 #include <muda/atomic.h>
 #include <muda/buffer/buffer_view.h>
@@ -126,6 +127,14 @@ struct StructuredDeviceMatrixSink
     SizeT                     horizon    = 0;
     SizeT                     block_size = 0;
     muda::BufferView<IndexT>  counters;
+    SocuNativeMatrixView<SolveT> native_matrix;
+    muda::CBufferView<SocuNativeDofDescriptor> native_dof_descriptors;
+    bool use_native_matrix = false;
+    muda::BufferView<SolveT>  compare_diag;
+    muda::BufferView<SolveT>  compare_first_offdiag;
+    SocuNativeMatrixView<SolveT> compare_native_matrix;
+    bool compare_enabled = false;
+    bool compare_uses_native_matrix = false;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -133,8 +142,38 @@ struct StructuredDeviceMatrixSink
                && block_size != 0;
     }
 
+    MUDA_GENERIC bool native_enabled() const noexcept
+    {
+        return use_native_matrix && native_dof_descriptors.data() != nullptr
+               && native_matrix.D.data() != nullptr && native_matrix.block_count != 0
+               && native_matrix.block_size != 0;
+    }
+
+    MUDA_GENERIC bool compare_native_enabled() const noexcept
+    {
+        return compare_enabled && compare_uses_native_matrix
+               && native_dof_descriptors.data() != nullptr
+               && compare_native_matrix.D.data() != nullptr
+               && compare_native_matrix.block_count != 0
+               && compare_native_matrix.block_size != 0;
+    }
+
+    MUDA_GENERIC bool compare_legacy_enabled() const noexcept
+    {
+        return compare_enabled && !compare_uses_native_matrix
+               && compare_diag.data() != nullptr;
+    }
+
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
     classify_dof_pair(IndexT old_i, IndexT old_j) const noexcept
+    {
+        if(native_enabled())
+            return classify_dof_pair_native(old_i, old_j);
+        return classify_dof_pair_legacy(old_i, old_j);
+    }
+
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    classify_dof_pair_legacy(IndexT old_i, IndexT old_j) const noexcept
     {
         if(old_i < 0 || old_j < 0)
             return StructuredSinkWriteClass::Skipped;
@@ -161,7 +200,37 @@ struct StructuredDeviceMatrixSink
     }
 
     MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
-    add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
+    classify_dof_pair_native(IndexT old_i, IndexT old_j) const noexcept
+    {
+        if(old_i < 0 || old_j < 0)
+            return StructuredSinkWriteClass::Skipped;
+        if(static_cast<SizeT>(old_i) >= native_dof_descriptors.size()
+           || static_cast<SizeT>(old_j) >= native_dof_descriptors.size())
+            return StructuredSinkWriteClass::Skipped;
+
+        const auto dof_i = native_dof_descriptors[static_cast<SizeT>(old_i)];
+        const auto dof_j = native_dof_descriptors[static_cast<SizeT>(old_j)];
+        if(!native_matrix.valid_dof_descriptor(dof_i)
+           || !native_matrix.valid_dof_descriptor(dof_j))
+            return StructuredSinkWriteClass::Skipped;
+
+        if(dof_i.block == dof_j.block)
+            return StructuredSinkWriteClass::Diag;
+
+        const SizeT distance = dof_i.block > dof_j.block
+                                   ? dof_i.block - dof_j.block
+                                   : dof_j.block - dof_i.block;
+        return distance == 1 && native_matrix.E.data() != nullptr
+                   ? StructuredSinkWriteClass::FirstOffdiag
+                   : StructuredSinkWriteClass::OffBand;
+    }
+
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    add_hessian_scalar_status_legacy(muda::BufferView<SolveT> target_diag,
+                                     muda::BufferView<SolveT> target_first_offdiag,
+                                     IndexT old_i,
+                                     IndexT old_j,
+                                     StoreT value) const noexcept
     {
         if(old_i < 0 || old_j < 0)
             return StructuredSinkWriteClass::Skipped;
@@ -187,14 +256,14 @@ struct StructuredDeviceMatrixSink
         if(bi == bj)
         {
             const SizeT index = (bi * block_size + li) * block_size + lj;
-            if(index >= diag.size())
+            if(index >= target_diag.size())
                 return StructuredSinkWriteClass::Skipped;
-            muda::atomic_add(diag.data(index), v);
+            muda::atomic_add(target_diag.data(index), v);
             return StructuredSinkWriteClass::Diag;
         }
 
         const SizeT distance = bi > bj ? bi - bj : bj - bi;
-        if(distance != 1 || first_offdiag.data() == nullptr)
+        if(distance != 1 || target_first_offdiag.data() == nullptr)
             return StructuredSinkWriteClass::OffBand;
 
         const bool  ij_is_forward = bi < bj;
@@ -202,12 +271,106 @@ struct StructuredDeviceMatrixSink
         const SizeT row           = ij_is_forward ? lj : li;
         const SizeT col           = ij_is_forward ? li : lj;
         const SizeT index = (left_block * block_size + row) * block_size + col;
-        if(index < first_offdiag.size())
+        if(index < target_first_offdiag.size())
         {
-            muda::atomic_add(first_offdiag.data(index), v);
+            muda::atomic_add(target_first_offdiag.data(index), v);
             return StructuredSinkWriteClass::FirstOffdiag;
         }
         return StructuredSinkWriteClass::Skipped;
+    }
+
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    add_hessian_scalar_status_native(SocuNativeMatrixView<SolveT> target,
+                                     IndexT old_i,
+                                     IndexT old_j,
+                                     StoreT value) const noexcept
+    {
+        if(old_i < 0 || old_j < 0)
+            return StructuredSinkWriteClass::Skipped;
+        if(static_cast<SizeT>(old_i) >= native_dof_descriptors.size()
+           || static_cast<SizeT>(old_j) >= native_dof_descriptors.size())
+            return StructuredSinkWriteClass::Skipped;
+
+        const auto dof_i = native_dof_descriptors[static_cast<SizeT>(old_i)];
+        const auto dof_j = native_dof_descriptors[static_cast<SizeT>(old_j)];
+        if(!target.valid_dof_descriptor(dof_i)
+           || !target.valid_dof_descriptor(dof_j))
+            return StructuredSinkWriteClass::Skipped;
+
+        const SolveT v = static_cast<SolveT>(value);
+        if(dof_i.block == dof_j.block)
+        {
+            const SizeT index =
+                target.diag_index(dof_i.block, dof_i.lane, dof_j.lane);
+            if(index >= target.D.size())
+                return StructuredSinkWriteClass::Skipped;
+            muda::atomic_add(target.D.data(index), v);
+            return StructuredSinkWriteClass::Diag;
+        }
+
+        const SizeT distance = dof_i.block > dof_j.block
+                                   ? dof_i.block - dof_j.block
+                                   : dof_j.block - dof_i.block;
+        if(distance != 1 || target.E.data() == nullptr)
+            return StructuredSinkWriteClass::OffBand;
+
+        const bool ij_is_forward = dof_i.block < dof_j.block;
+        const SizeT left_block = ij_is_forward ? dof_i.block : dof_j.block;
+        const SizeT row = ij_is_forward ? dof_j.lane : dof_i.lane;
+        const SizeT col = ij_is_forward ? dof_i.lane : dof_j.lane;
+        if(left_block >= target.first_offdiag_block_count
+           || row >= target.block_size || col >= target.block_size)
+            return StructuredSinkWriteClass::Skipped;
+        const SizeT index = target.first_offdiag_index(left_block, row, col);
+        if(index >= target.E.size())
+            return StructuredSinkWriteClass::Skipped;
+        muda::atomic_add(target.E.data(index), v);
+        return StructuredSinkWriteClass::FirstOffdiag;
+    }
+
+    MUDA_DEVICE __forceinline__ StructuredSinkWriteClass
+    add_hessian_scalar_status(IndexT old_i, IndexT old_j, StoreT value) const noexcept
+    {
+        StructuredSinkWriteClass primary_class = StructuredSinkWriteClass::Skipped;
+        if(native_enabled())
+        {
+            primary_class =
+                add_hessian_scalar_status_native(native_matrix, old_i, old_j, value);
+        }
+        else
+        {
+            primary_class = add_hessian_scalar_status_legacy(
+                diag,
+                first_offdiag,
+                old_i,
+                old_j,
+                value);
+        }
+
+        add_hessian_scalar_compare(old_i, old_j, value);
+        return primary_class;
+    }
+
+    MUDA_DEVICE __forceinline__ void add_hessian_scalar_compare(IndexT old_i,
+                                                                IndexT old_j,
+                                                                StoreT value) const noexcept
+    {
+        if(compare_native_enabled())
+        {
+            (void)add_hessian_scalar_status_native(
+                compare_native_matrix,
+                old_i,
+                old_j,
+                value);
+        }
+        else if(compare_legacy_enabled())
+        {
+            (void)add_hessian_scalar_status_legacy(compare_diag,
+                                                   compare_first_offdiag,
+                                                   old_i,
+                                                   old_j,
+                                                   value);
+        }
     }
 
     MUDA_DEVICE __forceinline__ void add_hessian_scalar(IndexT old_i,
@@ -299,6 +462,94 @@ struct StructuredDeviceMatrixSink
                 }
             }
         }
+    }
+
+    template <int SubBlockDim, int SubBlockCount, typename HMat>
+    MUDA_DEVICE __forceinline__ bool try_add_native_dense_block_upper_subblocks_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+        constexpr IndexT Rows = SubBlockDim * SubBlockCount;
+        static_assert(SubBlockDim > 0);
+        static_assert(SubBlockCount > 0);
+
+        if(!native_enabled() || old_dof_begin < 0)
+            return false;
+        const SizeT old_begin = static_cast<SizeT>(old_dof_begin);
+        if(old_begin + static_cast<SizeT>(Rows) > native_dof_descriptors.size())
+            return false;
+
+        const auto first = native_dof_descriptors[old_begin];
+        if(!native_matrix.valid_dof_descriptor(first)
+           || first.old_dof != old_dof_begin)
+            return false;
+
+        const SizeT block     = first.block;
+        const SizeT base_lane = first.lane;
+        if(base_lane + static_cast<SizeT>(Rows) > native_matrix.block_size)
+            return false;
+
+#pragma unroll
+        for(IndexT local = 1; local < Rows; ++local)
+        {
+            const auto dof =
+                native_dof_descriptors[old_begin + static_cast<SizeT>(local)];
+            if(!native_matrix.valid_dof_descriptor(dof)
+               || dof.old_dof != old_dof_begin + local || dof.block != block
+               || dof.lane != base_lane + static_cast<SizeT>(local))
+                return false;
+        }
+
+        const SizeT last_lane = base_lane + static_cast<SizeT>(Rows - 1);
+        if(native_matrix.diag_index(block, last_lane, last_lane)
+           >= native_matrix.D.size())
+            return false;
+
+#pragma unroll
+        for(IndexT row_block = 0; row_block < SubBlockCount; ++row_block)
+        {
+#pragma unroll
+            for(IndexT col_block = row_block; col_block < SubBlockCount; ++col_block)
+            {
+#pragma unroll
+                for(IndexT row = 0; row < SubBlockDim; ++row)
+                {
+#pragma unroll
+                    for(IndexT col = 0; col < SubBlockDim; ++col)
+                    {
+                        const IndexT local_i = row_block * SubBlockDim + row;
+                        const IndexT local_j = col_block * SubBlockDim + col;
+                        const SizeT row_lane =
+                            base_lane + static_cast<SizeT>(local_i);
+                        const SizeT col_lane =
+                            base_lane + static_cast<SizeT>(local_j);
+                        const auto value = static_cast<StoreT>(H(local_i, local_j));
+                        const auto v     = static_cast<SolveT>(value);
+                        muda::atomic_add(
+                            native_matrix.D.data(
+                                native_matrix.diag_index(block, row_lane, col_lane)),
+                            v);
+                        add_hessian_scalar_compare(old_dof_begin + local_i,
+                                                   old_dof_begin + local_j,
+                                                   value);
+
+                        if(row_block != col_block)
+                        {
+                            muda::atomic_add(
+                                native_matrix.D.data(native_matrix.diag_index(
+                                    block,
+                                    col_lane,
+                                    row_lane)),
+                                v);
+                            add_hessian_scalar_compare(old_dof_begin + local_j,
+                                                       old_dof_begin + local_i,
+                                                       value);
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     template <int Rows, int Cols, typename HMat>
@@ -476,6 +727,18 @@ struct StructuredDeviceAssemblySink
                 }
             }
         }
+    }
+
+    template <int SubBlockDim, int SubBlockCount, typename HMat>
+    MUDA_DEVICE __forceinline__ bool try_add_native_dense_block_upper_subblocks_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+        if(runtime_ordering.enabled)
+            return false;
+        return matrix.template try_add_native_dense_block_upper_subblocks_fixed<
+            SubBlockDim,
+            SubBlockCount>(old_dof_begin, H);
     }
 
     template <int Rows, int Cols, typename HMat>

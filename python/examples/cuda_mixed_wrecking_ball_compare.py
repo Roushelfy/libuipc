@@ -207,6 +207,12 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     socu["debug_compare_native_diag_rhs"] = (
         1 if os.environ.get("SOCU_NATIVE_DIAG_RHS_DIFF") == "1" else 0
     )
+    socu["native_chain_base_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE") == "1" else 0
+    )
+    socu["debug_compare_native_chain_base_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE_DIFF") == "1" else 0
+    )
     socu["runtime_reorder_frame_interval"] = int(spec["runtime_interval"])
     socu["runtime_reorder_graph_source"] = spec.get(
         "runtime_graph_source",
@@ -266,8 +272,9 @@ def build_scene(variant: str, backend: str, workspace: Path) -> tuple[Engine, Wo
 
     config = Scene.default_config()
     config["gravity"] = [[0.0], [-9.8], [0.0]]
-    config["contact"]["friction"]["enable"] = True
-    config["contact"]["enable"] = True
+    contact_enabled = os.environ.get("SOCU_CONTACT_ENABLE", "1") != "0"
+    config["contact"]["friction"]["enable"] = contact_enabled
+    config["contact"]["enable"] = contact_enabled
     config["contact"]["d_hat"] = 0.01
     config["line_search"]["max_iter"] = 8
     config["collision_detection"]["method"] = "stackless_bvh"
