@@ -11,8 +11,10 @@
 
 namespace uipc::backend::cuda_mixed
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_simplex_frictional_contact_structured(
     SimplexFrictionalContact::ContactInfo& info);
+#endif
 
 class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 {
@@ -333,7 +335,13 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 
         if(info.structured_hessian())
         {
+#ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+            throw SimSystemException(
+                "SOCU native-only build excludes legacy simplex frictional "
+                "structured contact assembly");
+#else
             assemble_ipc_simplex_frictional_contact_structured(info);
+#endif
             return;
         }
 

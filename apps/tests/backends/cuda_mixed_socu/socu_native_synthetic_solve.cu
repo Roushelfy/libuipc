@@ -18,7 +18,6 @@
 #endif
 
 #if UIPC_WITH_SOCU_NATIVE
-#include <socu_native/problem_generator.h>
 #include <socu_native/solver.h>
 #endif
 
@@ -34,6 +33,15 @@ using namespace uipc::backend::cuda_mixed;
 #ifndef SOCU_NATIVE_SOURCE_DIR
 #define SOCU_NATIVE_SOURCE_DIR ""
 #endif
+
+template <typename T>
+struct HostProblem
+{
+    socu_native::ProblemShape shape{};
+    std::vector<T>            diag;
+    std::vector<T>            off_diag;
+    std::vector<T>            rhs;
+};
 
 struct SolverPlanDeleter
 {
@@ -119,7 +127,111 @@ struct DeviceProblem
 };
 
 template <typename T>
-DeviceProblem<T> make_device_problem(const socu_native::HostProblem<T>& host)
+HostProblem<T> make_spd_block_tridiag_problem(const socu_native::ProblemShape& shape)
+{
+    HostProblem<T> problem;
+    problem.shape = shape;
+
+    const auto layout = socu_native::describe_problem_layout(shape);
+    problem.diag.assign(layout.diag_element_count, T{0});
+    problem.off_diag.assign(layout.off_diag_element_count, T{0});
+    problem.rhs.assign(layout.rhs_element_count, T{0});
+
+    for(int block = 0; block < shape.horizon; ++block)
+    {
+        const std::size_t block_offset =
+            static_cast<std::size_t>(block) * shape.n * shape.n;
+        for(int lane = 0; lane < shape.n; ++lane)
+        {
+            problem.diag[block_offset + static_cast<std::size_t>(lane) * shape.n
+                         + lane] = T{4};
+        }
+    }
+
+    for(int block = 0; block + 1 < shape.horizon; ++block)
+    {
+        const std::size_t block_offset =
+            static_cast<std::size_t>(block) * shape.n * shape.n;
+        for(int lane = 0; lane < shape.n; ++lane)
+        {
+            problem.off_diag[block_offset + static_cast<std::size_t>(lane) * shape.n
+                             + lane] = T{-0.25};
+        }
+    }
+
+    for(std::size_t i = 0; i < problem.rhs.size(); ++i)
+        problem.rhs[i] = static_cast<T>(std::sin(0.13 * static_cast<double>(i + 1)));
+
+    return problem;
+}
+
+template <typename T>
+double residual_norm(const HostProblem<T>& problem, const std::vector<T>& x)
+{
+    const auto& shape = problem.shape;
+    double      sum   = 0.0;
+
+    for(int block = 0; block < shape.horizon; ++block)
+    {
+        for(int row = 0; row < shape.n; ++row)
+        {
+            double ax = 0.0;
+
+            const std::size_t diag_offset =
+                static_cast<std::size_t>(block) * shape.n * shape.n;
+            const std::size_t rhs_offset =
+                static_cast<std::size_t>(block) * shape.n * shape.nrhs;
+            for(int col = 0; col < shape.n; ++col)
+            {
+                ax += static_cast<double>(
+                          problem.diag[diag_offset
+                                       + static_cast<std::size_t>(row) * shape.n + col])
+                      * static_cast<double>(x[rhs_offset + col]);
+            }
+
+            if(block + 1 < shape.horizon)
+            {
+                const std::size_t off_offset =
+                    static_cast<std::size_t>(block) * shape.n * shape.n;
+                const std::size_t next_rhs_offset =
+                    static_cast<std::size_t>(block + 1) * shape.n * shape.nrhs;
+                for(int col = 0; col < shape.n; ++col)
+                {
+                    ax += static_cast<double>(
+                              problem.off_diag[off_offset
+                                               + static_cast<std::size_t>(col) * shape.n
+                                               + row])
+                          * static_cast<double>(x[next_rhs_offset + col]);
+                }
+            }
+
+            if(block > 0)
+            {
+                const std::size_t off_offset =
+                    static_cast<std::size_t>(block - 1) * shape.n * shape.n;
+                const std::size_t prev_rhs_offset =
+                    static_cast<std::size_t>(block - 1) * shape.n * shape.nrhs;
+                for(int col = 0; col < shape.n; ++col)
+                {
+                    ax += static_cast<double>(
+                              problem.off_diag[off_offset
+                                               + static_cast<std::size_t>(row) * shape.n
+                                               + col])
+                          * static_cast<double>(x[prev_rhs_offset + col]);
+                }
+            }
+
+            const double residual =
+                static_cast<double>(problem.rhs[rhs_offset + row]) - ax;
+            sum += residual * residual;
+        }
+    }
+
+    return std::sqrt(sum);
+}
+
+template <typename T>
+DeviceProblem<T> make_device_problem(const HostProblem<T>& host)
 {
     DeviceProblem<T> device;
     device.shape      = host.shape;
@@ -134,7 +246,7 @@ DeviceProblem<T> make_device_problem(const socu_native::HostProblem<T>& host)
 }
 
 template <typename T>
-void upload_problem(const socu_native::HostProblem<T>& host,
+void upload_problem(const HostProblem<T>&              host,
                     DeviceProblem<T>&                 device,
                     cudaStream_t                      stream)
 {
@@ -231,9 +343,7 @@ void run_synthetic_solve_smoke(int block_size)
     REQUIRE(capability.resolved_perf_backend == socu_native::PerfBackend::MathDx);
     REQUIRE(capability.resolved_graph_mode == socu_native::GraphMode::Off);
 
-    auto base = socu_native::generate_random_spd_block_tridiag<T>(
-        shape,
-        static_cast<std::uint64_t>(12000 + block_size));
+    auto base = make_spd_block_tridiag_problem<T>(shape);
 
     DeviceProblem<T> device = make_device_problem(base);
     cudaStream_t raw_stream = nullptr;
@@ -255,8 +365,7 @@ void run_synthetic_solve_smoke(int block_size)
             launch_options);
         SOCU_NATIVE_CHECK_CUDA(cudaStreamSynchronize(raw_stream));
         const auto solution = download_rhs(device, raw_stream);
-        const double residual =
-            socu_native::residual_norm(base.diag, base.off_diag, base.rhs, solution, shape);
+        const double residual = residual_norm(base, solution);
         const double relative_residual = residual / std::max(1.0, norm2(base.rhs));
         const double residual_limit = std::is_same_v<T, float> ? 5e-3 : 5e-8;
         INFO("block_size=" << block_size << " repeat=" << repeat

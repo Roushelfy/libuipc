@@ -191,6 +191,7 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_set_signature;
         }
+        IndexT descriptor_epoch() const noexcept { return m_descriptor_epoch; }
         bool report_counters_enabled() const noexcept
         {
             return m_contact_counters.data() != nullptr;
@@ -237,6 +238,10 @@ class GlobalLinearSystem : public SimSystem
         void set_contact_set_signature(SizeT signature) noexcept
         {
             m_contact_set_signature = signature;
+        }
+        void set_descriptor_epoch(IndexT epoch) noexcept
+        {
+            m_descriptor_epoch = epoch;
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
@@ -323,6 +328,7 @@ class GlobalLinearSystem : public SimSystem
         StructuredContactOffbandPolicy m_contact_offband_policy =
             StructuredContactOffbandPolicy::Drop;
         SizeT                      m_contact_set_signature = 0;
+        IndexT                     m_descriptor_epoch = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;
         SizeT                      m_old_dof_count  = 0;

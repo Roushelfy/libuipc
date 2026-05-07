@@ -8,8 +8,10 @@
 #include <dytopo_effect_system/dytopo_classify_info.h>
 #include <linear_system/assembly_mode.h>
 #include <linear_system/global_linear_system.h>
+#include <linear_system/socu_native_descriptors.h>
 #include <mixed_precision/policy.h>
 #include <utils/structured_contact_assembly_sink.h>
+#include <muda/buffer/device_buffer.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -119,11 +121,18 @@ class GlobalDyTopoEffectManager final : public SimSystem
 
         ContactSink contact_sink() const noexcept { return m_contact_sink; }
         cudaStream_t stream() const noexcept { return m_stream; }
+        muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors() const noexcept
+        {
+            return m_vertex_descriptors;
+        }
+        IndexT descriptor_epoch() const noexcept { return m_descriptor_epoch; }
 
       private:
         friend class Impl;
         ContactSink  m_contact_sink;
         cudaStream_t m_stream = cudaStreamLegacy;
+        muda::CBufferView<SocuNativeVertexDescriptor> m_vertex_descriptors;
+        IndexT m_descriptor_epoch = 0;
     };
 
     class ComputeDyTopoEffectInfo
@@ -153,7 +162,42 @@ class GlobalDyTopoEffectManager final : public SimSystem
         void _distribute(ComputeDyTopoEffectInfo& info);
         void assemble_structured_hessian(
             GlobalLinearSystem::StructuredAssemblyInfo& info);
+        void ensure_structured_vertex_descriptors(
+            GlobalLinearSystem::StructuredAssemblyInfo& info);
         SizeT contact_set_signature();
+
+        struct StructuredVertexDescriptorCacheKey
+        {
+            // The descriptor table is an ordering-epoch cache. Current FEM fixed
+            // flags, ABD body fixed flags, and ABD vertex-to-body mappings are
+            // treated as structural data inside one descriptor epoch. If any of
+            // those buffers become mutable in-place, the mutating system must
+            // bump descriptor_epoch or this key must grow a content signature.
+            IndexT epoch = 0;
+            SizeT  global_vertex_count = 0;
+            SizeT  horizon = 0;
+            SizeT  block_size = 0;
+            const void* old_to_chain_data = nullptr;
+            SizeT       old_to_chain_size = 0;
+
+            IndexT fem_vertex_offset = -1;
+            IndexT fem_vertex_count = 0;
+            IndexT fem_old_dof_offset = -1;
+            const void* fem_fixed_data = nullptr;
+            SizeT       fem_fixed_size = 0;
+
+            IndexT abd_vertex_offset = -1;
+            IndexT abd_vertex_count = 0;
+            IndexT abd_old_dof_offset = -1;
+            IndexT abd_body_count = 0;
+            const void* abd_vertex_to_body_data = nullptr;
+            SizeT       abd_vertex_to_body_size = 0;
+            const void* abd_body_is_fixed_data = nullptr;
+            SizeT       abd_body_is_fixed_size = 0;
+
+            bool operator==(const StructuredVertexDescriptorCacheKey&) const noexcept =
+                default;
+        };
 
         SimSystemSlot<GlobalVertexManager> global_vertex_manager;
         SimSystemSlot<ABDLinearSubsystem> abd_linear_subsystem;
@@ -197,6 +241,9 @@ class GlobalDyTopoEffectManager final : public SimSystem
 
         vector<muda::DeviceTripletMatrix<StoreScalar, 3>> classified_dytopo_effect_hessians;
         vector<muda::DeviceDoubletVector<StoreScalar, 3>> classified_dytopo_effect_gradients;
+        muda::DeviceBuffer<SocuNativeVertexDescriptor> structured_vertex_descriptors;
+        StructuredVertexDescriptorCacheKey structured_vertex_descriptor_key;
+        IndexT structured_vertex_descriptor_epoch = 0;
 
         void loose_resize_entries(muda::DeviceTripletMatrix<StoreScalar, 3>& m, SizeT size);
         void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);

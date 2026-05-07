@@ -21,6 +21,7 @@
 #include <uipc/common/zip.h>
 #include <energy_component_flags.h>
 #include <fmt/format.h>
+#include <muda/buffer/buffer_launch.h>
 #include <vector>
 
 namespace uipc::backend
@@ -521,6 +522,8 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     if(dytopo_effect_reporters.view().empty())
         return;
 
+    ensure_structured_vertex_descriptors(structured_info);
+
     StructuredHessianInfo info;
     info.m_stream = structured_info.stream();
     auto contact_sink = structured_info.sink();
@@ -528,6 +531,12 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     info.m_contact_sink.counters = structured_info.contact_counters();
     info.m_contact_sink.hessian_cache = structured_info.contact_hessian_cache();
     info.m_contact_sink.offband_policy = structured_info.contact_offband_policy();
+    if(structured_vertex_descriptor_epoch == structured_info.descriptor_epoch())
+    {
+        info.m_vertex_descriptors =
+            structured_vertex_descriptors.view().as_const();
+        info.m_descriptor_epoch = structured_vertex_descriptor_epoch;
+    }
 
     if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
     {
@@ -580,6 +589,104 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
         Timer timer{dytopo_assemble_timer_name(*reporter)};
         reporter->assemble_structured_hessian(info);
     }
+}
+
+void GlobalDyTopoEffectManager::Impl::ensure_structured_vertex_descriptors(
+    GlobalLinearSystem::StructuredAssemblyInfo& structured_info)
+{
+    const IndexT epoch = structured_info.descriptor_epoch();
+    if(epoch <= 0)
+        return;
+
+    const SizeT global_vertex_count =
+        global_vertex_manager ? global_vertex_manager->positions().size() : SizeT{0};
+    if(global_vertex_count == 0)
+        return;
+
+    IndexT fem_vertex_offset = -1;
+    IndexT fem_vertex_count = 0;
+    IndexT fem_old_dof_offset = -1;
+    muda::CBufferView<IndexT> fem_vertex_is_fixed;
+    if(fem_linear_subsystem && finite_element_method && finite_element_vertex_reporter)
+    {
+        fem_vertex_offset = finite_element_vertex_reporter->vertex_offset();
+        fem_vertex_count = finite_element_vertex_reporter->vertex_count();
+        fem_old_dof_offset = fem_linear_subsystem->dof_offset();
+        fem_vertex_is_fixed = finite_element_method->is_fixed();
+    }
+
+    IndexT abd_vertex_offset = -1;
+    IndexT abd_vertex_count = 0;
+    IndexT abd_old_dof_offset = -1;
+    IndexT abd_body_count = 0;
+    muda::CBufferView<IndexT> abd_vertex_to_body;
+    muda::CBufferView<IndexT> abd_body_is_fixed;
+    if(abd_linear_subsystem && affine_body_dynamics && affine_body_vertex_reporter)
+    {
+        abd_vertex_offset = affine_body_vertex_reporter->vertex_offset();
+        abd_vertex_count = affine_body_vertex_reporter->vertex_count();
+        abd_old_dof_offset = abd_linear_subsystem->dof_offset();
+        abd_vertex_to_body = affine_body_dynamics->v2b();
+        abd_body_is_fixed = affine_body_dynamics->body_is_fixed();
+        abd_body_count = static_cast<IndexT>(abd_body_is_fixed.size());
+    }
+
+    const auto old_to_chain = structured_info.old_to_chain();
+    const auto shape = structured_info.shape();
+    const StructuredVertexDescriptorCacheKey key{
+        epoch,
+        global_vertex_count,
+        shape.horizon,
+        shape.block_size,
+        old_to_chain.data(),
+        old_to_chain.size(),
+        fem_vertex_offset,
+        fem_vertex_count,
+        fem_old_dof_offset,
+        fem_vertex_is_fixed.data(),
+        fem_vertex_is_fixed.size(),
+        abd_vertex_offset,
+        abd_vertex_count,
+        abd_old_dof_offset,
+        abd_body_count,
+        abd_vertex_to_body.data(),
+        abd_vertex_to_body.size(),
+        abd_body_is_fixed.data(),
+        abd_body_is_fixed.size()};
+
+    if(structured_vertex_descriptor_key == key
+       && structured_vertex_descriptors.size() == global_vertex_count)
+        return;
+
+    if(global_vertex_count > structured_vertex_descriptors.capacity())
+    {
+        const SizeT reserve_size =
+            static_cast<SizeT>(static_cast<Float>(global_vertex_count) * reserve_ratio)
+            + 1;
+        muda::BufferLaunch(structured_info.stream())
+            .reserve(structured_vertex_descriptors, reserve_size);
+    }
+    muda::BufferLaunch(structured_info.stream())
+        .resize(structured_vertex_descriptors, global_vertex_count);
+
+    rebuild_socu_native_vertex_descriptors(structured_info.stream(),
+                                           structured_vertex_descriptors.view(),
+                                           old_to_chain,
+                                           shape.horizon,
+                                           shape.block_size,
+                                           epoch,
+                                           fem_vertex_offset,
+                                           fem_vertex_count,
+                                           fem_old_dof_offset,
+                                           fem_vertex_is_fixed,
+                                           abd_vertex_offset,
+                                           abd_vertex_count,
+                                           abd_old_dof_offset,
+                                           abd_body_count,
+                                           abd_vertex_to_body,
+                                           abd_body_is_fixed);
+    structured_vertex_descriptor_key = key;
+    structured_vertex_descriptor_epoch = epoch;
 }
 
 SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()

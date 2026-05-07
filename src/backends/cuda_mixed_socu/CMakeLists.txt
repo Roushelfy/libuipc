@@ -2,6 +2,10 @@ set(CMAKE_CUDA_ARCHITECTURES ${UIPC_CUDA_ARCHITECTURES})
 uipc_info("CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}.")
 enable_language(CUDA)
 
+option(UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+    "Build cuda_mixed_socu without legacy structured contact assembly translation units."
+    OFF)
+
 # ------------------------------------------------------------------------------
 # CUDA Backend
 # ------------------------------------------------------------------------------
@@ -17,7 +21,7 @@ target_link_libraries(cuda_mixed_socu PUBLIC
 )
 
 if(TARGET socu_native)
-    target_link_libraries(cuda_mixed_socu PUBLIC socu_native)
+    target_link_libraries(cuda_mixed_socu PRIVATE socu_native)
     target_compile_definitions(cuda_mixed_socu PUBLIC UIPC_WITH_SOCU_NATIVE=1)
 else()
     target_compile_definitions(cuda_mixed_socu PUBLIC UIPC_WITH_SOCU_NATIVE=0)
@@ -33,6 +37,7 @@ target_include_directories(cuda_mixed_socu PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(cuda_mixed_socu PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RUNTIME_LIBRARY Shared
     CUDA_ARCHITECTURES ${UIPC_CUDA_ARCHITECTURES}
     CUDA_STANDARD_REQUIRED ON
     CUDA_STANDARD 20
@@ -77,6 +82,31 @@ if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
 
     list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER)
     uipc_info("cuda_mixed_socu wrecking_ball minimal build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER} source entries")
+endif()
+
+if(UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY)
+    set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_NATIVE_ONLY ${SOURCES})
+    list(LENGTH _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_NATIVE_ONLY _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_NATIVE_ONLY)
+
+    set(_UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_CALLER_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact.cu"
+        "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact.cu"
+        "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact.cu"
+        "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_normal_contact.cu")
+    set_property(
+        SOURCE ${_UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_CALLER_SOURCES}
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=1)
+
+    set(_UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_EXCLUDE_PATTERNS
+        ".*/contact_system/contact_models/.*_structured\\.cu$")
+
+    foreach(_UIPC_CUDA_MIXED_EXCLUDE_PATTERN IN LISTS _UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_EXCLUDE_PATTERNS)
+        list(FILTER SOURCES EXCLUDE REGEX "${_UIPC_CUDA_MIXED_EXCLUDE_PATTERN}")
+    endforeach()
+
+    list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_NATIVE_ONLY)
+    uipc_info("cuda_mixed_socu native-only build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_NATIVE_ONLY} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_NATIVE_ONLY} source entries")
 endif()
 
 target_sources(cuda_mixed_socu PRIVATE ${SOURCES})

@@ -11,8 +11,10 @@
 
 namespace uipc::backend::cuda_mixed
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_simplex_normal_contact_structured(
     SimplexNormalContact::ContactInfo& info);
+#endif
 
 class IPCSimplexNormalContact final : public SimplexNormalContact
 {
@@ -319,7 +321,13 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
 
         if(info.structured_hessian())
         {
+#ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+            throw SimSystemException(
+                "SOCU native-only build excludes legacy simplex normal "
+                "structured contact assembly");
+#else
             assemble_ipc_simplex_normal_contact_structured(info);
+#endif
             return;
         }
 

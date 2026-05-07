@@ -3,6 +3,9 @@
 #include <uipc/common/span.h>
 #include <uipc/common/type_define.h>
 
+#include <cuda_runtime_api.h>
+#include <muda/buffer/buffer_view.h>
+
 #include <stdexcept>
 #include <vector>
 
@@ -45,6 +48,7 @@ struct SocuNativeVertexDescriptor
     IndexT                   abd_body = -1;
     IndexT                   abd_j_index = -1;
     IndexT                   epoch = 0;
+    bool                     active = false;
 
     bool mapped() const noexcept
     {
@@ -52,7 +56,7 @@ struct SocuNativeVertexDescriptor
                && dof_count > 0;
     }
 
-    bool writable() const noexcept { return mapped() && !fixed; }
+    bool writable() const noexcept { return mapped() && active && !fixed; }
 };
 
 struct SocuNativeDescriptorTable
@@ -63,9 +67,13 @@ struct SocuNativeDescriptorTable
     std::vector<SocuNativeDofDescriptor>    dofs;
     std::vector<SocuNativeVertexDescriptor> vertices;
 
-    bool valid_for(IndexT expected_epoch) const noexcept
+    bool valid_for(IndexT expected_epoch,
+                   SizeT  expected_horizon = 0,
+                   SizeT  expected_block_size = 0) const noexcept
     {
-        return epoch == expected_epoch;
+        return epoch == expected_epoch
+               && (expected_horizon == 0 || horizon == expected_horizon)
+               && (expected_block_size == 0 || block_size == expected_block_size);
     }
 };
 
@@ -107,9 +115,17 @@ struct SocuNativeHalfBlockClassification
     SizeT               offband_scalar_count = 0;
     SizeT               skipped_scalar_count = 0;
 
+    // "In band" means no scalar would be dropped as off-band. Fixed or
+    // otherwise skipped scalars can still be present.
     bool fully_in_band() const noexcept
     {
-        return offband_scalar_count == 0 && skipped_scalar_count == 0
+        return offband_scalar_count == 0;
+    }
+
+    // Use this when the caller needs every scalar to be writable.
+    bool fully_writable_in_band() const noexcept
+    {
+        return fully_in_band() && skipped_scalar_count == 0
                && cls != SocuNativeBandClass::Skipped;
     }
 };
@@ -121,9 +137,17 @@ struct SocuNativeStencilClassification
     SizeT offband_half_block_count = 0;
     SizeT skipped_half_block_count = 0;
 
+    // "In band" means no half-block would be dropped as off-band. Fixed or
+    // otherwise skipped half-blocks can still be present.
     bool fully_in_band() const noexcept
     {
-        return offband_half_block_count == 0 && skipped_half_block_count == 0;
+        return offband_half_block_count == 0;
+    }
+
+    // Use this when the caller needs every half-block to be writable.
+    bool fully_writable_in_band() const noexcept
+    {
+        return fully_in_band() && skipped_half_block_count == 0;
     }
 };
 
@@ -158,6 +182,32 @@ build_socu_native_dof_descriptors(span<const IndexT> old_to_chain,
     return descriptors;
 }
 
+inline bool socu_native_dof_range_active(span<const SocuNativeDofDescriptor> dofs,
+                                         IndexT old_dof,
+                                         IndexT dof_count) noexcept
+{
+    if(old_dof < 0 || dof_count <= 0)
+        return false;
+    if(static_cast<SizeT>(old_dof + dof_count) > dofs.size())
+        return false;
+
+    const auto& first = dofs[static_cast<SizeT>(old_dof)];
+    if(!first.active || first.chain_dof < 0)
+        return false;
+    for(IndexT i = 1; i < dof_count; ++i)
+    {
+        const auto& dof = dofs[static_cast<SizeT>(old_dof + i)];
+        if(!dof.active)
+            return false;
+        if(dof.chain_dof != first.chain_dof + i)
+            return false;
+        if(dof.block != first.block
+           || dof.lane != first.lane + static_cast<SizeT>(i))
+            return false;
+    }
+    return true;
+}
+
 inline SocuNativeVertexDescriptor make_socu_native_vertex_descriptor(
     SocuNativeDescriptorKind              kind,
     bool                                  fixed,
@@ -176,6 +226,7 @@ inline SocuNativeVertexDescriptor make_socu_native_vertex_descriptor(
     descriptor.abd_body    = abd_body;
     descriptor.abd_j_index = abd_j_index;
     descriptor.epoch       = epoch;
+    descriptor.active      = socu_native_dof_range_active(dofs, old_dof, dof_count);
 
     if(old_dof >= 0 && static_cast<SizeT>(old_dof) < dofs.size())
     {
@@ -405,4 +456,22 @@ socu_native_classify_stencil_half(span<const SocuNativeVertexDescriptor> vertice
     }
     return out;
 }
+
+void rebuild_socu_native_vertex_descriptors(
+    cudaStream_t                           stream,
+    muda::BufferView<SocuNativeVertexDescriptor> descriptors,
+    muda::CBufferView<IndexT>              old_to_chain,
+    SizeT                                  horizon,
+    SizeT                                  block_size,
+    IndexT                                 epoch,
+    IndexT                                 fem_vertex_offset,
+    IndexT                                 fem_vertex_count,
+    IndexT                                 fem_old_dof_offset,
+    muda::CBufferView<IndexT>              fem_vertex_is_fixed,
+    IndexT                                 abd_vertex_offset,
+    IndexT                                 abd_vertex_count,
+    IndexT                                 abd_old_dof_offset,
+    IndexT                                 abd_body_count,
+    muda::CBufferView<IndexT>              abd_vertex_to_body,
+    muda::CBufferView<IndexT>              abd_body_is_fixed);
 }  // namespace uipc::backend::cuda_mixed

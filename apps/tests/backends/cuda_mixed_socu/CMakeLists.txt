@@ -6,6 +6,13 @@ target_include_directories(backend_cuda_mixed_socu PRIVATE
     ${PROJECT_SOURCE_DIR}/src/backends/cuda_mixed_socu
     ${PROJECT_SOURCE_DIR}/src)
 
+if(TARGET socu_native)
+    target_include_directories(backend_cuda_mixed_socu PRIVATE
+        $<TARGET_PROPERTY:socu_native,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(backend_cuda_mixed_socu PRIVATE
+        $<TARGET_PROPERTY:socu_native,INTERFACE_COMPILE_DEFINITIONS>)
+endif()
+
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     if(UIPC_GITHUB_ACTIONS)
         set(CMAKE_CUDA_ARCHITECTURES 75)
@@ -21,6 +28,7 @@ target_compile_definitions(backend_cuda_mixed_socu PRIVATE
 set_target_properties(backend_cuda_mixed_socu PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RUNTIME_LIBRARY Shared
     CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
     CUDA_INCLUDE_WHAT_YOU_USE ON
 )

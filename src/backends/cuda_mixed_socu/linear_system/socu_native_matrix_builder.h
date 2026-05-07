@@ -173,11 +173,25 @@ struct SocuNativeMatrixView
         return (block * block_size + lane) * nrhs + rhs_col;
     }
 
+    MUDA_GENERIC bool valid_block_lane(SizeT block, SizeT lane) const noexcept
+    {
+        return block < block_count && lane < block_size;
+    }
+
+    MUDA_GENERIC bool valid_block_entry(SizeT block,
+                                        SizeT row,
+                                        SizeT col) const noexcept
+    {
+        return block < block_count && row < block_size && col < block_size;
+    }
+
     MUDA_DEVICE void add_diag_scalar(SizeT block,
                                      SizeT row,
                                      SizeT col,
                                      Scalar value) const noexcept
     {
+        if(!valid_block_entry(block, row, col))
+            return;
         const SizeT index = diag_index(block, row, col);
         if(index < D.size())
             muda::atomic_add(D.data(index), value);
@@ -188,7 +202,8 @@ struct SocuNativeMatrixView
                                               SizeT col,
                                               Scalar value) const noexcept
     {
-        if(left_block >= first_offdiag_block_count)
+        if(left_block >= first_offdiag_block_count || row >= block_size
+           || col >= block_size)
             return;
         const SizeT index = first_offdiag_index(left_block, row, col);
         if(index < E.size())
@@ -200,7 +215,8 @@ struct SocuNativeMatrixView
                                         SizeT col,
                                         Scalar value) const noexcept
     {
-        if(offdiag_block >= offdiag_block_count)
+        if(offdiag_block >= offdiag_block_count || row >= block_size
+           || col >= block_size)
             return;
         const SizeT index = offdiag_index(offdiag_block, row, col);
         if(index < E.size())
@@ -212,6 +228,8 @@ struct SocuNativeMatrixView
                                     SizeT rhs_col,
                                     Scalar value) const noexcept
     {
+        if(!valid_block_lane(block, lane) || rhs_col >= nrhs)
+            return;
         const SizeT index = rhs_index(block, lane, rhs_col);
         if(index < rhs.size())
             muda::atomic_add(rhs.data(index), value);
@@ -304,7 +322,6 @@ class SocuNativeMatrixBuilder
         memset_async(m_D.data(), m_D.size(), stream);
         memset_async(m_E.data(), m_E.size(), stream);
         memset_async(m_rhs.data(), m_rhs.size(), stream);
-        memset_async(m_blocks.data(), m_blocks.size(), stream);
     }
 
     const SocuNativeStorageLayout& layout() const noexcept { return m_layout; }

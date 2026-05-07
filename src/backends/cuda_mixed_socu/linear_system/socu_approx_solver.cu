@@ -1234,6 +1234,7 @@ void SocuApproxSolver::prepare_structured_chain(
         info.set_contact_counters(m_runtime->report_counters.view());
     info.set_runtime_ordering_collector({});
     info.set_contact_offband_policy(m_contact_offband_policy);
+    info.set_descriptor_epoch(m_descriptor_epoch);
     if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
                                      m_contact_offband_policy)
        && m_cached_contact_hessian_valid
@@ -1349,6 +1350,7 @@ auto SocuApproxSolver::prepare_structured_probe(
             m_runtime_reorder_graph_source == "topology",
             runtime_graph_source_approx(m_runtime_reorder_graph_source)));
     info.set_contact_offband_policy(m_contact_offband_policy);
+    info.set_descriptor_epoch(m_descriptor_epoch);
     if(contact_hessian_cache_enabled(m_runtime_reorder_graph_source,
                                      m_contact_offband_policy))
     {

@@ -11,9 +11,11 @@
 
 namespace uipc::backend::cuda_mixed
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_vertex_half_plane_frictional_contact_structured(
     VertexHalfPlaneFrictionalContact::ContactInfo& info,
     const HalfPlane&                               half_plane);
+#endif
 
 class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFrictionalContact
 {
@@ -99,9 +101,15 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
 
         if(info.structured_hessian())
         {
+#ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+            throw SimSystemException(
+                "SOCU native-only build excludes legacy vertex-half-plane "
+                "frictional structured contact assembly");
+#else
             assemble_ipc_vertex_half_plane_frictional_contact_structured(
                 info,
                 *half_plane);
+#endif
             return;
         }
 

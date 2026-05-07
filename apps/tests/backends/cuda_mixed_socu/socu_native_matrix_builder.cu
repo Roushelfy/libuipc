@@ -78,6 +78,22 @@ __global__ void write_storage_fixture(SocuNativeMatrixView<Scalar> view)
 }
 
 template <typename Scalar>
+__global__ void write_out_of_bounds_fixture(SocuNativeMatrixView<Scalar> view)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    view.add_diag_scalar(0, view.block_size, 0, Scalar{1});
+    view.add_diag_scalar(view.block_count, 0, 0, Scalar{2});
+    view.add_first_offdiag_scalar(0, view.block_size, 0, Scalar{3});
+    view.add_first_offdiag_scalar(view.first_offdiag_block_count, 0, 0, Scalar{4});
+    view.add_offdiag_scalar(0, view.block_size, 0, Scalar{5});
+    view.add_offdiag_scalar(view.offdiag_block_count, 0, 0, Scalar{6});
+    view.add_rhs_scalar(0, view.block_size, 0, Scalar{7});
+    view.add_rhs_scalar(0, 0, view.nrhs, Scalar{8});
+}
+
+template <typename Scalar>
 __global__ void fill_spd_diagonal_fixture(SocuNativeMatrixView<Scalar> view)
 {
     const uipc::SizeT block = static_cast<uipc::SizeT>(blockIdx.x);
@@ -87,6 +103,15 @@ __global__ void fill_spd_diagonal_fixture(SocuNativeMatrixView<Scalar> view)
 
     view.add_diag_scalar(block, lane, lane, Scalar{2});
     view.add_rhs_scalar(block, lane, 0, Scalar{1});
+}
+
+template <typename Scalar>
+void require_all_zero(const std::vector<Scalar>& values)
+{
+    for(const Scalar value : values)
+    {
+        REQUIRE(static_cast<double>(value) == Catch::Approx(0.0));
+    }
 }
 
 template <typename Scalar>
@@ -257,6 +282,51 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
     CHECK(snapshot.blocks[1].padding_lane_begin == 3);
     CHECK(snapshot.blocks[1].padding_lane_count == 1);
     CHECK(snapshot.blocks[1].ordering_epoch == 42);
+}
+
+TEST_CASE("cuda_mixed_socu_native_matrix_builder_bounds_and_clear_contract",
+          "[cuda_mixed_socu][contract][socu_native_builder]")
+{
+    using Scalar = ActivePolicy::SolveScalar;
+
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        SKIP("no CUDA device is available for SOCU native storage tests");
+    }
+
+    StreamGuard stream;
+    SocuNativeMatrixBuilder<Scalar> builder;
+    builder.reserve(2, 4, 1);
+    builder.clear(stream.stream);
+
+    std::vector<SocuNativeBlockMeta> metadata(2);
+    metadata[0] = SocuNativeBlockMeta{0, 4, 4, 0, 7};
+    metadata[1] = SocuNativeBlockMeta{4, 2, 2, 2, 7};
+    builder.set_block_metadata(metadata, stream.stream);
+
+    write_out_of_bounds_fixture<<<1, 1, 0, stream.stream>>>(builder.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    auto snapshot = builder.snapshot(stream.stream);
+    require_all_zero(snapshot.D);
+    require_all_zero(snapshot.E);
+    require_all_zero(snapshot.rhs);
+    REQUIRE(snapshot.blocks.size() == metadata.size());
+    CHECK(snapshot.blocks[0].old_dof_begin == 0);
+    CHECK(snapshot.blocks[1].active_lane_count == 2);
+
+    builder.clear(stream.stream);
+    snapshot = builder.snapshot(stream.stream);
+    require_all_zero(snapshot.D);
+    require_all_zero(snapshot.E);
+    require_all_zero(snapshot.rhs);
+    REQUIRE(snapshot.blocks.size() == metadata.size());
+    CHECK(snapshot.blocks[0].ordering_epoch == 7);
+    CHECK(snapshot.blocks[1].padding_lane_count == 2);
 }
 
 TEST_CASE("cuda_mixed_socu_native_matrix_builder_solver_contract",

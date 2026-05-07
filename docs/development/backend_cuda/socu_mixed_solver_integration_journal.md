@@ -1258,3 +1258,69 @@ classification are covered for FEM/FEM, FEM/ABD, ABD/FEM, ABD/ABD, fixed
 vertices, off-band pairs, and reorder epochs. The default structured SOCU path
 continues to use the existing structured sink and still passes the 20-frame
 sanity run.
+
+## 2026-05-07 Milestone 4 Descriptor Device Rebuild And Link Closure
+
+This pass closed the remaining M4 descriptor/device-build issues and kept the
+native builder work isolated from legacy structured contact assembly:
+
+- Added `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY`. In this mode the SOCU backend
+  excludes legacy structured contact model translation units matching
+  `contact_system/contact_models/*_structured.cu`, while the non-structured
+  contact model callers compile with `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=1` so
+  accidental fallback calls fail clearly instead of silently using removed code.
+- Forced shared CUDA runtime linkage for the SOCU backend and backend test
+  target with `CUDA_RUNTIME_LIBRARY Shared`.
+- Fixed a CUDA DSO registration/link interaction by changing the backend's
+  `socu_native` link dependency from `PUBLIC` to `PRIVATE`. The test target now
+  inherits only `socu_native` interface include directories and compile
+  definitions; it no longer pulls `external/socu-native-cuda/libsocu_native.a`
+  into the test executable's CUDA device-link step. The previous duplicate
+  static CUDA archive linkage was the root cause of the
+  `cudaErrorInvalidResourceHandle` seen when launching the backend DSO's
+  descriptor rebuild kernel from the directly linked test executable.
+- Reworked the `socu_native` synthetic smoke test to use a local deterministic
+  SPD block-tridiagonal fixture and local residual check. This preserves the
+  solver contract test without requiring the test executable to link the
+  `socu_native` host-side problem generator symbols directly.
+
+Build-artifact checks:
+
+```text
+UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON configure:
+  cuda_mixed_socu native-only build: 468 -> 464 source entries
+
+build.ninja scan for
+  src/backends/cuda_mixed_socu/CMakeFiles/cuda_mixed_socu.dir/contact_system/contact_models/.*_structured.cu.o:
+  no matches
+
+structured_contact_hessian_cache.cu.o unresolved registration:
+  U __cudaRegisterLinkedBinary_6dcc94e7_35_structured_contact_hessian_cache_cu_82f2d525_2706635
+
+cuda_mixed_socu cmake_device_link.o registration:
+  T __cudaRegisterLinkedBinary_6dcc94e7_35_structured_contact_hessian_cache_cu_82f2d525_2706635
+
+test executable CUDA device-link/final-link:
+  no external/socu-native-cuda/libsocu_native.a
+
+git diff --check: passed
+```
+
+Functional results:
+
+| check | result |
+| --- | --- |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_descriptor]" -s` | passed, 124 assertions in 6 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_builder]"` | passed, 840 assertions in 5 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native][m6]"` | passed, 84 assertions in 1 case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 1066 assertions in 16 cases |
+
+Acceptance: M4 descriptor infrastructure is now considered complete for the
+planned infrastructure scope. Host descriptor construction, pair/stencil
+classification, reorder epoch behavior, device descriptor rebuild, comparison
+against the current structured sink classification, and native storage/solver
+contracts are covered by always-on backend contract tests. The production
+structured SOCU path remains unchanged and still does not consume the native
+descriptor table for matrix assembly. Provider migration, contact stencil
+descriptors, native graph/reorder collection, and native contact writes remain
+future milestones rather than hidden M4 requirements.

@@ -1,11 +1,51 @@
 #include <app/app.h>
 #include <linear_system/socu_native_descriptors.h>
+#include <mixed_precision/policy.h>
+#include <utils/assembly_sink.h>
 
+#include <cuda_runtime.h>
+#include <muda/buffer/buffer_launch.h>
+#include <muda/buffer/device_buffer.h>
+
+#include <array>
+#include <utility>
 #include <vector>
 
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+
+struct StreamGuard
+{
+    cudaStream_t stream = nullptr;
+
+    StreamGuard()
+    {
+        REQUIRE(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking)
+                == cudaSuccess);
+    }
+
+    StreamGuard(const StreamGuard&) = delete;
+    StreamGuard& operator=(const StreamGuard&) = delete;
+
+    ~StreamGuard()
+    {
+        if(stream != nullptr)
+            cudaStreamDestroy(stream);
+    }
+};
+
+bool has_cuda_device()
+{
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        return false;
+    }
+    return true;
+}
 
 struct DescriptorFixture
 {
@@ -64,6 +104,22 @@ struct DescriptorFixture
             uipc::span<const SocuNativeDofDescriptor>{dofs.data(), dofs.size()});
     }
 };
+
+template <typename StoreT, typename SolveT>
+__global__ void classify_with_structured_sink(
+    StructuredDeviceMatrixSink<StoreT, SolveT> sink,
+    muda::BufferView<uipc::IndexT>             out)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    out[0] = static_cast<uipc::IndexT>(sink.classify_dof_pair(0, 0));
+    out[1] = static_cast<uipc::IndexT>(sink.classify_dof_pair(2, 3));
+    out[2] = static_cast<uipc::IndexT>(sink.classify_dof_pair(0, 6));
+    out[3] = static_cast<uipc::IndexT>(sink.classify_dof_pair(9, 6));
+    out[4] = static_cast<uipc::IndexT>(sink.classify_dof_pair(9, 21));
+    out[5] = static_cast<uipc::IndexT>(sink.classify_dof_pair(0, 100));
+}
 }  // namespace
 
 TEST_CASE("cuda_mixed_socu_native_descriptor_dof_table",
@@ -134,6 +190,7 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_vertex_table",
     REQUIRE(vertices.size() == 12);
 
     CHECK(vertices[0].kind == SocuNativeDescriptorKind::Fem);
+    CHECK(vertices[0].active);
     CHECK(vertices[0].writable());
     CHECK(vertices[0].old_dof == 0);
     CHECK(vertices[0].dof_count == 3);
@@ -148,6 +205,7 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_vertex_table",
     CHECK(!vertices[5].mapped());
 
     CHECK(vertices[10].kind == SocuNativeDescriptorKind::Abd);
+    CHECK(vertices[10].active);
     CHECK(vertices[10].writable());
     CHECK(vertices[10].old_dof == 9);
     CHECK(vertices[10].dof_count == 12);
@@ -160,6 +218,52 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_vertex_table",
     CHECK(vertices[11].fixed);
     CHECK(vertices[11].abd_body == 1);
     CHECK(!vertices[11].writable());
+
+    std::vector<uipc::IndexT> inactive_old_to_chain(6, uipc::IndexT{-1});
+    const auto inactive_dofs = build_socu_native_dof_descriptors(
+        uipc::span<const uipc::IndexT>{inactive_old_to_chain.data(),
+                                       inactive_old_to_chain.size()},
+        {},
+        DescriptorFixture::Horizon,
+        DescriptorFixture::BlockSize,
+        7);
+    const auto inactive_vertex = make_socu_native_vertex_descriptor(
+        SocuNativeDescriptorKind::Fem,
+        false,
+        0,
+        3,
+        -1,
+        -1,
+        7,
+        uipc::span<const SocuNativeDofDescriptor>{inactive_dofs.data(),
+                                                  inactive_dofs.size()});
+    CHECK(inactive_vertex.mapped());
+    CHECK(!inactive_vertex.active);
+    CHECK(!inactive_vertex.writable());
+
+    std::vector<uipc::IndexT> split_old_to_chain = fixture.old_to_chain;
+    split_old_to_chain[1] = 2;
+    split_old_to_chain[2] = 3;
+    const auto split_dofs = build_socu_native_dof_descriptors(
+        uipc::span<const uipc::IndexT>{split_old_to_chain.data(),
+                                       split_old_to_chain.size()},
+        {},
+        DescriptorFixture::Horizon,
+        DescriptorFixture::BlockSize,
+        7);
+    const auto split_vertex = make_socu_native_vertex_descriptor(
+        SocuNativeDescriptorKind::Fem,
+        false,
+        0,
+        3,
+        -1,
+        -1,
+        7,
+        uipc::span<const SocuNativeDofDescriptor>{split_dofs.data(),
+                                                  split_dofs.size()});
+    CHECK(split_vertex.mapped());
+    CHECK(!split_vertex.active);
+    CHECK(!split_vertex.writable());
 }
 
 TEST_CASE("cuda_mixed_socu_native_descriptor_band_classification",
@@ -187,6 +291,7 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_band_classification",
     CHECK(diag.cls == SocuNativeBandClass::Diag);
     CHECK(diag.diag_scalar_count == 9);
     CHECK(diag.fully_in_band());
+    CHECK(diag.fully_writable_in_band());
 
     const auto first = socu_native_classify_half_block(
         fem0,
@@ -197,6 +302,7 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_band_classification",
     CHECK(first.cls == SocuNativeBandClass::FirstOffdiag);
     CHECK(first.first_offdiag_scalar_count == 9);
     CHECK(first.fully_in_band());
+    CHECK(first.fully_writable_in_band());
 
     const auto off = socu_native_classify_half_block(
         fem0,
@@ -232,6 +338,14 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_band_classification",
                                           DescriptorFixture::Horizon,
                                           DescriptorFixture::BlockSize)
               .cls == SocuNativeBandClass::Skipped);
+    const auto fixed_skip = socu_native_classify_half_block(
+        fixed_fem,
+        fem0,
+        old_to_chain,
+        DescriptorFixture::Horizon,
+        DescriptorFixture::BlockSize);
+    CHECK(fixed_skip.fully_in_band());
+    CHECK(!fixed_skip.fully_writable_in_band());
 
     const auto target = socu_native_classify_old_dof_pair(
         old_to_chain,
@@ -280,6 +394,8 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_reorder_epoch",
     table7.block_size = DescriptorFixture::BlockSize;
     table7.dofs = epoch7.dofs;
     CHECK(table7.valid_for(7));
+    CHECK(table7.valid_for(7, DescriptorFixture::Horizon, DescriptorFixture::BlockSize));
+    CHECK(!table7.valid_for(7, DescriptorFixture::Horizon + 1, DescriptorFixture::BlockSize));
     CHECK(!table7.valid_for(8));
 
     SocuNativeDescriptorTable table8;
@@ -292,4 +408,164 @@ TEST_CASE("cuda_mixed_socu_native_descriptor_reorder_epoch",
     CHECK(table8.dofs[0].block == 1);
     CHECK(table8.dofs[0].lane == 0);
     CHECK(table8.dofs[0].epoch == 8);
+}
+
+TEST_CASE("cuda_mixed_socu_native_descriptor_device_rebuild",
+          "[cuda_mixed_socu][contract][socu_native_descriptor]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU native descriptor tests");
+
+    DescriptorFixture fixture;
+
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain{fixture.old_to_chain};
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> descriptors;
+    descriptors.resize(12);
+
+    const std::vector<uipc::IndexT> fem_fixed{0, 1, 0};
+    const std::vector<uipc::IndexT> abd_v2b{0, 1};
+    const std::vector<uipc::IndexT> abd_fixed{0, 1};
+    muda::DeviceBuffer<uipc::IndexT> fem_fixed_device{fem_fixed};
+    muda::DeviceBuffer<uipc::IndexT> abd_v2b_device{abd_v2b};
+    muda::DeviceBuffer<uipc::IndexT> abd_fixed_device{abd_fixed};
+
+    cudaGetLastError();  // clear setup/copy status before checking the rebuild launch
+    rebuild_socu_native_vertex_descriptors(cudaStreamLegacy,
+                                           descriptors.view(),
+                                           old_to_chain.view(),
+                                           DescriptorFixture::Horizon,
+                                           DescriptorFixture::BlockSize,
+                                           11,
+                                           0,
+                                           3,
+                                           0,
+                                           fem_fixed_device.view(),
+                                           10,
+                                           2,
+                                           9,
+                                           2,
+                                           abd_v2b_device.view(),
+                                           abd_fixed_device.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+
+    std::vector<SocuNativeVertexDescriptor> host;
+    descriptors.copy_to(host);
+    REQUIRE(host.size() == 12);
+
+    CHECK(host[0].kind == SocuNativeDescriptorKind::Fem);
+    CHECK(host[0].active);
+    CHECK(host[0].writable());
+    CHECK(host[0].old_dof == 0);
+    CHECK(host[0].block == 0);
+    CHECK(host[0].lane == 0);
+    CHECK(host[0].epoch == 11);
+
+    CHECK(host[1].kind == SocuNativeDescriptorKind::Fem);
+    CHECK(host[1].fixed);
+    CHECK(!host[1].writable());
+
+    CHECK(!host[5].mapped());
+
+    CHECK(host[10].kind == SocuNativeDescriptorKind::Abd);
+    CHECK(host[10].active);
+    CHECK(host[10].writable());
+    CHECK(host[10].old_dof == 9);
+    CHECK(host[10].dof_count == 12);
+    CHECK(host[10].block == 2);
+    CHECK(host[10].lane == 0);
+    CHECK(host[10].abd_body == 0);
+    CHECK(host[10].abd_j_index == 0);
+
+    CHECK(host[11].kind == SocuNativeDescriptorKind::Abd);
+    CHECK(host[11].fixed);
+    CHECK(!host[11].writable());
+
+    const auto old_to_chain_host =
+        uipc::span<const uipc::IndexT>{fixture.old_to_chain.data(),
+                                       fixture.old_to_chain.size()};
+    CHECK(socu_native_classify_half_block(host[0],
+                                          host[1],
+                                          old_to_chain_host,
+                                          DescriptorFixture::Horizon,
+                                          DescriptorFixture::BlockSize)
+              .cls == SocuNativeBandClass::Skipped);
+    CHECK(socu_native_classify_half_block(host[0],
+                                          host[2],
+                                          old_to_chain_host,
+                                          DescriptorFixture::Horizon,
+                                          DescriptorFixture::BlockSize)
+              .cls == SocuNativeBandClass::OffBand);
+    CHECK(socu_native_classify_half_block(host[10],
+                                          host[2],
+                                          old_to_chain_host,
+                                          DescriptorFixture::Horizon,
+                                          DescriptorFixture::BlockSize)
+              .cls == SocuNativeBandClass::FirstOffdiag);
+}
+
+TEST_CASE("cuda_mixed_socu_native_descriptor_classification_matches_structured_sink",
+          "[cuda_mixed_socu][contract][socu_native_descriptor]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU native descriptor tests");
+
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    DescriptorFixture fixture;
+    StreamGuard       stream;
+
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain{fixture.old_to_chain};
+    muda::DeviceBuffer<Solve> diag;
+    muda::DeviceBuffer<Solve> first_offdiag;
+    muda::DeviceBuffer<uipc::IndexT> sink_classes;
+    muda::BufferLaunch(stream.stream)
+        .resize(diag,
+                DescriptorFixture::Horizon * DescriptorFixture::BlockSize
+                    * DescriptorFixture::BlockSize)
+        .resize(first_offdiag,
+                (DescriptorFixture::Horizon - 1) * DescriptorFixture::BlockSize
+                    * DescriptorFixture::BlockSize)
+        .resize(sink_classes, 6);
+
+    StructuredDeviceMatrixSink<Store, Solve> sink{
+        diag.view(),
+        first_offdiag.view(),
+        old_to_chain.view(),
+        DescriptorFixture::Horizon,
+        DescriptorFixture::BlockSize,
+        {}};
+    classify_with_structured_sink<<<1, 1, 0, stream.stream>>>(sink,
+                                                              sink_classes.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<uipc::IndexT> sink_host;
+    sink_classes.copy_to(sink_host);
+    REQUIRE(sink_host.size() == 6);
+
+    const std::array<std::pair<uipc::IndexT, uipc::IndexT>, 6> pairs{{
+        {0, 0},
+        {2, 3},
+        {0, 6},
+        {9, 6},
+        {9, 21},
+        {0, 100},
+    }};
+    const auto old_to_chain_host =
+        uipc::span<const uipc::IndexT>{fixture.old_to_chain.data(),
+                                       fixture.old_to_chain.size()};
+    for(std::size_t i = 0; i < pairs.size(); ++i)
+    {
+        const auto descriptor_class = socu_native_classify_old_dof_pair(
+            old_to_chain_host,
+            DescriptorFixture::Horizon,
+            DescriptorFixture::BlockSize,
+            pairs[i].first,
+            pairs[i].second);
+        CAPTURE(i, pairs[i].first, pairs[i].second);
+        CHECK(sink_host[i] == static_cast<uipc::IndexT>(descriptor_class.cls));
+    }
 }
