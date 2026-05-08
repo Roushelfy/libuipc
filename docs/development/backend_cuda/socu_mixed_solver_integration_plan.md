@@ -261,7 +261,10 @@ The solve report records:
   `native_chain_base_dense_miss_count`,
   `native_chain_base_scalar_fallback_count`,
   `native_chain_base_diag3x3_hit_count`, and
-  `native_chain_base_diag3x3_miss_count`
+  `native_chain_base_diag3x3_miss_count`,
+  `native_chain_base_pair3x3_same_block_hit_count`,
+  `native_chain_base_pair3x3_adjacent_hit_count`, and
+  `native_chain_base_pair3x3_miss_count`
 - line-search feedback when available
 - optional `runtime_reorder` diagnostics: enabled state, interval, capacity,
   collecting frame, last applied frame, raw/unique edge counts, overflow count,
@@ -1381,6 +1384,14 @@ Current implementation status (2026-05-07):
   This covers kinetic/mass-style diagonal vertex blocks and other diagonal
   `BlockDim=3` local writes. Inactive, fixed-policy, runtime-ordering, and
   unsupported cross-block cases still fall back to the scalar structured sink.
+- M6b/M6c now also includes the first FEM pair `3x3` target slice:
+  non-fixed cross-vertex `BlockDim=3` Hessian writes classify the two
+  descriptor-backed vertex triplets once per local `3x3` block. Same-native
+  block pairs write the full block directly to `D` with arbitrary lanes;
+  adjacent native block pairs write directly to first-offdiag `E` using the
+  same SOCU orientation as the scalar native sink; off-band and inactive cases
+  fall back to the scalar structured sink. Runtime ordering collection disables
+  this fast path so graph capture semantics remain scalar.
 
 Detailed M6b execution plan:
 
@@ -1391,8 +1402,10 @@ Detailed M6b execution plan:
      `native_chain_base_dense_miss_count`,
      `native_chain_base_scalar_fallback_count`,
      `native_chain_base_diag3x3_hit_count`, and
-     `native_chain_base_diag3x3_miss_count`. Extend the same counter family
-     with first-offdiag target counters when that target family lands.
+     `native_chain_base_diag3x3_miss_count`,
+     `native_chain_base_pair3x3_same_block_hit_count`,
+     `native_chain_base_pair3x3_adjacent_hit_count`, and
+     `native_chain_base_pair3x3_miss_count`.
    - Add a replacement timer for the old `Assemble Structured Chain` signal.
      Current fields are `chain_base_assembly_time_ms`,
      `native_chain_base_assembly_time_ms`, and
@@ -1428,17 +1441,27 @@ Detailed M6b execution plan:
      full same-block `3x3` block directly to `D` from descriptor lanes without
      requiring contiguous lanes. Synthetic tests cover arbitrary-lane hit and
      inactive-descriptor scalar fallback.
-   - Add pair targets for FEM element/report contributions that naturally know
-     their local vertex pair. Each pair target should classify once at descriptor
-     build time as diag, first-offdiag, off-band, or skipped.
+   - Pair `3x3` target: implemented M6b/M6c sink-side slice. It handles
+     same-block, adjacent-block, reverse adjacent order, and off-band fallback
+     for non-fixed local vertex pairs. Synthetic tests compare native primary,
+     debug compare, and scalar legacy `D/E` buffers and assert the expected
+     pair counters.
+   - Remaining high-performance work is to move this from descriptor-backed
+     sink-side classification to provider-built pair/stencil target arrays, so
+     provider kernels can load `left_block/row_lane/col_lane/transposed` targets
+     instead of gathering DoF descriptors in the write path.
    - For fixed vertices, use the descriptor fixed flag to choose identity or
      skip/write policy before entering the hot write loop.
 
 5. **First-offdiag target precomputation.**
    - Store SOCU orientation explicitly: `left_block`, `row_lane`, `col_lane`,
      and whether the provider-local pair order is transposed.
+   - The current FEM pair slice already classifies once per local `3x3` block
+     and writes adjacent pairs to first-offdiag `E`; it still computes target
+     orientation inside the sink from native DoF descriptors. The next
+     performance step is the explicit target table above.
    - Provider kernels must not recompute `abs(block_i - block_j)` per scalar
-     once this target exists.
+     once explicit target tables exist.
 
 6. **Production single-write mode.**
    - Default production path for enabled native targets writes only native
@@ -1450,9 +1473,10 @@ Detailed M6b execution plan:
 
 7. **M6b completion criteria.**
    - Provider unit tests cover ABD same-block and adjacent first-offdiag fast
-     paths plus the FEM vertex-local `3x3` arbitrary-lane/fallback fast path.
-     The remaining target families add off-band/skipped descriptor coverage as
-     they land.
+     paths plus the FEM vertex-local `3x3` arbitrary-lane/fallback fast path
+     and FEM pair `3x3` same-block, adjacent, reverse-adjacent, and off-band
+     fallback paths. The remaining target families add skipped/fixed descriptor
+     coverage as they land.
    - No-contact 20-frame scene passes with native chain/base targets and diff
      enabled.
    - Diff-off 100-frame no-contact performance run shows measurable native
@@ -1463,17 +1487,25 @@ Detailed M6b execution plan:
      continue using the assembly timer rather than frame time alone.
    - Hit-rate report shows the optimized target family is actually exercised on
      the benchmark scene.
+   - FEM pair target gate: `cuda_mixed_abd_fem_tower_viewer.py --levels 6
+     --disable-contact` with native chain/base enabled must show nonzero
+     `native_chain_base_pair3x3_same_block_hit_count` and
+     `native_chain_base_pair3x3_adjacent_hit_count`, zero pair misses, zero
+     scalar fallback for chain/base, and zero native diff mismatch when mirror
+     diff is enabled.
 
 Deliverables:
 
 - Static descriptors for chain/base Hessian contributions.
 - Native projected ABD/FEM block writes.
 - Provider-level fast targets:
-  - FEM `3x3` block/lane target writes for vertex-local Hessian contributions.
+  - FEM `3x3` block/lane target writes for vertex-local Hessian contributions
+    and same/adjacent cross-vertex pair Hessian contributions.
   - ABD `12x12` same-block and adjacent-block arbitrary-lane writes for
     kinetic/shape/base Hessian.
-  - First-offdiag target descriptors that avoid per-scalar band checks when the
-    provider already knows adjacent block pairs.
+  - First-offdiag target writes for ABD adjacent blocks and FEM adjacent
+    `3x3` pairs; explicit provider-built first-offdiag target descriptor tables
+    remain the next performance refinement.
 - Matrix diff tests for synthetic chain fixtures.
 - Scene-level diff for small deterministic scenes.
 

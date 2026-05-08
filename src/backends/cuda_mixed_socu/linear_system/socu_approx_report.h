@@ -148,6 +148,9 @@ struct SocuApproxSolveReport
     SizeT native_chain_base_scalar_fallback_count = 0;
     SizeT native_chain_base_diag3x3_hit_count = 0;
     SizeT native_chain_base_diag3x3_miss_count = 0;
+    SizeT native_chain_base_pair3x3_same_block_hit_count = 0;
+    SizeT native_chain_base_pair3x3_adjacent_hit_count = 0;
+    SizeT native_chain_base_pair3x3_miss_count = 0;
     bool plan_created_this_solve = false;
     bool debug_validation_enabled = false;
     bool debug_timing_enabled = false;

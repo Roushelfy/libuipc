@@ -442,6 +442,26 @@ struct StructuredDeviceMatrixSink
         record_counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Miss);
     }
 
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_pair3x3_same_block_hit() const noexcept
+    {
+        record_counter(
+            StructuredAssemblyCounterSlot::NativeChainBasePair3x3SameBlockHit);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_pair3x3_adjacent_hit() const noexcept
+    {
+        record_counter(
+            StructuredAssemblyCounterSlot::NativeChainBasePair3x3AdjacentHit);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_pair3x3_miss() const noexcept
+    {
+        record_counter(StructuredAssemblyCounterSlot::NativeChainBasePair3x3Miss);
+    }
+
     template <typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
                                                      const HMat& H) const noexcept
@@ -546,6 +566,139 @@ struct StructuredDeviceMatrixSink
         }
 
         return true;
+    }
+
+    template <typename HMat>
+    MUDA_DEVICE __forceinline__ StructuredNativeDenseBlockTarget
+    try_add_native_pair3x3_block_target(
+        IndexT old_row_dof_begin,
+        IndexT old_col_dof_begin,
+        const HMat& H,
+        bool mirror_when_same_native_block) const noexcept
+    {
+        if(!native_enabled() || old_row_dof_begin < 0 || old_col_dof_begin < 0)
+            return StructuredNativeDenseBlockTarget::Miss;
+        const SizeT old_row_begin = static_cast<SizeT>(old_row_dof_begin);
+        const SizeT old_col_begin = static_cast<SizeT>(old_col_dof_begin);
+        if(old_row_begin + SizeT{3} > native_dof_descriptors.size()
+           || old_col_begin + SizeT{3} > native_dof_descriptors.size())
+            return StructuredNativeDenseBlockTarget::Miss;
+
+        SizeT row_lanes[3];
+        SizeT col_lanes[3];
+
+        const auto first_row = native_dof_descriptors[old_row_begin];
+        const auto first_col = native_dof_descriptors[old_col_begin];
+        if(!native_matrix.valid_dof_descriptor(first_row)
+           || !native_matrix.valid_dof_descriptor(first_col)
+           || first_row.old_dof != old_row_dof_begin
+           || first_col.old_dof != old_col_dof_begin)
+            return StructuredNativeDenseBlockTarget::Miss;
+
+        const SizeT row_block = first_row.block;
+        const SizeT col_block = first_col.block;
+        row_lanes[0] = first_row.lane;
+        col_lanes[0] = first_col.lane;
+
+#pragma unroll
+        for(IndexT local = 1; local < 3; ++local)
+        {
+            const auto row_dof =
+                native_dof_descriptors[old_row_begin + static_cast<SizeT>(local)];
+            const auto col_dof =
+                native_dof_descriptors[old_col_begin + static_cast<SizeT>(local)];
+            if(!native_matrix.valid_dof_descriptor(row_dof)
+               || !native_matrix.valid_dof_descriptor(col_dof)
+               || row_dof.old_dof != old_row_dof_begin + local
+               || col_dof.old_dof != old_col_dof_begin + local
+               || row_dof.block != row_block || col_dof.block != col_block)
+                return StructuredNativeDenseBlockTarget::Miss;
+            row_lanes[local] = row_dof.lane;
+            col_lanes[local] = col_dof.lane;
+        }
+
+        const bool same_block = row_block == col_block;
+        const SizeT min_block = row_block < col_block ? row_block : col_block;
+        const SizeT max_block = row_block > col_block ? row_block : col_block;
+        const bool adjacent_block = max_block == min_block + 1;
+        if(!same_block && !adjacent_block)
+            return StructuredNativeDenseBlockTarget::Miss;
+
+        if(native_matrix.diag_index(max_block,
+                                    native_matrix.block_size - 1,
+                                    native_matrix.block_size - 1)
+           >= native_matrix.D.size())
+            return StructuredNativeDenseBlockTarget::Miss;
+
+        if(adjacent_block)
+        {
+            if(native_matrix.E.data() == nullptr
+               || min_block >= native_matrix.first_offdiag_block_count)
+                return StructuredNativeDenseBlockTarget::Miss;
+            if(native_matrix.first_offdiag_index(min_block,
+                                                 native_matrix.block_size - 1,
+                                                 native_matrix.block_size - 1)
+               >= native_matrix.E.size())
+                return StructuredNativeDenseBlockTarget::Miss;
+        }
+
+#pragma unroll
+        for(IndexT row = 0; row < 3; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < 3; ++col)
+            {
+                const auto value = static_cast<StoreT>(H(row, col));
+                const auto v     = static_cast<SolveT>(value);
+                const SizeT row_lane = row_lanes[row];
+                const SizeT col_lane = col_lanes[col];
+
+                if(same_block)
+                {
+                    muda::atomic_add(
+                        native_matrix.D.data(native_matrix.diag_index(row_block,
+                                                                      row_lane,
+                                                                      col_lane)),
+                        v);
+                    add_hessian_scalar_compare(old_row_dof_begin + row,
+                                               old_col_dof_begin + col,
+                                               value);
+
+                    if(mirror_when_same_native_block
+                       && old_row_dof_begin + row != old_col_dof_begin + col)
+                    {
+                        muda::atomic_add(
+                            native_matrix.D.data(native_matrix.diag_index(row_block,
+                                                                          col_lane,
+                                                                          row_lane)),
+                            v);
+                        add_hessian_scalar_compare(old_col_dof_begin + col,
+                                                   old_row_dof_begin + row,
+                                                   value);
+                    }
+                }
+                else
+                {
+                    const bool row_col_is_forward = row_block < col_block;
+                    const SizeT offdiag_row =
+                        row_col_is_forward ? col_lane : row_lane;
+                    const SizeT offdiag_col =
+                        row_col_is_forward ? row_lane : col_lane;
+                    muda::atomic_add(
+                        native_matrix.E.data(native_matrix.first_offdiag_index(
+                            min_block,
+                            offdiag_row,
+                            offdiag_col)),
+                        v);
+                    add_hessian_scalar_compare(old_row_dof_begin + row,
+                                               old_col_dof_begin + col,
+                                               value);
+                }
+            }
+        }
+
+        return same_block ? StructuredNativeDenseBlockTarget::SameBlock
+                          : StructuredNativeDenseBlockTarget::AdjacentBlock;
     }
 
     template <int SubBlockDim, int SubBlockCount, typename HMat>
@@ -949,6 +1102,30 @@ struct StructuredDeviceAssemblySink
         return used;
     }
 
+    template <typename HMat>
+    MUDA_DEVICE __forceinline__ StructuredNativeDenseBlockTarget
+    try_add_native_pair3x3_block(
+        IndexT old_row_dof_begin,
+        IndexT old_col_dof_begin,
+        const HMat& H,
+        bool mirror_when_same_native_block) const noexcept
+    {
+        if(runtime_ordering.enabled)
+            return StructuredNativeDenseBlockTarget::Miss;
+        const auto target = matrix.try_add_native_pair3x3_block_target(
+            old_row_dof_begin,
+            old_col_dof_begin,
+            H,
+            mirror_when_same_native_block);
+        if(target == StructuredNativeDenseBlockTarget::SameBlock)
+            matrix.record_native_chain_base_pair3x3_same_block_hit();
+        else if(target == StructuredNativeDenseBlockTarget::AdjacentBlock)
+            matrix.record_native_chain_base_pair3x3_adjacent_hit();
+        else
+            matrix.record_native_chain_base_pair3x3_miss();
+        return target;
+    }
+
     template <int Rows, int Cols, typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block_between_fixed(
         IndexT old_row_dof_begin,
@@ -1106,6 +1283,24 @@ struct LocalAssemblySink
                        .template try_add_native_same_block_dense_block_fixed<3, 3>(
                            old_dof_begin,
                            H))
+                    return;
+
+                structured.record_native_chain_base_scalar_fallback();
+            }
+            else if(block_i >= 0 && block_j >= 0
+                    && structured.matrix.native_enabled()
+                    && !structured.runtime_ordering.enabled)
+            {
+                const IndexT old_row_dof_begin =
+                    old_dof_offset + block_i * BlockDim;
+                const IndexT old_col_dof_begin =
+                    old_dof_offset + block_j * BlockDim;
+                const auto target = structured.try_add_native_pair3x3_block(
+                    old_row_dof_begin,
+                    old_col_dof_begin,
+                    H,
+                    mirror_when_same_structured_block);
+                if(target != StructuredNativeDenseBlockTarget::Miss)
                     return;
 
                 structured.record_native_chain_base_scalar_fallback();

@@ -1632,6 +1632,12 @@ void SocuApproxSolver::finalize_structured_chain(
             counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Hit);
         m_report.native_chain_base_diag3x3_miss_count =
             counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Miss);
+        m_report.native_chain_base_pair3x3_same_block_hit_count = counter(
+            StructuredAssemblyCounterSlot::NativeChainBasePair3x3SameBlockHit);
+        m_report.native_chain_base_pair3x3_adjacent_hit_count = counter(
+            StructuredAssemblyCounterSlot::NativeChainBasePair3x3AdjacentHit);
+        m_report.native_chain_base_pair3x3_miss_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBasePair3x3Miss);
     }
 
     m_report.structured_diag_write_count =

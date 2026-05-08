@@ -1628,3 +1628,44 @@ Acceptance status: this closes the vertex-local FEM `3x3` same-block target
 slice, but it is not yet a full FEM high-performance builder. FEM element pair
 targets, first-offdiag precomputed targets, and a scene-level FEM native hit
 rate/performance gate remain open M6b work.
+
+### M6b/M6c FEM Pair 3x3 First-Offdiag Target
+
+Implemented the next FEM native target slice:
+
+- Added descriptor-backed `3x3` pair writes for non-fixed
+  `LocalAssemblySink<BlockDim=3>` cross-vertex Hessian blocks.
+- Same-native-block vertex pairs write the full `3x3` block directly to native
+  `D` with arbitrary lane order and debug compare parity.
+- Adjacent-native-block vertex pairs write directly to first-offdiag `E` using
+  the same orientation as the scalar native sink, including reverse provider
+  pair order.
+- Off-band, inactive, fixed-policy, runtime-ordering, and native-disabled cases
+  keep the scalar structured fallback. Runtime ordering intentionally disables
+  the fast target so graph collection remains scalar.
+- Added report counters
+  `native_chain_base_pair3x3_same_block_hit_count`,
+  `native_chain_base_pair3x3_adjacent_hit_count`, and
+  `native_chain_base_pair3x3_miss_count`.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; device link and test executable link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6c]" -s` | passed, 2936 assertions in 2 cases; vertex-local diag and pair fixtures matched native primary/debug compare/legacy scalar buffers |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 3736 assertions in 5 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 4900 assertions in 23 cases |
+| no-contact FEM tower native gate, `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_REPORT_COUNTERS=1 ... cuda_mixed_abd_fem_tower_viewer.py --backend cuda_mixed_socu --solver socu_approx --levels 6 --smoke-frames 1 --disable-contact` | passed; report shows `diag3x3_hit=84`, `pair3x3_same_block_hit=77`, `pair3x3_adjacent_hit=13`, `pair3x3_miss=0`, `scalar_fallback=0`, and `chain_base_assembly_time_ms=0.8841919898986816` |
+| same no-contact FEM tower structured baseline, native chain/base disabled | passed; report shows `chain_base_assembly_time_ms=1.4704960584640503` |
+| same no-contact FEM tower native mirror-diff gate with `SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS_DIFF=1` | passed; native chain/base and diag/RHS mismatch counts are `0`, and all `D/E/rhs` diff abs sums are `0.0` |
+
+Acceptance status: the FEM pair/first-offdiag sink-side target slice is correct
+and is exercised by an actual FEM scene. On the chosen `levels=6` no-contact
+ABD/FEM tower gate, native chain/base assembly improved from about `1.47ms` to
+about `0.884ms` for the final solve, a roughly `40%` reduction in the isolated
+chain/base assembly timer. This still is not the final provider-built target
+table design: the current slice classifies once per local `3x3` block inside
+the sink from DoF descriptors. The next performance refinement is explicit
+provider/stencil target arrays that carry `left_block`, `row_lane`, `col_lane`,
+and transpose/orientation flags into the kernel hot loop.

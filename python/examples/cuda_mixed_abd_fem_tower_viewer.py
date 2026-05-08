@@ -83,18 +83,32 @@ def configure_solver(config, solver: str, workspace: str) -> None:
     ordering_path = os.path.join(workspace, "socu_approx_ordering.json")
     config["linear_system"]["socu_approx"]["mode"] = "solve"
     config["linear_system"]["socu_approx"]["ordering_source"] = "init_time"
-    config["linear_system"]["socu_approx"]["ordering_orderer"] = "auto_stable"
-    config["linear_system"]["socu_approx"]["ordering_block_size"] = "auto"
+    config["linear_system"]["socu_approx"]["ordering_orderer"] = "rcm"
+    config["linear_system"]["socu_approx"]["ordering_block_size"] = "64"
     config["linear_system"]["socu_approx"]["generated_ordering_report"] = ordering_path
-    config["linear_system"]["socu_approx"]["dry_run_report"] = report_path
+    config["linear_system"]["socu_approx"]["report"] = report_path
     config["linear_system"]["socu_approx"]["min_block_utilization"] = 0.0
     config["linear_system"]["socu_approx"]["damping_shift"] = 1.0
     config["linear_system"]["socu_approx"]["max_relative_residual"] = 1e-3
-    config["linear_system"]["socu_approx"]["debug_validation"] = 1
-    config["linear_system"]["socu_approx"]["report_each_solve"] = 1
+    report_counters = os.environ.get("SOCU_REPORT_COUNTERS", "1") != "0"
+    config["linear_system"]["socu_approx"]["debug_validation"] = 1 if report_counters else 0
+    config["linear_system"]["socu_approx"]["debug_timing"] = 1 if report_counters else 0
+    config["linear_system"]["socu_approx"]["report_each_solve"] = 1 if report_counters else 0
+    config["linear_system"]["socu_approx"]["native_diag_rhs"] = (
+        1 if os.environ.get("SOCU_NATIVE_DIAG_RHS") == "1" else 0
+    )
+    config["linear_system"]["socu_approx"]["debug_compare_native_diag_rhs"] = (
+        1 if os.environ.get("SOCU_NATIVE_DIAG_RHS_DIFF") == "1" else 0
+    )
+    config["linear_system"]["socu_approx"]["native_chain_base_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE") == "1" else 0
+    )
+    config["linear_system"]["socu_approx"]["debug_compare_native_chain_base_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE_DIFF") == "1" else 0
+    )
 
 
-def build_scene(backend: str, solver: str, levels: int):
+def build_scene(backend: str, solver: str, levels: int, contact_enabled: bool):
     Logger.set_level(Logger.Level.Warn)
 
     workspace = AssetDir.output_path(__file__)
@@ -105,7 +119,7 @@ def build_scene(backend: str, solver: str, levels: int):
     config = Scene.default_config()
     config["dt"] = 0.01
     config["gravity"] = [[0.0], [-9.8], [0.0]]
-    config["contact"]["enable"] = True
+    config["contact"]["enable"] = contact_enabled
     config["contact"]["friction"]["enable"] = False
     config["contact"]["constitution"] = "ipc"
     config["line_search"]["max_iter"] = 8
@@ -205,12 +219,17 @@ def main() -> None:
     parser.add_argument("--solver", choices=["fused_pcg", "socu_approx"], default="fused_pcg")
     parser.add_argument("--levels", type=int, default=6)
     parser.add_argument("--smoke-frames", type=int, default=0)
+    parser.add_argument("--disable-contact", action="store_true")
     args = parser.parse_args()
 
-    if args.backend == "cuda_mixed":
-        init_cuda_mixed_module_dir()
+    if args.backend in {"cuda_mixed", "cuda_mixed_socu"}:
+        init_cuda_mixed_module_dir(args.backend)
 
-    engine, world, scene = build_scene(args.backend, args.solver, args.levels)
+    engine, world, scene = build_scene(
+        args.backend,
+        args.solver,
+        args.levels,
+        not args.disable_contact)
     if args.smoke_frames > 0:
         smoke(world, args.smoke_frames)
         return
