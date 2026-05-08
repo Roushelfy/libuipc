@@ -254,6 +254,14 @@ The solve report records:
 - RHS norm, residual, relative residual, descent dot, gradient norm, direction
   norm, and direction validation thresholds
 - plan/timing/report counters when enabled
+- native chain/base target hit/miss/fallback counters when native chain/base
+  Hessian writes are enabled; current fields include
+  `native_chain_base_same_block_dense_hit_count`,
+  `native_chain_base_adjacent_dense_hit_count`,
+  `native_chain_base_dense_miss_count`,
+  `native_chain_base_scalar_fallback_count`,
+  `native_chain_base_diag3x3_hit_count`, and
+  `native_chain_base_diag3x3_miss_count`
 - line-search feedback when available
 - optional `runtime_reorder` diagnostics: enabled state, interval, capacity,
   collecting frame, last applied frame, raw/unique edge counts, overflow count,
@@ -546,6 +554,8 @@ native_target_epoch
 native_chain_base_fast_hit_count
 native_chain_base_fast_miss_count
 native_chain_base_scalar_fallback_count
+native_chain_base_diag3x3_hit_count
+native_chain_base_diag3x3_miss_count
 native_contact_exact_count
 native_contact_diag_fallback_count
 native_contact_lump_fallback_count
@@ -1364,6 +1374,13 @@ Current implementation status (2026-05-07):
   requested. If the body spans unsupported blocks, runtime ordering is being
   collected, or native storage is disabled, the provider falls back to the
   scalar structured sink.
+- M6b also includes the first FEM-style vertex-local `3x3` target slice:
+  `LocalAssemblySink<BlockDim=3>` same-vertex/same-block Hessian writes can
+  gather three native DoF descriptors once and write the full `3x3` block
+  directly to native `D`, with arbitrary lane order and debug compare parity.
+  This covers kinetic/mass-style diagonal vertex blocks and other diagonal
+  `BlockDim=3` local writes. Inactive, fixed-policy, runtime-ordering, and
+  unsupported cross-block cases still fall back to the scalar structured sink.
 
 Detailed M6b execution plan:
 
@@ -1372,9 +1389,10 @@ Detailed M6b execution plan:
      `native_chain_base_same_block_dense_hit_count`,
      `native_chain_base_adjacent_dense_hit_count`,
      `native_chain_base_dense_miss_count`,
-     `native_chain_base_scalar_fallback_count`, then extend the same counter
-     family with FEM `3x3` and first-offdiag target counters as those target
-     families land.
+     `native_chain_base_scalar_fallback_count`,
+     `native_chain_base_diag3x3_hit_count`, and
+     `native_chain_base_diag3x3_miss_count`. Extend the same counter family
+     with first-offdiag target counters when that target family lands.
    - Add a replacement timer for the old `Assemble Structured Chain` signal.
      Current fields are `chain_base_assembly_time_ms`,
      `native_chain_base_assembly_time_ms`, and
@@ -1406,7 +1424,10 @@ Detailed M6b execution plan:
    - Non-adjacent ABD bodies keep scalar native fallback.
 
 4. **FEM `3x3` and stencil targets.**
-   - Add vertex-local `3x3` diag targets for FEM kinetic/mass-style blocks.
+   - Vertex-local `3x3` diag target: implemented M6b/M6c slice. It writes a
+     full same-block `3x3` block directly to `D` from descriptor lanes without
+     requiring contiguous lanes. Synthetic tests cover arbitrary-lane hit and
+     inactive-descriptor scalar fallback.
    - Add pair targets for FEM element/report contributions that naturally know
      their local vertex pair. Each pair target should classify once at descriptor
      build time as diag, first-offdiag, off-band, or skipped.
@@ -1429,8 +1450,9 @@ Detailed M6b execution plan:
 
 7. **M6b completion criteria.**
    - Provider unit tests cover ABD same-block and adjacent first-offdiag fast
-     paths, and the remaining target families add off-band/skipped descriptor
-     coverage as they land.
+     paths plus the FEM vertex-local `3x3` arbitrary-lane/fallback fast path.
+     The remaining target families add off-band/skipped descriptor coverage as
+     they land.
    - No-contact 20-frame scene passes with native chain/base targets and diff
      enabled.
    - Diff-off 100-frame no-contact performance run shows measurable native

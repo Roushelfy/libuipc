@@ -1596,3 +1596,35 @@ is expected because factor/solve, Newton loop overhead, logging, and scene
 pipeline work dominate this no-contact benchmark. Future M6b FEM/first-offdiag
 target work should use `chain_base_assembly_time_ms` as the primary acceptance
 signal and keep end-to-end frame time as a secondary sanity check.
+
+### M6b/M6c FEM Vertex-Local 3x3 Target
+
+Implemented the first FEM-style native target slice:
+
+- Added a same-block dense `3x3` native writer for descriptor-backed
+  `BlockDim=3` local Hessian writes.
+- The target gathers the three old DoF descriptors once, accepts arbitrary lane
+  order inside the native SOCU block, and writes the full `3x3` block directly
+  to native `D`.
+- `LocalAssemblySink<BlockDim=3>::add_structured_block()` now attempts this
+  target for non-fixed same-vertex/same-block writes when native chain/base
+  Hessian is enabled and runtime ordering collection is inactive.
+- Unsupported cases fall back to the existing scalar structured sink and record
+  scalar fallback. New report counters are
+  `native_chain_base_diag3x3_hit_count` and
+  `native_chain_base_diag3x3_miss_count`.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; device link and test executable link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6c]" -s` | passed, 288 assertions in 1 case; same-block arbitrary-lane fixture reported hit `1`, miss `0`, fallback `0`, and inactive-descriptor fixture reported hit `0`, miss `1`, fallback `1`; native primary, debug compare, and scalar legacy `D` matched |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 1088 assertions in 4 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 2252 assertions in 22 cases |
+| no-contact 1-frame native smoke, `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_REPORT_COUNTERS=1 ... --variant socu_init --frames 1` | passed; report JSON includes the new fields and shows ABD counters unchanged: same-block `492`, adjacent `82`, dense miss `0`, scalar fallback `0`, `diag3x3_hit=0`, `diag3x3_miss=0` for the ABD-only scene |
+
+Acceptance status: this closes the vertex-local FEM `3x3` same-block target
+slice, but it is not yet a full FEM high-performance builder. FEM element pair
+targets, first-offdiag precomputed targets, and a scene-level FEM native hit
+rate/performance gate remain open M6b work.

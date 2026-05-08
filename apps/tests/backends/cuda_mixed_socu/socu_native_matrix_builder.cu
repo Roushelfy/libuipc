@@ -179,6 +179,38 @@ __global__ void write_native_abd_dense_block_fixture(
 }
 
 template <typename StoreT, typename SolveT>
+__global__ void write_native_diag3x3_dense_block_fixture(
+    StructuredDeviceAssemblySink<StoreT, SolveT> fast_sink,
+    StructuredDeviceAssemblySink<StoreT, SolveT> legacy_sink,
+    muda::BufferView<uipc::IndexT>               status)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    DeviceFixedMatrix<StoreT, 3, 3> H{};
+    for(uipc::IndexT row = 0; row < 3; ++row)
+    {
+        for(uipc::IndexT col = 0; col < 3; ++col)
+        {
+            H.values[row * 3 + col] =
+                static_cast<StoreT>(1 + row * 11 + col);
+        }
+    }
+
+    const bool used_fast_path =
+        fast_sink.template try_add_native_same_block_dense_block_fixed<3, 3>(
+            0,
+            H);
+    if(!used_fast_path)
+    {
+        fast_sink.record_native_chain_base_scalar_fallback();
+        fast_sink.template add_dense_block_between_fixed<3, 3>(0, 0, H);
+    }
+    legacy_sink.template add_dense_block_between_fixed<3, 3>(0, 0, H);
+    *status.data(0) = used_fast_path ? 1 : 0;
+}
+
+template <typename StoreT, typename SolveT>
 __global__ void write_native_diag_rhs_provider_fixture(
     SocuNativeMatrixView<SolveT>              native,
     StructuredDeviceMatrixSink<StoreT, SolveT> structured,
@@ -272,6 +304,144 @@ void require_all_close(const std::vector<Scalar>& values,
         REQUIRE(std::isfinite(static_cast<double>(value)));
         REQUIRE(static_cast<double>(value)
                 == Catch::Approx(static_cast<double>(expected)).margin(tolerance));
+    }
+}
+
+template <typename Store, typename Solve>
+void run_native_diag3x3_dense_block_fixture(
+    const std::vector<uipc::IndexT>& old_to_chain,
+    uipc::IndexT                     expected_status,
+    uipc::IndexT                     expected_hit_count,
+    uipc::IndexT                     expected_miss_count,
+    uipc::IndexT                     expected_fallback_count)
+{
+    constexpr uipc::SizeT  Horizon   = 1;
+    constexpr uipc::SizeT  BlockSize = 8;
+    constexpr uipc::SizeT  Nrhs      = 1;
+    constexpr uipc::IndexT Epoch     = 41;
+
+    const auto layout = make_socu_native_storage_layout(Horizon, BlockSize, Nrhs);
+    const std::vector<uipc::IndexT> old_dof_to_atom(old_to_chain.size(), -1);
+    auto dofs = build_socu_native_dof_descriptors(
+        uipc::span<const uipc::IndexT>{old_to_chain.data(), old_to_chain.size()},
+        uipc::span<const uipc::IndexT>{old_dof_to_atom.data(),
+                                       old_dof_to_atom.size()},
+        Horizon,
+        BlockSize,
+        Epoch);
+
+    StreamGuard stream;
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    muda::DeviceBuffer<Solve> native_diag;
+    muda::DeviceBuffer<Solve> compare_diag;
+    muda::DeviceBuffer<Solve> legacy_diag;
+    muda::DeviceBuffer<uipc::IndexT> status;
+    muda::DeviceBuffer<uipc::IndexT> counters;
+    native_diag.resize(layout.diag_element_count);
+    compare_diag.resize(layout.diag_element_count);
+    legacy_diag.resize(layout.diag_element_count);
+    status.resize(1);
+    counters.resize(kStructuredAssemblyCounterCount);
+
+    REQUIRE(cudaMemsetAsync(native_diag.data(),
+                            0,
+                            native_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(compare_diag.data(),
+                            0,
+                            compare_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(legacy_diag.data(),
+                            0,
+                            legacy_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(status.data(),
+                            0,
+                            status.size() * sizeof(uipc::IndexT),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(counters.data(),
+                            0,
+                            counters.size() * sizeof(uipc::IndexT),
+                            stream.stream)
+            == cudaSuccess);
+
+    muda::DeviceBuffer<Solve> empty_offdiag;
+    StructuredDeviceAssemblySink<Store, Solve> fast_sink{
+        native_diag.view(),
+        empty_offdiag.view(),
+        old_to_chain_device.view(),
+        Horizon,
+        BlockSize,
+        counters.view(),
+        {}};
+    fast_sink.matrix.use_native_matrix = true;
+    fast_sink.matrix.native_matrix =
+        make_test_native_view(native_diag.view(),
+                              empty_offdiag.view(),
+                              Horizon,
+                              BlockSize,
+                              Nrhs);
+    fast_sink.matrix.native_dof_descriptors = dofs_device.view();
+    fast_sink.matrix.compare_enabled = true;
+    fast_sink.matrix.compare_uses_native_matrix = false;
+    fast_sink.matrix.compare_diag = compare_diag.view();
+    fast_sink.matrix.compare_first_offdiag = empty_offdiag.view();
+
+    StructuredDeviceAssemblySink<Store, Solve> legacy_sink{
+        legacy_diag.view(),
+        empty_offdiag.view(),
+        old_to_chain_device.view(),
+        Horizon,
+        BlockSize,
+        {},
+        {}};
+
+    write_native_diag3x3_dense_block_fixture<Store, Solve>
+        <<<1, 1, 0, stream.stream>>>(fast_sink, legacy_sink, status.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<uipc::IndexT> status_host;
+    std::vector<uipc::IndexT> counters_host;
+    std::vector<Solve> native_diag_host;
+    std::vector<Solve> compare_diag_host;
+    std::vector<Solve> legacy_diag_host;
+    status.copy_to(status_host);
+    counters.copy_to(counters_host);
+    native_diag.copy_to(native_diag_host);
+    compare_diag.copy_to(compare_diag_host);
+    legacy_diag.copy_to(legacy_diag_host);
+
+    REQUIRE(status_host.size() == 1);
+    CHECK(status_host[0] == expected_status);
+    REQUIRE(counters_host.size() == kStructuredAssemblyCounterCount);
+    const auto counter = [&](StructuredAssemblyCounterSlot slot) -> uipc::IndexT
+    {
+        return counters_host[static_cast<std::size_t>(slot)];
+    };
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Hit)
+          == expected_hit_count);
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Miss)
+          == expected_miss_count);
+    CHECK(counter(StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback)
+          == expected_fallback_count);
+
+    REQUIRE(native_diag_host.size() == legacy_diag_host.size());
+    REQUIRE(compare_diag_host.size() == legacy_diag_host.size());
+    for(std::size_t i = 0; i < legacy_diag_host.size(); ++i)
+    {
+        CAPTURE(i);
+        CHECK(static_cast<double>(native_diag_host[i])
+              == Catch::Approx(static_cast<double>(legacy_diag_host[i]))
+                     .margin(1e-8));
+        CHECK(static_cast<double>(compare_diag_host[i])
+              == Catch::Approx(static_cast<double>(legacy_diag_host[i]))
+                     .margin(1e-8));
     }
 }
 }  // namespace
@@ -667,6 +837,41 @@ TEST_CASE("cuda_mixed_socu_native_chain_base_sink_matches_structured_sink",
         CHECK(static_cast<double>(primary_offdiag_host[i])
               == Catch::Approx(static_cast<double>(compare_offdiag_host[i]))
                      .margin(1e-8));
+    }
+}
+
+TEST_CASE("cuda_mixed_socu_native_diag3x3_fast_path_matches_structured_sink",
+          "[cuda_mixed_socu][contract][socu_native_builder][socu_native_provider][m6][m6b][m6c]")
+{
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        SKIP("no CUDA device is available for SOCU native storage tests");
+    }
+
+    SECTION("same native block with arbitrary lanes")
+    {
+        run_native_diag3x3_dense_block_fixture<Store, Solve>(
+            {7, 5, 2},
+            1,
+            1,
+            0,
+            0);
+    }
+
+    SECTION("inactive descriptor falls back to scalar sink")
+    {
+        run_native_diag3x3_dense_block_fixture<Store, Solve>(
+            {7, -1, 2},
+            0,
+            0,
+            1,
+            1);
     }
 }
 

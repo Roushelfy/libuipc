@@ -1628,6 +1628,10 @@ void SocuApproxSolver::finalize_structured_chain(
             counter(StructuredAssemblyCounterSlot::NativeChainBaseDenseMiss);
         m_report.native_chain_base_scalar_fallback_count =
             counter(StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback);
+        m_report.native_chain_base_diag3x3_hit_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Hit);
+        m_report.native_chain_base_diag3x3_miss_count =
+            counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Miss);
     }
 
     m_report.structured_diag_write_count =

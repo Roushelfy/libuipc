@@ -430,6 +430,18 @@ struct StructuredDeviceMatrixSink
             StructuredAssemblyCounterSlot::NativeChainBaseScalarFallback);
     }
 
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_diag3x3_hit() const noexcept
+    {
+        record_counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Hit);
+    }
+
+    MUDA_DEVICE __forceinline__ void
+    record_native_chain_base_diag3x3_miss() const noexcept
+    {
+        record_counter(StructuredAssemblyCounterSlot::NativeChainBaseDiag3x3Miss);
+    }
+
     template <typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block(IndexT old_dof_begin,
                                                      const HMat& H) const noexcept
@@ -471,6 +483,69 @@ struct StructuredDeviceMatrixSink
                     add_hessian_scalar(old_j, old_i, static_cast<StoreT>(H(row, col)));
             }
         }
+    }
+
+    template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ bool try_add_native_same_block_dense_block_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+        static_assert(Rows > 0);
+        static_assert(Cols > 0);
+        static_assert(Rows == Cols);
+
+        if(!native_enabled() || old_dof_begin < 0)
+            return false;
+        const SizeT old_begin = static_cast<SizeT>(old_dof_begin);
+        if(old_begin + static_cast<SizeT>(Rows) > native_dof_descriptors.size())
+            return false;
+
+        const auto first = native_dof_descriptors[old_begin];
+        if(!native_matrix.valid_dof_descriptor(first)
+           || first.old_dof != old_dof_begin)
+            return false;
+
+        const SizeT block = first.block;
+        SizeT       lanes[Rows];
+        lanes[0] = first.lane;
+
+#pragma unroll
+        for(IndexT local = 1; local < Rows; ++local)
+        {
+            const auto dof =
+                native_dof_descriptors[old_begin + static_cast<SizeT>(local)];
+            if(!native_matrix.valid_dof_descriptor(dof)
+               || dof.old_dof != old_dof_begin + local
+               || dof.block != block)
+                return false;
+            lanes[local] = dof.lane;
+        }
+
+        if(native_matrix.diag_index(block,
+                                    native_matrix.block_size - 1,
+                                    native_matrix.block_size - 1)
+           >= native_matrix.D.size())
+            return false;
+
+#pragma unroll
+        for(IndexT row = 0; row < Rows; ++row)
+        {
+#pragma unroll
+            for(IndexT col = 0; col < Cols; ++col)
+            {
+                const auto value = static_cast<StoreT>(H(row, col));
+                muda::atomic_add(native_matrix.D.data(native_matrix.diag_index(
+                                     block,
+                                     lanes[row],
+                                     lanes[col])),
+                                 static_cast<SolveT>(value));
+                add_hessian_scalar_compare(old_dof_begin + row,
+                                           old_dof_begin + col,
+                                           value);
+            }
+        }
+
+        return true;
     }
 
     template <int SubBlockDim, int SubBlockCount, typename HMat>
@@ -857,6 +932,24 @@ struct StructuredDeviceAssemblySink
     }
 
     template <int Rows, int Cols, typename HMat>
+    MUDA_DEVICE __forceinline__ bool try_add_native_same_block_dense_block_fixed(
+        IndexT old_dof_begin,
+        const HMat& H) const noexcept
+    {
+        if(runtime_ordering.enabled)
+            return false;
+        const bool used =
+            matrix.template try_add_native_same_block_dense_block_fixed<Rows, Cols>(
+                old_dof_begin,
+                H);
+        if(used)
+            matrix.record_native_chain_base_diag3x3_hit();
+        else
+            matrix.record_native_chain_base_diag3x3_miss();
+        return used;
+    }
+
+    template <int Rows, int Cols, typename HMat>
     MUDA_DEVICE __forceinline__ void add_dense_block_between_fixed(
         IndexT old_row_dof_begin,
         IndexT old_col_dof_begin,
@@ -998,6 +1091,25 @@ struct LocalAssemblySink
                 record_write_class(cls);
             }
             return;
+        }
+
+        if constexpr(BlockDim == 3)
+        {
+            if(!mirror_when_same_structured_block && block_i >= 0
+               && block_i == block_j
+               && structured.matrix.native_enabled()
+               && !structured.runtime_ordering.enabled)
+            {
+                const IndexT old_dof_begin =
+                    old_dof_offset + block_i * BlockDim;
+                if(structured
+                       .template try_add_native_same_block_dense_block_fixed<3, 3>(
+                           old_dof_begin,
+                           H))
+                    return;
+
+                structured.record_native_chain_base_scalar_fallback();
+            }
         }
 
 #pragma unroll
