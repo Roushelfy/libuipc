@@ -1560,3 +1560,39 @@ target, and the previous 82 dense misses/scalar fallbacks are gone. Remaining
 M6b work is still FEM `3x3`/pair targets, general first-offdiag target
 precomputation, diff-off performance timing, and keeping production native
 single-write mode clean. Native contact builder work remains M8.
+
+### M6b Assembly Timing Gate
+
+Added a debug-timing replacement for the old coarse `Assemble Structured Chain`
+signal:
+
+- `chain_base_assembly_time_ms` measures chain/base structured provider work
+  with CUDA events on the mixed backend stream.
+- `native_chain_base_assembly_time_ms` mirrors that value only when native
+  chain/base Hessian writes are enabled, so baseline/native reports are easy to
+  separate.
+- `contact_assembly_time_ms` records structured DyTopo contact assembly time
+  when that phase runs. It is `0.0` in no-contact validation.
+- Timing is only active when `debug_timing` is enabled. Diff-off production
+  runs with `SOCU_REPORT_COUNTERS=0` do not pay the extra event synchronize.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| native-only reconfigure/build, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; device link and shared library link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 1964 assertions in 21 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 800 assertions in 3 cases |
+| no-contact 20-frame native timing run, native chain/base + native diag/RHS enabled, diff disabled, counters/timing enabled | passed; final report shows `chain_base_assembly_time_ms=0.6652160286903381`, `native_chain_base_assembly_time_ms=0.6652160286903381`, same-block hits `492`, adjacent hits `82`, dense misses `0`, scalar fallbacks `0` |
+| no-contact 20-frame structured baseline timing run, native disabled, counters/timing enabled | passed; final report shows `chain_base_assembly_time_ms=0.8285120129585266`, `native_chain_base_assembly_time_ms=0.0` |
+| no-contact 100-frame structured baseline, diff/counters disabled | passed, `final_frame=100`, `wall_time_s=3.823726774950046`, `mean_frame_ms=17.808828111737967` |
+| no-contact 100-frame native diff-off, native chain/base + native diag/RHS enabled, counters disabled | passed, `final_frame=100`, `wall_time_s=3.726719599973876`, `mean_frame_ms=17.589850779622793` |
+
+Acceptance status: the ABD fast target now has a usable performance signal.
+The last-solve chain/base assembly timer improved by about `20%`
+(`0.8285ms -> 0.6652ms`) on the no-contact wrecking-ball scene, while the
+end-to-end 100-frame run improved by about `1.2%`. The small frame-level delta
+is expected because factor/solve, Newton loop overhead, logging, and scene
+pipeline work dominate this no-contact benchmark. Future M6b FEM/first-offdiag
+target work should use `chain_base_assembly_time_ms` as the primary acceptance
+signal and keep end-to-end frame time as a secondary sanity check.

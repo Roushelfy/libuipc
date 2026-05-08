@@ -403,48 +403,102 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
     {
         const bool contact_only =
             probe == LinearSolver::StructuredProbeAssembly::ContactOnly;
+        auto check_cuda = [](cudaError_t error, std::string_view operation)
+        {
+            if(error != cudaSuccess)
+            {
+                throw SimSystemException{fmt::format(
+                    "{} failed during structured assembly timing: {}",
+                    operation,
+                    cudaGetErrorString(error))};
+            }
+        };
+        auto measure_stream_work = [&](auto&& work) -> double
+        {
+            if(!info.debug_timing_enabled())
+            {
+                work();
+                return 0.0;
+            }
+
+            cudaEvent_t start = nullptr;
+            cudaEvent_t done  = nullptr;
+            auto destroy_events = [&]
+            {
+                if(start)
+                    cudaEventDestroy(start);
+                if(done)
+                    cudaEventDestroy(done);
+            };
+
+            try
+            {
+                check_cuda(cudaEventCreate(&start), "cudaEventCreate(start)");
+                check_cuda(cudaEventCreate(&done), "cudaEventCreate(done)");
+                check_cuda(cudaEventRecord(start, info.stream()),
+                           "cudaEventRecord(start)");
+                work();
+                check_cuda(cudaEventRecord(done, info.stream()),
+                           "cudaEventRecord(done)");
+                check_cuda(cudaEventSynchronize(done), "cudaEventSynchronize(done)");
+                float elapsed_ms = 0.0f;
+                check_cuda(cudaEventElapsedTime(&elapsed_ms, start, done),
+                           "cudaEventElapsedTime");
+                destroy_events();
+                return static_cast<double>(elapsed_ms);
+            }
+            catch(...)
+            {
+                destroy_events();
+                throw;
+            }
+        };
 
         if(!contact_only)
         {
             info.set_phase(StructuredAssemblyPhase::ChainBase);
-            for(const auto& subsystem_info : subsystem_infos)
+            const double chain_base_ms = measure_stream_work([&]
             {
-                if(!subsystem_info.is_diag)
-                    continue;
-
-                auto& diag_subsystem =
-                    diag_subsystem_view[subsystem_info.local_index];
-                if(!diag_subsystem->supports_structured_assembly())
+                for(const auto& subsystem_info : subsystem_infos)
                 {
-                    throw SimSystemException{fmt::format(
-                        "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
-                        diag_subsystem->name())};
+                    if(!subsystem_info.is_diag)
+                        continue;
+
+                    auto& diag_subsystem =
+                        diag_subsystem_view[subsystem_info.local_index];
+                    if(!diag_subsystem->supports_structured_assembly())
+                    {
+                        throw SimSystemException{fmt::format(
+                            "structured_subsystem_not_supported: diag subsystem '{}' does not support structured Hessian assembly",
+                            diag_subsystem->name())};
+                    }
+
+                    info.set_subsystem_extent(
+                        diag_dof_offsets[subsystem_info.local_index],
+                        diag_dof_counts[subsystem_info.local_index]);
+                    Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
+                    diag_subsystem->assemble_structured(info);
                 }
 
-                info.set_subsystem_extent(
-                    diag_dof_offsets[subsystem_info.local_index],
-                    diag_dof_counts[subsystem_info.local_index]);
-                Timer timer{assemble_timer_name(classify_subsystem(*diag_subsystem))};
-                diag_subsystem->assemble_structured(info);
-            }
-
-            for(const auto& subsystem_info : subsystem_infos)
-            {
-                if(subsystem_info.is_diag)
-                    continue;
-
-                auto& off_diag_subsystem =
-                    off_diag_subsystem_view[subsystem_info.local_index];
-                if(!off_diag_subsystem->supports_structured_assembly())
+                for(const auto& subsystem_info : subsystem_infos)
                 {
-                    throw SimSystemException{fmt::format(
-                        "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
-                        off_diag_subsystem->name())};
-                }
+                    if(subsystem_info.is_diag)
+                        continue;
 
-                Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
-                off_diag_subsystem->assemble_structured(info);
-            }
+                    auto& off_diag_subsystem =
+                        off_diag_subsystem_view[subsystem_info.local_index];
+                    if(!off_diag_subsystem->supports_structured_assembly())
+                    {
+                        throw SimSystemException{fmt::format(
+                            "offdiag_subsystem_unsupported: offdiag subsystem '{}' does not support structured Hessian assembly",
+                            off_diag_subsystem->name())};
+                    }
+
+                    Timer timer{assemble_timer_name(classify_subsystem(*off_diag_subsystem))};
+                    off_diag_subsystem->assemble_structured(info);
+                }
+            });
+            info.record_chain_base_assembly_time_ms(chain_base_ms);
 
             if(probe == LinearSolver::StructuredProbeAssembly::None)
             {
@@ -457,9 +511,13 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
         if(global_dytopo_effect_manager)
         {
             info.set_phase(StructuredAssemblyPhase::Contact);
-            Timer timer{contact_only ? "Probe Structured DyTopo Hessian Graph"
-                                      : "Assemble Structured DyTopo Hessian"};
-            global_dytopo_effect_manager->assemble_structured_hessian(info);
+            const double contact_ms = measure_stream_work([&]
+            {
+                Timer timer{contact_only ? "Probe Structured DyTopo Hessian Graph"
+                                          : "Assemble Structured DyTopo Hessian"};
+                global_dytopo_effect_manager->assemble_structured_hessian(info);
+            });
+            info.record_contact_assembly_time_ms(contact_ms);
         }
     };
 

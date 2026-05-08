@@ -1375,9 +1375,13 @@ Detailed M6b execution plan:
      `native_chain_base_scalar_fallback_count`, then extend the same counter
      family with FEM `3x3` and first-offdiag target counters as those target
      families land.
-   - Add a replacement timer for the old `Assemble Structured Chain` signal:
-     `native_chain_base_target_build_time_ms` and
-     `native_chain_base_assembly_time_ms`.
+   - Add a replacement timer for the old `Assemble Structured Chain` signal.
+     Current fields are `chain_base_assembly_time_ms`,
+     `native_chain_base_assembly_time_ms`, and
+     `contact_assembly_time_ms`. A separate
+     `native_chain_base_target_build_time_ms` should be added when M6b grows
+     explicit target descriptor build kernels instead of using descriptor-backed
+     sink-side gathering.
    - Report counters even when debug matrix diff is disabled, because perf runs
      must be diff-off.
 
@@ -1429,9 +1433,12 @@ Detailed M6b execution plan:
      coverage as they land.
    - No-contact 20-frame scene passes with native chain/base targets and diff
      enabled.
-   - Diff-off 100-frame no-contact performance run shows either measurable
-     native chain/base assembly reduction or documents why the bottleneck has
-     moved elsewhere.
+   - Diff-off 100-frame no-contact performance run shows measurable native
+     chain/base assembly reduction. Current ABD fast target timing shows the
+     last-solve chain/base assembly timer improving from about `0.829ms`
+     structured baseline to about `0.665ms` native; end-to-end no-contact
+     100-frame timing is only about `1.2%` faster, so later target work should
+     continue using the assembly timer rather than frame time alone.
    - Hit-rate report shows the optimized target family is actually exercised on
      the benchmark scene.
 

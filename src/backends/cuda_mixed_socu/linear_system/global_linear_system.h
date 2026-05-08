@@ -203,6 +203,15 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_counters.data() != nullptr;
         }
+        bool debug_timing_enabled() const noexcept { return m_debug_timing; }
+        double chain_base_assembly_time_ms() const noexcept
+        {
+            return m_chain_base_assembly_time_ms;
+        }
+        double contact_assembly_time_ms() const noexcept
+        {
+            return m_contact_assembly_time_ms;
+        }
 
         StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
         {
@@ -271,6 +280,10 @@ class GlobalLinearSystem : public SimSystem
         {
             m_descriptor_epoch = epoch;
         }
+        void set_debug_timing(bool enabled) noexcept
+        {
+            m_debug_timing = enabled;
+        }
         void set_phase(StructuredAssemblyPhase phase) noexcept
         {
             m_phase = phase;
@@ -323,6 +336,14 @@ class GlobalLinearSystem : public SimSystem
             m_off_band_contribution_count += off_band_contribution_count;
             m_contact_diag_fallback_count += diag_fallback_count;
             m_contact_lump_fallback_count += lump_fallback_count;
+        }
+        void record_chain_base_assembly_time_ms(double elapsed_ms) noexcept
+        {
+            m_chain_base_assembly_time_ms += elapsed_ms;
+        }
+        void record_contact_assembly_time_ms(double elapsed_ms) noexcept
+        {
+            m_contact_assembly_time_ms += elapsed_ms;
         }
         SizeT diag_write_count() const noexcept { return m_diag_write_count; }
         SizeT first_offdiag_write_count() const noexcept
@@ -394,9 +415,12 @@ class GlobalLinearSystem : public SimSystem
         SizeT                      m_off_band_contribution_count = 0;
         SizeT                      m_contact_diag_fallback_count = 0;
         SizeT                      m_contact_lump_fallback_count = 0;
+        double                     m_chain_base_assembly_time_ms = 0.0;
+        double                     m_contact_assembly_time_ms = 0.0;
         StructuredAssemblyPhase    m_phase = StructuredAssemblyPhase::ChainBase;
         muda::CBufferView<SocuNativeDofDescriptor> m_native_dof_descriptors;
         bool                       m_native_chain_base_hessian_enabled = false;
+        bool                       m_debug_timing = false;
         muda::BufferView<SolveScalar> m_chain_base_compare_diag;
         muda::BufferView<SolveScalar> m_chain_base_compare_first_offdiag;
         muda::BufferView<SolveScalar> m_chain_base_compare_rhs;

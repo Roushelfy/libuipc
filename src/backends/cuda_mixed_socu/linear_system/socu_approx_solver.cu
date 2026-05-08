@@ -1383,6 +1383,7 @@ void SocuApproxSolver::prepare_structured_chain(
         m_runtime->device_old_to_chain.view(),
         m_runtime->device_chain_to_old.view(),
         stream);
+    info.set_debug_timing(m_debug_timing);
     info.set_native_chain_base_hessian(
         m_native_chain_base_hessian_enabled,
         m_runtime->device_dof_descriptors.view());
@@ -1585,6 +1586,14 @@ bool SocuApproxSolver::finalize_structured_probe(
 void SocuApproxSolver::finalize_structured_chain(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
+    m_report.chain_base_assembly_time_ms =
+        info.chain_base_assembly_time_ms();
+    m_report.native_chain_base_assembly_time_ms =
+        m_native_chain_base_hessian_enabled
+            ? info.chain_base_assembly_time_ms()
+            : 0.0;
+    m_report.contact_assembly_time_ms = info.contact_assembly_time_ms();
+
     if(info.report_counters_enabled())
     {
         std::array<IndexT, Runtime::kReportCounterCount> assembly_counts{};

@@ -126,6 +126,9 @@ struct SocuApproxSolveReport
 
     double socu_factor_solve_time_ms = 0.0;
     double scatter_time_ms = 0.0;
+    double chain_base_assembly_time_ms = 0.0;
+    double native_chain_base_assembly_time_ms = 0.0;
+    double contact_assembly_time_ms = 0.0;
     std::string stream_source;
     bool native_diag_rhs_enabled = false;
     bool native_diag_rhs_diff_enabled = false;
