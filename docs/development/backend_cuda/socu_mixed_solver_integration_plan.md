@@ -1354,7 +1354,7 @@ Implementation split:
   provider-built target tables are a follow-up optimization once a provider
   still has a meaningful descriptor-gather cost after these block targets.
 
-Current implementation status (2026-05-07): complete for the native chain/base
+Current implementation status (2026-05-08): complete for the native chain/base
 scope.
 
 - Implemented as an opt-in descriptor-backed backend inside the existing
@@ -1366,12 +1366,12 @@ scope.
   contact remains on the legacy structured path.
 - Runtime diff mode assembles the chain/base Hessian into both native and
   legacy buffers at the pre-contact checkpoint and compares `D/E/rhs`.
-- Contact-enabled topology/`diag_lump` scene acceptance is not an M6 gate. M6
-  stops at the pre-contact chain/base checkpoint; contact Hessian build is M8.
-  A fallback build with legacy structured contact TUs was attempted again, but
-  `ipc_simplex_frictional_contact_structured.cu` reached about `54GB` RSS and
-  entered heavy swap during `cicc`, confirming that a contact-enabled
-  structured fallback gate is the wrong completion dependency for M6.
+- Contact-enabled topology/`diag_lump` scenes are not native chain/base
+  implementation gates. M6 stops at the pre-contact chain/base checkpoint;
+  native contact Hessian build is M8. A later full fallback build with the
+  legacy structured contact TUs did complete, so M6 now records supplemental
+  contact-enabled compatibility gates, but those gates exercise legacy contact
+  writes plus native chain/base, not the M8 native contact writer.
 - M6b currently includes ABD base Hessian fast paths for 12-DoF bodies that map
   to one native block or exactly two adjacent native blocks, even with arbitrary
   RCM lane order inside each block. Same-block pieces write directly to native
@@ -1399,6 +1399,8 @@ scope.
   matrix can be checked in isolation. The completed gates are native-only build,
   full native-provider contracts, 20-frame no-contact topology diff, 100-frame
   no-contact diff-off performance, and a real ABD/FEM tower hit-rate gate.
+  After the full fallback build completed, M6 also records contact-enabled
+  structured-fallback compatibility gates for the topology `diag_lump` scene.
 
 Detailed M6b execution plan:
 
@@ -1531,9 +1533,10 @@ Acceptance:
 - M6b target hit-rate counters prove that the benchmark exercises the optimized
   target family; otherwise the benchmark is not accepted as a performance gate
   for that target.
-- Contact-enabled topology `diag_lump` acceptance belongs to M8 native contact
-  build, not M6. M6 must document any fallback structured contact build attempt
-  but does not block chain/base completion on compiling legacy contact TUs.
+- Contact-enabled topology `diag_lump` native-contact acceptance belongs to M8,
+  not M6. M6 may record structured-fallback contact compatibility once a full
+  fallback build is available, but chain/base completion must not depend on
+  compiling legacy contact TUs.
 - All global constraints, design requirements, correctness gates, and acceptance
   rules defined above remain satisfied unless explicitly documented as a planned
   exception before commit.
@@ -1574,11 +1577,13 @@ Fallback:
 #### Milestone 8: Native Contact Build V1
 
 Goal: replace contact structured sink hot path with SOCU-native contact build.
-M8 owns the contact-enabled topology/`diag_lump` 20/100-frame gates that M6
-intentionally does not block on. The reason is practical and architectural:
+M8 owns the native-contact version of the contact-enabled topology/`diag_lump`
+20/100-frame gates. M6 can record legacy structured-contact fallback
+compatibility when a full fallback build is available, but that does not prove
+the new native contact writer. The reason is practical and architectural:
 contact Hessian assembly is a different provider family, and the legacy
-frictional structured contact TU is too heavy to serve as a routine M6 fallback
-build dependency.
+frictional structured contact TU is too heavy to serve as a routine M6 build
+dependency.
 
 M8 design requirements:
 

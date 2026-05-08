@@ -1672,10 +1672,11 @@ and transpose/orientation flags into the kernel hot loop.
 
 ### M6 Closure: Native Chain/Base Complete
 
-M6 is now closed for its native chain/base scope. The remaining contact-enabled
-topology acceptance was moved to M8 because contact Hessian build is explicitly
-M8 work, and the only fallback path depends on legacy structured contact TUs
-that are not a viable M6 build dependency on this workstation.
+M6 is now closed for its native chain/base scope. Contact-enabled topology
+acceptance for the native contact writer remains M8 because contact Hessian
+build is explicitly M8 work. The legacy structured-contact fallback path is
+kept as a compatibility/reference route, but it is not the implementation scope
+that closes M6.
 
 Important build observation:
 
@@ -1689,6 +1690,9 @@ Important build observation:
 - The build was interrupted to avoid destabilizing the machine. This confirms
   the earlier observation that the legacy frictional structured contact TU is a
   contact-stack compilation problem, not a native chain/base correctness gap.
+- On 2026-05-08, the full fallback build was later completed with
+  `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF`, allowing the structured-contact
+  compatibility gates below to run.
 
 Final M6 validation:
 
@@ -1707,6 +1711,45 @@ The accepted implementation provides descriptor-backed native parity, debug
 mirror diff, production single-write mode when diff is disabled, ABD same and
 adjacent `12x12` fast targets, FEM vertex-local and pair `3x3` targets, real
 scene hit-rate gates, and no-contact performance improvement. Contact-enabled
-`topology + diag_lump` 20/100-frame gates are now explicitly M8 native contact
-acceptance, where the contact target table and native contact writer will remove
-the dependency on the legacy frictional structured contact TU.
+`topology + diag_lump` native-contact acceptance is M8, where the contact target
+table and native contact writer will remove the dependency on the legacy
+frictional structured contact TU.
+
+### M6 Supplemental Full Fallback Contact Compatibility
+
+2026-05-08: After the full fallback build completed, the contact-enabled
+compatibility gates were run against the `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF`
+artifact. These gates exercise legacy structured contact assembly together with
+the M6 native chain/base path; they do not replace the M8 native contact writer
+acceptance.
+
+Build/product checks:
+
+- `build/build_impl_fp64/CMakeCache.txt` reports
+  `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY:BOOL=OFF`.
+- `build/build_impl_fp64/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu`
+  exists, and the legacy structured contact object files are present for
+  simplex frictional/normal and vertex-half-plane frictional/normal contact.
+- `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact`
+  passed, `4900` assertions in `23` test cases.
+
+Supplemental contact-enabled validation:
+
+| check | result |
+| --- | --- |
+| 20-frame contact-enabled topology mirror-diff gate, `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 SOCU_REPORT_COUNTERS=1 ... cuda_mixed_wrecking_ball_compare.py --variant socu_rt50_topology_diag_lump --frames 20 --backend cuda_mixed_socu` | passed, `final_frame=20`, `wall_time_s=4.479084960010368`, `mean_frame_ms=82.0732523483457`; report shows status `structured band direction solved and scattered: provider=abd_only, scope=multi_provider`, native chain/base diff mismatch `0`, all native chain/base `D/E/rhs` diff sums `0.0`, same-block dense hits `492`, adjacent dense hits `82`, dense misses `0`, scalar fallback `0`, `chain_base_assembly_time_ms=1.0244799852371216`, and `contact_assembly_time_ms=6.956448078155518` |
+| 100-frame contact-enabled structured baseline, native chain/base disabled and counters/diff disabled | passed, `final_frame=100`, `wall_time_s=17.490785808011424`, `mean_frame_ms=154.2077547806548` |
+| 100-frame contact-enabled native chain/base diff-off, `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1`, counters/diff disabled | passed, `final_frame=100`, `wall_time_s=17.48229211801663`, `mean_frame_ms=155.182085702545` |
+| 100-frame contact-enabled native chain/base counter gate, `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_REPORT_COUNTERS=1`, diff disabled | passed, `final_frame=100`, `wall_time_s=18.19558243697975`, `mean_frame_ms=161.3195193867432`; report shows native chain/base and native diag/RHS enabled, diff disabled, same-block dense hits `492`, adjacent dense hits `82`, dense misses `0`, scalar fallback `0`, `chain_base_assembly_time_ms=0.9599360227584839`, `native_chain_base_assembly_time_ms=0.9599360227584839`, and `contact_assembly_time_ms=24.102815628051758` |
+
+Interpretation:
+
+- The full fallback artifact is now usable for compatibility/regression checks.
+- M6 native chain/base remains exact under contact-enabled scenes: the 20-frame
+  mirror-diff gate has zero mismatch and zero diff sums, and both 20-frame and
+  100-frame counter reports show zero dense miss/scalar fallback for the ABD
+  chain/base targets.
+- The 100-frame native/contact mean time is roughly the same as structured
+  baseline in this small scene, and the counter-enabled run is slower because it
+  records debug counters. This is acceptable for M6; reducing contact assembly
+  time is still M8.
