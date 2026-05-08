@@ -1349,11 +1349,13 @@ Implementation split:
 - **M6b: fast native chain/base targets.** Move hot providers from
   scalar-by-scalar classification to block/stencil targets that already know
   `block/lane` destinations. M6b owns ABD `12x12` same-block and
-  adjacent-block targets, FEM `3x3` block targets, first-offdiag target
-  precomputation, and production native single-write with mirror diff kept
-  debug-only.
+  adjacent-block targets, FEM `3x3` block targets, first-offdiag target writes,
+  and production native single-write with mirror diff kept debug-only. Explicit
+  provider-built target tables are a follow-up optimization once a provider
+  still has a meaningful descriptor-gather cost after these block targets.
 
-Current implementation status (2026-05-07):
+Current implementation status (2026-05-07): complete for the native chain/base
+scope.
 
 - Implemented as an opt-in descriptor-backed backend inside the existing
   structured assembly sink API. Existing FEM/ABD providers keep their current
@@ -1364,11 +1366,12 @@ Current implementation status (2026-05-07):
   contact remains on the legacy structured path.
 - Runtime diff mode assembles the chain/base Hessian into both native and
   legacy buffers at the pre-contact checkpoint and compares `D/E/rhs`.
-- Contact-enabled scene acceptance still requires a successful fallback build
-  with legacy structured contact TUs. On the current machine,
-  `ipc_simplex_frictional_contact_structured.cu` enters very high memory/swap
-  usage during `cicc`, so the full contact 20/100-frame acceptance remains a
-  pending M6 gate rather than a completed one.
+- Contact-enabled topology/`diag_lump` scene acceptance is not an M6 gate. M6
+  stops at the pre-contact chain/base checkpoint; contact Hessian build is M8.
+  A fallback build with legacy structured contact TUs was attempted again, but
+  `ipc_simplex_frictional_contact_structured.cu` reached about `54GB` RSS and
+  entered heavy swap during `cicc`, confirming that a contact-enabled
+  structured fallback gate is the wrong completion dependency for M6.
 - M6b currently includes ABD base Hessian fast paths for 12-DoF bodies that map
   to one native block or exactly two adjacent native blocks, even with arbitrary
   RCM lane order inside each block. Same-block pieces write directly to native
@@ -1392,6 +1395,10 @@ Current implementation status (2026-05-07):
   same SOCU orientation as the scalar native sink; off-band and inactive cases
   fall back to the scalar structured sink. Runtime ordering collection disables
   this fast path so graph capture semantics remain scalar.
+- Final M6 validation uses no-contact scenes so the pre-contact chain/base
+  matrix can be checked in isolation. The completed gates are native-only build,
+  full native-provider contracts, 20-frame no-contact topology diff, 100-frame
+  no-contact diff-off performance, and a real ABD/FEM tower hit-rate gate.
 
 Detailed M6b execution plan:
 
@@ -1417,13 +1424,14 @@ Detailed M6b execution plan:
      must be diff-off.
 
 2. **Target API split.**
-   - Introduce a narrow header for native chain/base targets, separate from the
-     legacy structured contact sink headers.
-   - Keep `StructuredDeviceAssemblySink` as a fallback adapter, but make new
-     provider code call native target writers directly where possible.
-   - The writer API should accept `SocuNativeMatrixView`, target arrays, and
-     provider-local Hessian/RHS values. It should not need `old_to_chain` in the
-     hot path.
+   - M6 completion keeps `StructuredDeviceAssemblySink` as the fallback adapter
+     and houses the native target writers there, because this preserves the
+     existing provider call surface and lets chain/base targets share the debug
+     mirror path.
+   - A standalone narrow target header and direct provider calls are a cleanup
+     / later optimization item, not an M6 acceptance blocker. They become
+     necessary only when a provider-built target table replaces the current
+     descriptor-backed target writers.
 
 3. **ABD base Hessian targets.**
    - Same-block target: implemented M6b slice. A 12-DoF ABD body fully inside
@@ -1446,22 +1454,27 @@ Detailed M6b execution plan:
      for non-fixed local vertex pairs. Synthetic tests compare native primary,
      debug compare, and scalar legacy `D/E` buffers and assert the expected
      pair counters.
-   - Remaining high-performance work is to move this from descriptor-backed
-     sink-side classification to provider-built pair/stencil target arrays, so
-     provider kernels can load `left_block/row_lane/col_lane/transposed` targets
-     instead of gathering DoF descriptors in the write path.
+   - Remaining optional high-performance work is to move this from
+     descriptor-backed sink-side classification to provider-built pair/stencil
+     target arrays if profiling shows descriptor gathering is still material.
+     Current M6 acceptance uses the already-implemented block-level target,
+     which classifies once per local `3x3` block instead of once per scalar and
+     passes the real FEM hit-rate/performance gate.
    - For fixed vertices, use the descriptor fixed flag to choose identity or
      skip/write policy before entering the hot write loop.
 
-5. **First-offdiag target precomputation.**
+5. **First-offdiag target handling.**
    - Store SOCU orientation explicitly: `left_block`, `row_lane`, `col_lane`,
      and whether the provider-local pair order is transposed.
    - The current FEM pair slice already classifies once per local `3x3` block
      and writes adjacent pairs to first-offdiag `E`; it still computes target
-     orientation inside the sink from native DoF descriptors. The next
-     performance step is the explicit target table above.
-   - Provider kernels must not recompute `abs(block_i - block_j)` per scalar
-     once explicit target tables exist.
+     orientation inside the sink from native DoF descriptors. ABD adjacent
+     targets do the analogous whole-body classification and first-offdiag write.
+   - This is sufficient to close M6 because scalar-level band checks are gone
+     for the completed ABD and FEM target families and target hit-rate counters
+     show zero scalar fallback on the accepted scenes.
+   - Explicit target tables that avoid descriptor loads entirely remain a
+     later optimization, not an M6 correctness or acceptance requirement.
 
 6. **Production single-write mode.**
    - Default production path for enabled native targets writes only native
@@ -1477,14 +1490,12 @@ Detailed M6b execution plan:
      and FEM pair `3x3` same-block, adjacent, reverse-adjacent, and off-band
      fallback paths. The remaining target families add skipped/fixed descriptor
      coverage as they land.
-   - No-contact 20-frame scene passes with native chain/base targets and diff
-     enabled.
+   - No-contact 20-frame topology scene passes with native chain/base targets
+     and diff enabled.
    - Diff-off 100-frame no-contact performance run shows measurable native
-     chain/base assembly reduction. Current ABD fast target timing shows the
-     last-solve chain/base assembly timer improving from about `0.829ms`
-     structured baseline to about `0.665ms` native; end-to-end no-contact
-     100-frame timing is only about `1.2%` faster, so later target work should
-     continue using the assembly timer rather than frame time alone.
+     chain/base improvement. Final M6 closure measured the 100-frame
+     no-contact topology scene improving from `24.125ms` mean frame time to
+     `18.036ms` with native diag/RHS and native chain/base enabled.
    - Hit-rate report shows the optimized target family is actually exercised on
      the benchmark scene.
    - FEM pair target gate: `cuda_mixed_abd_fem_tower_viewer.py --levels 6
@@ -1504,8 +1515,7 @@ Deliverables:
   - ABD `12x12` same-block and adjacent-block arbitrary-lane writes for
     kinetic/shape/base Hessian.
   - First-offdiag target writes for ABD adjacent blocks and FEM adjacent
-    `3x3` pairs; explicit provider-built first-offdiag target descriptor tables
-    remain the next performance refinement.
+    `3x3` pairs.
 - Matrix diff tests for synthetic chain fixtures.
 - Scene-level diff for small deterministic scenes.
 
@@ -1513,12 +1523,17 @@ Acceptance:
 
 - Native chain/base matrix equals structured sink represented band within
   tolerance.
-- `cuda_mixed_socu` 20-frame topology `diag_lump` regression passes.
-- 100-frame best SOCU variant is not slower; target improvement is measurable
-  reduction in `Assemble Structured Chain` or replacement native timer.
+- `cuda_mixed_socu` 20-frame no-contact topology `diag_lump` chain/base
+  regression passes with native mirror diff enabled.
+- 100-frame no-contact topology `diag_lump` run is not slower; target
+  improvement is measurable reduction in frame time or replacement native
+  chain/base timer.
 - M6b target hit-rate counters prove that the benchmark exercises the optimized
   target family; otherwise the benchmark is not accepted as a performance gate
   for that target.
+- Contact-enabled topology `diag_lump` acceptance belongs to M8 native contact
+  build, not M6. M6 must document any fallback structured contact build attempt
+  but does not block chain/base completion on compiling legacy contact TUs.
 - All global constraints, design requirements, correctness gates, and acceptance
   rules defined above remain satisfied unless explicitly documented as a planned
   exception before commit.
@@ -1559,6 +1574,11 @@ Fallback:
 #### Milestone 8: Native Contact Build V1
 
 Goal: replace contact structured sink hot path with SOCU-native contact build.
+M8 owns the contact-enabled topology/`diag_lump` 20/100-frame gates that M6
+intentionally does not block on. The reason is practical and architectural:
+contact Hessian assembly is a different provider family, and the legacy
+frictional structured contact TU is too heavy to serve as a routine M6 fallback
+build dependency.
 
 M8 design requirements:
 

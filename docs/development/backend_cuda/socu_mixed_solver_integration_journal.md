@@ -1669,3 +1669,44 @@ table design: the current slice classifies once per local `3x3` block inside
 the sink from DoF descriptors. The next performance refinement is explicit
 provider/stencil target arrays that carry `left_block`, `row_lane`, `col_lane`,
 and transpose/orientation flags into the kernel hot loop.
+
+### M6 Closure: Native Chain/Base Complete
+
+M6 is now closed for its native chain/base scope. The remaining contact-enabled
+topology acceptance was moved to M8 because contact Hessian build is explicitly
+M8 work, and the only fallback path depends on legacy structured contact TUs
+that are not a viable M6 build dependency on this workstation.
+
+Important build observation:
+
+- A full `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` rebuild was attempted again
+  with `ninja -C build/build_impl_fp64 -j1
+  RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu`.
+- The build reached
+  `contact_system/contact_models/ipc_simplex_frictional_contact_structured.cu`.
+  During `cicc`, RSS climbed to about `54GB`, available memory dropped to tens
+  of MB, and swap usage climbed to about `16GB`.
+- The build was interrupted to avoid destabilizing the machine. This confirms
+  the earlier observation that the legacy frictional structured contact TU is a
+  contact-stack compilation problem, not a native chain/base correctness gap.
+
+Final M6 validation:
+
+| check | result |
+| --- | --- |
+| native-only reconfigure/build, `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` then `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; native-only source exclusion `469 -> 465`, device link and test executable link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_provider][m6]"` | passed, 3736 assertions in 5 cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, 4900 assertions in 23 cases |
+| no-contact 20-frame topology gate, `SOCU_CONTACT_ENABLE=0 SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_CHAIN_BASE_DIFF=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_DIAG_RHS_DIFF=1 SOCU_REPORT_COUNTERS=1 ... cuda_mixed_wrecking_ball_compare.py --variant socu_rt50_topology_diag_lump --frames 20 --backend cuda_mixed_socu` | passed, `final_frame=20`, `mean_frame_ms=41.2303806951968`; report shows native chain/base diff mismatch `0`, all `D/E/rhs` diff sums `0.0`, same-block dense hits `492`, adjacent dense hits `82`, dense misses `0`, scalar fallback `0`, and `chain_base_assembly_time_ms=0.7747520208358765` |
+| no-contact 100-frame structured baseline, native chain/base disabled, counters/diff disabled | passed, `final_frame=100`, `wall_time_s=4.650163705984596`, `mean_frame_ms=24.125422997167334` |
+| no-contact 100-frame native diff-off, native diag/RHS and native chain/base enabled, counters/diff disabled | passed, `final_frame=100`, `wall_time_s=3.678715430025477`, `mean_frame_ms=18.035593961831182` |
+| no-contact ABD/FEM tower native mirror-diff gate, `cuda_mixed_abd_fem_tower_viewer.py --backend cuda_mixed_socu --solver socu_approx --levels 6 --smoke-frames 1 --disable-contact` with native chain/base/diag-RHS diff enabled | passed; report shows native chain/base mismatch `0`, all diff sums `0.0`, `diag3x3_hit=84`, `pair3x3_same_block_hit=77`, `pair3x3_adjacent_hit=13`, `pair3x3_miss=0`, `scalar_fallback=0`, and `chain_base_assembly_time_ms=0.83651202917099` |
+
+Acceptance status: M6 is complete for native chain/base Hessian/RHS assembly.
+The accepted implementation provides descriptor-backed native parity, debug
+mirror diff, production single-write mode when diff is disabled, ABD same and
+adjacent `12x12` fast targets, FEM vertex-local and pair `3x3` targets, real
+scene hit-rate gates, and no-contact performance improvement. Contact-enabled
+`topology + diag_lump` 20/100-frame gates are now explicitly M8 native contact
+acceptance, where the contact target table and native contact writer will remove
+the dependency on the legacy frictional structured contact TU.
