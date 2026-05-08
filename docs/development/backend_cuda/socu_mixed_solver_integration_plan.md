@@ -1549,9 +1549,16 @@ Fallback:
   native sink fallback active and record the missed fast-target condition in the
   M6 journal.
 
-#### Milestone 7: Native Constraints / Joints / External Forces
+#### Milestone 7: Native Constraints / Joints / External Forces (Deferred)
 
 Goal: migrate fixed-stencil non-contact effects.
+
+Status (2026-05-08): deferred until after M8 native contact build. The current
+M6/M8 evidence shows contact assembly is the next dominant SOCU integration
+risk and performance hotspot, while constraints/joints/external forces can
+remain on structured fallback without blocking the main topology/contact
+acceptance gates. Revisit this milestone after native contact V1 lands, or when
+a concrete constraint/joint scene needs native SOCU coverage.
 
 Deliverables:
 
@@ -1577,6 +1584,7 @@ Fallback:
 #### Milestone 8: Native Contact Build V1
 
 Goal: replace contact structured sink hot path with SOCU-native contact build.
+Status (2026-05-08): active; M7 is temporarily deferred.
 M8 owns the native-contact version of the contact-enabled topology/`diag_lump`
 20/100-frame gates. M6 can record legacy structured-contact fallback
 compatibility when a full fallback build is available, but that does not prove
@@ -1608,6 +1616,12 @@ Detailed M8 execution plan:
      pair, FEM/ABD projection kind, ABD Jacobian indices, and fallback policy.
    - Add synthetic descriptor tests for all combinations: fully in-band,
      adjacent first-offdiag, off-band, skipped/fixed, FEM/ABD, and ABD/ABD.
+   - Initial implementation added `SocuNativeContactStencilTarget` and
+     `SocuNativeContactStencilPolicy` as narrow descriptor-side schema. The
+     first tests cover arbitrary-lane exact targets, adjacent orientation,
+     whole-stencil `diag_lump` fallback policy, `drop` off-band classification,
+     skipped/fixed vertices, and ABD metadata. The next slice should turn these
+     records into provider-facing target tables for one normal contact family.
 
 2. **Normal contact exact native write.**
    - Implement simplex normal and PH normal native writes first.

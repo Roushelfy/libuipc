@@ -1753,3 +1753,40 @@ Interpretation:
   baseline in this small scene, and the counter-enabled run is slower because it
   records debug counters. This is acceptable for M6; reducing contact assembly
   time is still M8.
+
+### M7 Deferred, M8 Native Contact Kickoff
+
+2026-05-08: M7 is intentionally deferred until after M8. The reason is that the
+current accepted scenes and fallback contact gates show contact assembly as the
+next SOCU integration hotspot, while constraints/joints/external forces can stay
+on structured fallback without blocking the topology/contact acceptance path.
+
+M8 first slice implemented:
+
+- Added `src/backends/cuda_mixed_socu/linear_system/socu_native_contact_targets.h`.
+- Introduced `SocuNativeContactStencilTarget`,
+  `SocuNativeContactStencilPolicy`, and `SocuNativeContactWriteMode`.
+- Contact target classification uses per-DoF descriptors directly rather than
+  `SocuNativeVertexDescriptor::active`, so arbitrary-lane vertices remain
+  eligible even when the old contiguous-range descriptor view would mark them
+  inactive. This preserves the M6 lesson from real RCM ordering.
+- Added policy helpers for exact in-band writes, `drop` off-band classification,
+  and whole-stencil `diag`/`diag_lump` fallback selection.
+- Added `apps/tests/backends/cuda_mixed_socu/socu_native_contact_targets.cu`
+  covering arbitrary-lane exact targets, adjacent first-offdiag orientation,
+  whole-stencil `diag_lump` fallback, drop/off-band classification,
+  skipped/fixed vertices, and ABD metadata.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake -S . -B build/build_impl_fp64` | passed; new test source picked up by the globbed test target |
+| `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; compiled `socu_native_contact_targets.cu` and relinked the test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -s` | passed, `53` assertions in `4` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, `4953` assertions in `27` test cases |
+
+Next M8 slice: build a provider-facing target table for the first normal contact
+family, likely simplex normal before PH/frictional contact, then add exact
+in-band native writes and matrix diff against the legacy structured contact
+reference.
