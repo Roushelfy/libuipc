@@ -298,4 +298,20 @@ socu_native_contact_make_half_block_target(
     }
     return target;
 }
+
+void rebuild_socu_native_simplex_contact_targets(
+    cudaStream_t                              stream,
+    muda::BufferView<SocuNativeContactStencilTarget> pt_targets,
+    muda::BufferView<SocuNativeContactStencilTarget> ee_targets,
+    muda::BufferView<SocuNativeContactStencilTarget> pe_targets,
+    muda::BufferView<SocuNativeContactStencilTarget> pp_targets,
+    muda::CBufferView<Vector4i>               pts,
+    muda::CBufferView<Vector4i>               ees,
+    muda::CBufferView<Vector3i>               pes,
+    muda::CBufferView<Vector2i>               pps,
+    muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    muda::CBufferView<IndexT>                 old_to_chain,
+    SizeT                                     horizon,
+    SizeT                                     block_size,
+    StructuredContactOffbandPolicy            fallback_policy);
 }  // namespace uipc::backend::cuda_mixed

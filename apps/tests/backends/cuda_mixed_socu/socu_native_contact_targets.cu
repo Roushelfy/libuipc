@@ -1,12 +1,31 @@
 #include <app/app.h>
 #include <linear_system/socu_native_contact_targets.h>
 
+#include <cuda_runtime.h>
+#include <muda/buffer/device_buffer.h>
+
 #include <initializer_list>
 #include <vector>
 
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+using uipc::IndexT;
+using uipc::Vector2i;
+using uipc::Vector3i;
+using uipc::Vector4i;
+
+bool has_cuda_device()
+{
+    int device_count = 0;
+    const cudaError_t device_query = cudaGetDeviceCount(&device_count);
+    if(device_query != cudaSuccess || device_count == 0)
+    {
+        cudaGetLastError();
+        return false;
+    }
+    return true;
+}
 
 struct ContactTargetFixture
 {
@@ -275,4 +294,98 @@ TEST_CASE("cuda_mixed_socu_native_contact_target_skip_and_abd_metadata",
     CHECK(abd_fem.row_abd_body == 5);
     CHECK(abd_fem.row_jacobian_index == 2);
     CHECK(abd_fem.col_jacobian_index == -1);
+}
+
+TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
+          "[cuda_mixed_socu][contract][socu_native_contact][m8]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU native contact target tests");
+
+    ContactTargetFixture fixture;
+    std::vector<SocuNativeVertexDescriptor> vertices(16);
+    vertices[0] =
+        fixture.vertex(SocuNativeDescriptorKind::Fem, 0, 3, false);
+    vertices[1] =
+        fixture.vertex(SocuNativeDescriptorKind::Fem, 3, 3, false);
+    vertices[2] =
+        fixture.vertex(SocuNativeDescriptorKind::Fem, 6, 3, false);
+    vertices[10] =
+        fixture.vertex(SocuNativeDescriptorKind::Abd, 9, 12, false, 5, 2);
+
+    std::vector<Vector4i> pts{Vector4i{0, 1, 2, 10}};
+    std::vector<Vector2i> pps{Vector2i{0, 1}};
+
+    muda::DeviceBuffer<IndexT> old_to_chain{fixture.old_to_chain};
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertex_device{vertices};
+    muda::DeviceBuffer<Vector4i> pt_device{pts};
+    muda::DeviceBuffer<Vector4i> ee_device;
+    muda::DeviceBuffer<Vector3i> pe_device;
+    muda::DeviceBuffer<Vector2i> pp_device{pps};
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> pt_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> ee_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> pe_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> pp_targets;
+    pt_targets.resize(10);
+    pp_targets.resize(3);
+
+    cudaGetLastError();
+    rebuild_socu_native_simplex_contact_targets(
+        cudaStreamLegacy,
+        pt_targets.view(),
+        ee_targets.view(),
+        pe_targets.view(),
+        pp_targets.view(),
+        pt_device.view().as_const(),
+        ee_device.view().as_const(),
+        pe_device.view().as_const(),
+        pp_device.view().as_const(),
+        vertex_device.view().as_const(),
+        old_to_chain.view().as_const(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::DiagLump);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+
+    std::vector<SocuNativeContactStencilTarget> pt_host;
+    std::vector<SocuNativeContactStencilTarget> pp_host;
+    pt_targets.copy_to(pt_host);
+    pp_targets.copy_to(pp_host);
+
+    REQUIRE(pt_host.size() == 10);
+    CHECK(pt_host[0].write_mode
+          == SocuNativeContactWriteMode::DiagLumpFallback);
+    CHECK(pt_host[0].local_row_vertex == 0);
+    CHECK(pt_host[0].local_col_vertex == 0);
+    CHECK(pt_host[0].half_block_class == SocuNativeBandClass::Diag);
+    CHECK(pt_host[2].write_mode
+          == SocuNativeContactWriteMode::DiagLumpFallback);
+    CHECK(pt_host[2].half_block_class == SocuNativeBandClass::OffBand);
+    CHECK(pt_host[6].col_kind == SocuNativeDescriptorKind::Abd);
+    CHECK(pt_host[6].col_abd_body == 5);
+    CHECK(pt_host[6].col_jacobian_index == 2);
+
+    REQUIRE(pp_host.size() == 3);
+    CHECK(pp_host[0].exact_in_band());
+    CHECK(pp_host[0].half_block_class == SocuNativeBandClass::Diag);
+    CHECK(pp_host[0].block_or_left_block == 0);
+    CHECK(pp_host[0].row_lane == 5);
+    CHECK(pp_host[0].col_lane == 5);
+
+    CHECK(pp_host[1].exact_in_band());
+    CHECK(pp_host[1].half_block_class == SocuNativeBandClass::FirstOffdiag);
+    CHECK(pp_host[1].block_or_left_block == 0);
+    CHECK(pp_host[1].row_lane == 2);
+    CHECK(pp_host[1].col_lane == 5);
+    CHECK(pp_host[1].transposed_first_offdiag);
+    CHECK(pp_host[1].local_row_vertex == 0);
+    CHECK(pp_host[1].local_col_vertex == 1);
+
+    CHECK(pp_host[2].exact_in_band());
+    CHECK(pp_host[2].half_block_class == SocuNativeBandClass::Diag);
+    CHECK(pp_host[2].block_or_left_block == 1);
+    CHECK(pp_host[2].row_lane == 2);
+    CHECK(pp_host[2].col_lane == 2);
 }

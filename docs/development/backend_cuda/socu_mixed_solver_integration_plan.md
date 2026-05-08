@@ -1617,11 +1617,16 @@ Detailed M8 execution plan:
    - Add synthetic descriptor tests for all combinations: fully in-band,
      adjacent first-offdiag, off-band, skipped/fixed, FEM/ABD, and ABD/ABD.
    - Initial implementation added `SocuNativeContactStencilTarget` and
-     `SocuNativeContactStencilPolicy` as narrow descriptor-side schema. The
-     first tests cover arbitrary-lane exact targets, adjacent orientation,
-     whole-stencil `diag_lump` fallback policy, `drop` off-band classification,
-     skipped/fixed vertices, and ABD metadata. The next slice should turn these
-     records into provider-facing target tables for one normal contact family.
+     `SocuNativeContactStencilPolicy` as narrow descriptor-side schema. Tests
+     cover arbitrary-lane exact targets, adjacent orientation, whole-stencil
+     `diag_lump` fallback policy, `drop` off-band classification,
+     skipped/fixed vertices, and ABD metadata.
+   - The follow-up implementation added a CUDA rebuild entry point for simplex
+     normal-style PT/EE/PE/PP target tables. It emits upper half-block target
+     records in the same local ordering as the current structured contact sink,
+     keeps ABD/FEM metadata, and classifies arbitrary-lane descriptors from the
+     current `old_to_chain` ordering. The next slice should consume those
+     tables in the simplex normal exact in-band writer.
 
 2. **Normal contact exact native write.**
    - Implement simplex normal and PH normal native writes first.

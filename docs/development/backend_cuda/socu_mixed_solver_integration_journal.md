@@ -1786,7 +1786,30 @@ Validation:
 | `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -s` | passed, `53` assertions in `4` test cases |
 | `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, `4953` assertions in `27` test cases |
 
-Next M8 slice: build a provider-facing target table for the first normal contact
-family, likely simplex normal before PH/frictional contact, then add exact
-in-band native writes and matrix diff against the legacy structured contact
-reference.
+M8 second slice implemented:
+
+- Added
+  `src/backends/cuda_mixed_socu/linear_system/socu_native_contact_targets.cu`.
+- Added `rebuild_socu_native_simplex_contact_targets(...)`, a narrow CUDA
+  rebuild entry point for PT/EE/PE/PP target arrays.
+- The device rebuild emits one `SocuNativeContactStencilTarget` per upper
+  half-block, in the same local order used by
+  `StructuredContactAssemblySink::write_hessian_half`.
+- Device classification uses current `old_to_chain` directly, so arbitrary-lane
+  FEM/ABD descriptors remain eligible even when the contiguous vertex descriptor
+  flag is false.
+- Whole-stencil `diag`/`diag_lump` policy is selected before exact writes; with
+  `drop`, only off-band half-blocks are marked `DropOffBand`, preserving the old
+  scalar drop behavior.
+
+Second-slice validation:
+
+| check | result |
+| --- | --- |
+| `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; built `socu_native_contact_targets.cu`, relinked `libuipc_backend_cuda_mixed_socu.so`, and relinked the SOCU test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -r compact` | passed, `85` assertions in `5` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, `4985` assertions in `28` test cases |
+
+Next M8 slice: consume the simplex target table in the normal-contact exact
+in-band writer, then add matrix diff against the legacy structured contact
+reference before enabling the path in scene gates.
