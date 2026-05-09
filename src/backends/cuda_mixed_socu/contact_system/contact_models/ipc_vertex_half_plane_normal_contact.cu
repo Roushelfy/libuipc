@@ -1,4 +1,5 @@
 #include <contact_system/vertex_half_plane_normal_contact.h>
+#include <contact_system/contact_models/ipc_vertex_half_plane_normal_contact_native.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
 #include <kernel_cout.h>
@@ -13,6 +14,27 @@ void assemble_ipc_vertex_half_plane_normal_contact_structured(
     VertexHalfPlaneNormalContact::ContactInfo& info,
     const HalfPlane&                           half_plane);
 #endif
+
+namespace
+{
+bool ph_contact_target_view_ready(
+    SizeT contact_count,
+    muda::CBufferView<SocuNativeContactStencilTarget> targets)
+{
+    return contact_count == 0
+           || (targets.data() != nullptr
+               && targets.size()
+                      >= contact_count
+                             * VertexHalfPlaneNormalContact::PHHalfHessianSize);
+}
+
+bool ph_native_contact_targets_ready(
+    VertexHalfPlaneNormalContact::ContactInfo& info)
+{
+    return ph_contact_target_view_ready(info.PHs().size(),
+                                        info.PH_native_contact_targets());
+}
+}  // namespace
 
 class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContact
 {
@@ -87,10 +109,21 @@ class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContac
 
         if(info.structured_hessian())
         {
+            const bool native_ready =
+                !info.structured_hessian_sink().approximate_weight_probe_only()
+                && ph_native_contact_targets_ready(info);
+            if(native_ready)
+            {
+                assemble_ipc_vertex_half_plane_normal_contact_native_exact(
+                    info,
+                    *half_plane);
+                return;
+            }
+
 #ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
             throw SimSystemException(
                 "SOCU native-only build excludes legacy vertex-half-plane "
-                "normal structured contact assembly");
+                "normal structured contact assembly and requires native target tables");
 #else
             assemble_ipc_vertex_half_plane_normal_contact_structured(info, *half_plane);
 #endif

@@ -2,9 +2,69 @@
 #include <collision_detection/vertex_half_plane_trajectory_filter.h>
 #include <utils/make_spd.h>
 #include <implicit_geometry/half_plane_vertex_reporter.h>
+#include <mixed_precision/cast.h>
 
 namespace uipc::backend::cuda_mixed
 {
+namespace
+{
+template <typename ContactSink>
+void record_ph_contact_topology(cudaStream_t               stream,
+                                ContactSink                structured_sink,
+                                muda::CBufferView<Vector2i> PHs)
+{
+    if(PHs.size() == 0)
+        return;
+
+    using namespace muda;
+    using Store = VertexHalfPlaneNormalContact::StoreScalar;
+    ParallelFor(256, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(PHs.size(),
+               [structured_sink,
+                PHs = PHs.viewer().name("PHs")] __device__(int I) mutable
+               {
+                   const Vector2i PH = PHs(I);
+                   structured_sink.write_weighted_hessian(PH(0), Store{1});
+               });
+}
+
+template <typename ContactSink>
+void record_ph_contact_weights(cudaStream_t                       stream,
+                               ContactSink                        structured_sink,
+                               muda::CBufferView<Vector2i>         PHs,
+                               muda::CBuffer2DView<ContactCoeff>   table,
+                               muda::CBufferView<IndexT>           contact_ids,
+                               IndexT                              half_plane_vertex_offset,
+                               Float                               dt)
+{
+    if(PHs.size() == 0)
+        return;
+
+    using namespace muda;
+    using Store = VertexHalfPlaneNormalContact::StoreScalar;
+    ParallelFor(256, 0, stream)
+        .file_line(__FILE__, __LINE__)
+        .apply(PHs.size(),
+               [structured_sink,
+                PHs = PHs.viewer().name("PHs"),
+                table = table.viewer().name("contact_tabular"),
+                contact_ids = contact_ids.viewer().name("contact_element_ids"),
+                half_plane_vertex_offset,
+                dt] __device__(int I) mutable
+               {
+                   const Vector2i PH = PHs(I);
+                   const IndexT   vI = PH(0);
+                   const IndexT   HI = PH(1);
+                   const Store weight = safe_cast<Store>(
+                       table(contact_ids(vI), contact_ids(HI + half_plane_vertex_offset))
+                           .kappa
+                       * dt * dt);
+                   structured_sink.write_weighted_hessian(vI, weight);
+               });
+}
+}  // namespace
+
 void VertexHalfPlaneNormalContact::do_build(ContactReporter::BuildInfo& info)
 {
     m_impl.global_trajectory_filter = require<GlobalTrajectoryFilter>();
@@ -89,6 +149,48 @@ void VertexHalfPlaneNormalContact::do_assemble_structured_hessian(
     this_info.m_hessian_only       = true;
     this_info.m_structured_hessian = true;
     this_info.m_structured_sink    = info.contact_sink();
+
+    if(this_info.m_structured_sink.topology_probe_only())
+    {
+        record_ph_contact_topology(info.stream(),
+                                   this_info.m_structured_sink,
+                                   this_info.PHs());
+        return;
+    }
+
+    if(this_info.m_structured_sink.approximate_weight_probe_only())
+    {
+        record_ph_contact_weights(info.stream(),
+                                  this_info.m_structured_sink,
+                                  this_info.PHs(),
+                                  this_info.contact_tabular(),
+                                  this_info.contact_element_ids(),
+                                  this_info.half_plane_vertex_offset(),
+                                  this_info.dt());
+        return;
+    }
+
+    const auto descriptors = info.vertex_descriptors();
+    const auto matrix      = this_info.m_structured_sink.sink.matrix;
+    if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
+       && matrix.horizon != 0 && matrix.block_size != 0)
+    {
+        m_impl.loose_resize(m_impl.PH_native_contact_targets,
+                            this_info.PHs().size() * PHHalfHessianSize);
+
+        rebuild_socu_native_vertex_half_plane_contact_targets(
+            info.stream(),
+            m_impl.PH_native_contact_targets.view(),
+            this_info.PHs(),
+            descriptors,
+            matrix.old_to_chain,
+            matrix.horizon,
+            matrix.block_size,
+            this_info.m_structured_sink.offband_policy);
+
+        this_info.m_PH_native_contact_targets =
+            m_impl.PH_native_contact_targets.view().as_const();
+    }
 
     m_impl.hessians = {};
     do_assemble(this_info);

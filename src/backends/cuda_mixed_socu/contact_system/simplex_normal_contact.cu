@@ -3,6 +3,7 @@
 #include <muda/cub/device/device_merge_sort.h>
 #include <utils/distance.h>
 #include <utils/codim_thickness.h>
+#include <linear_system/socu_native_contact_targets.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -209,6 +210,49 @@ void SimplexNormalContact::do_assemble_structured_hessian(
         record_contact_topology<3>(this_info.m_structured_sink, this_info.PEs(), "PEs");
         record_contact_topology<2>(this_info.m_structured_sink, this_info.PPs(), "PPs");
         return;
+    }
+
+    if(!this_info.m_structured_sink.approximate_weight_probe_only())
+    {
+        const auto descriptors = info.vertex_descriptors();
+        const auto matrix      = this_info.m_structured_sink.sink.matrix;
+        if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
+           && matrix.horizon != 0 && matrix.block_size != 0)
+        {
+            m_impl.loose_resize(m_impl.PT_native_contact_targets,
+                                this_info.PTs().size() * PTHalfHessianSize);
+            m_impl.loose_resize(m_impl.EE_native_contact_targets,
+                                this_info.EEs().size() * EEHalfHessianSize);
+            m_impl.loose_resize(m_impl.PE_native_contact_targets,
+                                this_info.PEs().size() * PEHalfHessianSize);
+            m_impl.loose_resize(m_impl.PP_native_contact_targets,
+                                this_info.PPs().size() * PPHalfHessianSize);
+
+            rebuild_socu_native_simplex_contact_targets(
+                info.stream(),
+                m_impl.PT_native_contact_targets.view(),
+                m_impl.EE_native_contact_targets.view(),
+                m_impl.PE_native_contact_targets.view(),
+                m_impl.PP_native_contact_targets.view(),
+                this_info.PTs(),
+                this_info.EEs(),
+                this_info.PEs(),
+                this_info.PPs(),
+                descriptors,
+                matrix.old_to_chain,
+                matrix.horizon,
+                matrix.block_size,
+                this_info.m_structured_sink.offband_policy);
+
+            this_info.m_PT_native_contact_targets =
+                m_impl.PT_native_contact_targets.view().as_const();
+            this_info.m_EE_native_contact_targets =
+                m_impl.EE_native_contact_targets.view().as_const();
+            this_info.m_PE_native_contact_targets =
+                m_impl.PE_native_contact_targets.view().as_const();
+            this_info.m_PP_native_contact_targets =
+                m_impl.PP_native_contact_targets.view().as_const();
+        }
     }
 
     m_impl.PT_hessians = {};

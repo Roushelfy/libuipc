@@ -1,4 +1,5 @@
 #include <contact_system/simplex_normal_contact.h>
+#include <contact_system/contact_models/ipc_simplex_normal_contact_native.h>
 #include <contact_system/contact_models/codim_ipc_simplex_normal_contact_function.h>
 #include <utils/distance/distance_flagged.h>
 #include <utils/codim_thickness.h>
@@ -15,6 +16,39 @@ namespace uipc::backend::cuda_mixed
 void assemble_ipc_simplex_normal_contact_structured(
     SimplexNormalContact::ContactInfo& info);
 #endif
+
+namespace
+{
+bool simplex_contact_target_view_ready(
+    SizeT contact_count,
+    SizeT half_hessian_size,
+    muda::CBufferView<SocuNativeContactStencilTarget> targets)
+{
+    return contact_count == 0
+           || (targets.data() != nullptr
+               && targets.size() >= contact_count * half_hessian_size);
+}
+
+bool simplex_native_contact_targets_ready(
+    SimplexNormalContact::ContactInfo& info)
+{
+    return simplex_contact_target_view_ready(info.PTs().size(),
+                                             SimplexNormalContact::PTHalfHessianSize,
+                                             info.PT_native_contact_targets())
+           && simplex_contact_target_view_ready(
+               info.EEs().size(),
+               SimplexNormalContact::EEHalfHessianSize,
+               info.EE_native_contact_targets())
+           && simplex_contact_target_view_ready(
+               info.PEs().size(),
+               SimplexNormalContact::PEHalfHessianSize,
+               info.PE_native_contact_targets())
+           && simplex_contact_target_view_ready(
+               info.PPs().size(),
+               SimplexNormalContact::PPHalfHessianSize,
+               info.PP_native_contact_targets());
+}
+}  // namespace
 
 class IPCSimplexNormalContact final : public SimplexNormalContact
 {
@@ -321,10 +355,19 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
 
         if(info.structured_hessian())
         {
+            const bool native_ready =
+                !info.structured_hessian_sink().approximate_weight_probe_only()
+                && simplex_native_contact_targets_ready(info);
+            if(native_ready)
+            {
+                assemble_ipc_simplex_normal_contact_native_exact(info);
+                return;
+            }
+
 #ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
             throw SimSystemException(
                 "SOCU native-only build excludes legacy simplex normal "
-                "structured contact assembly");
+                "structured contact assembly and requires native target tables");
 #else
             assemble_ipc_simplex_normal_contact_structured(info);
 #endif
