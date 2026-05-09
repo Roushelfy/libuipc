@@ -1813,3 +1813,265 @@ Second-slice validation:
 Next M8 slice: consume the simplex target table in the normal-contact exact
 in-band writer, then add matrix diff against the legacy structured contact
 reference before enabling the path in scene gates.
+
+M8 third slice implemented:
+
+- Extended `SocuNativeContactStencilTarget` with the ordered row/column global
+  vertex ids and the legacy `mirror_diag_block` decision. This preserves the
+  `StructuredContactAssemblySink::write_hessian_half` upper-half ordering and
+  same-block mirror rule in the target table itself.
+- Added `src/backends/cuda_mixed_socu/linear_system/socu_native_contact_writer.h`.
+  The exact writer consumes `SocuNativeContactStencilTarget` records and writes
+  projected FEM/FEM, FEM/ABD, ABD/FEM, and ABD/ABD half-blocks through a
+  `StructuredDeviceAssemblySink`. With native matrix fields enabled, the same
+  writer writes native SOCU `D/E`; with legacy fields, it writes the legacy
+  structured `D/E` layout.
+- The ABD projection is implemented by scalar Jacobian weights rather than
+  building device-side Eigen 12x12 temporaries. This keeps the small M8 contract
+  test from becoming another heavyweight structured-contact TU.
+- Added a mixed FEM/ABD PT simplex matrix-diff contract. It rebuilds the PT
+  target table, consumes all 10 exact in-band half-block targets, writes native
+  `D/E`, writes legacy-layout `D/E`, and checks both native and debug-compare
+  buffers against the legacy layout.
+
+Third-slice validation:
+
+| check | result |
+| --- | --- |
+| `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; rebuilt `socu_native_contact_targets.cu` and relinked the SOCU test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -r compact` | passed, `6289` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, `11189` assertions in `29` test cases |
+
+Current boundary: this proves the target-table exact writer and matrix layout
+diff for simplex normal-style in-band blocks. The production
+`ipc_simplex_normal_contact_structured.cu` path still writes through the legacy
+structured sink until contact-phase native matrix/compare wiring is added to the
+runtime scene path.
+
+M8 fourth slice implemented:
+
+- Added split production native exact contact TUs for simplex normal PT, EE, PE,
+  and PP contacts:
+  `ipc_simplex_normal_contact_native_{pt,ee,pe,pp}.cu`, plus a small dispatcher
+  and shared inline write helper.
+- `IPCSimplexNormalContact` now checks the rebuilt native target-table views in
+  `SimplexNormalContact::ContactInfo`. When all simplex normal target tables
+  are present and the pass is not the approximate-weight graph probe, the
+  structured Hessian branch dispatches to the native exact writer.
+- The native production path is intentionally all-or-legacy per contact. If
+  every half-block target for a contact is `ExactInBand` or `Skipped`, the
+  kernel consumes the target table and writes exact projected half-blocks. If
+  any half-block is `DropOffBand`, `DiagFallback`, `DiagLumpFallback`, missing,
+  or out of range, the whole contact falls back to the current structured sink.
+  This preserves existing off-band policy behavior until native `diag` and
+  `diag_lump` fallback writes are implemented.
+- The split TUs keep compile cost bounded compared with inlining the new writer
+  into the existing heavy structured contact implementation.
+
+Fourth-slice validation:
+
+| check | result |
+| --- | --- |
+| `cmake -S . -B build/build_impl_fp64` | passed; globbed build picked up the new native simplex normal contact files |
+| `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; compiled the dispatcher plus PT/EE/PE/PP native TUs and relinked `libuipc_backend_cuda_mixed_socu.so` and the SOCU test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -r compact` | passed, `6289` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` | passed, `11189` assertions in `29` test cases |
+| 20-frame contact-enabled smoke, `cuda_mixed_wrecking_ball_compare.py --variant socu_rt50_topology_diag_lump --frames 20 --backend cuda_mixed_socu` | passed, `final_frame=20`, `wall_time_s=3.5400211589876562`, `mean_frame_ms=71.38351279718336`; the run reached real simplex contact frames without breaking the new dispatch |
+
+Instrumentation note:
+
+- A speculative attempt to add new global
+  `NativeContactExactStencilHit`/`NativeContactLegacyFallbackStencil` counter
+  slots through the shared structured counter header caused a broad rebuild
+  that pulled the old `ipc_simplex_frictional_contact_structured.cu` TU back
+  into `cicc`. That compile ran for over an hour and peaked around 50 GB RSS, so
+  the counter-slot/report change was reverted.
+- Existing scalar contact counters in `SocuNativeContactExactWriter` remain.
+  Future native-contact hit-rate reporting should use a narrower debug buffer or
+  a native-only report path that does not force the old structured frictional
+  implementation to rebuild.
+
+Current boundary after the fourth slice:
+
+- Simplex normal production kernels now consume native target tables for exact
+  in-band stencils.
+- Contact assembly is not yet true SOCU native single-write in the runtime
+  scene path, because the contact phase still passes the current
+  `StructuredDeviceAssemblySink` storage. Native contact matrix/compare storage
+  wiring is the next required step before declaring the contact builder fully
+  native.
+- Off-band `diag`/`diag_lump`, PH normal, and frictional contact families still
+  use legacy structured fallback behavior.
+
+M8 fifth slice implemented:
+
+- Added opt-in contact-phase native matrix plumbing:
+  `linear_system/socu_approx/native_contact_hessian`.
+- Added opt-in contact-phase mirror diff:
+  `linear_system/socu_approx/debug_compare_native_contact_hessian`.
+- `GlobalLinearSystem::StructuredAssemblyInfo::sink()` now installs native
+  matrix fields for the `Contact` phase, independently from the chain/base
+  phase. This lets contact providers write either primary native storage or a
+  native compare workspace through the same `StructuredDeviceAssemblySink`.
+- The contact diff path reuses the opposite-layout Hessian compare workspace
+  that is populated during chain/base assembly. As a result, a runtime frame can
+  compare full native-vs-legacy `D/E/rhs` after contact assembly, not just a
+  synthetic contact-only fixture.
+- `cuda_mixed_wrecking_ball_compare.py` and
+  `cuda_mixed_abd_fem_tower_viewer.py` now expose the new switches through
+  `SOCU_NATIVE_CONTACT=1` and `SOCU_NATIVE_CONTACT_DIFF=1`.
+- In native-only builds, excluded fallback contact callers now no-op when their
+  contact set is empty. They still throw if an unsupported family has real
+  contacts. This keeps native-only scene gates from failing on empty PH or
+  frictional contact families.
+
+Fifth-slice validation:
+
+| check | result |
+| --- | --- |
+| full fallback rebuild attempt, `ninja -C build/build_impl_fp64 -j2 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` with `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` | intentionally stopped; changing `global_linear_system.h` invalidated broad objects and pulled `ipc_simplex_frictional_contact_structured.cu` into `cicc` again |
+| native-only configure, `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` | passed; source exclusion reported `479 -> 475` source entries |
+| native-only build, `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; split simplex normal native TUs compiled serially, device link and test executable link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][m8]" -r compact` in native-only build | passed, `6289` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]" -r compact` in native-only build | passed, `11189` assertions in `29` test cases |
+| native-only 20-frame scene attempt with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT_DIFF=1` | progressed past empty unsupported contact families; stopped at frame 9 when the scene produced `320` vertex-half-plane normal contacts, which are still intentionally unsupported in native-only mode |
+| restore fallback cache, `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF` | passed; `CMakeCache.txt` reports `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY:BOOL=OFF` |
+
+Current boundary after the fifth slice:
+
+- Contact-phase native primary/compare storage is wired and compiles.
+- The default fallback artifact was not relinked after the `global_linear_system.h`
+  change because doing so requires the old heavy structured frictional contact
+  TU. The CMake cache is restored to fallback mode, but the last linked binary
+  was produced by the native-only validation build.
+- The next runtime acceptance blocker is PH normal contact. The topology scene
+  reaches PH contacts before simplex normal contacts, so a simplex-only
+  native-only scene gate is not enough for the current accepted scene.
+
+M8 sixth slice implemented:
+
+- Added
+  `rebuild_socu_native_vertex_half_plane_contact_targets(...)`, reusing the
+  generic target-table rebuild kernel with `StencilSize=1`. For PH contacts the
+  target table intentionally consumes only `PH(0)` as the active vertex stencil;
+  `PH(1)` remains the half-plane index used by the contact model.
+- Extended `VertexHalfPlaneNormalContact::ContactInfo` with a PH native target
+  view and added a cached PH target buffer in the wrapper implementation.
+- Moved PH topology and approximate-weight graph probes into small free helper
+  kernels. This avoids the nvcc extended-lambda restriction on private member
+  functions and keeps probe behavior aligned with the old structured PH normal
+  path.
+- Added `ipc_vertex_half_plane_normal_contact_native.{h,cu}`. The exact kernel
+  computes the same `PH_barrier_gradient_hessian` as the old structured path,
+  then consumes the PH target table through the shared
+  `SocuNativeContactExactWriter` helper with `StencilSize=1`.
+- Updated `IPCVertexHalfPlaneNormalContact` so its structured Hessian branch
+  dispatches to the native exact PH writer whenever a PH target table is
+  present. In native-only builds it still throws if a real PH contact appears
+  without native targets.
+- Extended the M8 contact target contract with a PH device-rebuild check,
+  covering both FEM and ABD single-vertex PH targets and proving that the
+  ignored half-plane slot does not affect the native target record.
+
+Sixth-slice validation:
+
+| check | result |
+| --- | --- |
+| `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` | passed; source exclusion reported `481 -> 477` entries |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed after moving PH probe kernels out of the private wrapper method; device link and shared library link completed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]" -s` | passed, `6312` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `11212` assertions in `29` test cases |
+| native-only scene attempt with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_NATIVE_CONTACT_DIFF=1` | progressed through frame 9 with `320` PH normal contacts and converged in three Newton iterations; stopped at frame 10 when `320` PH frictional contacts appeared and the native-only build correctly rejected the still-legacy PH frictional structured path |
+
+Current boundary after the sixth slice:
+
+- PH normal is no longer the native-only runtime blocker for the topology
+  scene. Simplex normal and PH normal now both have production native exact
+  target-table write paths.
+- The next acceptance blocker is PH frictional contact. The topology scene hits
+  PH frictional before simplex frictional, so M8 should migrate PH frictional
+  next if the goal is to reach the full native-only contact acceptance gate.
+
+M8 seventh slice implemented:
+
+- Added PH frictional native target-table plumbing to
+  `VertexHalfPlaneFrictionalContact`. The wrapper now handles topology and
+  approximate-weight probes before model dispatch, rebuilds a single-vertex PH
+  target table for exact writes, and passes that table through
+  `ContactInfo`.
+- Added `ipc_vertex_half_plane_frictional_contact_native.{h,cu}`. The exact
+  kernel computes the same `PH_friction_gradient_hessian` as the existing
+  structured path, applies `make_spd`, and consumes the shared PH target table
+  through `SocuNativeContactExactWriter` with `StencilSize=1`.
+- Updated `IPCVertexHalfPlaneFrictionalContact` so native-ready structured
+  Hessian assembly dispatches to the PH frictional native exact writer. In
+  native-only builds, real PH frictional contacts without native targets still
+  throw.
+
+Seventh-slice validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` | passed; source exclusion reported `483 -> 479` entries |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; compiled the PH frictional native TU, device link, shared library, and test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]"` | passed, `6312` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `11212` assertions in `29` test cases |
+| native-only topology gate with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_NATIVE_CONTACT_DIFF=1`, `socu_rt50_topology_diag_lump --frames 20` | passed the previous frame-10 PH frictional blocker; progressed through frame 13 and began frame 14; stopped when simplex frictional produced `18342` Grad3 contributions and native-only rejected the still-legacy simplex frictional structured path |
+
+Current boundary after the seventh slice:
+
+- PH normal and PH frictional both have production native exact paths and no
+  longer block the native-only topology gate.
+- The next observed blocker is simplex frictional contact at frame 14. This is
+  the largest remaining contact migration because PT/EE/PE/PP frictional
+  stencils require `12x12`, `9x9`, and `6x6` Hessian kernels plus the existing
+  `make_spd` and mollifier logic.
+
+M8 eighth slice implemented:
+
+- Added simplex frictional native target-table plumbing to
+  `SimplexFrictionalContact`. The wrapper now records cheap frictional weights
+  for graph probes, rebuilds PT/EE/PE/PP native target tables for exact
+  structured Hessian assembly, and passes those views through `ContactInfo`.
+- Added split simplex frictional native exact writers:
+  `ipc_simplex_frictional_contact_native.{h,cu}` and
+  `ipc_simplex_frictional_contact_native_{pt,ee,pe,pp}.cu`.
+- PT, EE, and PE keep the same generated IPC frictional Hessian path as the
+  legacy structured implementation, including `make_spd`; EE keeps the
+  existing mollifier branch that writes zero Hessian when mollification is
+  required. The write side consumes `SocuNativeContactExactWriter` through the
+  target table.
+- PP is deliberately specialized. The straightforward PP native TU that pulled
+  the generated `6x6` frictional expression, generic block writer, and SPD
+  projection repeatedly exhausted `cicc` memory. The current PP kernel computes
+  the tangent `3x3` block with scalar device code, projects the inner `2x2`
+  friction Hessian when needed, and writes the three exact PP half-blocks
+  directly. This keeps the native-only build usable, but also defines a clear
+  follow-up: PP currently skips non-exact target modes instead of consuming
+  `DiagFallback`/`DiagLumpFallback`, and needs a PP-specific matrix-diff gate.
+- Updated `IPCSimplexFrictionalContact` so native-ready structured Hessian
+  assembly dispatches to the simplex frictional native exact writer. In
+  native-only builds, real simplex frictional contacts without target tables
+  still throw.
+
+Eighth-slice validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake -S . -B build/build_impl_fp64 -DUIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` | passed; native-only CMake cache is enabled |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; compiled the split simplex frictional native TUs, device link, shared library, and test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]"` | passed, `6312` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `11212` assertions in `29` test cases |
+| native-only topology gate with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_NATIVE_CONTACT_DIFF=1 SOCU_REPORT_COUNTERS=1`, `socu_rt50_topology_diag_lump --frames 20` | passed the previous frame-14 simplex frictional blocker and completed `final_frame=20`; summary reported `wall_time_s=3.790876034006942` and `mean_frame_ms=78.18641975754872` |
+
+Current boundary after the eighth slice:
+
+- The native-only contact path now covers PH normal, PH frictional, simplex
+  normal, and simplex frictional exact in-band writes well enough to complete
+  the 20-frame topology gate with contact mirror diff enabled.
+- M8 is not complete yet. Remaining acceptance work: native off-band
+  `diag`/`diag_lump` fallback consumption, PP-specific matrix diff and fallback
+  coverage, 100-frame topology gate, and a performance comparison against the
+  structured contact baseline.

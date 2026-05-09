@@ -1625,8 +1625,21 @@ Detailed M8 execution plan:
      normal-style PT/EE/PE/PP target tables. It emits upper half-block target
      records in the same local ordering as the current structured contact sink,
      keeps ABD/FEM metadata, and classifies arbitrary-lane descriptors from the
-     current `old_to_chain` ordering. The next slice should consume those
-     tables in the simplex normal exact in-band writer.
+     current `old_to_chain` ordering.
+   - The third slice extended target records with ordered global vertex ids and
+     the legacy same-block mirror decision, then added an exact target-table
+     writer. A mixed FEM/ABD PT contract consumes all 10 in-band half-block
+     targets and diffs native `D/E` against the legacy structured `D/E` layout.
+   - The fourth slice passes rebuilt target-table views through
+     `SimplexNormalContact::ContactInfo` and adds split PT/EE/PE/PP production
+     native exact kernels. The structured contact branch now takes the native
+     exact path when all simplex normal target tables are ready and the current
+     pass is not the approximate-weight graph probe.
+   - Current boundary: simplex normal production kernels consume the target
+     table for exact in-band stencils, and the contact phase can now be wired
+     to native primary or compare storage through opt-in solver flags. Runtime
+     acceptance still depends on migrating PH normal and off-band native
+     fallback behavior.
 
 2. **Normal contact exact native write.**
    - Implement simplex normal and PH normal native writes first.
@@ -1634,6 +1647,64 @@ Detailed M8 execution plan:
      exact in-band targets or approved diagonal fallback.
    - Compare native matrix against structured contact matrix for fully in-band
      cases.
+   - Current status: simplex normal-style exact half-block writer, synthetic
+     matrix diff, runtime target-table views, and production exact in-band
+     dispatch are implemented for PT/EE/PE/PP. The native production path is
+     split by stencil family to avoid reintroducing a monolithic heavyweight
+     contact TU.
+   - The production exact branch is deliberately all-or-legacy per contact:
+     if every half-block target is `ExactInBand` or `Skipped`, the native writer
+     consumes the target table; otherwise the whole contact falls back to the
+     legacy structured sink. This preserves current `drop`, `diag`, and
+     `diag_lump` behavior until native off-band policy writes are implemented.
+   - Contact-phase native matrix/compare storage is wired for runtime gates.
+     Remaining work: add a narrow native-contact hit/fallback report that does
+     not force old structured frictional TUs to rebuild, implement native
+     off-band fallback writes, and extend the same pattern to PH normal and
+     frictional contacts.
+   - The next runtime slice added opt-in contact-phase native matrix storage
+     (`linear_system/socu_approx/native_contact_hessian`) and mirror diff
+     (`debug_compare_native_contact_hessian`). The diff path reuses the
+     opposite-layout Hessian compare workspace across chain/base and contact
+     phases, so native contact writes can be compared against the legacy
+     structured path before enabling native contact as the primary writer.
+   - Native-only scene validation now skips empty unsupported contact families
+     instead of throwing, but the current topology scene reaches real
+     vertex-half-plane normal contacts at frame 9. That means PH normal contact
+     migration is a runtime acceptance blocker before the full 20/100-frame
+     native-only contact gate can pass.
+   - The next slice added the PH normal target rebuild entry point and
+     production native exact write. `VertexHalfPlaneNormalContact` now handles
+     topology and approximate-weight probes before dispatch, rebuilds a
+     single-vertex target table for PH exact writes, and passes that table to
+     `IPCVertexHalfPlaneNormalContact`. The native PH exact kernel consumes the
+     same `SocuNativeContactExactWriter` helper with `StencilSize=1`, so FEM
+     and ABD projection semantics stay shared with simplex normal.
+   - Native-only scene validation now passes the frame-9 PH normal blocker:
+     the topology scene reaches `320` PH normal contacts, runs three Newton
+     iterations, and converges. The next native-only runtime blocker is
+     vertex-half-plane frictional contact at frame 10.
+   - The follow-up slice added PH frictional native exact writes. It reuses the
+     same single-vertex PH target table, computes `PH_friction_gradient_hessian`
+     with the current friction coefficient and `make_spd`, and consumes the
+     target through the shared exact contact writer. Native-only topology
+     validation now passes the frame-10 PH frictional blocker and reaches
+     frame 14, where simplex frictional contact becomes the next blocker.
+   - The next slice added simplex frictional target-table plumbing and
+     production native exact writes for PT, EE, PE, and PP. PT/EE/PE keep the
+     current generated IPC Hessian path, including `make_spd` and the EE
+     mollifier zero branch, then consume the shared exact contact target writer.
+     PP is intentionally implemented as a scalar exact-in-band writer: it
+     computes the tangent `3x3` block directly, projects the inner `2x2`
+     friction Hessian when needed, and writes the three exact PP half-blocks.
+     This avoids pulling the old `6x6` PP frictional expression and generic
+     writer templates into one TU, which repeatedly exhausted `cicc` memory in
+     native-only builds.
+   - Native-only topology validation now passes the previous frame-14 simplex
+     frictional blocker and reaches frame 20 with native chain/base, native
+     contact primary writes, and native contact mirror diff enabled. Remaining
+     M8 work is to add native off-band fallback consumption, strengthen PP
+     matrix-diff coverage, and run the 100-frame/performance acceptance gates.
 
 3. **Off-band fallback path.**
    - Implement native `diag` and `diag_lump` fallback for off-band contact
@@ -1644,10 +1715,22 @@ Detailed M8 execution plan:
    - Report `native_contact_exact_count`, `native_contact_diag_fallback_count`,
      `native_contact_lump_fallback_count`, and
      `native_contact_structured_fallback_count`.
+   - Do not add these report slots through a shared header change that forces
+     every old structured contact TU to rebuild. Prefer a narrow
+     native-contact-only debug buffer or a native-only report extension.
 
 4. **Frictional contact migration.**
-   - Add simplex frictional and PH frictional native writes after normal contact
-     is stable.
+   - PH frictional native exact writes are implemented as the first frictional
+     slice because they are single-vertex `3x3` writes and block the topology
+     gate before simplex frictional.
+   - Simplex frictional native exact writes are implemented for PT/EE/PE/PP.
+     The topology gate no longer stops at frame 14 and reaches frame 20 in
+     native-only mode.
+   - PP frictional is the current caution point. Its native kernel is a scalar
+     exact-in-band path that writes only `ExactInBand`/`Skipped` targets. It
+     deliberately does not yet consume non-exact target modes such as
+     `DiagFallback` or `DiagLumpFallback`; those remain part of the off-band
+     fallback milestone before M8 can be called complete.
    - Track register count, spills, compile time, and object size. If frictional
      native kernels become compile-time bottlenecks, split by contact family and
      keep structured fallback for the heaviest family.
@@ -1669,12 +1752,21 @@ Detailed M8 execution plan:
      enabled.
    - Native contact build shows reduced contact assembly timer or documents a
      clear non-contact bottleneck that now dominates.
+   - The full fallback build must be rebuilt once after the contact-phase
+     native matrix plumbing lands, because touching `global_linear_system.h`
+     invalidates broad backend objects and pulls old structured contact TUs
+     back into the fallback build. Until that relink is completed, native-only
+     tests validate the new code but the default fallback artifact is stale.
+   - Current status: the 20-frame native-only topology gate passes after the
+     simplex frictional migration. The 100-frame gate, native off-band fallback
+     policy tests, PP-specific matrix diff, and performance comparison remain
+     open before closing M8.
 
 Deliverables:
 
 - Contact descriptor table for PT/EE/PE/PP/PH stencils.
-- Native simplex normal, simplex frictional, PH normal, and PH frictional
-  contact build kernels.
+- Native simplex normal and PH normal contact build kernels.
+- Native simplex frictional and PH frictional contact build kernels.
 - Exact write for fully in-band stencils.
 - `diag` and `diag_lump` fallback for any stencil with off-band half-blocks.
 - Contact policy unit tests.
