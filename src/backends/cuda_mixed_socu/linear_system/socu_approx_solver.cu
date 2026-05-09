@@ -279,6 +279,17 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_compare_native_chain_base_hessian =
         debug_compare_native_chain_base_hessian_attr
         && debug_compare_native_chain_base_hessian_attr->view()[0] != 0;
+    auto native_contact_hessian_attr =
+        config.find<IndexT>("linear_system/socu_approx/native_contact_hessian");
+    m_native_contact_hessian_enabled =
+        native_contact_hessian_attr
+        && native_contact_hessian_attr->view()[0] != 0;
+    auto debug_compare_native_contact_hessian_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/debug_compare_native_contact_hessian");
+    m_debug_compare_native_contact_hessian =
+        debug_compare_native_contact_hessian_attr
+        && debug_compare_native_contact_hessian_attr->view()[0] != 0;
     auto debug_write_runtime_ordering_report_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/debug_write_runtime_ordering_report");
@@ -863,10 +874,13 @@ bool SocuApproxSolver::install_ordering_report_impl(
             runtime = next_runtime.get();
         }
 
+        const bool needs_hessian_compare_workspace =
+            m_debug_compare_native_chain_base_hessian
+            || m_debug_compare_native_contact_hessian;
+
         runtime->reserve(m_debug_validation, m_report_counters_enabled);
         runtime->reserve_diag_rhs_compare(m_debug_compare_native_diag_rhs);
-        runtime->reserve_chain_base_compare(
-            m_debug_compare_native_chain_base_hessian);
+        runtime->reserve_chain_base_compare(needs_hessian_compare_workspace);
         runtime->upload_mappings(build_old_to_chain, build_chain_to_old);
         runtime->upload_old_dof_to_atom(old_dof_to_atom);
         runtime->upload_dof_descriptors(native_dof_descriptors);
@@ -1356,7 +1370,19 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.native_chain_base_hessian_diff_diag_abs_sum = 0.0;
     m_report.native_chain_base_hessian_diff_offdiag_abs_sum = 0.0;
     m_report.native_chain_base_hessian_diff_rhs_abs_sum = 0.0;
-    if(m_debug_compare_native_chain_base_hessian)
+    m_report.native_contact_hessian_enabled =
+        m_native_contact_hessian_enabled;
+    m_report.native_contact_hessian_diff_enabled =
+        m_debug_compare_native_contact_hessian;
+    m_report.native_contact_hessian_diff_mismatch_count = 0;
+    m_report.native_contact_hessian_diff_diag_abs_sum = 0.0;
+    m_report.native_contact_hessian_diff_offdiag_abs_sum = 0.0;
+    m_report.native_contact_hessian_diff_rhs_abs_sum = 0.0;
+
+    const bool needs_hessian_compare_workspace =
+        m_debug_compare_native_chain_base_hessian
+        || m_debug_compare_native_contact_hessian;
+    if(needs_hessian_compare_workspace)
     {
         if(m_native_diag_rhs_enabled)
         {
@@ -1387,13 +1413,24 @@ void SocuApproxSolver::prepare_structured_chain(
     info.set_native_chain_base_hessian(
         m_native_chain_base_hessian_enabled,
         m_runtime->device_dof_descriptors.view());
-    if(m_debug_compare_native_chain_base_hessian)
+    if(needs_hessian_compare_workspace)
     {
         info.set_native_chain_base_compare_workspace(
             m_runtime->device_chain_base_compare_diag.view(),
             m_runtime->device_chain_base_compare_off_diag.view(),
             m_runtime->device_chain_base_compare_rhs.view(),
             !m_native_chain_base_hessian_enabled);
+    }
+    info.set_native_contact_hessian(
+        m_native_contact_hessian_enabled,
+        m_runtime->device_dof_descriptors.view());
+    if(m_debug_compare_native_contact_hessian)
+    {
+        info.set_native_contact_compare_workspace(
+            m_runtime->device_chain_base_compare_diag.view(),
+            m_runtime->device_chain_base_compare_off_diag.view(),
+            m_runtime->device_chain_base_compare_rhs.view(),
+            !m_native_contact_hessian_enabled);
     }
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
         info.set_contact_counters(m_runtime->report_counters.view());
@@ -1429,6 +1466,8 @@ void SocuApproxSolver::prepare_structured_chain(
         : m_native_chain_base_hessian_enabled
             ? "mixed_backend_current_stream_native_chain_base"
             : "mixed_backend_current_stream";
+    if(m_native_contact_hessian_enabled)
+        m_report.stream_source += "_native_contact";
 #endif
 }
 
@@ -1593,6 +1632,52 @@ void SocuApproxSolver::finalize_structured_chain(
             ? info.chain_base_assembly_time_ms()
             : 0.0;
     m_report.contact_assembly_time_ms = info.contact_assembly_time_ms();
+    m_report.native_contact_hessian_enabled =
+        m_native_contact_hessian_enabled;
+    m_report.native_contact_hessian_diff_enabled =
+        m_debug_compare_native_contact_hessian;
+
+#if UIPC_WITH_SOCU_NATIVE
+    if(m_debug_compare_native_contact_hessian)
+    {
+        UIPC_ASSERT(m_runtime != nullptr,
+                    "SOCU native contact Hessian diff requires initialized runtime.");
+        compare_socu_native_diag_rhs_workspace<Runtime::Scalar>(
+            info.stream(),
+            m_runtime->device_chain_base_compare_diag.view(),
+            m_runtime->device_chain_base_compare_off_diag.view(),
+            m_runtime->device_chain_base_compare_rhs.view(),
+            m_runtime->device_diag.view(),
+            m_runtime->device_off_diag.view(),
+            m_runtime->device_rhs.view(),
+            m_runtime->validation_sums.view(),
+            m_runtime->validation_status.view(),
+            1e-9,
+            1e-10);
+        m_runtime->download_validation_status(info.stream());
+        m_runtime->download_validation_sums(info.stream());
+        m_report.native_contact_hessian_diff_mismatch_count =
+            static_cast<SizeT>(std::max<IndexT>(
+                0,
+                m_runtime->host_validation_status[0]));
+        m_report.native_contact_hessian_diff_diag_abs_sum =
+            m_runtime->host_validation_sums[0];
+        m_report.native_contact_hessian_diff_offdiag_abs_sum =
+            m_runtime->host_validation_sums[1];
+        m_report.native_contact_hessian_diff_rhs_abs_sum =
+            m_runtime->host_validation_sums[2];
+        if(m_report.native_contact_hessian_diff_mismatch_count != 0)
+        {
+            throw Exception{fmt::format(
+                "SOCU native contact Hessian diff failed: mismatches={}, "
+                "diag_abs_sum={}, offdiag_abs_sum={}, rhs_abs_sum={}",
+                m_report.native_contact_hessian_diff_mismatch_count,
+                m_report.native_contact_hessian_diff_diag_abs_sum,
+                m_report.native_contact_hessian_diff_offdiag_abs_sum,
+                m_report.native_contact_hessian_diff_rhs_abs_sum)};
+        }
+    }
+#endif
 
     if(info.report_counters_enabled())
     {

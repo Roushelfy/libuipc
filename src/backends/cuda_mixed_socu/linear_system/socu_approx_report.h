@@ -142,6 +142,12 @@ struct SocuApproxSolveReport
     double native_chain_base_hessian_diff_diag_abs_sum = 0.0;
     double native_chain_base_hessian_diff_offdiag_abs_sum = 0.0;
     double native_chain_base_hessian_diff_rhs_abs_sum = 0.0;
+    bool native_contact_hessian_enabled = false;
+    bool native_contact_hessian_diff_enabled = false;
+    SizeT native_contact_hessian_diff_mismatch_count = 0;
+    double native_contact_hessian_diff_diag_abs_sum = 0.0;
+    double native_contact_hessian_diff_offdiag_abs_sum = 0.0;
+    double native_contact_hessian_diff_rhs_abs_sum = 0.0;
     SizeT native_chain_base_same_block_dense_hit_count = 0;
     SizeT native_chain_base_adjacent_dense_hit_count = 0;
     SizeT native_chain_base_dense_miss_count = 0;

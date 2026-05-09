@@ -209,6 +209,9 @@ MUDA_DEVICE SocuNativeContactStencilTarget make_half_block_target(
     IndexT                         contact_id,
     IndexT                         local_row_vertex,
     IndexT                         local_col_vertex,
+    IndexT                         row_global_vertex,
+    IndexT                         col_global_vertex,
+    bool                           mirror_diag_block,
     const SocuNativeVertexDescriptor& row,
     const SocuNativeVertexDescriptor& col,
     muda::CBufferView<IndexT>      old_to_chain,
@@ -219,8 +222,11 @@ MUDA_DEVICE SocuNativeContactStencilTarget make_half_block_target(
 {
     SocuNativeContactStencilTarget target;
     target.contact_id       = contact_id;
+    target.row_global_vertex = row_global_vertex;
+    target.col_global_vertex = col_global_vertex;
     target.local_row_vertex = local_row_vertex;
     target.local_col_vertex = local_col_vertex;
+    target.mirror_diag_block = mirror_diag_block;
     target.row_old_dof      = row.old_dof;
     target.row_dof_count    = row.dof_count;
     target.col_old_dof      = col.old_dof;
@@ -338,11 +344,21 @@ void rebuild_stencil_targets(cudaStream_t stream,
                        {
                            IndexT L = row;
                            IndexT R = col;
-                           upper_lr(stencil(row), stencil(col), row, col, L, R);
+                           const bool swapped = upper_lr(stencil(row),
+                                                         stencil(col),
+                                                         row,
+                                                         col,
+                                                         L,
+                                                         R);
                            targets.data()[target_index++] =
                                make_half_block_target<StencilSize>(i,
                                                                    L,
                                                                    R,
+                                                                   stencil(L),
+                                                                   stencil(R),
+                                                                   stencil(L)
+                                                                           != stencil(R)
+                                                                       || swapped,
                                                                    vertices[L],
                                                                    vertices[R],
                                                                    old_to_chain,
@@ -399,6 +415,26 @@ void rebuild_socu_native_simplex_contact_targets(
     rebuild_stencil_targets<2>(stream,
                                pp_targets,
                                pps,
+                               vertex_descriptors,
+                               old_to_chain,
+                               horizon,
+                               block_size,
+                               fallback_policy);
+}
+
+void rebuild_socu_native_vertex_half_plane_contact_targets(
+    cudaStream_t stream,
+    muda::BufferView<SocuNativeContactStencilTarget> ph_targets,
+    muda::CBufferView<Vector2i> phs,
+    muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    muda::CBufferView<IndexT> old_to_chain,
+    SizeT horizon,
+    SizeT block_size,
+    StructuredContactOffbandPolicy fallback_policy)
+{
+    rebuild_stencil_targets<1>(stream,
+                               ph_targets,
+                               phs,
                                vertex_descriptors,
                                old_to_chain,
                                horizon,

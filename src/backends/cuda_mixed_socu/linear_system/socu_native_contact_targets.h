@@ -32,6 +32,8 @@ struct SocuNativeContactStencilPolicy
 struct SocuNativeContactStencilTarget
 {
     IndexT contact_id       = -1;
+    IndexT row_global_vertex = -1;
+    IndexT col_global_vertex = -1;
     IndexT local_row_vertex = -1;
     IndexT local_col_vertex = -1;
 
@@ -44,6 +46,7 @@ struct SocuNativeContactStencilTarget
     SizeT row_lane            = 0;
     SizeT col_lane            = 0;
     bool  transposed_first_offdiag = false;
+    bool  mirror_diag_block        = false;
 
     IndexT row_old_dof   = -1;
     IndexT row_dof_count = 0;
@@ -222,6 +225,8 @@ socu_native_contact_make_half_block_target(
     IndexT                               contact_id,
     IndexT                               local_row_vertex,
     IndexT                               local_col_vertex,
+    IndexT                               row_global_vertex,
+    IndexT                               col_global_vertex,
     const SocuNativeVertexDescriptor&    row,
     const SocuNativeVertexDescriptor&    col,
     span<const SocuNativeDofDescriptor>  dofs,
@@ -233,8 +238,14 @@ socu_native_contact_make_half_block_target(
 {
     SocuNativeContactStencilTarget target;
     target.contact_id       = contact_id;
+    target.row_global_vertex = row_global_vertex;
+    target.col_global_vertex = col_global_vertex;
     target.local_row_vertex = local_row_vertex;
     target.local_col_vertex = local_col_vertex;
+    target.mirror_diag_block =
+        row_global_vertex >= 0 && col_global_vertex >= 0
+            ? row_global_vertex != col_global_vertex
+            : local_row_vertex != local_col_vertex;
     target.row_old_dof      = row.old_dof;
     target.row_dof_count    = row.dof_count;
     target.col_old_dof      = col.old_dof;
@@ -299,6 +310,34 @@ socu_native_contact_make_half_block_target(
     return target;
 }
 
+inline SocuNativeContactStencilTarget
+socu_native_contact_make_half_block_target(
+    IndexT                               contact_id,
+    IndexT                               local_row_vertex,
+    IndexT                               local_col_vertex,
+    const SocuNativeVertexDescriptor&    row,
+    const SocuNativeVertexDescriptor&    col,
+    span<const SocuNativeDofDescriptor>  dofs,
+    SizeT                                horizon,
+    SizeT                                block_size,
+    StructuredContactOffbandPolicy       fallback_policy,
+    SocuNativeContactWriteMode           stencil_write_mode =
+        SocuNativeContactWriteMode::ExactInBand) noexcept
+{
+    return socu_native_contact_make_half_block_target(contact_id,
+                                                      local_row_vertex,
+                                                      local_col_vertex,
+                                                      -1,
+                                                      -1,
+                                                      row,
+                                                      col,
+                                                      dofs,
+                                                      horizon,
+                                                      block_size,
+                                                      fallback_policy,
+                                                      stencil_write_mode);
+}
+
 void rebuild_socu_native_simplex_contact_targets(
     cudaStream_t                              stream,
     muda::BufferView<SocuNativeContactStencilTarget> pt_targets,
@@ -309,6 +348,16 @@ void rebuild_socu_native_simplex_contact_targets(
     muda::CBufferView<Vector4i>               ees,
     muda::CBufferView<Vector3i>               pes,
     muda::CBufferView<Vector2i>               pps,
+    muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    muda::CBufferView<IndexT>                 old_to_chain,
+    SizeT                                     horizon,
+    SizeT                                     block_size,
+    StructuredContactOffbandPolicy            fallback_policy);
+
+void rebuild_socu_native_vertex_half_plane_contact_targets(
+    cudaStream_t                              stream,
+    muda::BufferView<SocuNativeContactStencilTarget> ph_targets,
+    muda::CBufferView<Vector2i>               phs,
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
     muda::CBufferView<IndexT>                 old_to_chain,
     SizeT                                     horizon,

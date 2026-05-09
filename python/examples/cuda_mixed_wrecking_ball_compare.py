@@ -213,6 +213,12 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     socu["debug_compare_native_chain_base_hessian"] = (
         1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE_DIFF") == "1" else 0
     )
+    socu["native_contact_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT") == "1" else 0
+    )
+    socu["debug_compare_native_contact_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT_DIFF") == "1" else 0
+    )
     socu["runtime_reorder_frame_interval"] = int(spec["runtime_interval"])
     socu["runtime_reorder_graph_source"] = spec.get(
         "runtime_graph_source",

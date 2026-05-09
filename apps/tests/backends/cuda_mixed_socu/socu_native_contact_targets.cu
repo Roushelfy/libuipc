@@ -1,9 +1,11 @@
 #include <app/app.h>
 #include <linear_system/socu_native_contact_targets.h>
+#include <linear_system/socu_native_contact_writer.h>
 
 #include <cuda_runtime.h>
 #include <muda/buffer/device_buffer.h>
 
+#include <cmath>
 #include <initializer_list>
 #include <vector>
 
@@ -11,6 +13,8 @@ namespace
 {
 using namespace uipc::backend::cuda_mixed;
 using uipc::IndexT;
+using uipc::SizeT;
+using uipc::Vector3;
 using uipc::Vector2i;
 using uipc::Vector3i;
 using uipc::Vector4i;
@@ -92,6 +96,82 @@ struct ContactTargetFixture
         return {dofs.data(), dofs.size()};
     }
 };
+
+struct StreamGuard
+{
+    cudaStream_t stream = nullptr;
+
+    StreamGuard()
+    {
+        REQUIRE(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking)
+                == cudaSuccess);
+    }
+
+    StreamGuard(const StreamGuard&)            = delete;
+    StreamGuard& operator=(const StreamGuard&) = delete;
+
+    ~StreamGuard()
+    {
+        if(stream != nullptr)
+            cudaStreamDestroy(stream);
+    }
+};
+
+template <typename Solve>
+SocuNativeMatrixView<Solve> make_contact_test_native_view(
+    muda::BufferView<Solve> diag,
+    muda::BufferView<Solve> offdiag,
+    uipc::SizeT             horizon,
+    uipc::SizeT             block_size,
+    uipc::SizeT             nrhs)
+{
+    const auto layout = make_socu_native_storage_layout(horizon, block_size, nrhs);
+    return SocuNativeMatrixView<Solve>{diag,
+                                       offdiag,
+                                       {},
+                                       {},
+                                       horizon,
+                                       block_size,
+                                       nrhs,
+                                       layout.first_offdiag_block_count,
+                                       layout.offdiag_block_count};
+}
+
+template <typename StoreT, typename SolveT>
+__global__ void write_native_contact_exact_diff_fixture(
+    SocuNativeContactExactWriter<StoreT, SolveT>  legacy_writer,
+    SocuNativeContactExactWriter<StoreT, SolveT>  native_writer,
+    muda::CBufferView<SocuNativeContactStencilTarget> pt_targets,
+    muda::BufferView<IndexT> status)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    Eigen::Matrix<StoreT, 12, 12> H;
+    for(IndexT row = 0; row < 12; ++row)
+    {
+        for(IndexT col = 0; col < 12; ++col)
+        {
+            H(row, col) =
+                static_cast<StoreT>(0.125 + 0.5 * row + 0.03125 * col);
+        }
+    }
+
+    IndexT native_consumed = 0;
+    IndexT legacy_consumed = 0;
+    for(IndexT target_index = 0; target_index < 10; ++target_index)
+    {
+        const auto target = pt_targets.data()[static_cast<SizeT>(target_index)];
+        const auto H3 = H.template block<3, 3>(target.local_row_vertex * 3,
+                                               target.local_col_vertex * 3);
+        if(legacy_writer.write_half_block(target, H3))
+            ++legacy_consumed;
+        if(native_writer.write_half_block(target, H3))
+            ++native_consumed;
+    }
+    status.data()[0] = native_consumed;
+    status.data()[1] = legacy_consumed;
+}
 }  // namespace
 
 TEST_CASE("cuda_mixed_socu_native_contact_target_arbitrary_lane_exact",
@@ -388,4 +468,320 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
     CHECK(pp_host[2].block_or_left_block == 1);
     CHECK(pp_host[2].row_lane == 2);
     CHECK(pp_host[2].col_lane == 2);
+
+    std::vector<Vector2i> phs{Vector2i{0, 7}, Vector2i{10, 3}};
+    muda::DeviceBuffer<Vector2i> ph_device{phs};
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> ph_targets;
+    ph_targets.resize(phs.size());
+
+    cudaGetLastError();
+    rebuild_socu_native_vertex_half_plane_contact_targets(
+        cudaStreamLegacy,
+        ph_targets.view(),
+        ph_device.view().as_const(),
+        vertex_device.view().as_const(),
+        old_to_chain.view().as_const(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::DiagLump);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+
+    std::vector<SocuNativeContactStencilTarget> ph_host;
+    ph_targets.copy_to(ph_host);
+
+    REQUIRE(ph_host.size() == 2);
+    CHECK(ph_host[0].exact_in_band());
+    CHECK(ph_host[0].row_global_vertex == 0);
+    CHECK(ph_host[0].col_global_vertex == 0);
+    CHECK(ph_host[0].local_row_vertex == 0);
+    CHECK(ph_host[0].local_col_vertex == 0);
+    CHECK(ph_host[0].half_block_class == SocuNativeBandClass::Diag);
+    CHECK(ph_host[0].block_or_left_block == 0);
+    CHECK(ph_host[0].row_lane == 5);
+    CHECK(ph_host[0].col_lane == 5);
+
+    CHECK(ph_host[1].exact_in_band());
+    CHECK(ph_host[1].row_global_vertex == 10);
+    CHECK(ph_host[1].col_global_vertex == 10);
+    CHECK(ph_host[1].row_kind == SocuNativeDescriptorKind::Abd);
+    CHECK(ph_host[1].row_abd_body == 5);
+    CHECK(ph_host[1].row_jacobian_index == 2);
+    CHECK(ph_host[1].half_block_class == SocuNativeBandClass::Diag);
+    CHECK(ph_host[1].block_or_left_block == 2);
+    CHECK(ph_host[1].row_lane == 11);
+    CHECK(ph_host[1].col_lane == 11);
+}
+
+TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
+          "[cuda_mixed_socu][contract][socu_native_contact][m8]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU native contact writer tests");
+
+    using Store = double;
+    using Solve = double;
+    constexpr SizeT  Horizon   = 2;
+    constexpr SizeT  BlockSize = 32;
+    constexpr SizeT  Nrhs      = 1;
+    constexpr IndexT Epoch     = 23;
+
+    const auto layout = make_socu_native_storage_layout(Horizon, BlockSize, Nrhs);
+
+    std::vector<IndexT> old_to_chain(18, IndexT{-1});
+    old_to_chain[0] = 5;
+    old_to_chain[1] = 2;
+    old_to_chain[2] = 9;
+    old_to_chain[3] = static_cast<IndexT>(BlockSize + 4);
+    old_to_chain[4] = static_cast<IndexT>(BlockSize + 7);
+    old_to_chain[5] = static_cast<IndexT>(BlockSize + 1);
+    for(IndexT local = 0; local < 12; ++local)
+        old_to_chain[static_cast<SizeT>(6 + local)] =
+            static_cast<IndexT>(BlockSize + 8 + local);
+
+    std::vector<IndexT> old_dof_to_atom(old_to_chain.size(), IndexT{-1});
+    for(SizeT old = 0; old < old_dof_to_atom.size(); ++old)
+        old_dof_to_atom[old] = static_cast<IndexT>(old / 3);
+
+    const auto dofs = build_socu_native_dof_descriptors(
+        uipc::span<const IndexT>{old_to_chain.data(), old_to_chain.size()},
+        uipc::span<const IndexT>{old_dof_to_atom.data(), old_dof_to_atom.size()},
+        Horizon,
+        BlockSize,
+        Epoch);
+
+    const auto make_vertex = [&](SocuNativeDescriptorKind kind,
+                                 IndexT old_dof,
+                                 IndexT dof_count,
+                                 IndexT body,
+                                 IndexT jacobian_index)
+    {
+        return make_socu_native_vertex_descriptor(
+            kind,
+            false,
+            old_dof,
+            dof_count,
+            body,
+            jacobian_index,
+            Epoch,
+            uipc::span<const SocuNativeDofDescriptor>{dofs.data(), dofs.size()});
+    };
+
+    std::vector<SocuNativeVertexDescriptor> vertices(12);
+    vertices[0] = make_vertex(SocuNativeDescriptorKind::Fem, 0, 3, -1, -1);
+    vertices[1] = make_vertex(SocuNativeDescriptorKind::Fem, 3, 3, -1, -1);
+    vertices[10] = make_vertex(SocuNativeDescriptorKind::Abd, 6, 12, 0, 0);
+    vertices[11] = make_vertex(SocuNativeDescriptorKind::Abd, 6, 12, 0, 1);
+
+    std::vector<Vector4i> pts{Vector4i{0, 1, 10, 11}};
+    std::vector<ABDJacobi> Js{ABDJacobi{Vector3{0.25, -0.5, 0.75}},
+                              ABDJacobi{Vector3{-0.125, 0.375, 0.625}}};
+
+    StreamGuard stream;
+    muda::DeviceBuffer<IndexT> old_to_chain_device{old_to_chain};
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertex_device{vertices};
+    muda::DeviceBuffer<Vector4i> pt_device{pts};
+    muda::DeviceBuffer<Vector4i> empty_ee;
+    muda::DeviceBuffer<Vector3i> empty_pe;
+    muda::DeviceBuffer<Vector2i> empty_pp;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> pt_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> empty_ee_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> empty_pe_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> empty_pp_targets;
+    pt_targets.resize(10);
+
+    rebuild_socu_native_simplex_contact_targets(
+        stream.stream,
+        pt_targets.view(),
+        empty_ee_targets.view(),
+        empty_pe_targets.view(),
+        empty_pp_targets.view(),
+        pt_device.view().as_const(),
+        empty_ee.view().as_const(),
+        empty_pe.view().as_const(),
+        empty_pp.view().as_const(),
+        vertex_device.view().as_const(),
+        old_to_chain_device.view().as_const(),
+        Horizon,
+        BlockSize,
+        StructuredContactOffbandPolicy::Drop);
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<SocuNativeContactStencilTarget> target_host;
+    pt_targets.copy_to(target_host);
+    REQUIRE(target_host.size() == 10);
+    for(const auto& target : target_host)
+    {
+        CHECK(target.exact_in_band());
+        CHECK(target.row_global_vertex >= 0);
+        CHECK(target.col_global_vertex >= 0);
+    }
+    CHECK(target_host[0].row_global_vertex == 0);
+    CHECK(target_host[0].col_global_vertex == 0);
+    CHECK(!target_host[0].mirror_diag_block);
+    CHECK(target_host[1].row_global_vertex == 0);
+    CHECK(target_host[1].col_global_vertex == 1);
+    CHECK(target_host[1].mirror_diag_block);
+    CHECK(target_host[9].row_global_vertex == 11);
+    CHECK(target_host[9].col_global_vertex == 11);
+    CHECK(!target_host[9].mirror_diag_block);
+
+    muda::DeviceBuffer<Solve> native_diag;
+    muda::DeviceBuffer<Solve> native_offdiag;
+    muda::DeviceBuffer<Solve> compare_diag;
+    muda::DeviceBuffer<Solve> compare_offdiag;
+    muda::DeviceBuffer<Solve> legacy_diag;
+    muda::DeviceBuffer<Solve> legacy_offdiag;
+    muda::DeviceBuffer<IndexT> counters;
+    muda::DeviceBuffer<IndexT> status;
+    muda::DeviceBuffer<ABDJacobi> abd_J_device{Js};
+
+    const SizeT first_offdiag_elements =
+        layout.first_offdiag_block_count * BlockSize * BlockSize;
+    native_diag.resize(layout.diag_element_count);
+    native_offdiag.resize(layout.offdiag_element_count);
+    compare_diag.resize(layout.diag_element_count);
+    compare_offdiag.resize(first_offdiag_elements);
+    legacy_diag.resize(layout.diag_element_count);
+    legacy_offdiag.resize(first_offdiag_elements);
+    counters.resize(kStructuredAssemblyCounterCount);
+    status.resize(2);
+
+    REQUIRE(cudaMemsetAsync(native_diag.data(),
+                            0,
+                            native_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(native_offdiag.data(),
+                            0,
+                            native_offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(compare_diag.data(),
+                            0,
+                            compare_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(compare_offdiag.data(),
+                            0,
+                            compare_offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(legacy_diag.data(),
+                            0,
+                            legacy_diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(legacy_offdiag.data(),
+                            0,
+                            legacy_offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(counters.data(),
+                            0,
+                            counters.size() * sizeof(IndexT),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(status.data(),
+                            0,
+                            status.size() * sizeof(IndexT),
+                            stream.stream)
+            == cudaSuccess);
+
+    StructuredDeviceAssemblySink<Store, Solve> native_sink{
+        native_diag.view(),
+        native_offdiag.view(),
+        old_to_chain_device.view(),
+        Horizon,
+        BlockSize,
+        counters.view(),
+        {}};
+    native_sink.matrix.use_native_matrix = true;
+    native_sink.matrix.native_matrix =
+        make_contact_test_native_view(native_diag.view(),
+                                      native_offdiag.view(),
+                                      Horizon,
+                                      BlockSize,
+                                      Nrhs);
+    native_sink.matrix.native_dof_descriptors = dofs_device.view();
+    native_sink.matrix.compare_enabled = true;
+    native_sink.matrix.compare_uses_native_matrix = false;
+    native_sink.matrix.compare_diag = compare_diag.view();
+    native_sink.matrix.compare_first_offdiag = compare_offdiag.view();
+
+    SocuNativeContactExactWriter<Store, Solve> native_writer{
+        native_sink,
+        abd_J_device.view().as_const()};
+
+    StructuredDeviceAssemblySink<Store, Solve> legacy_sink{
+        legacy_diag.view(),
+        legacy_offdiag.view(),
+        old_to_chain_device.view(),
+        Horizon,
+        BlockSize,
+        {},
+        {}};
+    SocuNativeContactExactWriter<Store, Solve> legacy_writer{
+        legacy_sink,
+        abd_J_device.view().as_const()};
+
+    write_native_contact_exact_diff_fixture<Store, Solve>
+        <<<1, 1, 0, stream.stream>>>(legacy_writer,
+                                     native_writer,
+                                     pt_targets.view().as_const(),
+                                     status.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<IndexT> status_host;
+    std::vector<Solve> native_diag_host;
+    std::vector<Solve> native_offdiag_host;
+    std::vector<Solve> compare_diag_host;
+    std::vector<Solve> compare_offdiag_host;
+    std::vector<Solve> legacy_diag_host;
+    std::vector<Solve> legacy_offdiag_host;
+    status.copy_to(status_host);
+    native_diag.copy_to(native_diag_host);
+    native_offdiag.copy_to(native_offdiag_host);
+    compare_diag.copy_to(compare_diag_host);
+    compare_offdiag.copy_to(compare_offdiag_host);
+    legacy_diag.copy_to(legacy_diag_host);
+    legacy_offdiag.copy_to(legacy_offdiag_host);
+
+    REQUIRE(status_host.size() == 2);
+    CHECK(status_host[0] == 10);
+    CHECK(status_host[1] == 10);
+
+    REQUIRE(native_diag_host.size() == legacy_diag_host.size());
+    REQUIRE(compare_diag_host.size() == legacy_diag_host.size());
+    for(std::size_t i = 0; i < legacy_diag_host.size(); ++i)
+    {
+        CAPTURE(i);
+        CHECK(native_diag_host[i]
+              == Catch::Approx(legacy_diag_host[i]).margin(1e-9));
+        CHECK(compare_diag_host[i]
+              == Catch::Approx(legacy_diag_host[i]).margin(1e-9));
+    }
+
+    REQUIRE(native_offdiag_host.size() >= legacy_offdiag_host.size());
+    REQUIRE(compare_offdiag_host.size() == legacy_offdiag_host.size());
+    for(std::size_t i = 0; i < legacy_offdiag_host.size(); ++i)
+    {
+        CAPTURE(i);
+        CHECK(native_offdiag_host[i]
+              == Catch::Approx(legacy_offdiag_host[i]).margin(1e-9));
+        CHECK(compare_offdiag_host[i]
+              == Catch::Approx(legacy_offdiag_host[i]).margin(1e-9));
+    }
+
+    for(std::size_t i = legacy_offdiag_host.size();
+        i < native_offdiag_host.size();
+        ++i)
+    {
+        CAPTURE(i);
+        CHECK(std::abs(native_offdiag_host[i]) == Catch::Approx(0.0).margin(1e-12));
+    }
 }

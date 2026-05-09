@@ -106,6 +106,12 @@ def configure_solver(config, solver: str, workspace: str) -> None:
     config["linear_system"]["socu_approx"]["debug_compare_native_chain_base_hessian"] = (
         1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE_DIFF") == "1" else 0
     )
+    config["linear_system"]["socu_approx"]["native_contact_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT") == "1" else 0
+    )
+    config["linear_system"]["socu_approx"]["debug_compare_native_contact_hessian"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT_DIFF") == "1" else 0
+    )
 
 
 def build_scene(backend: str, solver: str, levels: int, contact_enabled: bool):

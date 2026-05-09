@@ -105,6 +105,8 @@ class SocuApproxSolver : public LinearSolver
     bool        m_debug_compare_native_diag_rhs = false;
     bool        m_native_chain_base_hessian_enabled = false;
     bool        m_debug_compare_native_chain_base_hessian = false;
+    bool        m_native_contact_hessian_enabled = false;
+    bool        m_debug_compare_native_contact_hessian = false;
     bool        m_debug_write_runtime_ordering_report = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;
