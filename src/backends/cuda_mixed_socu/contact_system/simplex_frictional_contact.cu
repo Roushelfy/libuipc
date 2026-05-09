@@ -1,5 +1,7 @@
 #include <contact_system/simplex_frictional_contact.h>
+#include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
 #include <muda/ext/eigen/evd.h>
+#include <mixed_precision/cast.h>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -22,6 +24,110 @@ void record_friction_contact_topology(ContactSink sink,
                {
                    sink.template write_topology_half<StencilSize>(indices(i));
                });
+}
+
+template <typename ContactSink>
+void record_friction_contact_weights(cudaStream_t               stream,
+                                     ContactSink                sink,
+                                     muda::CBufferView<Vector4i> PTs,
+                                     muda::CBufferView<Vector4i> EEs,
+                                     muda::CBufferView<Vector3i> PEs,
+                                     muda::CBufferView<Vector2i> PPs,
+                                     muda::CBuffer2DView<ContactCoeff> table,
+                                     muda::CBufferView<IndexT> contact_ids,
+                                     Float                     dt)
+{
+    using namespace muda;
+    using namespace sym::codim_ipc_contact;
+    using Store = SimplexFrictionalContact::StoreScalar;
+
+    if(PTs.size())
+    {
+        ParallelFor(256, 0, stream)
+            .file_line(__FILE__, __LINE__)
+            .apply(PTs.size(),
+                   [sink,
+                    table = table.viewer().name("contact_tabular"),
+                    contact_ids = contact_ids.viewer().name("contact_element_ids"),
+                    PTs = PTs.viewer().name("friction_PTs"),
+                    dt] __device__(int i) mutable
+                   {
+                       const auto& PT = PTs(i);
+                       Vector4i cids = {contact_ids(PT[0]),
+                                        contact_ids(PT[1]),
+                                        contact_ids(PT[2]),
+                                        contact_ids(PT[3])};
+                       const auto coeff = PT_contact_coeff(table, cids);
+                       const Store weight =
+                           safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                       sink.template write_weighted_half<4>(PT, weight);
+                   });
+    }
+
+    if(EEs.size())
+    {
+        ParallelFor(256, 0, stream)
+            .file_line(__FILE__, __LINE__)
+            .apply(EEs.size(),
+                   [sink,
+                    table = table.viewer().name("contact_tabular"),
+                    contact_ids = contact_ids.viewer().name("contact_element_ids"),
+                    EEs = EEs.viewer().name("friction_EEs"),
+                    dt] __device__(int i) mutable
+                   {
+                       const auto& EE = EEs(i);
+                       Vector4i cids = {contact_ids(EE[0]),
+                                        contact_ids(EE[1]),
+                                        contact_ids(EE[2]),
+                                        contact_ids(EE[3])};
+                       const auto coeff = EE_contact_coeff(table, cids);
+                       const Store weight =
+                           safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                       sink.template write_weighted_half<4>(EE, weight);
+                   });
+    }
+
+    if(PEs.size())
+    {
+        ParallelFor(256, 0, stream)
+            .file_line(__FILE__, __LINE__)
+            .apply(PEs.size(),
+                   [sink,
+                    table = table.viewer().name("contact_tabular"),
+                    contact_ids = contact_ids.viewer().name("contact_element_ids"),
+                    PEs = PEs.viewer().name("friction_PEs"),
+                    dt] __device__(int i) mutable
+                   {
+                       const auto& PE = PEs(i);
+                       Vector3i cids = {contact_ids(PE[0]),
+                                        contact_ids(PE[1]),
+                                        contact_ids(PE[2])};
+                       const auto coeff = PE_contact_coeff(table, cids);
+                       const Store weight =
+                           safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                       sink.template write_weighted_half<3>(PE, weight);
+                   });
+    }
+
+    if(PPs.size())
+    {
+        ParallelFor(256, 0, stream)
+            .file_line(__FILE__, __LINE__)
+            .apply(PPs.size(),
+                   [sink,
+                    table = table.viewer().name("contact_tabular"),
+                    contact_ids = contact_ids.viewer().name("contact_element_ids"),
+                    PPs = PPs.viewer().name("friction_PPs"),
+                    dt] __device__(int i) mutable
+                   {
+                       const auto& PP = PPs(i);
+                       Vector2i cids = {contact_ids(PP[0]), contact_ids(PP[1])};
+                       const auto coeff = PP_contact_coeff(table, cids);
+                       const Store weight =
+                           safe_cast<Store>(coeff.kappa * coeff.mu * dt * dt);
+                       sink.template write_weighted_half<2>(PP, weight);
+                   });
+    }
 }
 }  // namespace
 
@@ -221,6 +327,60 @@ void SimplexFrictionalContact::do_assemble_structured_hessian(
         record_friction_contact_topology<2>(
             this_info.m_structured_sink, this_info.friction_PPs(), "friction_PPs");
         return;
+    }
+
+    if(this_info.m_structured_sink.approximate_weight_probe_only())
+    {
+        record_friction_contact_weights(info.stream(),
+                                        this_info.m_structured_sink,
+                                        this_info.friction_PTs(),
+                                        this_info.friction_EEs(),
+                                        this_info.friction_PEs(),
+                                        this_info.friction_PPs(),
+                                        this_info.contact_tabular(),
+                                        this_info.contact_element_ids(),
+                                        this_info.dt());
+        return;
+    }
+
+    const auto descriptors = info.vertex_descriptors();
+    const auto matrix      = this_info.m_structured_sink.sink.matrix;
+    if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
+       && matrix.horizon != 0 && matrix.block_size != 0)
+    {
+        m_impl.loose_resize(m_impl.PT_native_contact_targets,
+                            this_info.friction_PTs().size() * PTHalfHessianSize);
+        m_impl.loose_resize(m_impl.EE_native_contact_targets,
+                            this_info.friction_EEs().size() * EEHalfHessianSize);
+        m_impl.loose_resize(m_impl.PE_native_contact_targets,
+                            this_info.friction_PEs().size() * PEHalfHessianSize);
+        m_impl.loose_resize(m_impl.PP_native_contact_targets,
+                            this_info.friction_PPs().size() * PPHalfHessianSize);
+
+        rebuild_socu_native_simplex_contact_targets(
+            info.stream(),
+            m_impl.PT_native_contact_targets.view(),
+            m_impl.EE_native_contact_targets.view(),
+            m_impl.PE_native_contact_targets.view(),
+            m_impl.PP_native_contact_targets.view(),
+            this_info.friction_PTs(),
+            this_info.friction_EEs(),
+            this_info.friction_PEs(),
+            this_info.friction_PPs(),
+            descriptors,
+            matrix.old_to_chain,
+            matrix.horizon,
+            matrix.block_size,
+            this_info.m_structured_sink.offband_policy);
+
+        this_info.m_PT_native_contact_targets =
+            m_impl.PT_native_contact_targets.view().as_const();
+        this_info.m_EE_native_contact_targets =
+            m_impl.EE_native_contact_targets.view().as_const();
+        this_info.m_PE_native_contact_targets =
+            m_impl.PE_native_contact_targets.view().as_const();
+        this_info.m_PP_native_contact_targets =
+            m_impl.PP_native_contact_targets.view().as_const();
     }
 
     m_impl.PT_hessians = {};

@@ -3,6 +3,7 @@
 #include <line_search/line_searcher.h>
 #include <contact_system/contact_coeff.h>
 #include <implicit_geometry/half_plane_vertex_reporter.h>
+#include <linear_system/socu_native_contact_targets.h>
 #include <utils/structured_contact_assembly_sink.h>
 
 namespace uipc::backend::cuda_mixed
@@ -17,6 +18,7 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
     using StoreScalar = ContactReporter::StoreScalar;
     using EnergyScalar = ContactReporter::EnergyScalar;
     using StoreMat3 = Eigen::Matrix<StoreScalar, 3, 3>;
+    constexpr static SizeT PHHalfHessianSize = 1;
 
     class Impl;
 
@@ -61,6 +63,10 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         bool hessian_only() const noexcept { return m_hessian_only; }
         bool structured_hessian() const noexcept { return m_structured_hessian; }
         auto structured_hessian_sink() const noexcept { return m_structured_sink; }
+        auto PH_native_contact_targets() const noexcept
+        {
+            return m_PH_native_contact_targets;
+        }
 
       private:
         friend class VertexHalfPlaneFrictionalContact;
@@ -71,6 +77,7 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
         bool                              m_hessian_only = false;
         bool                              m_structured_hessian = false;
         StructuredContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar> m_structured_sink;
+        muda::CBufferView<SocuNativeContactStencilTarget> m_PH_native_contact_targets;
     };
 
     class BuildInfo
@@ -106,10 +113,22 @@ class VertexHalfPlaneFrictionalContact : public ContactReporter
 
         SizeT PH_count = 0;
         Float dt       = 0.0;
+        Float reserve_ratio = 1.1;
+
+        template <typename T>
+        void loose_resize(muda::DeviceBuffer<T>& buffer, SizeT size)
+        {
+            if(size > buffer.capacity())
+            {
+                buffer.reserve(size * reserve_ratio);
+            }
+            buffer.resize(size);
+        }
 
         muda::CBufferView<EnergyScalar>    energies;
         muda::CDoubletVectorView<StoreScalar, 3> gradients;
         muda::CTripletMatrixView<StoreScalar, 3> hessians;
+        muda::DeviceBuffer<SocuNativeContactStencilTarget> PH_native_contact_targets;
     };
 
     muda::CBufferView<Vector2i>        PHs() const noexcept;

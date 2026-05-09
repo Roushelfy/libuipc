@@ -1,4 +1,5 @@
 #include <contact_system/vertex_half_plane_frictional_contact.h>
+#include <contact_system/contact_models/ipc_vertex_half_plane_frictional_contact_native.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
 #include <kernel_cout.h>
@@ -16,6 +17,28 @@ void assemble_ipc_vertex_half_plane_frictional_contact_structured(
     VertexHalfPlaneFrictionalContact::ContactInfo& info,
     const HalfPlane&                               half_plane);
 #endif
+
+namespace
+{
+bool ph_friction_contact_target_view_ready(
+    SizeT contact_count,
+    muda::CBufferView<SocuNativeContactStencilTarget> targets)
+{
+    return contact_count == 0
+           || (targets.data() != nullptr
+               && targets.size()
+                      >= contact_count
+                             * VertexHalfPlaneFrictionalContact::PHHalfHessianSize);
+}
+
+bool ph_friction_native_contact_targets_ready(
+    VertexHalfPlaneFrictionalContact::ContactInfo& info)
+{
+    return ph_friction_contact_target_view_ready(
+        info.friction_PHs().size(),
+        info.PH_native_contact_targets());
+}
+}  // namespace
 
 class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFrictionalContact
 {
@@ -101,10 +124,21 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
 
         if(info.structured_hessian())
         {
+            const bool native_ready =
+                !info.structured_hessian_sink().approximate_weight_probe_only()
+                && ph_friction_native_contact_targets_ready(info);
+            if(native_ready)
+            {
+                assemble_ipc_vertex_half_plane_frictional_contact_native_exact(
+                    info,
+                    *half_plane);
+                return;
+            }
+
 #ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
             throw SimSystemException(
                 "SOCU native-only build excludes legacy vertex-half-plane "
-                "frictional structured contact assembly");
+                "frictional structured contact assembly and requires native target tables");
 #else
             assemble_ipc_vertex_half_plane_frictional_contact_structured(
                 info,

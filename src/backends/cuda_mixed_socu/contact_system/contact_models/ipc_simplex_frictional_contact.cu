@@ -1,4 +1,5 @@
 #include <contact_system/simplex_frictional_contact.h>
+#include <contact_system/contact_models/ipc_simplex_frictional_contact_native.h>
 #include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
 #include <utils/codim_thickness.h>
 #include <kernel_cout.h>
@@ -15,6 +16,40 @@ namespace uipc::backend::cuda_mixed
 void assemble_ipc_simplex_frictional_contact_structured(
     SimplexFrictionalContact::ContactInfo& info);
 #endif
+
+namespace
+{
+bool simplex_friction_contact_target_view_ready(
+    SizeT contact_count,
+    SizeT half_hessian_size,
+    muda::CBufferView<SocuNativeContactStencilTarget> targets)
+{
+    return contact_count == 0
+           || (targets.data() != nullptr
+               && targets.size() >= contact_count * half_hessian_size);
+}
+
+bool simplex_friction_native_contact_targets_ready(
+    SimplexFrictionalContact::ContactInfo& info)
+{
+    return simplex_friction_contact_target_view_ready(
+               info.friction_PTs().size(),
+               SimplexFrictionalContact::PTHalfHessianSize,
+               info.friction_PT_native_contact_targets())
+           && simplex_friction_contact_target_view_ready(
+               info.friction_EEs().size(),
+               SimplexFrictionalContact::EEHalfHessianSize,
+               info.friction_EE_native_contact_targets())
+           && simplex_friction_contact_target_view_ready(
+               info.friction_PEs().size(),
+               SimplexFrictionalContact::PEHalfHessianSize,
+               info.friction_PE_native_contact_targets())
+           && simplex_friction_contact_target_view_ready(
+               info.friction_PPs().size(),
+               SimplexFrictionalContact::PPHalfHessianSize,
+               info.friction_PP_native_contact_targets());
+}
+}  // namespace
 
 class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 {
@@ -335,10 +370,19 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 
         if(info.structured_hessian())
         {
+            const bool native_ready =
+                !info.structured_hessian_sink().approximate_weight_probe_only()
+                && simplex_friction_native_contact_targets_ready(info);
+            if(native_ready)
+            {
+                assemble_ipc_simplex_frictional_contact_native_exact(info);
+                return;
+            }
+
 #ifdef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
             throw SimSystemException(
                 "SOCU native-only build excludes legacy simplex frictional "
-                "structured contact assembly");
+                "structured contact assembly and requires native target tables");
 #else
             assemble_ipc_simplex_frictional_contact_structured(info);
 #endif
