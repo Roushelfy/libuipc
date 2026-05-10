@@ -1607,6 +1607,75 @@ M8 design requirements:
 - The native contact path should be family-scoped. Normal contacts can ship
   before frictional contacts if frictional compilation cost or register pressure
   is too high.
+- The production native contact writer must be exact-only and direct. It should
+  write primary values only to SOCU-native `D/E`; it must not silently fall back
+  to `StructuredContactAssemblySink::write_hessian_half` inside the writer.
+  Structured writes are allowed only as an explicit outer fallback path or as a
+  debug mirror path outside performance runs.
+
+Direct native contact writer plan:
+
+1. **Exact-only direct writer V1.**
+   - Dispatch to native contact kernels only when
+     `native_contact_hessian` has installed native `D/E` storage and all target
+     tables are present.
+   - `linear_system/socu_approx/native_contact_hessian` and
+     `debug_compare_native_contact_hessian` must be registered default scene
+     config keys, otherwise example-side assignment is silently ineffective and
+     the solver will report contact native disabled.
+   - `SocuNativeContactExactWriter` writes primary values through native matrix
+     storage only. It may update the legacy/native compare workspace for debug,
+     but the primary path must not call `StructuredContactAssemblySink`.
+   - If a contact target table is missing, stale, or contains any target that is
+     not `ExactInBand`/`Skipped`, the native exact writer does not write that
+     contact. Native-only builds should fail at the outer dispatch boundary
+     rather than falling back inside the writer.
+   - Empty contact families remain a no-op even in native-only builds. This
+     keeps startup/probe frames from failing before a family has any real
+     contact while still failing loudly for nonempty unsupported families.
+
+2. **High-performance target-table V2.**
+   - Extend the target schema so each exact half-block carries all information
+     needed by the writer without loading old DoF descriptors:
+     target matrix kind (`D` or first-offdiag `E`), block/left-block id,
+     lane arrays for row and column DoFs, local component ids, ABD/FEM projection
+     weights, mirror policy, and validity bits.
+   - For FEM/FEM targets this reduces to up to `3x3` direct lane writes.
+     For FEM/ABD and ABD/FEM it becomes `3x12` / `12x3` weighted lane writes.
+     For ABD/ABD it becomes `12x12` weighted lane writes, with same-body
+     symmetric accumulation represented explicitly in the target.
+   - The device writer then receives a local `3x3` block and a target record and
+     performs only:
+
+     ```text
+     for precomputed row lane / column lane:
+         value = projection_weight * H3(component_row, component_col)
+         atomic_add(D/E[target_block, row_lane, col_lane], value)
+     ```
+
+   - No `old_to_chain`, no `classify_dof_pair`, and no descriptor lookup should
+     appear in the production writer after V2. Descriptor and ordering work
+     belongs to target-table rebuild kernels.
+
+3. **Fallback separation.**
+   - Legacy structured fallback remains an outer dispatch path while M8 is
+     incomplete, but it must not be embedded in the native writer.
+   - Off-band `diag` and `diag_lump` are separate native policy writers. They
+     consume target records whose policy is explicitly `DiagFallback` or
+     `DiagLumpFallback`; they are not implemented by silently re-entering the
+     legacy structured sink.
+
+4. **Removal criteria for legacy structured contact fallback.**
+   - Native exact targets cover PH normal/frictional and simplex
+     normal/frictional PT/EE/PE/PP in native-only builds.
+   - Native `diag` and `diag_lump` policy writers pass policy-reference matrix
+     tests.
+   - 20-frame and 100-frame topology/contact gates pass with
+     `native_contact_hessian=1` and mirror diff disabled for performance.
+   - A fallback/full build still passes contract and scene smoke tests.
+   - After those gates, old structured contact TUs can move behind a debug or
+     comparison option; native-only/default performance builds should not link
+     them.
 
 Detailed M8 execution plan:
 
@@ -1652,11 +1721,12 @@ Detailed M8 execution plan:
      dispatch are implemented for PT/EE/PE/PP. The native production path is
      split by stencil family to avoid reintroducing a monolithic heavyweight
      contact TU.
-   - The production exact branch is deliberately all-or-legacy per contact:
-     if every half-block target is `ExactInBand` or `Skipped`, the native writer
-     consumes the target table; otherwise the whole contact falls back to the
-     legacy structured sink. This preserves current `drop`, `diag`, and
-     `diag_lump` behavior until native off-band policy writes are implemented.
+   - The production exact branch is now exact-only at the writer level: if
+     every half-block target is `ExactInBand` or `Skipped`, the native writer
+     consumes the target table and writes primary values to SOCU-native `D/E`.
+     Otherwise it returns without an embedded legacy write. Legacy structured
+     fallback remains only as an outer dispatch path when native contact storage
+     is not enabled or target tables are unavailable.
    - Contact-phase native matrix/compare storage is wired for runtime gates.
      Remaining work: add a narrow native-contact hit/fallback report that does
      not force old structured frictional TUs to rebuild, implement native
@@ -1691,20 +1761,23 @@ Detailed M8 execution plan:
      validation now passes the frame-10 PH frictional blocker and reaches
      frame 14, where simplex frictional contact becomes the next blocker.
    - The next slice added simplex frictional target-table plumbing and
-     production native exact writes for PT, EE, PE, and PP. PT/EE/PE keep the
-     current generated IPC Hessian path, including `make_spd` and the EE
-     mollifier zero branch, then consume the shared exact contact target writer.
-     PP is intentionally implemented as a scalar exact-in-band writer: it
-     computes the tangent `3x3` block directly, projects the inner `2x2`
-     friction Hessian when needed, and writes the three exact PP half-blocks.
-     This avoids pulling the old `6x6` PP frictional expression and generic
-     writer templates into one TU, which repeatedly exhausted `cicc` memory in
-     native-only builds.
+     production native exact writes for PT, EE, PE, and PP. All four families
+     now keep the current generated IPC Hessian path, including `make_spd` and
+     the EE mollifier zero branch, then consume the shared exact contact target
+     writer. PP was briefly specialized as a scalar exact-in-band writer to
+     avoid `cicc` memory pressure, but was restored to the generated `6x6`
+     `PP_friction_gradient_hessian` path so its computation matches the legacy
+     CUDA/structured implementation.
    - Native-only topology validation now passes the previous frame-14 simplex
      frictional blocker and reaches frame 20 with native chain/base, native
      contact primary writes, and native contact mirror diff enabled. Remaining
      M8 work is to add native off-band fallback consumption, strengthen PP
      matrix-diff coverage, and run the 100-frame/performance acceptance gates.
+   - The exact-only direct-writer cleanup was rebuilt and validated after
+     contact config registration was fixed. The 20-frame
+     `socu_rt50_topology_diag_lump` native-only gate completed with
+     `native_contact_hessian_enabled=true`, contact mirror diff enabled, and
+     `native_contact_hessian_diff_mismatch_count=0`.
 
 3. **Off-band fallback path.**
    - Implement native `diag` and `diag_lump` fallback for off-band contact
@@ -1726,11 +1799,11 @@ Detailed M8 execution plan:
    - Simplex frictional native exact writes are implemented for PT/EE/PE/PP.
      The topology gate no longer stops at frame 14 and reaches frame 20 in
      native-only mode.
-   - PP frictional is the current caution point. Its native kernel is a scalar
-     exact-in-band path that writes only `ExactInBand`/`Skipped` targets. It
-     deliberately does not yet consume non-exact target modes such as
-     `DiagFallback` or `DiagLumpFallback`; those remain part of the off-band
-     fallback milestone before M8 can be called complete.
+   - PP frictional now uses the same generated `6x6` Hessian plus `make_spd`
+     pattern as the legacy CUDA/structured path. The caution point moves back
+     to compile-resource validation: this TU must stay buildable in
+     native-only and fallback configurations while preserving the same
+     generated calculation as the other simplex frictional families.
    - Track register count, spills, compile time, and object size. If frictional
      native kernels become compile-time bottlenecks, split by contact family and
      keep structured fallback for the heaviest family.
@@ -1758,9 +1831,10 @@ Detailed M8 execution plan:
      back into the fallback build. Until that relink is completed, native-only
      tests validate the new code but the default fallback artifact is stale.
    - Current status: the 20-frame native-only topology gate passes after the
-     simplex frictional migration. The 100-frame gate, native off-band fallback
-     policy tests, PP-specific matrix diff, and performance comparison remain
-     open before closing M8.
+     exact-only direct-writer cleanup with contact mirror diff enabled and zero
+     native-contact diff mismatches. The 100-frame gate, native off-band
+     fallback policy tests, PP compile-resource validation in the fallback
+     artifact, and performance comparison remain open before closing M8.
 
 Deliverables:
 

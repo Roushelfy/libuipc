@@ -2037,19 +2037,15 @@ M8 eighth slice implemented:
 - Added split simplex frictional native exact writers:
   `ipc_simplex_frictional_contact_native.{h,cu}` and
   `ipc_simplex_frictional_contact_native_{pt,ee,pe,pp}.cu`.
-- PT, EE, and PE keep the same generated IPC frictional Hessian path as the
+- PT, EE, PE, and PP keep the same generated IPC frictional Hessian path as the
   legacy structured implementation, including `make_spd`; EE keeps the
   existing mollifier branch that writes zero Hessian when mollification is
   required. The write side consumes `SocuNativeContactExactWriter` through the
   target table.
-- PP is deliberately specialized. The straightforward PP native TU that pulled
-  the generated `6x6` frictional expression, generic block writer, and SPD
-  projection repeatedly exhausted `cicc` memory. The current PP kernel computes
-  the tangent `3x3` block with scalar device code, projects the inner `2x2`
-  friction Hessian when needed, and writes the three exact PP half-blocks
-  directly. This keeps the native-only build usable, but also defines a clear
-  follow-up: PP currently skips non-exact target modes instead of consuming
-  `DiagFallback`/`DiagLumpFallback`, and needs a PP-specific matrix-diff gate.
+- PP was briefly implemented as a scalar exact-in-band writer to reduce
+  `cicc` memory pressure, but was restored to the generated `6x6`
+  `PP_friction_gradient_hessian` path so its computation matches the other
+  native simplex frictional families and the legacy CUDA/structured path.
 - Updated `IPCSimplexFrictionalContact` so native-ready structured Hessian
   assembly dispatches to the simplex frictional native exact writer. In
   native-only builds, real simplex frictional contacts without target tables
@@ -2072,6 +2068,57 @@ Current boundary after the eighth slice:
   normal, and simplex frictional exact in-band writes well enough to complete
   the 20-frame topology gate with contact mirror diff enabled.
 - M8 is not complete yet. Remaining acceptance work: native off-band
-  `diag`/`diag_lump` fallback consumption, PP-specific matrix diff and fallback
-  coverage, 100-frame topology gate, and a performance comparison against the
-  structured contact baseline.
+  `diag`/`diag_lump` fallback consumption, compile-resource validation for the
+  restored PP generated path, 100-frame topology gate, and a performance
+  comparison against the structured contact baseline.
+
+M8 direct-writer cleanup:
+
+- The original M8 plan stated that production contact writes should use
+  precomputed native block/lane targets and avoid per-scalar band
+  classification, but the first implementation still used
+  `SocuNativeContactExactWriter` as an adapter around
+  `StructuredDeviceAssemblySink::add_hessian_scalar_status`. That preserved
+  fallback/debug behavior, but it also kept legacy structured sink semantics in
+  the native writer and contributed to high compile pressure for PP frictional.
+- The plan now explicitly separates exact native writes, native off-band policy
+  writes, and legacy structured fallback. Legacy fallback remains an outer
+  dispatch path while M8 is incomplete; it is no longer a writer-internal
+  behavior.
+- `SocuNativeContactExactWriter` has been simplified to an exact-only direct
+  primary writer: it requires native contact matrix storage, writes primary
+  values through SOCU-native `D/E`, and returns without writing when targets are
+  missing or not exact/skipped. It may still update the configured debug compare
+  workspace, but production primary writes no longer fall back to structured
+  contact storage inside the writer.
+- Native contact dispatch now requires both ready target tables and installed
+  native matrix storage. Default/fallback builds that do not enable
+  `native_contact_hessian` continue to use the explicit legacy structured
+  contact path outside native-only mode.
+- This is V1 of the direct writer. It still uses native DoF descriptors while
+  expanding ABD/FEM projections so arbitrary ABD lane orders remain correct.
+  The high-performance V2 target table should precompute the final row/column
+  lanes and projection weights so the writer only performs projected `3x3`
+  block additions into `D/E`.
+
+Direct-writer cleanup validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; rebuilt the touched contact wrappers, device link, backend shared library, core config, and test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]"` | passed, `3238` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `8138` assertions in `29` test cases |
+| native-only topology gate with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_NATIVE_CONTACT_DIFF=1 SOCU_REPORT_COUNTERS=1`, `socu_rt50_topology_diag_lump --frames 20` | passed; completed `final_frame=20` with `native_contact_hessian_enabled=true`, contact mirror diff enabled, and `native_contact_hessian_diff_mismatch_count=0` |
+
+Two cleanup fixes were needed for the direct-writer gate:
+
+- Empty contact families now return early in native-only structured assembly.
+  This preserves the old no-op behavior for unsupported families before any
+  real contacts exist, while still throwing when a nonempty contact family lacks
+  native storage or target tables.
+- `linear_system/socu_approx/native_contact_hessian` and
+  `debug_compare_native_contact_hessian` are now registered in the default
+  scene config. Before this fix the example set the keys, but the solver could
+  not find them, so the report showed `native_contact_hessian_enabled=false`
+  and native-only dispatch rejected real PH normal contacts at frame 9.
