@@ -1,11 +1,16 @@
 #pragma once
 
+#include <affine_body/abd_jacobi_matrix.h>
 #include <linear_system/socu_native_descriptors.h>
 #include <utils/structured_contact_offband_policy.h>
+
+#include <cstdint>
 
 namespace uipc::backend::cuda_mixed
 {
 inline constexpr IndexT SocuNativeContactMaxDofsPerVertex = 12;
+inline constexpr SizeT  SocuNativeContactMaxPackedBlock   = 0xffffffffu;
+inline constexpr SizeT  SocuNativeContactMaxPackedLane    = 0xffff;
 
 enum class SocuNativeContactWriteMode : IndexT
 {
@@ -31,6 +36,40 @@ struct SocuNativeContactStencilPolicy
     }
 };
 
+struct SocuNativeContactDirectSide
+{
+    IndexT       count = 0;
+    std::uint32_t blocks[SocuNativeContactMaxDofsPerVertex] = {};
+    std::uint16_t lanes[SocuNativeContactMaxDofsPerVertex] = {};
+    std::uint8_t  components[SocuNativeContactMaxDofsPerVertex] = {};
+    Float         weights[SocuNativeContactMaxDofsPerVertex] = {};
+
+    MUDA_GENERIC bool valid_index(IndexT i) const noexcept
+    {
+        return i >= 0 && i < count && i < SocuNativeContactMaxDofsPerVertex;
+    }
+
+    MUDA_GENERIC SizeT lane(IndexT i) const noexcept
+    {
+        return static_cast<SizeT>(lanes[static_cast<SizeT>(i)]);
+    }
+
+    MUDA_GENERIC SizeT block(IndexT i) const noexcept
+    {
+        return static_cast<SizeT>(blocks[static_cast<SizeT>(i)]);
+    }
+
+    MUDA_GENERIC IndexT component(IndexT i) const noexcept
+    {
+        return static_cast<IndexT>(components[static_cast<SizeT>(i)]);
+    }
+
+    MUDA_GENERIC Float weight(IndexT i) const noexcept
+    {
+        return weights[static_cast<SizeT>(i)];
+    }
+};
+
 struct SocuNativeContactStencilTarget
 {
     IndexT contact_id       = -1;
@@ -50,8 +89,9 @@ struct SocuNativeContactStencilTarget
     bool  transposed_first_offdiag = false;
     bool  mirror_diag_block        = false;
     bool  direct_lanes_valid       = false;
-    SizeT row_direct_lanes[SocuNativeContactMaxDofsPerVertex] = {};
-    SizeT col_direct_lanes[SocuNativeContactMaxDofsPerVertex] = {};
+    bool  direct_projection_valid  = false;
+    SocuNativeContactDirectSide row_direct;
+    SocuNativeContactDirectSide col_direct;
 
     IndexT row_old_dof   = -1;
     IndexT row_dof_count = 0;
@@ -79,6 +119,19 @@ struct SocuNativeContactStencilTarget
                || write_mode == SocuNativeContactWriteMode::DiagLumpFallback;
     }
 };
+
+MUDA_GENERIC inline IndexT socu_native_contact_abd_component(IndexT dof) noexcept
+{
+    return dof < 3 ? dof : (dof - 3) / 3;
+}
+
+MUDA_GENERIC inline Float
+socu_native_contact_abd_weight(const ABDJacobi& J, IndexT dof) noexcept
+{
+    if(dof < 3)
+        return Float{1};
+    return J.x_bar()((dof - 3) % 3);
+}
 
 inline SocuNativeScalarTarget
 socu_native_classify_dof_descriptor_pair(
@@ -129,61 +182,129 @@ socu_native_classify_dof_descriptor_pair(
     return target;
 }
 
-inline bool socu_native_contact_fill_direct_lanes(
+inline bool socu_native_contact_fill_direct_side(
+    SocuNativeContactDirectSide&        side,
+    const SocuNativeVertexDescriptor&   vertex,
+    span<const SocuNativeDofDescriptor> dofs,
+    SizeT                               horizon,
+    SizeT                               block_size,
+    span<const ABDJacobi>               abd_vertex_to_J) noexcept
+{
+    if(vertex.old_dof < 0 || vertex.dof_count <= 0
+       || vertex.dof_count > SocuNativeContactMaxDofsPerVertex
+       || static_cast<SizeT>(vertex.old_dof + vertex.dof_count) > dofs.size())
+        return false;
+
+    SocuNativeContactDirectSide out;
+    out.count = vertex.dof_count;
+
+    ABDJacobi J;
+    if(vertex.kind == SocuNativeDescriptorKind::Abd)
+    {
+        if(vertex.abd_j_index < 0
+           || static_cast<SizeT>(vertex.abd_j_index) >= abd_vertex_to_J.size())
+            return false;
+        J = abd_vertex_to_J[static_cast<SizeT>(vertex.abd_j_index)];
+    }
+
+    for(IndexT local = 0; local < vertex.dof_count; ++local)
+    {
+        const auto& dof =
+            dofs[static_cast<SizeT>(vertex.old_dof + local)];
+        if(!dof.active || dof.old_dof != vertex.old_dof + local
+           || dof.block >= horizon || dof.block > SocuNativeContactMaxPackedBlock
+           || dof.lane >= block_size
+           || dof.lane > SocuNativeContactMaxPackedLane)
+            return false;
+
+        out.blocks[static_cast<SizeT>(local)] =
+            static_cast<std::uint32_t>(dof.block);
+        out.lanes[static_cast<SizeT>(local)] =
+            static_cast<std::uint16_t>(dof.lane);
+
+        if(vertex.kind == SocuNativeDescriptorKind::Fem)
+        {
+            if(local >= 3)
+                return false;
+            out.components[static_cast<SizeT>(local)] =
+                static_cast<std::uint8_t>(local);
+            out.weights[static_cast<SizeT>(local)] = Float{1};
+        }
+        else if(vertex.kind == SocuNativeDescriptorKind::Abd)
+        {
+            out.components[static_cast<SizeT>(local)] =
+                static_cast<std::uint8_t>(
+                    socu_native_contact_abd_component(local));
+            out.weights[static_cast<SizeT>(local)] =
+                socu_native_contact_abd_weight(J, local);
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    side = out;
+    return true;
+}
+
+inline bool socu_native_contact_fill_direct_data(
     SocuNativeContactStencilTarget&      target,
     const SocuNativeVertexDescriptor&    row,
     const SocuNativeVertexDescriptor&    col,
     span<const SocuNativeDofDescriptor>  dofs,
     SizeT                                horizon,
-    SizeT                                block_size) noexcept
+    SizeT                                block_size,
+    span<const ABDJacobi>                abd_vertex_to_J = {}) noexcept
 {
-    if(target.half_block_class != SocuNativeBandClass::Diag
-       && target.half_block_class != SocuNativeBandClass::FirstOffdiag)
-        return false;
-    if(row.old_dof < 0 || col.old_dof < 0 || row.dof_count <= 0
-       || col.dof_count <= 0
-       || row.dof_count > SocuNativeContactMaxDofsPerVertex
-       || col.dof_count > SocuNativeContactMaxDofsPerVertex)
-        return false;
-    if(static_cast<SizeT>(row.old_dof + row.dof_count) > dofs.size()
-       || static_cast<SizeT>(col.old_dof + col.dof_count) > dofs.size())
+    if(!target.scalar_classification.fully_in_band()
+       || target.half_block_class == SocuNativeBandClass::Skipped)
         return false;
 
-    for(IndexT r = 0; r < row.dof_count; ++r)
-    {
-        const auto& dof = dofs[static_cast<SizeT>(row.old_dof + r)];
-        if(!dof.active || dof.old_dof != row.old_dof + r
-           || dof.block >= horizon || dof.lane >= block_size)
-            return false;
-        target.row_direct_lanes[r] = dof.lane;
-    }
+    SocuNativeContactDirectSide row_side;
+    SocuNativeContactDirectSide col_side;
+    if(!socu_native_contact_fill_direct_side(row_side,
+                                             row,
+                                             dofs,
+                                             horizon,
+                                             block_size,
+                                             abd_vertex_to_J)
+       || !socu_native_contact_fill_direct_side(col_side,
+                                                col,
+                                                dofs,
+                                                horizon,
+                                                block_size,
+                                                abd_vertex_to_J))
+        return false;
 
-    for(IndexT c = 0; c < col.dof_count; ++c)
-    {
-        const auto& dof = dofs[static_cast<SizeT>(col.old_dof + c)];
-        if(!dof.active || dof.old_dof != col.old_dof + c
-           || dof.block >= horizon || dof.lane >= block_size)
-            return false;
-        target.col_direct_lanes[c] = dof.lane;
-    }
-
-    for(IndexT r = 0; r < row.dof_count; ++r)
-    {
-        for(IndexT c = 0; c < col.dof_count; ++c)
-        {
-            const auto scalar = socu_native_classify_dof_descriptor_pair(
-                dofs,
-                horizon,
-                block_size,
-                row.old_dof + r,
-                col.old_dof + c);
-            if(scalar.cls != target.half_block_class
-               || scalar.left_block != target.block_or_left_block)
-                return false;
-        }
-    }
-
+    target.row_direct = row_side;
+    target.col_direct = col_side;
     target.direct_lanes_valid = true;
+    target.direct_projection_valid = true;
+    return true;
+}
+
+inline bool socu_native_contact_fill_diagonal_direct_data(
+    SocuNativeContactStencilTarget&      target,
+    const SocuNativeVertexDescriptor&    vertex,
+    span<const SocuNativeDofDescriptor>  dofs,
+    SizeT                                horizon,
+    SizeT                                block_size,
+    span<const ABDJacobi>                abd_vertex_to_J = {}) noexcept
+{
+    SocuNativeContactDirectSide side;
+    if(!socu_native_contact_fill_direct_side(side,
+                                             vertex,
+                                             dofs,
+                                             horizon,
+                                             block_size,
+                                             abd_vertex_to_J))
+        return false;
+
+    target.row_direct = side;
+    target.col_direct = side;
+    target.direct_lanes_valid = true;
+    target.direct_projection_valid = true;
     return true;
 }
 
@@ -297,7 +418,8 @@ socu_native_contact_make_half_block_target(
     SizeT                                block_size,
     StructuredContactOffbandPolicy       fallback_policy,
     SocuNativeContactWriteMode           stencil_write_mode =
-        SocuNativeContactWriteMode::ExactInBand) noexcept
+        SocuNativeContactWriteMode::ExactInBand,
+    span<const ABDJacobi>                abd_vertex_to_J = {}) noexcept
 {
     SocuNativeContactStencilTarget target;
     target.contact_id       = contact_id;
@@ -329,6 +451,13 @@ socu_native_contact_make_half_block_target(
        || stencil_write_mode == SocuNativeContactWriteMode::DiagLumpFallback)
     {
         target.write_mode = stencil_write_mode;
+        if(local_row_vertex == local_col_vertex)
+            socu_native_contact_fill_diagonal_direct_data(target,
+                                                          row,
+                                                          dofs,
+                                                          horizon,
+                                                          block_size,
+                                                          abd_vertex_to_J);
         return target;
     }
 
@@ -367,23 +496,25 @@ socu_native_contact_make_half_block_target(
             target.col_lane            = scalar.col_lane;
             target.transposed_first_offdiag =
                 scalar.transposed_first_offdiag;
-            socu_native_contact_fill_direct_lanes(
+            socu_native_contact_fill_direct_data(
                 target,
                 row,
                 col,
                 dofs,
                 horizon,
-                block_size);
+                block_size,
+                abd_vertex_to_J);
             return target;
         }
     }
-    socu_native_contact_fill_direct_lanes(
+    socu_native_contact_fill_direct_data(
         target,
         row,
         col,
         dofs,
         horizon,
-        block_size);
+        block_size,
+        abd_vertex_to_J);
     return target;
 }
 
@@ -427,6 +558,7 @@ void rebuild_socu_native_simplex_contact_targets(
     muda::CBufferView<Vector2i>               pps,
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
     muda::CBufferView<IndexT>                 old_to_chain,
+    muda::CBufferView<ABDJacobi>              abd_vertex_to_J,
     SizeT                                     horizon,
     SizeT                                     block_size,
     StructuredContactOffbandPolicy            fallback_policy);
@@ -437,6 +569,7 @@ void rebuild_socu_native_vertex_half_plane_contact_targets(
     muda::CBufferView<Vector2i>               phs,
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
     muda::CBufferView<IndexT>                 old_to_chain,
+    muda::CBufferView<ABDJacobi>              abd_vertex_to_J,
     SizeT                                     horizon,
     SizeT                                     block_size,
     StructuredContactOffbandPolicy            fallback_policy);

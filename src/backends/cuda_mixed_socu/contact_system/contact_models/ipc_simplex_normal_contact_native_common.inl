@@ -29,6 +29,32 @@ MUDA_DEVICE bool contact_targets_are_exact_or_skipped(
     return true;
 }
 
+template <int StencilSize>
+MUDA_DEVICE bool contact_targets_are_whole_stencil_fallback(
+    muda::CBufferView<SocuNativeContactStencilTarget> targets,
+    SizeT                                             base,
+    SocuNativeContactWriteMode&                       write_mode) noexcept
+{
+    constexpr SizeT HalfBlockCount = StencilSize * (StencilSize + 1) / 2;
+    if(targets.data() == nullptr || base + HalfBlockCount > targets.size())
+        return false;
+
+    write_mode = targets.data()[base].write_mode;
+    if(write_mode != SocuNativeContactWriteMode::DiagFallback
+       && write_mode != SocuNativeContactWriteMode::DiagLumpFallback)
+        return false;
+
+#pragma unroll
+    for(IndexT target_offset = 1; target_offset < HalfBlockCount; ++target_offset)
+    {
+        const auto mode =
+            targets.data()[base + static_cast<SizeT>(target_offset)].write_mode;
+        if(mode != write_mode)
+            return false;
+    }
+    return true;
+}
+
 template <int StencilSize, typename Stencil, typename HMat>
 MUDA_DEVICE void write_exact_targets(
     StructuredContactAssemblySink<ActivePolicy::StoreScalar,
@@ -43,15 +69,33 @@ MUDA_DEVICE void write_exact_targets(
     constexpr SizeT HalfBlockCount = StencilSize * (StencilSize + 1) / 2;
     const SizeT     base = static_cast<SizeT>(contact_id) * HalfBlockCount;
 
-    if(!contact_targets_are_exact_or_skipped<StencilSize>(targets, base))
-    {
-        return;
-    }
-
     SocuNativeContactExactWriter<Store, Solve> writer{
         structured_sink.sink.matrix,
         structured_sink.abd_vertex_to_J,
         structured_sink.counters};
+
+    if(!contact_targets_are_exact_or_skipped<StencilSize>(targets, base))
+    {
+        SocuNativeContactWriteMode fallback_mode =
+            SocuNativeContactWriteMode::Skipped;
+        if(!contact_targets_are_whole_stencil_fallback<StencilSize>(
+               targets,
+               base,
+               fallback_mode))
+            return;
+
+        if(fallback_mode == SocuNativeContactWriteMode::DiagFallback)
+            writer.template write_diag_fallback_stencil<StencilSize>(
+                targets,
+                base,
+                H);
+        else if(fallback_mode == SocuNativeContactWriteMode::DiagLumpFallback)
+            writer.template write_lump_fallback_stencil<StencilSize>(
+                targets,
+                base,
+                H);
+        return;
+    }
 
 #pragma unroll
     for(IndexT target_offset = 0; target_offset < HalfBlockCount; ++target_offset)

@@ -193,6 +193,7 @@ void VertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
             this_info.friction_PHs(),
             descriptors,
             matrix.old_to_chain,
+            this_info.m_structured_sink.abd_vertex_to_J,
             matrix.horizon,
             matrix.block_size,
             this_info.m_structured_sink.offband_policy);

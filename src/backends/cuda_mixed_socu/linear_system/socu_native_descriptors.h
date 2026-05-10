@@ -120,13 +120,13 @@ struct SocuNativeHalfBlockClassification
 
     // "In band" means no scalar would be dropped as off-band. Fixed or
     // otherwise skipped scalars can still be present.
-    bool fully_in_band() const noexcept
+    MUDA_GENERIC bool fully_in_band() const noexcept
     {
         return offband_scalar_count == 0;
     }
 
     // Use this when the caller needs every scalar to be writable.
-    bool fully_writable_in_band() const noexcept
+    MUDA_GENERIC bool fully_writable_in_band() const noexcept
     {
         return fully_in_band() && skipped_scalar_count == 0
                && cls != SocuNativeBandClass::Skipped;
@@ -142,13 +142,13 @@ struct SocuNativeStencilClassification
 
     // "In band" means no half-block would be dropped as off-band. Fixed or
     // otherwise skipped half-blocks can still be present.
-    bool fully_in_band() const noexcept
+    MUDA_GENERIC bool fully_in_band() const noexcept
     {
         return offband_half_block_count == 0;
     }
 
     // Use this when the caller needs every half-block to be writable.
-    bool fully_writable_in_band() const noexcept
+    MUDA_GENERIC bool fully_writable_in_band() const noexcept
     {
         return fully_in_band() && skipped_half_block_count == 0;
     }

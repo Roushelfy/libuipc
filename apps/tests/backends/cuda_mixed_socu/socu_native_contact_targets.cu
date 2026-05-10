@@ -196,6 +196,27 @@ __global__ void write_native_contact_direct_lane_fixture(
     status.data()[1] =
         native_writer.write_half_block(offdiag_target, H_offdiag) ? 1 : 0;
 }
+
+template <typename StoreT, typename SolveT>
+__global__ void write_native_contact_lump_fallback_fixture(
+    SocuNativeContactExactWriter<StoreT, SolveT>  native_writer,
+    muda::CBufferView<SocuNativeContactStencilTarget> targets)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    Eigen::Matrix<StoreT, 6, 6> H;
+    for(IndexT row = 0; row < 6; ++row)
+    {
+        for(IndexT col = 0; col < 6; ++col)
+        {
+            H(row, col) =
+                static_cast<StoreT>((row + 1) * 0.25 - (col + 1) * 0.125);
+        }
+    }
+
+    native_writer.template write_lump_fallback_stencil<2>(targets, 0, H);
+}
 }  // namespace
 
 TEST_CASE("cuda_mixed_socu_native_contact_target_arbitrary_lane_exact",
@@ -248,12 +269,17 @@ TEST_CASE("cuda_mixed_socu_native_contact_target_arbitrary_lane_exact",
     CHECK(target.row_lane == 5);
     CHECK(target.col_lane == 5);
     CHECK(target.direct_lanes_valid);
-    CHECK(target.row_direct_lanes[0] == 5);
-    CHECK(target.row_direct_lanes[1] == 2);
-    CHECK(target.row_direct_lanes[2] == 9);
-    CHECK(target.col_direct_lanes[0] == 5);
-    CHECK(target.col_direct_lanes[1] == 2);
-    CHECK(target.col_direct_lanes[2] == 9);
+    CHECK(target.row_direct.lane(0) == 5);
+    CHECK(target.row_direct.lane(1) == 2);
+    CHECK(target.row_direct.lane(2) == 9);
+    CHECK(target.col_direct.lane(0) == 5);
+    CHECK(target.col_direct.lane(1) == 2);
+    CHECK(target.col_direct.lane(2) == 9);
+    CHECK(target.direct_projection_valid);
+    CHECK(target.row_direct.component(0) == 0);
+    CHECK(target.row_direct.component(1) == 1);
+    CHECK(target.row_direct.component(2) == 2);
+    CHECK(target.row_direct.weight(0) == Catch::Approx(1.0));
     CHECK(target.row_old_dof == 0);
     CHECK(target.row_dof_count == 3);
 }
@@ -301,12 +327,13 @@ TEST_CASE("cuda_mixed_socu_native_contact_target_adjacent_orientation",
     CHECK(forward.col_lane == 5);
     CHECK(forward.transposed_first_offdiag);
     CHECK(forward.direct_lanes_valid);
-    CHECK(forward.row_direct_lanes[0] == 5);
-    CHECK(forward.row_direct_lanes[1] == 2);
-    CHECK(forward.row_direct_lanes[2] == 9);
-    CHECK(forward.col_direct_lanes[0] == 2);
-    CHECK(forward.col_direct_lanes[1] == 1);
-    CHECK(forward.col_direct_lanes[2] == 3);
+    CHECK(forward.row_direct.lane(0) == 5);
+    CHECK(forward.row_direct.lane(1) == 2);
+    CHECK(forward.row_direct.lane(2) == 9);
+    CHECK(forward.col_direct.lane(0) == 2);
+    CHECK(forward.col_direct.lane(1) == 1);
+    CHECK(forward.col_direct.lane(2) == 3);
+    CHECK(forward.direct_projection_valid);
 }
 
 TEST_CASE("cuda_mixed_socu_native_contact_direct_lane_writer_uses_targets",
@@ -345,6 +372,8 @@ TEST_CASE("cuda_mixed_socu_native_contact_direct_lane_writer_uses_targets",
 
     REQUIRE(diag_target.direct_lanes_valid);
     REQUIRE(offdiag_target.direct_lanes_valid);
+    REQUIRE(diag_target.direct_projection_valid);
+    REQUIRE(offdiag_target.direct_projection_valid);
     REQUIRE(offdiag_target.transposed_first_offdiag);
 
     StreamGuard stream;
@@ -433,6 +462,169 @@ TEST_CASE("cuda_mixed_socu_native_contact_direct_lane_writer_uses_targets",
                   == Catch::Approx(offdiag_expected).margin(1e-12));
         }
     }
+}
+
+TEST_CASE("cuda_mixed_socu_native_contact_lump_fallback_writer_uses_targets",
+          "[cuda_mixed_socu][contract][socu_native_contact][m8][v2]")
+{
+    if(!has_cuda_device())
+        SKIP("CUDA device is required");
+
+    using Store = double;
+    using Solve = double;
+
+    ContactTargetFixture fixture;
+    const auto fem0 = fixture.vertex(SocuNativeDescriptorKind::Fem, 0, 3);
+    const auto fem2 = fixture.vertex(SocuNativeDescriptorKind::Fem, 6, 3);
+
+    const std::vector<SocuNativeVertexDescriptor> stencil{fem0, fem2};
+    const auto stencil_class = socu_native_contact_classify_stencil_half(
+        uipc::span<const SocuNativeVertexDescriptor>{stencil.data(), stencil.size()},
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize);
+    const auto policy = socu_native_contact_make_stencil_policy(
+        stencil_class,
+        StructuredContactOffbandPolicy::DiagLump);
+    REQUIRE(policy.write_mode == SocuNativeContactWriteMode::DiagLumpFallback);
+
+    std::vector<SocuNativeContactStencilTarget> targets;
+    targets.push_back(socu_native_contact_make_half_block_target(
+        0,
+        0,
+        0,
+        fem0,
+        fem0,
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::DiagLump,
+        policy.write_mode));
+    targets.push_back(socu_native_contact_make_half_block_target(
+        0,
+        0,
+        1,
+        fem0,
+        fem2,
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::DiagLump,
+        policy.write_mode));
+    targets.push_back(socu_native_contact_make_half_block_target(
+        0,
+        1,
+        1,
+        fem2,
+        fem2,
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::DiagLump,
+        policy.write_mode));
+
+    REQUIRE(targets.size() == 3);
+    REQUIRE(targets[0].direct_projection_valid);
+    REQUIRE(!targets[1].direct_projection_valid);
+    REQUIRE(targets[2].direct_projection_valid);
+    CHECK(targets[0].row_direct.block(0) == 0);
+    CHECK(targets[2].row_direct.block(0) == 3);
+
+    StreamGuard stream;
+    const auto layout = make_socu_native_storage_layout(
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        1);
+
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> target_device{targets};
+    muda::DeviceBuffer<Solve> diag;
+    muda::DeviceBuffer<Solve> offdiag;
+    muda::DeviceBuffer<IndexT> counters;
+    diag.resize(layout.diag_element_count);
+    offdiag.resize(layout.offdiag_element_count);
+    counters.resize(kStructuredAssemblyCounterCount);
+
+    REQUIRE(cudaMemsetAsync(diag.data(),
+                            0,
+                            diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(offdiag.data(),
+                            0,
+                            offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(counters.data(),
+                            0,
+                            counters.size() * sizeof(IndexT),
+                            stream.stream)
+            == cudaSuccess);
+
+    StructuredDeviceMatrixSink<Store, Solve> matrix;
+    matrix.use_native_matrix = true;
+    matrix.native_matrix =
+        make_contact_test_native_view(diag.view(),
+                                      offdiag.view(),
+                                      ContactTargetFixture::Horizon,
+                                      ContactTargetFixture::BlockSize,
+                                      1);
+    SocuNativeContactExactWriter<Store, Solve> writer{
+        matrix,
+        {},
+        counters.view()};
+
+    write_native_contact_lump_fallback_fixture<Store, Solve>
+        <<<1, 1, 0, stream.stream>>>(writer, target_device.view().as_const());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<Solve> diag_host;
+    std::vector<IndexT> counter_host;
+    diag.copy_to(diag_host);
+    counters.copy_to(counter_host);
+
+    const auto diag_index = [&](SizeT block, SizeT lane)
+    {
+        return (block * ContactTargetFixture::BlockSize + lane)
+                   * ContactTargetFixture::BlockSize
+               + lane;
+    };
+    const auto H_value = [](IndexT row, IndexT col)
+    {
+        return static_cast<Solve>((row + 1) * 0.25 - (col + 1) * 0.125);
+    };
+    const auto lump = [&](IndexT local_vertex, IndexT component)
+    {
+        Solve out = 0;
+        for(IndexT j = 0; j < 2; ++j)
+        {
+            for(IndexT c = 0; c < 3; ++c)
+            {
+                const Solve value = H_value(local_vertex * 3 + component,
+                                            j * 3 + c);
+                out += std::abs(value);
+            }
+        }
+        return out;
+    };
+
+    const SizeT fem0_lanes[3] = {5, 2, 9};
+    const SizeT fem2_lanes[3] = {2, 1, 3};
+    for(IndexT component = 0; component < 3; ++component)
+    {
+        CHECK(diag_host[diag_index(0, fem0_lanes[component])]
+              == Catch::Approx(lump(0, component)).margin(1e-12));
+        CHECK(diag_host[diag_index(3, fem2_lanes[component])]
+              == Catch::Approx(lump(1, component)).margin(1e-12));
+    }
+
+    REQUIRE(counter_host.size() == kStructuredAssemblyCounterCount);
+    CHECK(counter_host[static_cast<SizeT>(
+              StructuredAssemblyCounterSlot::ContactOffBandLumpFallbackStencil)]
+          == 1);
+    CHECK(counter_host[static_cast<SizeT>(
+              StructuredAssemblyCounterSlot::ContactDiagScalarWrite)]
+          == 6);
 }
 
 TEST_CASE("cuda_mixed_socu_native_contact_target_stencil_policy",
@@ -559,8 +751,12 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
 
     std::vector<Vector4i> pts{Vector4i{0, 1, 2, 10}};
     std::vector<Vector2i> pps{Vector2i{0, 1}};
+    std::vector<ABDJacobi> Js{ABDJacobi{},
+                              ABDJacobi{},
+                              ABDJacobi{Vector3{0.25, -0.5, 0.75}}};
 
     muda::DeviceBuffer<IndexT> old_to_chain{fixture.old_to_chain};
+    muda::DeviceBuffer<ABDJacobi> abd_J_device{Js};
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertex_device{vertices};
     muda::DeviceBuffer<Vector4i> pt_device{pts};
     muda::DeviceBuffer<Vector4i> ee_device;
@@ -586,6 +782,7 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
         pp_device.view().as_const(),
         vertex_device.view().as_const(),
         old_to_chain.view().as_const(),
+        abd_J_device.view().as_const(),
         ContactTargetFixture::Horizon,
         ContactTargetFixture::BlockSize,
         StructuredContactOffbandPolicy::DiagLump);
@@ -645,6 +842,7 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
         ph_device.view().as_const(),
         vertex_device.view().as_const(),
         old_to_chain.view().as_const(),
+        abd_J_device.view().as_const(),
         ContactTargetFixture::Horizon,
         ContactTargetFixture::BlockSize,
         StructuredContactOffbandPolicy::DiagLump);
@@ -676,6 +874,9 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_target_table_device_rebuild",
     CHECK(ph_host[1].block_or_left_block == 2);
     CHECK(ph_host[1].row_lane == 11);
     CHECK(ph_host[1].col_lane == 11);
+    CHECK(ph_host[1].direct_projection_valid);
+    CHECK(ph_host[1].row_direct.component(3) == 0);
+    CHECK(ph_host[1].row_direct.weight(3) == Catch::Approx(0.25));
 }
 
 TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
@@ -745,6 +946,7 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
     StreamGuard stream;
     muda::DeviceBuffer<IndexT> old_to_chain_device{old_to_chain};
     muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    muda::DeviceBuffer<ABDJacobi> abd_J_device{Js};
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertex_device{vertices};
     muda::DeviceBuffer<Vector4i> pt_device{pts};
     muda::DeviceBuffer<Vector4i> empty_ee;
@@ -768,6 +970,7 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
         empty_pp.view().as_const(),
         vertex_device.view().as_const(),
         old_to_chain_device.view().as_const(),
+        abd_J_device.view().as_const(),
         Horizon,
         BlockSize,
         StructuredContactOffbandPolicy::Drop);
@@ -801,7 +1004,6 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
     muda::DeviceBuffer<Solve> legacy_offdiag;
     muda::DeviceBuffer<IndexT> counters;
     muda::DeviceBuffer<IndexT> status;
-    muda::DeviceBuffer<ABDJacobi> abd_J_device{Js};
 
     const SizeT first_offdiag_elements =
         layout.first_offdiag_block_count * BlockSize * BlockSize;
