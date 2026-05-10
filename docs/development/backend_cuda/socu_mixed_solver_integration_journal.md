@@ -2160,3 +2160,55 @@ Current V2 boundary:
   target schema so contact kernels do not pay unnecessary target-table
   bandwidth, and then rerun diff-off 100-frame structured-vs-native performance
   gates.
+
+M8 V2 compact target / precomputed ABD-weight slice:
+
+- Replaced the fixed row/column lane arrays in
+  `SocuNativeContactStencilTarget` with split compact side records. Each side
+  now stores only the needed per-local-DoF direct write data:
+  target block, native lane, physical component, and projection weight.
+- Target rebuild now precomputes ABD projection weights from the ABD Jacobi
+  map. The production writer no longer loads native DoF descriptors or ABD
+  Jacobians for the primary direct write path; it consumes the target side
+  table and only evaluates `weight_row * H(component_row, component_col) *
+  weight_col` before adding into native `D/E`.
+- The direct writer now supports same-block `D` writes and adjacent-block
+  first-offdiag `E` writes at per-DoF side granularity. This is stricter than
+  the earlier uniform-half-block V2 slice and covers mixed same-block /
+  adjacent-block side layouts without falling back to descriptor-assisted
+  classification.
+- Whole-stencil native `diag_lump` fallback is implemented and validated. When
+  a contact stencil is marked `DiagLumpFallback`, the writer forms the current
+  policy's row-wise absolute lump in physical coordinates and writes the
+  resulting diagonal/lumped values through the same direct side targets.
+- `DiagFallback` is currently limited to scalar diagonal native writes. A full
+  exact per-vertex diagonal-block fallback was prototyped, but compiling the
+  native contact TUs pushed `cicc` to roughly 55 GiB RSS. Keeping this path
+  narrow preserves buildability; the active topology acceptance uses
+  `diag_lump`, so this does not block the current gate.
+
+V2 compact target validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; rebuilt the descriptor/header users, native contact TUs, device link, shared library, and test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][v2]" -s` | passed, `54` assertions in `2` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]"` | passed, `3315` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `8215` assertions in `31` test cases |
+| native-only diff-off topology gate with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_REPORT_COUNTERS=0`, `socu_rt50_topology_diag_lump --frames 100 --backend cuda_mixed_socu` | passed; completed `final_frame=100`, `wall_time_s=20.40436254697852`, `mean_frame_ms=181.1963871656917` |
+
+Structured-vs-native performance gate boundary:
+
+- The native diff-off 100-frame side of the gate passed.
+- The structured baseline side did not complete in this workspace because the
+  current `build/build_impl_fp64` artifact is configured with
+  `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON`; attempting a separate fallback build
+  with native-only disabled pulled in the legacy monolithic
+  `ipc_simplex_frictional_contact_structured.cu` TU. That TU drove `cicc` to
+  roughly 53-54 GiB RSS and about 67 GiB swap usage, so the build was
+  interrupted to keep the machine usable.
+- Therefore this slice proves native correctness and the native 100-frame
+  runtime gate, but it does not yet produce a rigorous structured-vs-native
+  performance ratio. That comparison needs either a prebuilt fallback artifact
+  or a larger-memory fallback build environment.

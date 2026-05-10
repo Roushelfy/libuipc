@@ -1656,19 +1656,23 @@ Direct native contact writer plan:
    - No `old_to_chain`, no `classify_dof_pair`, and no descriptor lookup should
      appear in the production writer after V2. Descriptor and ordering work
      belongs to target-table rebuild kernels.
-   - Current V2 first slice: exact target records now carry precomputed
-     row/column native lane arrays for up to `12` DoFs per half-block side.
-     The primary writer consumes these arrays directly for exact `D/E` writes
-     when `direct_lanes_valid=true`, so the production FEM/FEM exact path no
-     longer needs native DoF descriptors, `old_to_chain`, or pair
-     classification inside the writer.
-   - Current V2 boundary: ABD projection weights are still expanded in the
-     writer from ABD Jacobian data, and targets whose half-block scalars do not
-     share a uniform `D`/first-offdiag destination fall back to the V1
-     descriptor-assisted exact writer. The next V2 slice should precompute
-     projection weights and compress the lane schema before treating V2 as a
-     performance win; the current array-based record is intentionally simple
-     and correctness-oriented, but it increases target-table bandwidth.
+   - Current V2 status: exact target records now carry compact split side
+     tables rather than simple full row/column lane arrays. Each side stores
+     the direct target block, native lane, physical component, and projection
+     weight for the local DoFs that actually participate in the half-block.
+   - ABD projection weights are precomputed during target rebuild from the ABD
+     Jacobi map. The production writer consumes side-table component/weight
+     data and performs only projected `3x3` block additions into native `D/E`;
+     it no longer loads ABD Jacobians, native DoF descriptors, `old_to_chain`,
+     or calls pair classification for the primary direct write path.
+   - Direct target eligibility is per side and per DoF, not a single uniform
+     half-block destination. Same-block values route to `D`, adjacent-block
+     values route to first-offdiag `E`, and invalid/off-band scalar pairs
+     force an explicit stencil policy such as `DiagLumpFallback`.
+   - Current V2 boundary: exact and `diag_lump` topology gates are covered, but
+     `DiagFallback` is only scalar-diagonal native fallback. A full exact
+     diagonal-block fallback was rejected for now because it pushed native
+     contact TU compilation beyond practical memory limits.
 
 3. **Fallback separation.**
    - Legacy structured fallback remains an outer dispatch path while M8 is
@@ -1791,13 +1795,13 @@ Detailed M8 execution plan:
      `socu_rt50_topology_diag_lump` native-only gate completed with
      `native_contact_hessian_enabled=true`, contact mirror diff enabled, and
      `native_contact_hessian_diff_mismatch_count=0`.
-   - The V2 direct-lane first slice is implemented for exact half-block
-     targets. Synthetic arbitrary-lane FEM/FEM tests now construct a writer
-     without native DoF descriptors and verify direct `D` plus transposed
-     first-offdiag `E` writes from the target table alone. The runtime
-     topology gate still passes with native contact mirror diff enabled, but
-     this slice is not a performance acceptance gate yet because ABD weights
-     and target record compression remain open.
+   - The V2 compact target slice is implemented for exact half-block targets
+     and native `diag_lump` fallback. Synthetic V2 tests now construct a writer
+     without native DoF descriptors, verify direct `D` plus transposed
+     first-offdiag `E` writes from the target table alone, and verify
+     whole-stencil `diag_lump` fallback through direct target-side data.
+     The native-only diff-off 100-frame topology gate passes with
+     `final_frame=100` and `mean_frame_ms=181.1963871656917`.
 
 3. **Off-band fallback path.**
    - Implement native `diag` and `diag_lump` fallback for off-band contact
@@ -1852,12 +1856,15 @@ Detailed M8 execution plan:
      tests validate the new code but the default fallback artifact is stale.
    - Current status: the 20-frame native-only topology gate passes after the
      exact-only direct-writer cleanup with contact mirror diff enabled and zero
-     native-contact diff mismatches. The direct-lane V2 first slice also passes
-     focused native-contact contract tests and the same 20-frame topology gate.
-     The 100-frame gate, native off-band fallback policy tests, PP
-     compile-resource validation in the fallback artifact, target-schema
-     compression/precomputed ABD weights, and performance comparison remain
-     open before closing M8.
+     native-contact diff mismatches. The compact/precomputed-weight V2 slice
+     passes focused native-contact contract tests, the full SOCU contract
+     suite, and the native-only diff-off 100-frame topology gate. The rigorous
+     structured-vs-native performance ratio remains open because the fallback
+     artifact currently requires compiling the legacy monolithic structured
+     frictional contact TU, which exceeded the available memory/swap budget in
+     this workspace. PP compile-resource validation in the fallback artifact
+     and any future full `DiagFallback` block policy remain open before closing
+     M8 completely.
 
 Deliverables:
 
