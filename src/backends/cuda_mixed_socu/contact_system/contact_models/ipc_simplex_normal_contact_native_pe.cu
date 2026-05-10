@@ -84,7 +84,7 @@ void assemble_ipc_simplex_normal_contact_native_exact_PE(
                    make_spd(H);
                    const auto H_store = downcast_hessian<Store>(H);
                    ipc_simplex_normal_native_detail::
-                       write_exact_targets_or_legacy<3>(
+                       write_exact_targets<3>(
                            structured_sink,
                            targets,
                            i,

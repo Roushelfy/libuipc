@@ -109,8 +109,14 @@ class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContac
 
         if(info.structured_hessian())
         {
+            if(info.PHs().size() == 0)
+            {
+                return;
+            }
+
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
+                && info.structured_hessian_sink().sink.matrix.native_enabled()
                 && ph_native_contact_targets_ready(info);
             if(native_ready)
             {

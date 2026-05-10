@@ -124,8 +124,14 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
 
         if(info.structured_hessian())
         {
+            if(info.friction_PHs().size() == 0)
+            {
+                return;
+            }
+
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
+                && info.structured_hessian_sink().sink.matrix.native_enabled()
                 && ph_friction_native_contact_targets_ready(info);
             if(native_ready)
             {

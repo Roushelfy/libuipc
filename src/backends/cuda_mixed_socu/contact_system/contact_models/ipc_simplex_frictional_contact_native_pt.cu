@@ -91,7 +91,7 @@ void assemble_ipc_simplex_frictional_contact_native_exact_PT(
                    cuda_mixed::make_spd(H);
 
                    ipc_simplex_normal_native_detail::
-                       write_exact_targets_or_legacy<4>(
+                       write_exact_targets<4>(
                            structured_sink,
                            targets,
                            i,

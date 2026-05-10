@@ -139,7 +139,6 @@ SocuNativeMatrixView<Solve> make_contact_test_native_view(
 
 template <typename StoreT, typename SolveT>
 __global__ void write_native_contact_exact_diff_fixture(
-    SocuNativeContactExactWriter<StoreT, SolveT>  legacy_writer,
     SocuNativeContactExactWriter<StoreT, SolveT>  native_writer,
     muda::CBufferView<SocuNativeContactStencilTarget> pt_targets,
     muda::BufferView<IndexT> status)
@@ -158,19 +157,16 @@ __global__ void write_native_contact_exact_diff_fixture(
     }
 
     IndexT native_consumed = 0;
-    IndexT legacy_consumed = 0;
     for(IndexT target_index = 0; target_index < 10; ++target_index)
     {
         const auto target = pt_targets.data()[static_cast<SizeT>(target_index)];
         const auto H3 = H.template block<3, 3>(target.local_row_vertex * 3,
                                                target.local_col_vertex * 3);
-        if(legacy_writer.write_half_block(target, H3))
-            ++legacy_consumed;
         if(native_writer.write_half_block(target, H3))
             ++native_consumed;
     }
     status.data()[0] = native_consumed;
-    status.data()[1] = legacy_consumed;
+    status.data()[1] = 0;
 }
 }  // namespace
 
@@ -713,24 +709,11 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
     native_sink.matrix.compare_first_offdiag = compare_offdiag.view();
 
     SocuNativeContactExactWriter<Store, Solve> native_writer{
-        native_sink,
-        abd_J_device.view().as_const()};
-
-    StructuredDeviceAssemblySink<Store, Solve> legacy_sink{
-        legacy_diag.view(),
-        legacy_offdiag.view(),
-        old_to_chain_device.view(),
-        Horizon,
-        BlockSize,
-        {},
-        {}};
-    SocuNativeContactExactWriter<Store, Solve> legacy_writer{
-        legacy_sink,
+        native_sink.matrix,
         abd_J_device.view().as_const()};
 
     write_native_contact_exact_diff_fixture<Store, Solve>
-        <<<1, 1, 0, stream.stream>>>(legacy_writer,
-                                     native_writer,
+        <<<1, 1, 0, stream.stream>>>(native_writer,
                                      pt_targets.view().as_const(),
                                      status.view());
     REQUIRE(cudaGetLastError() == cudaSuccess);
@@ -741,43 +724,33 @@ TEST_CASE("cuda_mixed_socu_native_simplex_contact_exact_writer_matrix_diff",
     std::vector<Solve> native_offdiag_host;
     std::vector<Solve> compare_diag_host;
     std::vector<Solve> compare_offdiag_host;
-    std::vector<Solve> legacy_diag_host;
-    std::vector<Solve> legacy_offdiag_host;
     status.copy_to(status_host);
     native_diag.copy_to(native_diag_host);
     native_offdiag.copy_to(native_offdiag_host);
     compare_diag.copy_to(compare_diag_host);
     compare_offdiag.copy_to(compare_offdiag_host);
-    legacy_diag.copy_to(legacy_diag_host);
-    legacy_offdiag.copy_to(legacy_offdiag_host);
 
     REQUIRE(status_host.size() == 2);
     CHECK(status_host[0] == 10);
-    CHECK(status_host[1] == 10);
+    CHECK(status_host[1] == 0);
 
-    REQUIRE(native_diag_host.size() == legacy_diag_host.size());
-    REQUIRE(compare_diag_host.size() == legacy_diag_host.size());
-    for(std::size_t i = 0; i < legacy_diag_host.size(); ++i)
+    REQUIRE(native_diag_host.size() == compare_diag_host.size());
+    for(std::size_t i = 0; i < compare_diag_host.size(); ++i)
     {
         CAPTURE(i);
         CHECK(native_diag_host[i]
-              == Catch::Approx(legacy_diag_host[i]).margin(1e-9));
-        CHECK(compare_diag_host[i]
-              == Catch::Approx(legacy_diag_host[i]).margin(1e-9));
+              == Catch::Approx(compare_diag_host[i]).margin(1e-9));
     }
 
-    REQUIRE(native_offdiag_host.size() >= legacy_offdiag_host.size());
-    REQUIRE(compare_offdiag_host.size() == legacy_offdiag_host.size());
-    for(std::size_t i = 0; i < legacy_offdiag_host.size(); ++i)
+    REQUIRE(native_offdiag_host.size() >= compare_offdiag_host.size());
+    for(std::size_t i = 0; i < compare_offdiag_host.size(); ++i)
     {
         CAPTURE(i);
         CHECK(native_offdiag_host[i]
-              == Catch::Approx(legacy_offdiag_host[i]).margin(1e-9));
-        CHECK(compare_offdiag_host[i]
-              == Catch::Approx(legacy_offdiag_host[i]).margin(1e-9));
+              == Catch::Approx(compare_offdiag_host[i]).margin(1e-9));
     }
 
-    for(std::size_t i = legacy_offdiag_host.size();
+    for(std::size_t i = compare_offdiag_host.size();
         i < native_offdiag_host.size();
         ++i)
     {

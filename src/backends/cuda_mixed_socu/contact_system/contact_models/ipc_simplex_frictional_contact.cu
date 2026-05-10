@@ -370,8 +370,18 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
 
         if(info.structured_hessian())
         {
+            const bool has_contacts = info.friction_PTs().size() != 0
+                                      || info.friction_EEs().size() != 0
+                                      || info.friction_PEs().size() != 0
+                                      || info.friction_PPs().size() != 0;
+            if(!has_contacts)
+            {
+                return;
+            }
+
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
+                && info.structured_hessian_sink().sink.matrix.native_enabled()
                 && simplex_friction_native_contact_targets_ready(info);
             if(native_ready)
             {

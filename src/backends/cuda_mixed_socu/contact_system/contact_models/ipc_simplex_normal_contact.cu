@@ -355,8 +355,18 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
 
         if(info.structured_hessian())
         {
+            const bool has_contacts = info.PTs().size() != 0
+                                      || info.EEs().size() != 0
+                                      || info.PEs().size() != 0
+                                      || info.PPs().size() != 0;
+            if(!has_contacts)
+            {
+                return;
+            }
+
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
+                && info.structured_hessian_sink().sink.matrix.native_enabled()
                 && simplex_native_contact_targets_ready(info);
             if(native_ready)
             {

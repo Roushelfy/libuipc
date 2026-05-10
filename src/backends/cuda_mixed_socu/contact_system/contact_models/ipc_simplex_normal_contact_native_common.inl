@@ -30,7 +30,7 @@ MUDA_DEVICE bool contact_targets_are_exact_or_skipped(
 }
 
 template <int StencilSize, typename Stencil, typename HMat>
-MUDA_DEVICE void write_exact_targets_or_legacy(
+MUDA_DEVICE void write_exact_targets(
     StructuredContactAssemblySink<ActivePolicy::StoreScalar,
                                   ActivePolicy::SolveScalar> structured_sink,
     muda::CBufferView<SocuNativeContactStencilTarget> targets,
@@ -45,12 +45,11 @@ MUDA_DEVICE void write_exact_targets_or_legacy(
 
     if(!contact_targets_are_exact_or_skipped<StencilSize>(targets, base))
     {
-        structured_sink.template write_hessian_half<StencilSize>(indices, H);
         return;
     }
 
     SocuNativeContactExactWriter<Store, Solve> writer{
-        structured_sink.sink,
+        structured_sink.sink.matrix,
         structured_sink.abd_vertex_to_J,
         structured_sink.counters};
 

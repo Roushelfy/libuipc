@@ -10,13 +10,13 @@ namespace uipc::backend::cuda_mixed
 template <typename StoreT, typename SolveT>
 struct SocuNativeContactExactWriter
 {
-    StructuredDeviceAssemblySink<StoreT, SolveT> sink;
+    StructuredDeviceMatrixSink<StoreT, SolveT>   matrix;
     muda::CBufferView<ABDJacobi>                 abd_vertex_to_J;
     muda::BufferView<IndexT>                     counters;
 
     MUDA_GENERIC bool valid() const noexcept
     {
-        return sink.valid();
+        return matrix.native_enabled();
     }
 
     static MUDA_DEVICE IndexT abd_component(IndexT dof) noexcept
@@ -72,14 +72,26 @@ struct SocuNativeContactExactWriter
                                                     StoreT value,
                                                     bool   mirror_diag_block) const noexcept
     {
-        const auto cls = sink.add_hessian_scalar_status(old_row, old_col, value);
+        if(!valid())
+            return StructuredSinkWriteClass::Skipped;
+
+        const auto cls = matrix.add_hessian_scalar_status_native(
+            matrix.native_matrix,
+            old_row,
+            old_col,
+            value);
         record_counter(cls);
+        matrix.add_hessian_scalar_compare(old_row, old_col, value);
         if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
            && old_row != old_col)
         {
-            const auto mirror_cls =
-                sink.add_hessian_scalar_status(old_col, old_row, value);
+            const auto mirror_cls = matrix.add_hessian_scalar_status_native(
+                matrix.native_matrix,
+                old_col,
+                old_row,
+                value);
             record_counter(mirror_cls);
+            matrix.add_hessian_scalar_compare(old_col, old_row, value);
         }
         return cls;
     }

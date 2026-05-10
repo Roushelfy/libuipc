@@ -75,7 +75,7 @@ void assemble_ipc_vertex_half_plane_normal_contact_native_exact(
                    Eigen::Matrix<IndexT, 1, 1> indices;
                    indices(0) = vI;
                    ipc_simplex_normal_native_detail::
-                       write_exact_targets_or_legacy<1>(
+                       write_exact_targets<1>(
                            structured_sink,
                            targets,
                            I,
