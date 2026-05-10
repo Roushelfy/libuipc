@@ -179,27 +179,30 @@ void VertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
         return;
     }
 
-    const auto descriptors = info.vertex_descriptors();
-    const auto matrix      = this_info.m_structured_sink.sink.matrix;
-    if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
-       && matrix.horizon != 0 && matrix.block_size != 0)
+    const auto matrix = this_info.m_structured_sink.sink.matrix;
+    if(matrix.native_enabled())
     {
-        m_impl.loose_resize(m_impl.PH_native_contact_targets,
-                            this_info.friction_PHs().size() * PHHalfHessianSize);
+        const auto descriptors = info.vertex_descriptors();
+        if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
+           && matrix.horizon != 0 && matrix.block_size != 0)
+        {
+            m_impl.loose_resize(m_impl.PH_native_contact_targets,
+                                this_info.friction_PHs().size() * PHHalfHessianSize);
 
-        rebuild_socu_native_vertex_half_plane_contact_targets(
-            info.stream(),
-            m_impl.PH_native_contact_targets.view(),
-            this_info.friction_PHs(),
-            descriptors,
-            matrix.old_to_chain,
-            this_info.m_structured_sink.abd_vertex_to_J,
-            matrix.horizon,
-            matrix.block_size,
-            this_info.m_structured_sink.offband_policy);
+            rebuild_socu_native_vertex_half_plane_contact_targets(
+                info.stream(),
+                m_impl.PH_native_contact_targets.view(),
+                this_info.friction_PHs(),
+                descriptors,
+                matrix.old_to_chain,
+                this_info.m_structured_sink.abd_vertex_to_J,
+                matrix.horizon,
+                matrix.block_size,
+                this_info.m_structured_sink.offband_policy);
 
-        this_info.m_PH_native_contact_targets =
-            m_impl.PH_native_contact_targets.view().as_const();
+            this_info.m_PH_native_contact_targets =
+                m_impl.PH_native_contact_targets.view().as_const();
+        }
     }
 
     m_impl.hessians = {};

@@ -343,45 +343,48 @@ void SimplexFrictionalContact::do_assemble_structured_hessian(
         return;
     }
 
-    const auto descriptors = info.vertex_descriptors();
-    const auto matrix      = this_info.m_structured_sink.sink.matrix;
-    if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
-       && matrix.horizon != 0 && matrix.block_size != 0)
+    const auto matrix = this_info.m_structured_sink.sink.matrix;
+    if(matrix.native_enabled())
     {
-        m_impl.loose_resize(m_impl.PT_native_contact_targets,
-                            this_info.friction_PTs().size() * PTHalfHessianSize);
-        m_impl.loose_resize(m_impl.EE_native_contact_targets,
-                            this_info.friction_EEs().size() * EEHalfHessianSize);
-        m_impl.loose_resize(m_impl.PE_native_contact_targets,
-                            this_info.friction_PEs().size() * PEHalfHessianSize);
-        m_impl.loose_resize(m_impl.PP_native_contact_targets,
-                            this_info.friction_PPs().size() * PPHalfHessianSize);
+        const auto descriptors = info.vertex_descriptors();
+        if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
+           && matrix.horizon != 0 && matrix.block_size != 0)
+        {
+            m_impl.loose_resize(m_impl.PT_native_contact_targets,
+                                this_info.friction_PTs().size() * PTHalfHessianSize);
+            m_impl.loose_resize(m_impl.EE_native_contact_targets,
+                                this_info.friction_EEs().size() * EEHalfHessianSize);
+            m_impl.loose_resize(m_impl.PE_native_contact_targets,
+                                this_info.friction_PEs().size() * PEHalfHessianSize);
+            m_impl.loose_resize(m_impl.PP_native_contact_targets,
+                                this_info.friction_PPs().size() * PPHalfHessianSize);
 
-        rebuild_socu_native_simplex_contact_targets(
-            info.stream(),
-            m_impl.PT_native_contact_targets.view(),
-            m_impl.EE_native_contact_targets.view(),
-            m_impl.PE_native_contact_targets.view(),
-            m_impl.PP_native_contact_targets.view(),
-            this_info.friction_PTs(),
-            this_info.friction_EEs(),
-            this_info.friction_PEs(),
-            this_info.friction_PPs(),
-            descriptors,
-            matrix.old_to_chain,
-            this_info.m_structured_sink.abd_vertex_to_J,
-            matrix.horizon,
-            matrix.block_size,
-            this_info.m_structured_sink.offband_policy);
+            rebuild_socu_native_simplex_contact_targets(
+                info.stream(),
+                m_impl.PT_native_contact_targets.view(),
+                m_impl.EE_native_contact_targets.view(),
+                m_impl.PE_native_contact_targets.view(),
+                m_impl.PP_native_contact_targets.view(),
+                this_info.friction_PTs(),
+                this_info.friction_EEs(),
+                this_info.friction_PEs(),
+                this_info.friction_PPs(),
+                descriptors,
+                matrix.old_to_chain,
+                this_info.m_structured_sink.abd_vertex_to_J,
+                matrix.horizon,
+                matrix.block_size,
+                this_info.m_structured_sink.offband_policy);
 
-        this_info.m_PT_native_contact_targets =
-            m_impl.PT_native_contact_targets.view().as_const();
-        this_info.m_EE_native_contact_targets =
-            m_impl.EE_native_contact_targets.view().as_const();
-        this_info.m_PE_native_contact_targets =
-            m_impl.PE_native_contact_targets.view().as_const();
-        this_info.m_PP_native_contact_targets =
-            m_impl.PP_native_contact_targets.view().as_const();
+            this_info.m_PT_native_contact_targets =
+                m_impl.PT_native_contact_targets.view().as_const();
+            this_info.m_EE_native_contact_targets =
+                m_impl.EE_native_contact_targets.view().as_const();
+            this_info.m_PE_native_contact_targets =
+                m_impl.PE_native_contact_targets.view().as_const();
+            this_info.m_PP_native_contact_targets =
+                m_impl.PP_native_contact_targets.view().as_const();
+        }
     }
 
     m_impl.PT_hessians = {};

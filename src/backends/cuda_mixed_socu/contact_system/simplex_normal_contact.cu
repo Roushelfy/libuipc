@@ -212,7 +212,8 @@ void SimplexNormalContact::do_assemble_structured_hessian(
         return;
     }
 
-    if(!this_info.m_structured_sink.approximate_weight_probe_only())
+    if(!this_info.m_structured_sink.approximate_weight_probe_only()
+       && this_info.m_structured_sink.sink.matrix.native_enabled())
     {
         const auto descriptors = info.vertex_descriptors();
         const auto matrix      = this_info.m_structured_sink.sink.matrix;
