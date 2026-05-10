@@ -2122,3 +2122,41 @@ Two cleanup fixes were needed for the direct-writer gate:
   scene config. Before this fix the example set the keys, but the solver could
   not find them, so the report showed `native_contact_hessian_enabled=false`
   and native-only dispatch rejected real PH normal contacts at frame 9.
+
+M8 V2 direct-lane target slice:
+
+- Added precomputed row/column lane arrays to exact native contact target
+  records. Each exact half-block target can now tell the writer the final
+  native `D` or first-offdiag `E` lanes for up to `12` local DoFs per side.
+- Updated the exact native contact writer so primary writes use those
+  precomputed lanes when `direct_lanes_valid=true`. The FEM/FEM direct path can
+  now write native `D/E` without native DoF descriptors, `old_to_chain`, or
+  per-scalar pair classification in the writer.
+- Kept a V1 descriptor-assisted path for targets whose scalar half-blocks do
+  not map to one uniform `D`/first-offdiag destination. ABD projection weights
+  are still expanded in the writer, so this is a correctness-oriented first
+  slice of V2 rather than the final high-performance schema.
+- Added a synthetic arbitrary-lane writer contract that constructs native
+  matrix storage without native DoF descriptors and verifies direct diagonal
+  and transposed first-offdiag writes from the target lanes alone.
+
+V2 direct-lane validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed before the validation build |
+| `ninja -C build/build_impl_fp64 -j1 RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu` | passed; rebuilt the target-schema users, device link, backend shared library, and test executable |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact][v2]" -s` | passed, `30` assertions in `1` test case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_native_contact]"` | passed, `3282` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `8182` assertions in `30` test cases |
+| native-only topology gate with `SOCU_NATIVE_CHAIN_BASE=1 SOCU_NATIVE_DIAG_RHS=1 SOCU_NATIVE_CONTACT=1 SOCU_NATIVE_CONTACT_DIFF=1 SOCU_REPORT_COUNTERS=1`, `socu_rt50_topology_diag_lump --frames 20` | passed; completed `final_frame=20`, `wall_time_s=53.931154954014346`, `mean_frame_ms=2588.105514511699`, `native_contact_hessian_enabled=true`, contact mirror diff enabled, and `native_contact_hessian_diff_mismatch_count=0` |
+
+Current V2 boundary:
+
+- Do not claim a performance win from this slice. The target record is larger
+  because it stores simple fixed-size lane arrays, and the measured topology
+  run above had debug counters plus mirror diff enabled.
+- Next V2 work should precompute ABD projection weights, compact or split the
+  target schema so contact kernels do not pay unnecessary target-table
+  bandwidth, and then rerun diff-off 100-frame structured-vs-native performance
+  gates.
