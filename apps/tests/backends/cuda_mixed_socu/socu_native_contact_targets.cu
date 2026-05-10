@@ -168,6 +168,34 @@ __global__ void write_native_contact_exact_diff_fixture(
     status.data()[0] = native_consumed;
     status.data()[1] = 0;
 }
+
+template <typename StoreT, typename SolveT>
+__global__ void write_native_contact_direct_lane_fixture(
+    SocuNativeContactExactWriter<StoreT, SolveT> native_writer,
+    SocuNativeContactStencilTarget               diag_target,
+    SocuNativeContactStencilTarget               offdiag_target,
+    muda::BufferView<IndexT>                     status)
+{
+    if(threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+
+    Eigen::Matrix<StoreT, 3, 3> H_diag;
+    Eigen::Matrix<StoreT, 3, 3> H_offdiag;
+    for(IndexT row = 0; row < 3; ++row)
+    {
+        for(IndexT col = 0; col < 3; ++col)
+        {
+            H_diag(row, col) =
+                static_cast<StoreT>(1.0 + 10.0 * row + col);
+            H_offdiag(row, col) =
+                static_cast<StoreT>(100.0 + 10.0 * row + col);
+        }
+    }
+
+    status.data()[0] = native_writer.write_half_block(diag_target, H_diag) ? 1 : 0;
+    status.data()[1] =
+        native_writer.write_half_block(offdiag_target, H_offdiag) ? 1 : 0;
+}
 }  // namespace
 
 TEST_CASE("cuda_mixed_socu_native_contact_target_arbitrary_lane_exact",
@@ -219,6 +247,13 @@ TEST_CASE("cuda_mixed_socu_native_contact_target_arbitrary_lane_exact",
     CHECK(target.block_or_left_block == 0);
     CHECK(target.row_lane == 5);
     CHECK(target.col_lane == 5);
+    CHECK(target.direct_lanes_valid);
+    CHECK(target.row_direct_lanes[0] == 5);
+    CHECK(target.row_direct_lanes[1] == 2);
+    CHECK(target.row_direct_lanes[2] == 9);
+    CHECK(target.col_direct_lanes[0] == 5);
+    CHECK(target.col_direct_lanes[1] == 2);
+    CHECK(target.col_direct_lanes[2] == 9);
     CHECK(target.row_old_dof == 0);
     CHECK(target.row_dof_count == 3);
 }
@@ -265,6 +300,139 @@ TEST_CASE("cuda_mixed_socu_native_contact_target_adjacent_orientation",
     CHECK(forward.row_lane == 2);
     CHECK(forward.col_lane == 5);
     CHECK(forward.transposed_first_offdiag);
+    CHECK(forward.direct_lanes_valid);
+    CHECK(forward.row_direct_lanes[0] == 5);
+    CHECK(forward.row_direct_lanes[1] == 2);
+    CHECK(forward.row_direct_lanes[2] == 9);
+    CHECK(forward.col_direct_lanes[0] == 2);
+    CHECK(forward.col_direct_lanes[1] == 1);
+    CHECK(forward.col_direct_lanes[2] == 3);
+}
+
+TEST_CASE("cuda_mixed_socu_native_contact_direct_lane_writer_uses_targets",
+          "[cuda_mixed_socu][contract][socu_native_contact][m8][v2]")
+{
+    if(!has_cuda_device())
+        SKIP("CUDA device is required");
+
+    using Store = double;
+    using Solve = double;
+
+    ContactTargetFixture fixture;
+    const auto fem0 = fixture.vertex(SocuNativeDescriptorKind::Fem, 0, 3);
+    const auto fem1 = fixture.vertex(SocuNativeDescriptorKind::Fem, 3, 3);
+
+    const auto diag_target = socu_native_contact_make_half_block_target(
+        0,
+        0,
+        0,
+        fem0,
+        fem0,
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::Drop);
+    const auto offdiag_target = socu_native_contact_make_half_block_target(
+        0,
+        0,
+        1,
+        fem0,
+        fem1,
+        fixture.dof_span(),
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        StructuredContactOffbandPolicy::Drop);
+
+    REQUIRE(diag_target.direct_lanes_valid);
+    REQUIRE(offdiag_target.direct_lanes_valid);
+    REQUIRE(offdiag_target.transposed_first_offdiag);
+
+    StreamGuard stream;
+    const auto layout = make_socu_native_storage_layout(
+        ContactTargetFixture::Horizon,
+        ContactTargetFixture::BlockSize,
+        1);
+
+    muda::DeviceBuffer<Solve> diag;
+    muda::DeviceBuffer<Solve> offdiag;
+    muda::DeviceBuffer<IndexT> status;
+    diag.resize(layout.diag_element_count);
+    offdiag.resize(layout.offdiag_element_count);
+    status.resize(2);
+
+    REQUIRE(cudaMemsetAsync(diag.data(),
+                            0,
+                            diag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(offdiag.data(),
+                            0,
+                            offdiag.size() * sizeof(Solve),
+                            stream.stream)
+            == cudaSuccess);
+    REQUIRE(cudaMemsetAsync(status.data(),
+                            0,
+                            status.size() * sizeof(IndexT),
+                            stream.stream)
+            == cudaSuccess);
+
+    StructuredDeviceMatrixSink<Store, Solve> matrix;
+    matrix.use_native_matrix = true;
+    matrix.native_matrix =
+        make_contact_test_native_view(diag.view(),
+                                      offdiag.view(),
+                                      ContactTargetFixture::Horizon,
+                                      ContactTargetFixture::BlockSize,
+                                      1);
+    SocuNativeContactExactWriter<Store, Solve> writer{matrix, {}, {}};
+
+    write_native_contact_direct_lane_fixture<Store, Solve>
+        <<<1, 1, 0, stream.stream>>>(writer,
+                                     diag_target,
+                                     offdiag_target,
+                                     status.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
+
+    std::vector<IndexT> status_host;
+    std::vector<Solve> diag_host;
+    std::vector<Solve> offdiag_host;
+    status.copy_to(status_host);
+    diag.copy_to(diag_host);
+    offdiag.copy_to(offdiag_host);
+
+    REQUIRE(status_host.size() == 2);
+    CHECK(status_host[0] == 1);
+    CHECK(status_host[1] == 1);
+
+    const auto diag_index = [&](SizeT row, SizeT col)
+    {
+        return (SizeT{0} * ContactTargetFixture::BlockSize + row)
+                   * ContactTargetFixture::BlockSize
+               + col;
+    };
+    const auto offdiag_index = [&](SizeT row, SizeT col)
+    {
+        return (SizeT{0} * ContactTargetFixture::BlockSize + row)
+                   * ContactTargetFixture::BlockSize
+               + col;
+    };
+
+    const SizeT fem0_lanes[3] = {5, 2, 9};
+    const SizeT fem1_lanes[3] = {2, 1, 3};
+    for(IndexT row = 0; row < 3; ++row)
+    {
+        for(IndexT col = 0; col < 3; ++col)
+        {
+            const auto diag_expected = 1.0 + 10.0 * row + col;
+            CHECK(diag_host[diag_index(fem0_lanes[row], fem0_lanes[col])]
+                  == Catch::Approx(diag_expected).margin(1e-12));
+
+            const auto offdiag_expected = 100.0 + 10.0 * row + col;
+            CHECK(offdiag_host[offdiag_index(fem1_lanes[col], fem0_lanes[row])]
+                  == Catch::Approx(offdiag_expected).margin(1e-12));
+        }
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_native_contact_target_stencil_policy",

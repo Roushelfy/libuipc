@@ -5,6 +5,8 @@
 
 namespace uipc::backend::cuda_mixed
 {
+inline constexpr IndexT SocuNativeContactMaxDofsPerVertex = 12;
+
 enum class SocuNativeContactWriteMode : IndexT
 {
     Skipped          = 0,
@@ -47,6 +49,9 @@ struct SocuNativeContactStencilTarget
     SizeT col_lane            = 0;
     bool  transposed_first_offdiag = false;
     bool  mirror_diag_block        = false;
+    bool  direct_lanes_valid       = false;
+    SizeT row_direct_lanes[SocuNativeContactMaxDofsPerVertex] = {};
+    SizeT col_direct_lanes[SocuNativeContactMaxDofsPerVertex] = {};
 
     IndexT row_old_dof   = -1;
     IndexT row_dof_count = 0;
@@ -122,6 +127,64 @@ socu_native_classify_dof_descriptor_pair(
     target.col_lane   = ij_is_forward ? di.lane : dj.lane;
     target.transposed_first_offdiag = ij_is_forward;
     return target;
+}
+
+inline bool socu_native_contact_fill_direct_lanes(
+    SocuNativeContactStencilTarget&      target,
+    const SocuNativeVertexDescriptor&    row,
+    const SocuNativeVertexDescriptor&    col,
+    span<const SocuNativeDofDescriptor>  dofs,
+    SizeT                                horizon,
+    SizeT                                block_size) noexcept
+{
+    if(target.half_block_class != SocuNativeBandClass::Diag
+       && target.half_block_class != SocuNativeBandClass::FirstOffdiag)
+        return false;
+    if(row.old_dof < 0 || col.old_dof < 0 || row.dof_count <= 0
+       || col.dof_count <= 0
+       || row.dof_count > SocuNativeContactMaxDofsPerVertex
+       || col.dof_count > SocuNativeContactMaxDofsPerVertex)
+        return false;
+    if(static_cast<SizeT>(row.old_dof + row.dof_count) > dofs.size()
+       || static_cast<SizeT>(col.old_dof + col.dof_count) > dofs.size())
+        return false;
+
+    for(IndexT r = 0; r < row.dof_count; ++r)
+    {
+        const auto& dof = dofs[static_cast<SizeT>(row.old_dof + r)];
+        if(!dof.active || dof.old_dof != row.old_dof + r
+           || dof.block >= horizon || dof.lane >= block_size)
+            return false;
+        target.row_direct_lanes[r] = dof.lane;
+    }
+
+    for(IndexT c = 0; c < col.dof_count; ++c)
+    {
+        const auto& dof = dofs[static_cast<SizeT>(col.old_dof + c)];
+        if(!dof.active || dof.old_dof != col.old_dof + c
+           || dof.block >= horizon || dof.lane >= block_size)
+            return false;
+        target.col_direct_lanes[c] = dof.lane;
+    }
+
+    for(IndexT r = 0; r < row.dof_count; ++r)
+    {
+        for(IndexT c = 0; c < col.dof_count; ++c)
+        {
+            const auto scalar = socu_native_classify_dof_descriptor_pair(
+                dofs,
+                horizon,
+                block_size,
+                row.old_dof + r,
+                col.old_dof + c);
+            if(scalar.cls != target.half_block_class
+               || scalar.left_block != target.block_or_left_block)
+                return false;
+        }
+    }
+
+    target.direct_lanes_valid = true;
+    return true;
 }
 
 inline SocuNativeHalfBlockClassification
@@ -304,9 +367,23 @@ socu_native_contact_make_half_block_target(
             target.col_lane            = scalar.col_lane;
             target.transposed_first_offdiag =
                 scalar.transposed_first_offdiag;
+            socu_native_contact_fill_direct_lanes(
+                target,
+                row,
+                col,
+                dofs,
+                horizon,
+                block_size);
             return target;
         }
     }
+    socu_native_contact_fill_direct_lanes(
+        target,
+        row,
+        col,
+        dofs,
+        horizon,
+        block_size);
     return target;
 }
 

@@ -16,7 +16,9 @@ struct SocuNativeContactExactWriter
 
     MUDA_GENERIC bool valid() const noexcept
     {
-        return matrix.native_enabled();
+        return matrix.use_native_matrix && matrix.native_matrix.D.data() != nullptr
+               && matrix.native_matrix.block_count != 0
+               && matrix.native_matrix.block_size != 0;
     }
 
     static MUDA_DEVICE IndexT abd_component(IndexT dof) noexcept
@@ -96,6 +98,124 @@ struct SocuNativeContactExactWriter
         return cls;
     }
 
+    MUDA_DEVICE StructuredSinkWriteClass add_direct_primary(
+        const SocuNativeContactStencilTarget& target,
+        IndexT                                local_row,
+        IndexT                                local_col,
+        StoreT                                value) const noexcept
+    {
+        if(!valid() || !target.direct_lanes_valid || local_row < 0
+           || local_col < 0
+           || local_row >= SocuNativeContactMaxDofsPerVertex
+           || local_col >= SocuNativeContactMaxDofsPerVertex)
+            return StructuredSinkWriteClass::Skipped;
+
+        const auto& native = matrix.native_matrix;
+        const auto  v      = static_cast<SolveT>(value);
+        if(target.half_block_class == SocuNativeBandClass::Diag)
+        {
+            const SizeT row_lane =
+                target.row_direct_lanes[static_cast<SizeT>(local_row)];
+            const SizeT col_lane =
+                target.col_direct_lanes[static_cast<SizeT>(local_col)];
+            if(!native.valid_block_entry(target.block_or_left_block,
+                                         row_lane,
+                                         col_lane))
+                return StructuredSinkWriteClass::Skipped;
+            const SizeT index =
+                native.diag_index(target.block_or_left_block, row_lane, col_lane);
+            if(index >= native.D.size())
+                return StructuredSinkWriteClass::Skipped;
+            muda::atomic_add(native.D.data(index), v);
+            return StructuredSinkWriteClass::Diag;
+        }
+
+        if(target.half_block_class == SocuNativeBandClass::FirstOffdiag)
+        {
+            const SizeT row_lane =
+                target.transposed_first_offdiag
+                    ? target.col_direct_lanes[static_cast<SizeT>(local_col)]
+                    : target.row_direct_lanes[static_cast<SizeT>(local_row)];
+            const SizeT col_lane =
+                target.transposed_first_offdiag
+                    ? target.row_direct_lanes[static_cast<SizeT>(local_row)]
+                    : target.col_direct_lanes[static_cast<SizeT>(local_col)];
+            if(target.block_or_left_block >= native.first_offdiag_block_count
+               || row_lane >= native.block_size || col_lane >= native.block_size
+               || native.E.data() == nullptr)
+                return StructuredSinkWriteClass::Skipped;
+            const SizeT index = native.first_offdiag_index(
+                target.block_or_left_block,
+                row_lane,
+                col_lane);
+            if(index >= native.E.size())
+                return StructuredSinkWriteClass::Skipped;
+            muda::atomic_add(native.E.data(index), v);
+            return StructuredSinkWriteClass::FirstOffdiag;
+        }
+
+        return StructuredSinkWriteClass::OffBand;
+    }
+
+    MUDA_DEVICE StructuredSinkWriteClass add_target_scalar_with_old(
+        const SocuNativeContactStencilTarget& target,
+        IndexT                                local_row,
+        IndexT                                local_col,
+        StoreT                                value,
+        bool                                  mirror_diag_block,
+        IndexT                                old_row,
+        IndexT                                old_col) const noexcept
+    {
+        if(!target.direct_lanes_valid)
+            return add_scalar(old_row, old_col, value, mirror_diag_block);
+
+        const auto cls = add_direct_primary(target, local_row, local_col, value);
+        record_counter(cls);
+        matrix.add_hessian_scalar_compare(old_row, old_col, value);
+        if(mirror_diag_block && cls == StructuredSinkWriteClass::Diag
+           && old_row != old_col)
+        {
+            const SizeT row_lane =
+                target.row_direct_lanes[static_cast<SizeT>(local_row)];
+            const SizeT col_lane =
+                target.col_direct_lanes[static_cast<SizeT>(local_col)];
+            const auto& native = matrix.native_matrix;
+            if(native.valid_block_entry(target.block_or_left_block,
+                                        col_lane,
+                                        row_lane))
+            {
+                const SizeT index = native.diag_index(
+                    target.block_or_left_block,
+                    col_lane,
+                    row_lane);
+                if(index < native.D.size())
+                {
+                    muda::atomic_add(native.D.data(index),
+                                     static_cast<SolveT>(value));
+                    record_counter(StructuredSinkWriteClass::Diag);
+                }
+            }
+            matrix.add_hessian_scalar_compare(old_col, old_row, value);
+        }
+        return cls;
+    }
+
+    MUDA_DEVICE StructuredSinkWriteClass add_target_scalar(
+        const SocuNativeContactStencilTarget& target,
+        IndexT                                local_row,
+        IndexT                                local_col,
+        StoreT                                value,
+        bool                                  mirror_diag_block) const noexcept
+    {
+        return add_target_scalar_with_old(target,
+                                          local_row,
+                                          local_col,
+                                          value,
+                                          mirror_diag_block,
+                                          target.row_old_dof + local_row,
+                                          target.col_old_dof + local_col);
+    }
+
     template <typename H3>
     MUDA_DEVICE void add_fem_fem(const SocuNativeContactStencilTarget& target,
                                  const H3& H) const noexcept
@@ -106,10 +226,11 @@ struct SocuNativeContactExactWriter
 #pragma unroll
             for(IndexT c = 0; c < 3; ++c)
             {
-                add_scalar(target.row_old_dof + r,
-                           target.col_old_dof + c,
-                           static_cast<StoreT>(H(r, c)),
-                           target.mirror_diag_block);
+                add_target_scalar(target,
+                                  r,
+                                  c,
+                                  static_cast<StoreT>(H(r, c)),
+                                  target.mirror_diag_block);
             }
         }
     }
@@ -130,10 +251,7 @@ struct SocuNativeContactExactWriter
             {
                 const StoreT value =
                     static_cast<StoreT>(wr * static_cast<Alu>(H(comp, c)));
-                add_scalar(target.row_old_dof + r,
-                           target.col_old_dof + c,
-                           value,
-                           target.mirror_diag_block);
+                add_target_scalar(target, r, c, value, target.mirror_diag_block);
             }
         }
     }
@@ -154,10 +272,7 @@ struct SocuNativeContactExactWriter
                 const Alu    wc   = abd_weight(col_J, c);
                 const StoreT value =
                     static_cast<StoreT>(static_cast<Alu>(H(r, comp)) * wc);
-                add_scalar(target.row_old_dof + r,
-                           target.col_old_dof + c,
-                           value,
-                           target.mirror_diag_block);
+                add_target_scalar(target, r, c, value, target.mirror_diag_block);
             }
         }
     }
@@ -200,10 +315,11 @@ struct SocuNativeContactExactWriter
                                          * static_cast<Alu>(H(comp_j, comp_i))
                                          * row_w_j;
                             }
-                            add_scalar(target.row_old_dof + local_i,
-                                       target.row_old_dof + local_j,
-                                       static_cast<StoreT>(value),
-                                       row_block != col_block);
+                            add_target_scalar(target,
+                                              local_i,
+                                              local_j,
+                                              static_cast<StoreT>(value),
+                                              row_block != col_block);
                         }
                     }
                 }
@@ -225,10 +341,11 @@ struct SocuNativeContactExactWriter
                     const Alu    wc     = abd_weight(col_J, c);
                     const Alu value =
                         wr * static_cast<Alu>(H(comp_r, comp_c)) * wc;
-                    add_scalar(target.row_old_dof + r,
-                               target.col_old_dof + c,
-                               static_cast<StoreT>(value),
-                               target.mirror_diag_block);
+                    add_target_scalar(target,
+                                      r,
+                                      c,
+                                      static_cast<StoreT>(value),
+                                      target.mirror_diag_block);
                 }
             }
             return;
@@ -246,10 +363,13 @@ struct SocuNativeContactExactWriter
                 const Alu    wc     = abd_weight(row_J, c);
                 const Alu value =
                     wr * static_cast<Alu>(H(comp_c, comp_r)) * wc;
-                add_scalar(target.col_old_dof + r,
-                           target.row_old_dof + c,
-                           static_cast<StoreT>(value),
-                           target.mirror_diag_block);
+                add_target_scalar_with_old(target,
+                                           c,
+                                           r,
+                                           static_cast<StoreT>(value),
+                                           target.mirror_diag_block,
+                                           target.col_old_dof + r,
+                                           target.row_old_dof + c);
             }
         }
     }

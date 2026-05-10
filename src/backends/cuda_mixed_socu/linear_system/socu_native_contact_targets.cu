@@ -123,6 +123,90 @@ MUDA_DEVICE SocuNativeHalfBlockClassification classify_half_block(
     return out;
 }
 
+MUDA_DEVICE bool load_old_to_chain_block_lane(muda::CBufferView<IndexT> old_to_chain,
+                                              SizeT                     horizon,
+                                              SizeT                     block_size,
+                                              IndexT                    old_dof,
+                                              SizeT&                    block,
+                                              SizeT&                    lane) noexcept
+{
+    if(block_size == 0 || old_dof < 0
+       || static_cast<SizeT>(old_dof) >= old_to_chain.size())
+        return false;
+
+    const IndexT chain = old_to_chain.data()[static_cast<SizeT>(old_dof)];
+    if(chain < 0)
+        return false;
+
+    const SizeT chain_dof = static_cast<SizeT>(chain);
+    block = chain_dof / block_size;
+    lane  = chain_dof % block_size;
+    return block < horizon;
+}
+
+MUDA_DEVICE bool fill_direct_lanes(SocuNativeContactStencilTarget& target,
+                                   const SocuNativeVertexDescriptor& row,
+                                   const SocuNativeVertexDescriptor& col,
+                                   muda::CBufferView<IndexT> old_to_chain,
+                                   SizeT horizon,
+                                   SizeT block_size) noexcept
+{
+    if(target.half_block_class != SocuNativeBandClass::Diag
+       && target.half_block_class != SocuNativeBandClass::FirstOffdiag)
+        return false;
+    if(row.old_dof < 0 || col.old_dof < 0 || row.dof_count <= 0
+       || col.dof_count <= 0
+       || row.dof_count > SocuNativeContactMaxDofsPerVertex
+       || col.dof_count > SocuNativeContactMaxDofsPerVertex)
+        return false;
+
+    for(IndexT r = 0; r < row.dof_count; ++r)
+    {
+        SizeT block = 0;
+        SizeT lane  = 0;
+        if(!load_old_to_chain_block_lane(old_to_chain,
+                                         horizon,
+                                         block_size,
+                                         row.old_dof + r,
+                                         block,
+                                         lane))
+            return false;
+        target.row_direct_lanes[r] = lane;
+    }
+
+    for(IndexT c = 0; c < col.dof_count; ++c)
+    {
+        SizeT block = 0;
+        SizeT lane  = 0;
+        if(!load_old_to_chain_block_lane(old_to_chain,
+                                         horizon,
+                                         block_size,
+                                         col.old_dof + c,
+                                         block,
+                                         lane))
+            return false;
+        target.col_direct_lanes[c] = lane;
+    }
+
+    for(IndexT r = 0; r < row.dof_count; ++r)
+    {
+        for(IndexT c = 0; c < col.dof_count; ++c)
+        {
+            const auto scalar = classify_old_to_chain_pair(old_to_chain,
+                                                           horizon,
+                                                           block_size,
+                                                           row.old_dof + r,
+                                                           col.old_dof + c);
+            if(scalar.cls != target.half_block_class
+               || scalar.left_block != target.block_or_left_block)
+                return false;
+        }
+    }
+
+    target.direct_lanes_valid = true;
+    return true;
+}
+
 MUDA_DEVICE void accumulate_stencil_class(SocuNativeStencilClassification& out,
                                           SocuNativeBandClass cls) noexcept
 {
@@ -279,6 +363,12 @@ MUDA_DEVICE SocuNativeContactStencilTarget make_half_block_target(
             target.col_lane            = scalar.col_lane;
             target.transposed_first_offdiag =
                 scalar.transposed_first_offdiag;
+            fill_direct_lanes(target,
+                              row,
+                              col,
+                              old_to_chain,
+                              horizon,
+                              block_size);
             return target;
         }
     }
