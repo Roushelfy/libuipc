@@ -230,6 +230,19 @@ struct SocuContactPlanStats
     SizeT program_count = 0;
     SizeT task_count = 0;
     SizeT bucket_count = 0;
+    SizeT exact_program_count = 0;
+    SizeT diag_program_count = 0;
+    SizeT diag_lump_program_count = 0;
+    SizeT drop_program_count = 0;
+    SizeT skipped_program_count = 0;
+    SizeT mixed_rejected_program_count = 0;
+    SizeT diag_block_task_count = 0;
+    SizeT diag_scalar_task_count = 0;
+    SizeT lump_scalar_task_count = 0;
+    SizeT hot_diag_block_count = 0;
+    SizeT hot_offdiag_block_count = 0;
+    SizeT cache_hit_count = 0;
+    SizeT rebuild_count = 0;
 };
 
 struct SocuVertexSidePlan
@@ -346,6 +359,9 @@ struct SocuContactAssemblyPlanM2Workspace
     muda::DeviceBuffer<int> scalar_offsets;
     muda::DeviceBuffer<int> scalar_total;
     muda::DeviceBuffer<int> task_cursor;
+    muda::DeviceBuffer<int> program_bucket_flags;
+    muda::DeviceBuffer<int> program_bucket_offsets;
+    muda::DeviceBuffer<int> program_stats;
 };
 
 SocuContactAssemblyPlanView socu_contact_assembly_plan_view(

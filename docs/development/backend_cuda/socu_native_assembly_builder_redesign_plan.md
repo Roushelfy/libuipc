@@ -1718,18 +1718,20 @@ Current implementation status:
   off-band policy. PH uses only `PH(0)` as the matrix side; `PH(1)` remains
   evaluator data and is not inserted into the side table.
 - The builder performs contact-side collection, sort/unique, side/lane
-  materialization, lower-bound side lookup, and program/task emission on CUDA.
-  Host code currently prepares source headers and resizes buffers.
+  materialization, lower-bound side lookup, program/task emission, bucket
+  marking/scan/compaction, and program/task stats counting on CUDA. Host code
+  currently prepares source headers and resizes buffers.
 - New `[m2]` CUDA contract tests execute the production builder kernels on
   `muda::DeviceBuffer` inputs and validate active side deduplication,
   fixed/unmapped/read-only side records, ABD/FEM lane materialization,
   PT/EE/PE/PP/PH source mapping, normal/frictional source disambiguation, PH
   half-plane omission, dense-source-id validation failures, and
-  Drop/Diag/DiagLump off-band policies.
-- This is not full M2 acceptance yet. Remaining M2 work includes source
-  invalid-entry counters, bucket construction, split cache/report integration,
-  production dense-source debug validation/reporting, and parity against the
-  legacy symbolic classification oracle.
+  Drop/Diag/DiagLump off-band policies. They also validate exact/drop/skipped
+  bucket ranges, execution strategies, and first program/task counters.
+- This is not full M2 acceptance yet. Remaining M2 work includes invalid
+  source/local-id counter reporting, split cache/report integration, production
+  dense-source debug validation/reporting, and parity against the legacy
+  symbolic classification oracle.
 
 Acceptance:
 

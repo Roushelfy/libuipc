@@ -1953,3 +1953,44 @@ Current M2 status:
   construction, split cache/report integration, production debug-validation
   reporting, and symbolic parity against the legacy target classification
   oracle.
+
+## 2026-05-11 Redesign Branch M2 Bucket And Stats Slice
+
+Implemented:
+
+- Added device-side bucket construction for the compact contact program plan:
+  mark bucket starts, prefix-scan bucket ids, and compact contiguous ranges into
+  `SocuContactProgramBucket`.
+- Bucket keys currently use model, family, program kind, and execution
+  strategy. Exact/Diag/DiagLump programs use `DirectScatter`; Drop/Skipped and
+  debug rejected programs use `DetectOnly`.
+- Added first program/task stats to `SocuContactPlanStats`: exact, diag,
+  diag-lump, drop, skipped, mixed-rejected program counts; diag-block,
+  diag-scalar, lump-scalar task counts; and hot diag/offdiag placeholders.
+- The stats pass runs on CUDA over the emitted program/task buffers and copies
+  back only the compact counter vector for `last_stats`.
+
+Tests added:
+
+- `cuda_mixed_socu_contact_assembly_plan_buckets_and_stats` builds a synthetic
+  PT source with Exact, Drop, and Skipped programs. It validates bucket range
+  boundaries, execution strategies, source-to-program statuses, and
+  `last_stats` counters.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; only the modified plan/test TUs rebuilt before link |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `198` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5189` assertions in `38` test cases |
+
+Current M2 status:
+
+- Source coverage, program emission, buckets, and first builder stats are now in
+  place and tested.
+- M2 is still not accepted. Remaining work: invalid source/local-id counter
+  reporting, split cache/report integration, production debug-validation
+  reporting, and symbolic parity against the legacy target classification
+  oracle.

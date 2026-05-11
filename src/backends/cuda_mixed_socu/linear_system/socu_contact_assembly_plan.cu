@@ -535,6 +535,162 @@ __global__ void emit_ph_programs_kernel(
                                    0};
 }
 
+enum class M2ProgramStatSlot : int
+{
+    ExactProgram = 0,
+    DiagProgram,
+    DiagLumpProgram,
+    DropProgram,
+    SkippedProgram,
+    MixedRejectedProgram,
+    DiagBlockTask,
+    DiagScalarTask,
+    LumpScalarTask,
+    HotDiagBlock,
+    HotOffdiagBlock,
+    Count,
+};
+
+MUDA_GENERIC int stat_index(M2ProgramStatSlot slot) noexcept
+{
+    return static_cast<int>(slot);
+}
+
+MUDA_DEVICE SocuContactExecutionStrategy execution_strategy_for_program(
+    SocuContactProgramKind kind) noexcept
+{
+    switch(kind)
+    {
+        case SocuContactProgramKind::Exact:
+        case SocuContactProgramKind::Diag:
+        case SocuContactProgramKind::DiagLump:
+            return SocuContactExecutionStrategy::DirectScatter;
+        case SocuContactProgramKind::Drop:
+        case SocuContactProgramKind::Skipped:
+        case SocuContactProgramKind::MixedRejectedDebugOnly:
+        default:
+            return SocuContactExecutionStrategy::DetectOnly;
+    }
+}
+
+MUDA_DEVICE bool same_bucket_key(const SocuContactProgramHeader& lhs,
+                                 const SocuContactProgramHeader& rhs) noexcept
+{
+    return lhs.model == rhs.model && lhs.family == rhs.family
+           && lhs.program_kind == rhs.program_kind
+           && execution_strategy_for_program(lhs.program_kind)
+                  == execution_strategy_for_program(rhs.program_kind);
+}
+
+MUDA_DEVICE void count_program_kind(SocuContactProgramKind kind,
+                                    muda::BufferView<int> counters)
+{
+    switch(kind)
+    {
+        case SocuContactProgramKind::Exact:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::ExactProgram)], 1);
+            break;
+        case SocuContactProgramKind::Diag:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DiagProgram)], 1);
+            break;
+        case SocuContactProgramKind::DiagLump:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DiagLumpProgram)], 1);
+            break;
+        case SocuContactProgramKind::Drop:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DropProgram)], 1);
+            break;
+        case SocuContactProgramKind::Skipped:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::SkippedProgram)], 1);
+            break;
+        case SocuContactProgramKind::MixedRejectedDebugOnly:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::MixedRejectedProgram)], 1);
+            break;
+    }
+}
+
+MUDA_DEVICE void count_task_kind(const SocuContactMicroTask& task,
+                                 muda::BufferView<int> counters)
+{
+    switch(task.write_kind)
+    {
+        case SocuAssemblyWriteKind::DiagBlockFem:
+        case SocuAssemblyWriteKind::DiagBlockAbd:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DiagBlockTask)], 1);
+            break;
+        case SocuAssemblyWriteKind::DiagScalarFem:
+        case SocuAssemblyWriteKind::DiagScalarAbd:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DiagScalarTask)], 1);
+            break;
+        case SocuAssemblyWriteKind::LumpScalarFem:
+        case SocuAssemblyWriteKind::LumpScalarAbd:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::LumpScalarTask)], 1);
+            break;
+        default:
+            break;
+    }
+
+    if((task.flags
+        & static_cast<std::uint8_t>(SocuContactTaskFlag::HotReduceEligible))
+       != 0)
+    {
+        const auto slot = task.band == SocuAssemblyBand::Diag
+                              ? M2ProgramStatSlot::HotDiagBlock
+                              : M2ProgramStatSlot::HotOffdiagBlock;
+        atomicAdd(&counters.data()[stat_index(slot)], 1);
+    }
+}
+
+__global__ void mark_program_buckets_and_stats_kernel(
+    muda::CBufferView<SocuContactProgramHeader> programs,
+    muda::CBufferView<SocuContactMicroTask> tasks,
+    muda::BufferView<int> bucket_flags,
+    muda::BufferView<int> counters)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= programs.size())
+        return;
+
+    const auto program = programs.data()[i];
+    const bool is_bucket_start =
+        i == 0 || !same_bucket_key(programs.data()[i - 1], program);
+    bucket_flags.data()[i] = is_bucket_start ? 1 : 0;
+
+    count_program_kind(program.program_kind, counters);
+    for(std::uint16_t task = 0; task < program.task_count; ++task)
+    {
+        const SizeT task_id = static_cast<SizeT>(program.first_task) + task;
+        if(task_id < tasks.size())
+            count_task_kind(tasks.data()[task_id], counters);
+    }
+}
+
+__global__ void compact_program_buckets_kernel(
+    muda::CBufferView<SocuContactProgramHeader> programs,
+    muda::CBufferView<int> bucket_flags,
+    muda::CBufferView<int> bucket_offsets,
+    muda::BufferView<SocuContactProgramBucket> buckets)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= programs.size())
+        return;
+    if(!bucket_flags.data()[i])
+        return;
+
+    SizeT end = i + 1;
+    while(end < programs.size() && bucket_flags.data()[end] == 0)
+        ++end;
+
+    const auto program = programs.data()[i];
+    SocuContactProgramBucket bucket;
+    bucket.model = program.model;
+    bucket.family = program.family;
+    bucket.program_kind = program.program_kind;
+    bucket.execution_strategy = execution_strategy_for_program(program.program_kind);
+    bucket.first_program = static_cast<std::uint32_t>(i);
+    bucket.program_count = static_cast<std::uint32_t>(end - i);
+    buckets.data()[static_cast<SizeT>(bucket_offsets.data()[i])] = bucket;
+}
+
 void launch_1d(SizeT count, auto&& launcher)
 {
     if(count == 0)
@@ -695,6 +851,8 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
 {
     plan.side_plan.key = input.side_key;
     plan.program_plan.key = input.program_key;
+    plan.side_plan.last_stats = {};
+    plan.program_plan.last_stats = {};
 
     const SizeT pt_count = input.pt_contacts.size();
     const SizeT ee_count = input.ee_contacts.size();
@@ -1189,6 +1347,86 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
     plan.program_plan.tasks.resize(static_cast<SizeT>(task_count));
     plan.program_plan.last_stats.program_count = total_program_count;
     plan.program_plan.last_stats.task_count = static_cast<SizeT>(task_count);
-    plan.program_plan.last_stats.bucket_count = 0;
+
+    if(total_program_count == 0)
+    {
+        plan.program_plan.buckets.resize(0);
+        plan.program_plan.last_stats.bucket_count = 0;
+        return;
+    }
+
+    workspace.program_bucket_flags.resize(total_program_count);
+    workspace.program_bucket_offsets.resize(total_program_count);
+    workspace.program_stats.resize(
+        static_cast<SizeT>(stat_index(M2ProgramStatSlot::Count)));
+    plan.program_plan.buckets.resize(total_program_count);
+
+    muda::BufferLaunch(input.stream).fill<int>(workspace.program_stats.view(), 0);
+    launch_1d(total_program_count,
+              [&](unsigned int grid, int block)
+              {
+                  mark_program_buckets_and_stats_kernel<<<grid,
+                                                          block,
+                                                          0,
+                                                          launch_stream(input.stream)>>>(
+                      plan.program_plan.programs.view(),
+                      plan.program_plan.tasks.view(),
+                      workspace.program_bucket_flags.view(),
+                      workspace.program_stats.view());
+              });
+    muda::DeviceScan().ExclusiveSum(workspace.program_bucket_flags.data(),
+                                    workspace.program_bucket_offsets.data(),
+                                    static_cast<int>(total_program_count));
+    write_last_scan_total_kernel<<<1, 1, 0, launch_stream(input.stream)>>>(
+        workspace.program_bucket_flags.view(),
+        workspace.program_bucket_offsets.view(),
+        workspace.scalar_total.view());
+    const int bucket_count = copy_first_int(workspace.scalar_total);
+    launch_1d(total_program_count,
+              [&](unsigned int grid, int block)
+              {
+                  compact_program_buckets_kernel<<<grid,
+                                                   block,
+                                                   0,
+                                                   launch_stream(input.stream)>>>(
+                      plan.program_plan.programs.view(),
+                      workspace.program_bucket_flags.view(),
+                      workspace.program_bucket_offsets.view(),
+                      plan.program_plan.buckets.view());
+              });
+    cudaStreamSynchronize(launch_stream(input.stream));
+    plan.program_plan.buckets.resize(static_cast<SizeT>(bucket_count));
+
+    std::vector<int> stats;
+    workspace.program_stats.copy_to(stats);
+    const auto stat = [&](M2ProgramStatSlot slot) -> SizeT
+    {
+        const auto index = static_cast<SizeT>(stat_index(slot));
+        return index < stats.size() ? static_cast<SizeT>(stats[index]) : SizeT{0};
+    };
+
+    plan.program_plan.last_stats.bucket_count = static_cast<SizeT>(bucket_count);
+    plan.program_plan.last_stats.exact_program_count =
+        stat(M2ProgramStatSlot::ExactProgram);
+    plan.program_plan.last_stats.diag_program_count =
+        stat(M2ProgramStatSlot::DiagProgram);
+    plan.program_plan.last_stats.diag_lump_program_count =
+        stat(M2ProgramStatSlot::DiagLumpProgram);
+    plan.program_plan.last_stats.drop_program_count =
+        stat(M2ProgramStatSlot::DropProgram);
+    plan.program_plan.last_stats.skipped_program_count =
+        stat(M2ProgramStatSlot::SkippedProgram);
+    plan.program_plan.last_stats.mixed_rejected_program_count =
+        stat(M2ProgramStatSlot::MixedRejectedProgram);
+    plan.program_plan.last_stats.diag_block_task_count =
+        stat(M2ProgramStatSlot::DiagBlockTask);
+    plan.program_plan.last_stats.diag_scalar_task_count =
+        stat(M2ProgramStatSlot::DiagScalarTask);
+    plan.program_plan.last_stats.lump_scalar_task_count =
+        stat(M2ProgramStatSlot::LumpScalarTask);
+    plan.program_plan.last_stats.hot_diag_block_count =
+        stat(M2ProgramStatSlot::HotDiagBlock);
+    plan.program_plan.last_stats.hot_offdiag_block_count =
+        stat(M2ProgramStatSlot::HotOffdiagBlock);
 }
 }  // namespace uipc::backend::cuda_mixed
