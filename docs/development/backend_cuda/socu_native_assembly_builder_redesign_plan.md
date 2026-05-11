@@ -1706,14 +1706,15 @@ contents.
 
 Current implementation status:
 
-- M2 first slice is implemented in `socu-native-builder-redesign` as of
-  2026-05-11.
+- M2 first and second symbolic slices are implemented in
+  `socu-native-builder-redesign` as of 2026-05-11.
 - Added `socu_contact_assembly_plan.{h,cu}` with compact POD records,
   split side/program owners, combined device view, dense O(1)
   `program_for(source_id, local_contact_id)` lookup, and an
   `active_set_temporary` CUDA builder.
-- The first builder slice covers PT and PH sources. PT emits exact, diag,
-  diag-lump, drop, or skipped microtasks according to side banding and
+- The builder covers normal and frictional simplex PT/EE/PE/PP source views,
+  plus normal and frictional PH source views. Simplex sources emit exact,
+  diag, diag-lump, drop, or skipped microtasks according to side banding and
   off-band policy. PH uses only `PH(0)` as the matrix side; `PH(1)` remains
   evaluator data and is not inserted into the side table.
 - The builder performs contact-side collection, sort/unique, side/lane
@@ -1722,12 +1723,13 @@ Current implementation status:
 - New `[m2]` CUDA contract tests execute the production builder kernels on
   `muda::DeviceBuffer` inputs and validate active side deduplication,
   fixed/unmapped/read-only side records, ABD/FEM lane materialization,
-  PT/PH source mapping, PH half-plane omission, and Drop/Diag/DiagLump
-  off-band policies.
-- This is not full M2 acceptance yet. Remaining M2 work includes EE/PE/PP and
-  frictional source coverage, source invalid-entry counters, bucket
-  construction, split cache/report integration, production dense-source debug
-  validation, and parity against the legacy symbolic classification oracle.
+  PT/EE/PE/PP/PH source mapping, normal/frictional source disambiguation, PH
+  half-plane omission, dense-source-id validation failures, and
+  Drop/Diag/DiagLump off-band policies.
+- This is not full M2 acceptance yet. Remaining M2 work includes source
+  invalid-entry counters, bucket construction, split cache/report integration,
+  production dense-source debug validation/reporting, and parity against the
+  legacy symbolic classification oracle.
 
 Acceptance:
 

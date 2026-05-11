@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -164,28 +165,33 @@ MUDA_DEVICE SocuContactMicroTask make_task(SocuAssemblySideId row_side,
     return task;
 }
 
-__global__ void collect_active_vertices_kernel(muda::CBufferView<Vector4i> pts,
-                                               muda::CBufferView<Vector2i> phs,
-                                               muda::BufferView<IndexT> refs)
+template <typename VectorT, int StencilSize>
+__global__ void collect_stencil_vertices_kernel(muda::CBufferView<VectorT> contacts,
+                                                SizeT output_offset,
+                                                muda::BufferView<IndexT> refs)
 {
-    const SizeT pt_refs = pts.size() * 4;
-    const SizeT ref_count = pt_refs + phs.size();
+    const SizeT ref_count = contacts.size() * StencilSize;
     const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(i >= ref_count)
         return;
 
-    IndexT vertex = InvalidVertex;
-    if(i < pt_refs)
-    {
-        const SizeT contact = i / 4;
-        const SizeT local = i % 4;
-        vertex = pts.data()[contact](static_cast<Eigen::Index>(local));
-    }
-    else
-    {
-        vertex = phs.data()[i - pt_refs](0);
-    }
-    refs.data()[i] = vertex >= 0 ? vertex : InvalidVertex;
+    const SizeT contact = i / StencilSize;
+    const SizeT local = i % StencilSize;
+    const IndexT vertex =
+        contacts.data()[contact](static_cast<Eigen::Index>(local));
+    refs.data()[output_offset + i] = vertex >= 0 ? vertex : InvalidVertex;
+}
+
+__global__ void collect_ph_active_vertices_kernel(muda::CBufferView<Vector2i> phs,
+                                                  SizeT output_offset,
+                                                  muda::BufferView<IndexT> refs)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= phs.size())
+        return;
+
+    const IndexT vertex = phs.data()[i](0);
+    refs.data()[output_offset + i] = vertex >= 0 ? vertex : InvalidVertex;
 }
 
 __global__ void mark_unique_vertices_kernel(muda::CBufferView<IndexT> sorted,
@@ -329,8 +335,9 @@ MUDA_DEVICE int append_diag_tasks_for_stencil(
     return task_count;
 }
 
-__global__ void emit_pt_programs_kernel(
-    muda::CBufferView<Vector4i> pts,
+template <typename VectorT, int StencilSize>
+__global__ void emit_simplex_programs_kernel(
+    muda::CBufferView<VectorT> contacts,
     muda::CBufferView<IndexT> sorted_side_vertices,
     muda::CBufferView<SocuAssemblySideRecord> sides,
     StructuredContactOffbandPolicy offband_policy,
@@ -338,28 +345,29 @@ __global__ void emit_pt_programs_kernel(
     std::uint32_t first_source_to_program,
     SocuContactSourceId source_id,
     SocuContactModelKind model,
+    SocuContactFamily family,
     muda::BufferView<SocuContactProgramHeader> programs,
     muda::BufferView<SocuContactMicroTask> tasks,
     muda::BufferView<SocuContactSourceToProgram> source_to_program,
     muda::BufferView<int> task_cursor)
 {
     const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(i >= pts.size())
+    if(i >= contacts.size())
         return;
 
     SocuContactProgramHeader program;
     program.source_id = source_id;
     program.local_contact_id = static_cast<IndexT>(i);
     program.model = model;
-    program.family = SocuContactFamily::PT;
-    program.stencil_size = 4;
+    program.family = family;
+    program.stencil_size = StencilSize;
 
-    const auto stencil = pts.data()[i];
+    const auto stencil = contacts.data()[i];
     SocuAssemblySideId side_ids[4] = {SocuInvalidAssemblySideId,
                                       SocuInvalidAssemblySideId,
                                       SocuInvalidAssemblySideId,
                                       SocuInvalidAssemblySideId};
-    for(int local = 0; local < 4; ++local)
+    for(int local = 0; local < StencilSize; ++local)
     {
         side_ids[local] =
             find_side_id(sorted_side_vertices, stencil(static_cast<Eigen::Index>(local)));
@@ -369,9 +377,9 @@ __global__ void emit_pt_programs_kernel(
     SocuContactMicroTask local_tasks[10];
     int                  exact_task_count = 0;
     bool                 has_offband = false;
-    for(int row = 0; row < 4; ++row)
+    for(int row = 0; row < StencilSize; ++row)
     {
-        for(int col = row; col < 4; ++col)
+        for(int col = row; col < StencilSize; ++col)
         {
             if(!side_id_valid(side_ids[row], sides)
                || !side_id_valid(side_ids[col], sides))
@@ -424,7 +432,7 @@ __global__ void emit_pt_programs_kernel(
             program.program_kind = SocuContactProgramKind::Diag;
             emit_task_count = append_diag_tasks_for_stencil(
                 side_ids,
-                4,
+                StencilSize,
                 sides,
                 false,
                 local_tasks);
@@ -434,7 +442,7 @@ __global__ void emit_pt_programs_kernel(
             program.program_kind = SocuContactProgramKind::DiagLump;
             emit_task_count = append_diag_tasks_for_stencil(
                 side_ids,
-                4,
+                StencilSize,
                 sides,
                 true,
                 local_tasks);
@@ -578,6 +586,91 @@ SocuContactSourceHeader make_source_header(SocuContactSourceId source_id,
     source.first_source_to_program = static_cast<std::uint32_t>(first_map);
     return source;
 }
+
+enum class M2SourceSlot : std::uint8_t
+{
+    PT,
+    EE,
+    PE,
+    PP,
+    PH,
+    FrictionPT,
+    FrictionEE,
+    FrictionPE,
+    FrictionPP,
+    FrictionPH,
+};
+
+struct M2SourceSpec
+{
+    SocuContactM2SourceInput source;
+    SocuContactFamily        family = SocuContactFamily::PT;
+    std::uint16_t            stencil_size = 0;
+    SizeT                    contact_count = 0;
+    M2SourceSlot             slot = M2SourceSlot::PT;
+    SizeT                    first_program = 0;
+    SizeT                    first_map = 0;
+};
+
+bool source_valid(const SocuContactM2SourceInput& source) noexcept
+{
+    return source.source_id != SocuInvalidContactSourceId;
+}
+
+void require_source_for_contacts(const SocuContactM2SourceInput& source,
+                                 SizeT contact_count,
+                                 const char* name)
+{
+    if(contact_count != 0 && !source_valid(source))
+        throw std::invalid_argument{std::string{name}
+                                    + " contacts require a valid dense source id"};
+}
+
+void push_source_if_valid(std::vector<M2SourceSpec>& specs,
+                          const SocuContactM2SourceInput& source,
+                          SocuContactFamily family,
+                          std::uint16_t stencil_size,
+                          SizeT contact_count,
+                          M2SourceSlot slot)
+{
+    if(!source_valid(source))
+        return;
+    specs.push_back(M2SourceSpec{source,
+                                 family,
+                                 stencil_size,
+                                 contact_count,
+                                 slot,
+                                 0,
+                                 0});
+}
+
+void sort_and_validate_dense_sources(std::vector<M2SourceSpec>& specs)
+{
+    std::sort(specs.begin(),
+              specs.end(),
+              [](const M2SourceSpec& lhs, const M2SourceSpec& rhs)
+              {
+                  return lhs.source.source_id < rhs.source.source_id;
+              });
+
+    for(SizeT i = 0; i < static_cast<SizeT>(specs.size()); ++i)
+    {
+        if(specs[i].source.source_id != static_cast<SocuContactSourceId>(i))
+        {
+            throw std::invalid_argument{
+                "M2 active_set_temporary builder requires dense source ids: "
+                "source_id == sources[source_id].source_id"};
+        }
+    }
+}
+
+SizeT max_tasks_per_contact(const M2SourceSpec& spec) noexcept
+{
+    if(spec.family == SocuContactFamily::PH)
+        return 1;
+    const SizeT stencil_size = spec.stencil_size;
+    return stencil_size * (stencil_size + 1) / 2;
+}
 }  // namespace
 
 SocuContactAssemblyPlanView socu_contact_assembly_plan_view(
@@ -600,18 +693,119 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
     SocuContactAssemblyPlanM2Workspace&        workspace,
     const SocuContactAssemblyPlanM2BuildInput& input)
 {
-    if(input.pt_source.source_id != 0 || input.ph_source.source_id != 1)
-    {
-        throw std::invalid_argument{
-            "M2 active_set_temporary builder currently requires dense PT source 0 and PH source 1"};
-    }
-
     plan.side_plan.key = input.side_key;
     plan.program_plan.key = input.program_key;
 
     const SizeT pt_count = input.pt_contacts.size();
+    const SizeT ee_count = input.ee_contacts.size();
+    const SizeT pe_count = input.pe_contacts.size();
+    const SizeT pp_count = input.pp_contacts.size();
     const SizeT ph_count = input.ph_contacts.size();
-    const SizeT ref_count = pt_count * 4 + ph_count;
+
+    const SizeT friction_pt_count = input.friction_pt_contacts.size();
+    const SizeT friction_ee_count = input.friction_ee_contacts.size();
+    const SizeT friction_pe_count = input.friction_pe_contacts.size();
+    const SizeT friction_pp_count = input.friction_pp_contacts.size();
+    const SizeT friction_ph_count = input.friction_ph_contacts.size();
+
+    require_source_for_contacts(input.pt_source, pt_count, "PT");
+    require_source_for_contacts(input.ee_source, ee_count, "EE");
+    require_source_for_contacts(input.pe_source, pe_count, "PE");
+    require_source_for_contacts(input.pp_source, pp_count, "PP");
+    require_source_for_contacts(input.ph_source, ph_count, "PH");
+    require_source_for_contacts(
+        input.friction_pt_source,
+        friction_pt_count,
+        "friction PT");
+    require_source_for_contacts(
+        input.friction_ee_source,
+        friction_ee_count,
+        "friction EE");
+    require_source_for_contacts(
+        input.friction_pe_source,
+        friction_pe_count,
+        "friction PE");
+    require_source_for_contacts(
+        input.friction_pp_source,
+        friction_pp_count,
+        "friction PP");
+    require_source_for_contacts(
+        input.friction_ph_source,
+        friction_ph_count,
+        "friction PH");
+
+    std::vector<M2SourceSpec> source_specs;
+    source_specs.reserve(10);
+    push_source_if_valid(source_specs,
+                         input.pt_source,
+                         SocuContactFamily::PT,
+                         4,
+                         pt_count,
+                         M2SourceSlot::PT);
+    push_source_if_valid(source_specs,
+                         input.ee_source,
+                         SocuContactFamily::EE,
+                         4,
+                         ee_count,
+                         M2SourceSlot::EE);
+    push_source_if_valid(source_specs,
+                         input.pe_source,
+                         SocuContactFamily::PE,
+                         3,
+                         pe_count,
+                         M2SourceSlot::PE);
+    push_source_if_valid(source_specs,
+                         input.pp_source,
+                         SocuContactFamily::PP,
+                         2,
+                         pp_count,
+                         M2SourceSlot::PP);
+    push_source_if_valid(source_specs,
+                         input.ph_source,
+                         SocuContactFamily::PH,
+                         2,
+                         ph_count,
+                         M2SourceSlot::PH);
+    push_source_if_valid(source_specs,
+                         input.friction_pt_source,
+                         SocuContactFamily::PT,
+                         4,
+                         friction_pt_count,
+                         M2SourceSlot::FrictionPT);
+    push_source_if_valid(source_specs,
+                         input.friction_ee_source,
+                         SocuContactFamily::EE,
+                         4,
+                         friction_ee_count,
+                         M2SourceSlot::FrictionEE);
+    push_source_if_valid(source_specs,
+                         input.friction_pe_source,
+                         SocuContactFamily::PE,
+                         3,
+                         friction_pe_count,
+                         M2SourceSlot::FrictionPE);
+    push_source_if_valid(source_specs,
+                         input.friction_pp_source,
+                         SocuContactFamily::PP,
+                         2,
+                         friction_pp_count,
+                         M2SourceSlot::FrictionPP);
+    push_source_if_valid(source_specs,
+                         input.friction_ph_source,
+                         SocuContactFamily::PH,
+                         2,
+                         friction_ph_count,
+                         M2SourceSlot::FrictionPH);
+    sort_and_validate_dense_sources(source_specs);
+
+    SizeT ref_count = 0;
+    for(const auto& spec : source_specs)
+    {
+        if(spec.family == SocuContactFamily::PH)
+            ref_count += spec.contact_count;
+        else
+            ref_count += spec.contact_count * spec.stencil_size;
+    }
 
     workspace.scalar_total.resize(1);
     workspace.task_cursor.resize(1);
@@ -628,17 +822,106 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
         workspace.unique_offsets.resize(ref_count);
         plan.side_plan.sorted_side_vertices.resize(ref_count);
 
-        launch_1d(ref_count,
-                  [&](unsigned int grid, int block)
-                  {
-                      collect_active_vertices_kernel<<<grid,
-                                                       block,
-                                                       0,
-                                                       launch_stream(input.stream)>>>(
-                          input.pt_contacts,
-                          input.ph_contacts,
-                          workspace.vertex_refs.view());
-                  });
+        SizeT ref_offset = 0;
+        auto collect_vec4 = [&](muda::CBufferView<Vector4i> contacts)
+        {
+            const SizeT count = contacts.size() * 4;
+            const SizeT base = ref_offset;
+            launch_1d(count,
+                      [&](unsigned int grid, int block)
+                      {
+                          collect_stencil_vertices_kernel<Vector4i, 4>
+                              <<<grid, block, 0, launch_stream(input.stream)>>>(
+                                  contacts,
+                                  base,
+                                  workspace.vertex_refs.view());
+                      });
+            ref_offset += count;
+        };
+        auto collect_vec3 = [&](muda::CBufferView<Vector3i> contacts)
+        {
+            const SizeT count = contacts.size() * 3;
+            const SizeT base = ref_offset;
+            launch_1d(count,
+                      [&](unsigned int grid, int block)
+                      {
+                          collect_stencil_vertices_kernel<Vector3i, 3>
+                              <<<grid, block, 0, launch_stream(input.stream)>>>(
+                                  contacts,
+                                  base,
+                                  workspace.vertex_refs.view());
+                      });
+            ref_offset += count;
+        };
+        auto collect_vec2 = [&](muda::CBufferView<Vector2i> contacts)
+        {
+            const SizeT count = contacts.size() * 2;
+            const SizeT base = ref_offset;
+            launch_1d(count,
+                      [&](unsigned int grid, int block)
+                      {
+                          collect_stencil_vertices_kernel<Vector2i, 2>
+                              <<<grid, block, 0, launch_stream(input.stream)>>>(
+                                  contacts,
+                                  base,
+                                  workspace.vertex_refs.view());
+                      });
+            ref_offset += count;
+        };
+        auto collect_ph = [&](muda::CBufferView<Vector2i> contacts)
+        {
+            const SizeT count = contacts.size();
+            const SizeT base = ref_offset;
+            launch_1d(count,
+                      [&](unsigned int grid, int block)
+                      {
+                          collect_ph_active_vertices_kernel<<<grid,
+                                                              block,
+                                                              0,
+                                                              launch_stream(input.stream)>>>(
+                              contacts,
+                              base,
+                              workspace.vertex_refs.view());
+                      });
+            ref_offset += count;
+        };
+
+        for(const auto& spec : source_specs)
+        {
+            switch(spec.slot)
+            {
+                case M2SourceSlot::PT:
+                    collect_vec4(input.pt_contacts);
+                    break;
+                case M2SourceSlot::EE:
+                    collect_vec4(input.ee_contacts);
+                    break;
+                case M2SourceSlot::PE:
+                    collect_vec3(input.pe_contacts);
+                    break;
+                case M2SourceSlot::PP:
+                    collect_vec2(input.pp_contacts);
+                    break;
+                case M2SourceSlot::PH:
+                    collect_ph(input.ph_contacts);
+                    break;
+                case M2SourceSlot::FrictionPT:
+                    collect_vec4(input.friction_pt_contacts);
+                    break;
+                case M2SourceSlot::FrictionEE:
+                    collect_vec4(input.friction_ee_contacts);
+                    break;
+                case M2SourceSlot::FrictionPE:
+                    collect_vec3(input.friction_pe_contacts);
+                    break;
+                case M2SourceSlot::FrictionPP:
+                    collect_vec2(input.friction_pp_contacts);
+                    break;
+                case M2SourceSlot::FrictionPH:
+                    collect_ph(input.friction_ph_contacts);
+                    break;
+            }
+        }
 
         muda::DeviceRadixSort().SortKeys(workspace.vertex_refs.data(),
                                          workspace.sorted_vertex_refs.data(),
@@ -734,26 +1017,26 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
         plan.side_plan.last_stats.lane_count = plan.side_plan.lanes.size();
     }
 
-    const SizeT total_program_count = pt_count + ph_count;
-    const SizeT max_task_count = pt_count * 10 + ph_count;
-    plan.program_plan.sources =
-        std::vector<SocuContactSourceHeader>{
-            make_source_header(input.pt_source.source_id,
-                               input.pt_source.reporter_id,
-                               input.pt_source.model,
-                               SocuContactFamily::PT,
-                               4,
-                               pt_count,
-                               0,
-                               0),
-            make_source_header(input.ph_source.source_id,
-                               input.ph_source.reporter_id,
-                               input.ph_source.model,
-                               SocuContactFamily::PH,
-                               2,
-                               ph_count,
-                               pt_count,
-                               pt_count)};
+    SizeT total_program_count = 0;
+    SizeT max_task_count = 0;
+    std::vector<SocuContactSourceHeader> source_headers;
+    source_headers.reserve(source_specs.size());
+    for(auto& spec : source_specs)
+    {
+        spec.first_program = total_program_count;
+        spec.first_map = total_program_count;
+        source_headers.push_back(make_source_header(spec.source.source_id,
+                                                    spec.source.reporter_id,
+                                                    spec.source.model,
+                                                    spec.family,
+                                                    spec.stencil_size,
+                                                    spec.contact_count,
+                                                    spec.first_program,
+                                                    spec.first_map));
+        total_program_count += spec.contact_count;
+        max_task_count += spec.contact_count * max_tasks_per_contact(spec);
+    }
+    plan.program_plan.sources = std::move(source_headers);
     plan.program_plan.programs.resize(total_program_count);
     plan.program_plan.source_to_program.resize(total_program_count);
     plan.program_plan.tasks.resize(max_task_count);
@@ -772,45 +1055,135 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
             .fill<SocuContactMicroTask>(plan.program_plan.tasks.view(), {});
     muda::BufferLaunch(input.stream).fill<int>(workspace.task_cursor.view(), 0);
 
-    launch_1d(pt_count,
-              [&](unsigned int grid, int block)
-              {
-                  emit_pt_programs_kernel<<<grid,
-                                            block,
-                                            0,
-                                            launch_stream(input.stream)>>>(
-                      input.pt_contacts,
-                      plan.side_plan.sorted_side_vertices.view(),
-                      plan.side_plan.sides.view(),
-                      input.offband_policy,
-                      0,
-                      0,
-                      input.pt_source.source_id,
-                      input.pt_source.model,
-                      plan.program_plan.programs.view(),
-                      plan.program_plan.tasks.view(),
-                      plan.program_plan.source_to_program.view(),
-                      workspace.task_cursor.view());
-              });
-    launch_1d(ph_count,
-              [&](unsigned int grid, int block)
-              {
-                  emit_ph_programs_kernel<<<grid,
-                                            block,
-                                            0,
-                                            launch_stream(input.stream)>>>(
-                      input.ph_contacts,
-                      plan.side_plan.sorted_side_vertices.view(),
-                      plan.side_plan.sides.view(),
-                      static_cast<std::uint32_t>(pt_count),
-                      static_cast<std::uint32_t>(pt_count),
-                      input.ph_source.source_id,
-                      input.ph_source.model,
-                      plan.program_plan.programs.view(),
-                      plan.program_plan.tasks.view(),
-                      plan.program_plan.source_to_program.view(),
-                      workspace.task_cursor.view());
-              });
+    auto launch_simplex4 = [&](muda::CBufferView<Vector4i> contacts,
+                               const M2SourceSpec& spec)
+    {
+        launch_1d(spec.contact_count,
+                  [&](unsigned int grid, int block)
+                  {
+                      emit_simplex_programs_kernel<Vector4i, 4>
+                          <<<grid, block, 0, launch_stream(input.stream)>>>(
+                              contacts,
+                              plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.sides.view(),
+                              input.offband_policy,
+                              static_cast<std::uint32_t>(spec.first_program),
+                              static_cast<std::uint32_t>(spec.first_map),
+                              spec.source.source_id,
+                              spec.source.model,
+                              spec.family,
+                              plan.program_plan.programs.view(),
+                              plan.program_plan.tasks.view(),
+                              plan.program_plan.source_to_program.view(),
+                              workspace.task_cursor.view());
+                  });
+    };
+    auto launch_simplex3 = [&](muda::CBufferView<Vector3i> contacts,
+                               const M2SourceSpec& spec)
+    {
+        launch_1d(spec.contact_count,
+                  [&](unsigned int grid, int block)
+                  {
+                      emit_simplex_programs_kernel<Vector3i, 3>
+                          <<<grid, block, 0, launch_stream(input.stream)>>>(
+                              contacts,
+                              plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.sides.view(),
+                              input.offband_policy,
+                              static_cast<std::uint32_t>(spec.first_program),
+                              static_cast<std::uint32_t>(spec.first_map),
+                              spec.source.source_id,
+                              spec.source.model,
+                              spec.family,
+                              plan.program_plan.programs.view(),
+                              plan.program_plan.tasks.view(),
+                              plan.program_plan.source_to_program.view(),
+                              workspace.task_cursor.view());
+                  });
+    };
+    auto launch_simplex2 = [&](muda::CBufferView<Vector2i> contacts,
+                               const M2SourceSpec& spec)
+    {
+        launch_1d(spec.contact_count,
+                  [&](unsigned int grid, int block)
+                  {
+                      emit_simplex_programs_kernel<Vector2i, 2>
+                          <<<grid, block, 0, launch_stream(input.stream)>>>(
+                              contacts,
+                              plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.sides.view(),
+                              input.offband_policy,
+                              static_cast<std::uint32_t>(spec.first_program),
+                              static_cast<std::uint32_t>(spec.first_map),
+                              spec.source.source_id,
+                              spec.source.model,
+                              spec.family,
+                              plan.program_plan.programs.view(),
+                              plan.program_plan.tasks.view(),
+                              plan.program_plan.source_to_program.view(),
+                              workspace.task_cursor.view());
+                  });
+    };
+    auto launch_ph = [&](muda::CBufferView<Vector2i> contacts,
+                         const M2SourceSpec& spec)
+    {
+        launch_1d(spec.contact_count,
+                  [&](unsigned int grid, int block)
+                  {
+                      emit_ph_programs_kernel<<<grid,
+                                                block,
+                                                0,
+                                                launch_stream(input.stream)>>>(
+                          contacts,
+                          plan.side_plan.sorted_side_vertices.view(),
+                          plan.side_plan.sides.view(),
+                          static_cast<std::uint32_t>(spec.first_program),
+                          static_cast<std::uint32_t>(spec.first_map),
+                          spec.source.source_id,
+                          spec.source.model,
+                          plan.program_plan.programs.view(),
+                          plan.program_plan.tasks.view(),
+                          plan.program_plan.source_to_program.view(),
+                          workspace.task_cursor.view());
+                  });
+    };
+
+    for(const auto& spec : source_specs)
+    {
+        switch(spec.slot)
+        {
+            case M2SourceSlot::PT:
+                launch_simplex4(input.pt_contacts, spec);
+                break;
+            case M2SourceSlot::EE:
+                launch_simplex4(input.ee_contacts, spec);
+                break;
+            case M2SourceSlot::PE:
+                launch_simplex3(input.pe_contacts, spec);
+                break;
+            case M2SourceSlot::PP:
+                launch_simplex2(input.pp_contacts, spec);
+                break;
+            case M2SourceSlot::PH:
+                launch_ph(input.ph_contacts, spec);
+                break;
+            case M2SourceSlot::FrictionPT:
+                launch_simplex4(input.friction_pt_contacts, spec);
+                break;
+            case M2SourceSlot::FrictionEE:
+                launch_simplex4(input.friction_ee_contacts, spec);
+                break;
+            case M2SourceSlot::FrictionPE:
+                launch_simplex3(input.friction_pe_contacts, spec);
+                break;
+            case M2SourceSlot::FrictionPP:
+                launch_simplex2(input.friction_pp_contacts, spec);
+                break;
+            case M2SourceSlot::FrictionPH:
+                launch_ph(input.friction_ph_contacts, spec);
+                break;
+        }
+    }
 
     const int task_count = copy_first_int(workspace.task_cursor);
     plan.program_plan.tasks.resize(static_cast<SizeT>(task_count));

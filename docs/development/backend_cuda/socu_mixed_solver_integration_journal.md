@@ -1907,3 +1907,49 @@ Current M2 status:
   bucket construction, split cache/report integration, dense-source debug
   validation in the production builder path, and symbolic parity checks against
   the legacy target classification oracle.
+
+## 2026-05-11 Redesign Branch M2 Source Coverage Slice
+
+Implemented:
+
+- Extended `SocuContactAssemblyPlanM2BuildInput` to accept normal and
+  frictional simplex PT/EE/PE/PP contact views plus normal and frictional PH
+  views.
+- Replaced the PT-only symbolic emission kernel with a templated simplex
+  emitter for 4-, 3-, and 2-vertex stencils. Normal and frictional sources now
+  share the same compact symbolic program format and are disambiguated by
+  `(source_id, local_contact_id)`.
+- Generalized active-side collection to launch per-source CUDA collection
+  kernels for Vector4i, Vector3i, Vector2i, and PH active-vertex-only inputs.
+- Generalized source table construction. The builder now emits all valid source
+  headers in dense `source_id` order, allows valid zero-contact sources, and
+  rejects non-empty contact views without a valid source id.
+- Added dense source-id validation in the production builder path. Non-dense,
+  duplicate, and missing source-id cases throw before launching CUDA work.
+
+Tests added:
+
+- `cuda_mixed_socu_contact_assembly_plan_simplex_families_and_friction_sources`
+  validates normal PT/EE/PE/PP, frictional PT/EE/PE/PP, and frictional PH source
+  records, source-to-program maps, source/model disambiguation for local
+  contact `0`, and PH half-plane omission from the side table.
+- `cuda_mixed_socu_contact_assembly_plan_dense_source_validation` validates
+  non-dense, duplicate, and missing source-id failures.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; only the modified plan/test TUs rebuilt before link |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `168` assertions in `5` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5159` assertions in `37` test cases |
+
+Current M2 status:
+
+- Compact source/program coverage now spans the contact families planned for
+  M2, including normal/frictional source disambiguation.
+- M2 is still not accepted. Remaining work: invalid/skipped counters, bucket
+  construction, split cache/report integration, production debug-validation
+  reporting, and symbolic parity against the legacy target classification
+  oracle.

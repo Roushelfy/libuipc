@@ -306,10 +306,31 @@ struct SocuContactAssemblyPlanM2BuildInput
     SocuVertexSidePlanKey side_key;
     SocuContactProgramPlanKey program_key;
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors;
+
     muda::CBufferView<Vector4i> pt_contacts;
+    muda::CBufferView<Vector4i> ee_contacts;
+    muda::CBufferView<Vector3i> pe_contacts;
+    muda::CBufferView<Vector2i> pp_contacts;
     muda::CBufferView<Vector2i> ph_contacts;
+
+    muda::CBufferView<Vector4i> friction_pt_contacts;
+    muda::CBufferView<Vector4i> friction_ee_contacts;
+    muda::CBufferView<Vector3i> friction_pe_contacts;
+    muda::CBufferView<Vector2i> friction_pp_contacts;
+    muda::CBufferView<Vector2i> friction_ph_contacts;
+
     SocuContactM2SourceInput pt_source;
+    SocuContactM2SourceInput ee_source;
+    SocuContactM2SourceInput pe_source;
+    SocuContactM2SourceInput pp_source;
     SocuContactM2SourceInput ph_source;
+
+    SocuContactM2SourceInput friction_pt_source;
+    SocuContactM2SourceInput friction_ee_source;
+    SocuContactM2SourceInput friction_pe_source;
+    SocuContactM2SourceInput friction_pp_source;
+    SocuContactM2SourceInput friction_ph_source;
+
     StructuredContactOffbandPolicy offband_policy =
         StructuredContactOffbandPolicy::Drop;
     cudaStream_t stream = cudaStreamLegacy;

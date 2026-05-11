@@ -5,6 +5,7 @@
 #include <muda/buffer/device_buffer.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -15,6 +16,7 @@ using namespace uipc::backend::cuda_mixed;
 using uipc::IndexT;
 using uipc::SizeT;
 using uipc::Vector2i;
+using uipc::Vector3i;
 using uipc::Vector4i;
 
 static_assert(std::is_trivially_copyable_v<SocuAssemblyDofLane>);
@@ -260,6 +262,204 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_program_map_pt_ph",
     CHECK(ph_task.row_side == programs[1].side_ids[0]);
     CHECK(ph_task.col_side == programs[1].side_ids[0]);
     CHECK(ph_task.band == SocuAssemblyBand::Diag);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_simplex_families_and_friction_sources",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<Vector4i> pts{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> ees{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 3}}};
+    muda::DeviceBuffer<Vector3i> pes{
+        std::vector<Vector3i>{Vector3i{0, 1, 2}}};
+    muda::DeviceBuffer<Vector2i> pps{
+        std::vector<Vector2i>{Vector2i{1, 2}}};
+    muda::DeviceBuffer<Vector2i> phs{std::vector<Vector2i>{}};
+    muda::DeviceBuffer<Vector4i> friction_pts{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> friction_ees{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 3}}};
+    muda::DeviceBuffer<Vector3i> friction_pes{
+        std::vector<Vector3i>{Vector3i{0, 1, 2}}};
+    muda::DeviceBuffer<Vector2i> friction_pps{
+        std::vector<Vector2i>{Vector2i{1, 2}}};
+    muda::DeviceBuffer<Vector2i> friction_phs{
+        std::vector<Vector2i>{Vector2i{2, 99}}};
+
+    auto input = make_input(vertices, pts, phs, StructuredContactOffbandPolicy::Drop);
+    input.ee_contacts = ees.view();
+    input.pe_contacts = pes.view();
+    input.pp_contacts = pps.view();
+    input.friction_pt_contacts = friction_pts.view();
+    input.friction_ee_contacts = friction_ees.view();
+    input.friction_pe_contacts = friction_pes.view();
+    input.friction_pp_contacts = friction_pps.view();
+    input.friction_ph_contacts = friction_phs.view();
+    input.ee_source = SocuContactM2SourceInput{
+        1,
+        10,
+        SocuContactModelKind::SimplexNormal};
+    input.pe_source = SocuContactM2SourceInput{
+        2,
+        10,
+        SocuContactModelKind::SimplexNormal};
+    input.pp_source = SocuContactM2SourceInput{
+        3,
+        10,
+        SocuContactModelKind::SimplexNormal};
+    input.ph_source = {};
+    input.friction_pt_source = SocuContactM2SourceInput{
+        4,
+        20,
+        SocuContactModelKind::SimplexFrictional};
+    input.friction_ee_source = SocuContactM2SourceInput{
+        5,
+        20,
+        SocuContactModelKind::SimplexFrictional};
+    input.friction_pe_source = SocuContactM2SourceInput{
+        6,
+        20,
+        SocuContactModelKind::SimplexFrictional};
+    input.friction_pp_source = SocuContactM2SourceInput{
+        7,
+        20,
+        SocuContactModelKind::SimplexFrictional};
+    input.friction_ph_source = SocuContactM2SourceInput{
+        8,
+        21,
+        SocuContactModelKind::VertexHalfPlaneFrictional};
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        plan,
+        workspace,
+        input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactSourceHeader> sources;
+    std::vector<SocuContactProgramHeader> programs;
+    std::vector<SocuContactSourceToProgram> maps;
+    std::vector<IndexT> sorted_vertices;
+    plan.program_plan.sources.copy_to(sources);
+    plan.program_plan.programs.copy_to(programs);
+    plan.program_plan.source_to_program.copy_to(maps);
+    plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+
+    REQUIRE(sources.size() == 9);
+    REQUIRE(programs.size() == 9);
+    REQUIRE(maps.size() == 9);
+    CHECK(sorted_vertices == std::vector<IndexT>{0, 1, 2, 3});
+    CHECK(std::find(sorted_vertices.begin(), sorted_vertices.end(), 99)
+          == sorted_vertices.end());
+
+    CHECK(sources[0].source_id == 0);
+    CHECK(sources[0].family == SocuContactFamily::PT);
+    CHECK(sources[0].model == SocuContactModelKind::SimplexNormal);
+    CHECK(sources[1].family == SocuContactFamily::EE);
+    CHECK(sources[1].stencil_size == 4);
+    CHECK(sources[2].family == SocuContactFamily::PE);
+    CHECK(sources[2].stencil_size == 3);
+    CHECK(sources[3].family == SocuContactFamily::PP);
+    CHECK(sources[3].stencil_size == 2);
+    CHECK(sources[4].source_id == 4);
+    CHECK(sources[4].family == SocuContactFamily::PT);
+    CHECK(sources[4].model == SocuContactModelKind::SimplexFrictional);
+    CHECK(sources[5].family == SocuContactFamily::EE);
+    CHECK(sources[5].model == SocuContactModelKind::SimplexFrictional);
+    CHECK(sources[6].family == SocuContactFamily::PE);
+    CHECK(sources[6].model == SocuContactModelKind::SimplexFrictional);
+    CHECK(sources[7].family == SocuContactFamily::PP);
+    CHECK(sources[7].model == SocuContactModelKind::SimplexFrictional);
+    CHECK(sources[8].family == SocuContactFamily::PH);
+    CHECK(sources[8].model == SocuContactModelKind::VertexHalfPlaneFrictional);
+
+    for(SizeT i = 0; i < programs.size(); ++i)
+    {
+        CHECK(maps[i].program_id == i);
+        CHECK(maps[i].status == SocuContactProgramMapStatus::Valid);
+        CHECK(programs[i].source_id == i);
+        CHECK(programs[i].local_contact_id == 0);
+        CHECK(programs[i].task_count > 0);
+    }
+    CHECK(programs[0].family == SocuContactFamily::PT);
+    CHECK(programs[1].family == SocuContactFamily::EE);
+    CHECK(programs[2].family == SocuContactFamily::PE);
+    CHECK(programs[3].family == SocuContactFamily::PP);
+    CHECK(programs[4].family == SocuContactFamily::PT);
+    CHECK(programs[4].model == SocuContactModelKind::SimplexFrictional);
+    CHECK(programs[4].source_id != programs[0].source_id);
+    CHECK(programs[5].family == SocuContactFamily::EE);
+    CHECK(programs[6].family == SocuContactFamily::PE);
+    CHECK(programs[7].family == SocuContactFamily::PP);
+    CHECK(programs[8].family == SocuContactFamily::PH);
+    CHECK(programs[8].model == SocuContactModelKind::VertexHalfPlaneFrictional);
+    CHECK(programs[8].side_ids[1] == SocuInvalidAssemblySideId);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_dense_source_validation",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<Vector4i> pts{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> ees{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 3}}};
+    muda::DeviceBuffer<Vector2i> phs{std::vector<Vector2i>{}};
+
+    {
+        auto input = make_input(vertices, pts, phs, StructuredContactOffbandPolicy::Drop);
+        input.pt_source.source_id = 1;
+        input.ph_source = {};
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        CHECK_THROWS_AS(
+            build_socu_contact_assembly_plan_m2_active_set_temporary(
+                plan,
+                workspace,
+                input),
+            std::invalid_argument);
+    }
+
+    {
+        auto input = make_input(vertices, pts, phs, StructuredContactOffbandPolicy::Drop);
+        input.ee_contacts = ees.view();
+        input.ee_source = SocuContactM2SourceInput{
+            0,
+            10,
+            SocuContactModelKind::SimplexNormal};
+        input.ph_source = {};
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        CHECK_THROWS_AS(
+            build_socu_contact_assembly_plan_m2_active_set_temporary(
+                plan,
+                workspace,
+                input),
+            std::invalid_argument);
+    }
+
+    {
+        auto input = make_input(vertices, pts, phs, StructuredContactOffbandPolicy::Drop);
+        input.pt_source = {};
+        input.ph_source = {};
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        CHECK_THROWS_AS(
+            build_socu_contact_assembly_plan_m2_active_set_temporary(
+                plan,
+                workspace,
+                input),
+            std::invalid_argument);
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_offband_policy",
