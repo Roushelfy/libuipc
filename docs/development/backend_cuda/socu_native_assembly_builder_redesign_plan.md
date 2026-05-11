@@ -1704,6 +1704,31 @@ M2 cannot be accepted with CPU-only symbolic tests. At least one M2 test must
 execute the production CUDA builder kernels and validate emitted device buffer
 contents.
 
+Current implementation status:
+
+- M2 first slice is implemented in `socu-native-builder-redesign` as of
+  2026-05-11.
+- Added `socu_contact_assembly_plan.{h,cu}` with compact POD records,
+  split side/program owners, combined device view, dense O(1)
+  `program_for(source_id, local_contact_id)` lookup, and an
+  `active_set_temporary` CUDA builder.
+- The first builder slice covers PT and PH sources. PT emits exact, diag,
+  diag-lump, drop, or skipped microtasks according to side banding and
+  off-band policy. PH uses only `PH(0)` as the matrix side; `PH(1)` remains
+  evaluator data and is not inserted into the side table.
+- The builder performs contact-side collection, sort/unique, side/lane
+  materialization, lower-bound side lookup, and program/task emission on CUDA.
+  Host code currently prepares source headers and resizes buffers.
+- New `[m2]` CUDA contract tests execute the production builder kernels on
+  `muda::DeviceBuffer` inputs and validate active side deduplication,
+  fixed/unmapped/read-only side records, ABD/FEM lane materialization,
+  PT/PH source mapping, PH half-plane omission, and Drop/Diag/DiagLump
+  off-band policies.
+- This is not full M2 acceptance yet. Remaining M2 work includes EE/PE/PP and
+  frictional source coverage, source invalid-entry counters, bucket
+  construction, split cache/report integration, production dense-source debug
+  validation, and parity against the legacy symbolic classification oracle.
+
 Acceptance:
 
 - Compact builder emits the same symbolic classes as the current target builder

@@ -1856,3 +1856,54 @@ M1 status: accepted for the redesign branch. M2 may now start from the compact
 side table and contact program builder. The remaining source-table work belongs
 to M2 because it creates the compact production source records consumed by the
 program builder.
+
+## 2026-05-11 Redesign Branch M2 First Slice
+
+Implemented:
+
+- Added `linear_system/socu_contact_assembly_plan.{h,cu}` with compact
+  side/lane/source/program/task PODs, split `SocuVertexSidePlan` and
+  `SocuContactProgramPlan` owners, a combined device view, and dense O(1)
+  `program_for(source_id, local_contact_id)` lookup.
+- Implemented an `active_set_temporary` CUDA builder for PT and PH sources.
+  The builder collects active matrix vertices on device, radix-sorts and
+  deduplicates them, materializes side/lane records from native vertex
+  descriptors, and emits compact program/task records.
+- PT emission now covers exact, skipped, Drop, Diag, and DiagLump symbolic
+  outcomes for synthetic FEM/ABD/fixed/unmapped/off-band cases.
+- PH emission treats only `PH(0)` as a matrix side. The half-plane id in
+  `PH(1)` is kept out of the side table and remains evaluator data for future
+  numeric kernels.
+- The first slice keeps buckets empty and does not invoke the legacy target
+  writer, `old_to_chain`, `classify_dof_pair`, or structured contact sinks.
+
+Tests added:
+
+- `socu_contact_assembly_plan.cu` static-asserts POD trivial-copy and byte
+  budgets.
+- `cuda_mixed_socu_contact_assembly_plan_side_table_active_set` validates
+  active-side deduplication, fixed/unmapped/read-only behavior, FEM/ABD lane
+  materialization, and PH half-plane omission from the side table.
+- `cuda_mixed_socu_contact_assembly_plan_program_map_pt_ph` validates dense
+  source headers, source-to-program maps, O(1) lookup preconditions, PT/PH
+  program records, and tightly referenced PH tasks.
+- `cuda_mixed_socu_contact_assembly_plan_offband_policy` validates Drop, Diag,
+  and DiagLump symbolic policy outputs.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; new glob caused CMake regeneration, then only the new plan TU and new test TU compiled before device-link/link |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5072` assertions in `35` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `81` assertions in `3` test cases |
+
+Current M2 status:
+
+- First production CUDA builder slice is in place and tested, but M2 is not yet
+  accepted.
+- Remaining M2 work: EE/PE/PP and frictional sources, invalid-entry counters,
+  bucket construction, split cache/report integration, dense-source debug
+  validation in the production builder path, and symbolic parity checks against
+  the legacy target classification oracle.
