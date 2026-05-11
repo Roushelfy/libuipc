@@ -3,8 +3,8 @@
 #include <line_search/line_searcher.h>
 #include <contact_system/contact_coeff.h>
 #include <collision_detection/simplex_trajectory_filter.h>
-#include <linear_system/socu_native_contact_targets.h>
 #include <utils/structured_contact_assembly_sink.h>
+#include <memory>
 
 namespace uipc::backend::cuda_mixed
 {
@@ -72,21 +72,9 @@ class SimplexNormalContact : public ContactReporter
         bool hessian_only() const noexcept { return m_hessian_only; }
         bool structured_hessian() const noexcept { return m_structured_hessian; }
         auto structured_hessian_sink() const noexcept { return m_structured_sink; }
-        auto PT_native_contact_targets() const noexcept
+        const void* exact_contact_context() const noexcept
         {
-            return m_PT_native_contact_targets;
-        }
-        auto EE_native_contact_targets() const noexcept
-        {
-            return m_EE_native_contact_targets;
-        }
-        auto PE_native_contact_targets() const noexcept
-        {
-            return m_PE_native_contact_targets;
-        }
-        auto PP_native_contact_targets() const noexcept
-        {
-            return m_PP_native_contact_targets;
+            return m_exact_contact_context;
         }
 
       private:
@@ -106,10 +94,7 @@ class SimplexNormalContact : public ContactReporter
         bool                              m_hessian_only = false;
         bool                              m_structured_hessian = false;
         StructuredContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar> m_structured_sink;
-        muda::CBufferView<SocuNativeContactStencilTarget> m_PT_native_contact_targets;
-        muda::CBufferView<SocuNativeContactStencilTarget> m_EE_native_contact_targets;
-        muda::CBufferView<SocuNativeContactStencilTarget> m_PE_native_contact_targets;
-        muda::CBufferView<SocuNativeContactStencilTarget> m_PP_native_contact_targets;
+        const void* m_exact_contact_context = nullptr;
     };
 
     class BuildInfo
@@ -197,10 +182,7 @@ class SimplexNormalContact : public ContactReporter
         muda::CDoubletVectorView<StoreScalar, 3> PP_gradients;
         muda::CTripletMatrixView<StoreScalar, 3> PP_hessians;
 
-        muda::DeviceBuffer<SocuNativeContactStencilTarget> PT_native_contact_targets;
-        muda::DeviceBuffer<SocuNativeContactStencilTarget> EE_native_contact_targets;
-        muda::DeviceBuffer<SocuNativeContactStencilTarget> PE_native_contact_targets;
-        muda::DeviceBuffer<SocuNativeContactStencilTarget> PP_native_contact_targets;
+        std::shared_ptr<void> exact_contact_cache;
     };
 
     muda::CBufferView<Vector4i>        PTs() const;

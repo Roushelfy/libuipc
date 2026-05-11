@@ -1,4 +1,4 @@
-#include <contact_system/simplex_normal_contact.h>
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
 #include <contact_system/contact_models/codim_ipc_simplex_normal_contact_function.h>
 #include <utils/distance/distance_flagged.h>
 #include <utils/codim_thickness.h>
@@ -10,7 +10,7 @@
 namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_simplex_normal_contact_structured(
-    SimplexNormalContact::ContactInfo& info)
+    SimplexNormalContactStructuredInfo info)
 {
     using namespace muda;
     using namespace sym::codim_ipc_simplex_contact;

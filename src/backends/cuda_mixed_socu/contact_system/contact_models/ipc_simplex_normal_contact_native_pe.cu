@@ -11,7 +11,8 @@
 namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_simplex_normal_contact_native_exact_PE(
-    SimplexNormalContact::ContactInfo& info)
+    SimplexNormalContact::ContactInfo& info,
+    const SimplexNormalContactNativeContext& native_context)
 {
     using namespace muda;
     using namespace sym::codim_ipc_simplex_contact;
@@ -24,13 +25,13 @@ void assemble_ipc_simplex_normal_contact_native_exact_PE(
     if(info.PEs().size() == 0)
         return;
 
-    const auto structured_sink = info.structured_hessian_sink();
-    const auto targets         = info.PE_native_contact_targets();
+    const auto native_sink = native_context.sink;
+    const auto targets = native_context.PE_targets;
 
     ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(info.PEs().size(),
-               [structured_sink,
+               [native_sink,
                 targets,
                 table = info.contact_tabular().viewer().name("contact_tabular"),
                 contact_ids = info.contact_element_ids().viewer().name("contact_element_ids"),
@@ -85,7 +86,7 @@ void assemble_ipc_simplex_normal_contact_native_exact_PE(
                    const auto H_store = downcast_hessian<Store>(H);
                    ipc_simplex_normal_native_detail::
                        write_exact_targets<3>(
-                           structured_sink,
+                           native_sink,
                            targets,
                            i,
                            PE,

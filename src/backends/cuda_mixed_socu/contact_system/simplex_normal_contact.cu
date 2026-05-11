@@ -3,12 +3,31 @@
 #include <muda/cub/device/device_merge_sort.h>
 #include <utils/distance.h>
 #include <utils/codim_thickness.h>
-#include <linear_system/socu_native_contact_targets.h>
+#include <contact_system/contact_models/ipc_simplex_normal_contact_native.h>
 
 namespace uipc::backend::cuda_mixed
 {
 namespace
 {
+struct SimplexNormalContactExactCache
+{
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> PT_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> EE_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> PE_targets;
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> PP_targets;
+    IndexT descriptor_epoch = -1;
+    SizeT  contact_signature = ~SizeT{0};
+    StructuredContactOffbandPolicy offband_policy =
+        StructuredContactOffbandPolicy::Drop;
+};
+
+SimplexNormalContactExactCache& exact_cache(std::shared_ptr<void>& cache)
+{
+    if(!cache)
+        cache = std::make_shared<SimplexNormalContactExactCache>();
+    return *std::static_pointer_cast<SimplexNormalContactExactCache>(cache);
+}
+
 template <int StencilSize, typename ContactSink, typename IndicesView>
 void record_contact_topology(ContactSink sink,
                              IndicesView indices,
@@ -202,6 +221,7 @@ void SimplexNormalContact::do_assemble_structured_hessian(
     this_info.m_hessian_only       = true;
     this_info.m_structured_hessian = true;
     this_info.m_structured_sink    = info.contact_sink();
+    SimplexNormalContactNativeContext native_context;
 
     if(this_info.m_structured_sink.topology_probe_only())
     {
@@ -213,47 +233,63 @@ void SimplexNormalContact::do_assemble_structured_hessian(
     }
 
     if(!this_info.m_structured_sink.approximate_weight_probe_only()
-       && this_info.m_structured_sink.sink.matrix.native_enabled())
+       && info.native_contact_sink().native_enabled())
     {
         const auto descriptors = info.vertex_descriptors();
-        const auto matrix      = this_info.m_structured_sink.sink.matrix;
-        if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
-           && matrix.horizon != 0 && matrix.block_size != 0)
+        const auto native_sink = info.native_contact_sink();
+        if(descriptors.data() != nullptr && native_sink.old_to_chain.data() != nullptr
+           && native_sink.horizon != 0 && native_sink.block_size != 0)
         {
-            m_impl.loose_resize(m_impl.PT_native_contact_targets,
-                                this_info.PTs().size() * PTHalfHessianSize);
-            m_impl.loose_resize(m_impl.EE_native_contact_targets,
-                                this_info.EEs().size() * EEHalfHessianSize);
-            m_impl.loose_resize(m_impl.PE_native_contact_targets,
-                                this_info.PEs().size() * PEHalfHessianSize);
-            m_impl.loose_resize(m_impl.PP_native_contact_targets,
-                                this_info.PPs().size() * PPHalfHessianSize);
+            auto& cache = exact_cache(m_impl.exact_contact_cache);
+            const SizeT pt_target_count = this_info.PTs().size() * PTHalfHessianSize;
+            const SizeT ee_target_count = this_info.EEs().size() * EEHalfHessianSize;
+            const SizeT pe_target_count = this_info.PEs().size() * PEHalfHessianSize;
+            const SizeT pp_target_count = this_info.PPs().size() * PPHalfHessianSize;
+            const bool targets_valid =
+                cache.descriptor_epoch == info.descriptor_epoch()
+                && cache.contact_signature == info.contact_set_signature()
+                && cache.offband_policy
+                       == this_info.m_structured_sink.offband_policy
+                && cache.PT_targets.size() == pt_target_count
+                && cache.EE_targets.size() == ee_target_count
+                && cache.PE_targets.size() == pe_target_count
+                && cache.PP_targets.size() == pp_target_count;
 
-            rebuild_socu_native_simplex_contact_targets(
-                info.stream(),
-                m_impl.PT_native_contact_targets.view(),
-                m_impl.EE_native_contact_targets.view(),
-                m_impl.PE_native_contact_targets.view(),
-                m_impl.PP_native_contact_targets.view(),
-                this_info.PTs(),
-                this_info.EEs(),
-                this_info.PEs(),
-                this_info.PPs(),
-                descriptors,
-                matrix.old_to_chain,
-                this_info.m_structured_sink.abd_vertex_to_J,
-                matrix.horizon,
-                matrix.block_size,
-                this_info.m_structured_sink.offband_policy);
+            if(!targets_valid)
+            {
+                m_impl.loose_resize(cache.PT_targets, pt_target_count);
+                m_impl.loose_resize(cache.EE_targets, ee_target_count);
+                m_impl.loose_resize(cache.PE_targets, pe_target_count);
+                m_impl.loose_resize(cache.PP_targets, pp_target_count);
 
-            this_info.m_PT_native_contact_targets =
-                m_impl.PT_native_contact_targets.view().as_const();
-            this_info.m_EE_native_contact_targets =
-                m_impl.EE_native_contact_targets.view().as_const();
-            this_info.m_PE_native_contact_targets =
-                m_impl.PE_native_contact_targets.view().as_const();
-            this_info.m_PP_native_contact_targets =
-                m_impl.PP_native_contact_targets.view().as_const();
+                rebuild_socu_native_simplex_contact_targets(
+                    info.stream(),
+                    cache.PT_targets.view(),
+                    cache.EE_targets.view(),
+                    cache.PE_targets.view(),
+                    cache.PP_targets.view(),
+                    this_info.PTs(),
+                    this_info.EEs(),
+                    this_info.PEs(),
+                    this_info.PPs(),
+                    descriptors,
+                    native_sink.old_to_chain,
+                    this_info.m_structured_sink.abd_vertex_to_J,
+                    native_sink.horizon,
+                    native_sink.block_size,
+                    this_info.m_structured_sink.offband_policy);
+
+                cache.descriptor_epoch = info.descriptor_epoch();
+                cache.contact_signature = info.contact_set_signature();
+                cache.offband_policy = this_info.m_structured_sink.offband_policy;
+            }
+
+            native_context.sink = native_sink;
+            native_context.PT_targets = cache.PT_targets.view().as_const();
+            native_context.EE_targets = cache.EE_targets.view().as_const();
+            native_context.PE_targets = cache.PE_targets.view().as_const();
+            native_context.PP_targets = cache.PP_targets.view().as_const();
+            this_info.m_exact_contact_context = &native_context;
         }
     }
 

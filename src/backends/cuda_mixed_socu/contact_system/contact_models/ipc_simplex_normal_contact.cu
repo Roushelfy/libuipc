@@ -1,4 +1,7 @@
 #include <contact_system/simplex_normal_contact.h>
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
+#endif
 #include <contact_system/contact_models/ipc_simplex_normal_contact_native.h>
 #include <contact_system/contact_models/codim_ipc_simplex_normal_contact_function.h>
 #include <utils/distance/distance_flagged.h>
@@ -14,11 +17,31 @@ namespace uipc::backend::cuda_mixed
 {
 #ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_simplex_normal_contact_structured(
-    SimplexNormalContact::ContactInfo& info);
+    SimplexNormalContactStructuredInfo info);
 #endif
 
 namespace
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+SimplexNormalContactStructuredInfo make_simplex_normal_structured_info(
+    SimplexNormalContact::ContactInfo& info)
+{
+    return SimplexNormalContactStructuredInfo{
+        info.contact_tabular(),
+        info.PTs(),
+        info.EEs(),
+        info.PEs(),
+        info.PPs(),
+        info.positions(),
+        info.rest_positions(),
+        info.thicknesses(),
+        info.contact_element_ids(),
+        info.d_hats(),
+        info.dt(),
+        info.structured_hessian_sink()};
+}
+#endif
+
 bool simplex_contact_target_view_ready(
     SizeT contact_count,
     SizeT half_hessian_size,
@@ -30,23 +53,24 @@ bool simplex_contact_target_view_ready(
 }
 
 bool simplex_native_contact_targets_ready(
-    SimplexNormalContact::ContactInfo& info)
+    SimplexNormalContact::ContactInfo&          info,
+    const SimplexNormalContactNativeContext& native_context)
 {
     return simplex_contact_target_view_ready(info.PTs().size(),
                                              SimplexNormalContact::PTHalfHessianSize,
-                                             info.PT_native_contact_targets())
+                                             native_context.PT_targets)
            && simplex_contact_target_view_ready(
                info.EEs().size(),
                SimplexNormalContact::EEHalfHessianSize,
-               info.EE_native_contact_targets())
+               native_context.EE_targets)
            && simplex_contact_target_view_ready(
                info.PEs().size(),
                SimplexNormalContact::PEHalfHessianSize,
-               info.PE_native_contact_targets())
+               native_context.PE_targets)
            && simplex_contact_target_view_ready(
                info.PPs().size(),
                SimplexNormalContact::PPHalfHessianSize,
-               info.PP_native_contact_targets());
+               native_context.PP_targets);
 }
 }  // namespace
 
@@ -364,13 +388,19 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                 return;
             }
 
+            const auto* native_context =
+                static_cast<const SimplexNormalContactNativeContext*>(
+                    info.exact_contact_context());
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
-                && info.structured_hessian_sink().sink.matrix.native_enabled()
-                && simplex_native_contact_targets_ready(info);
+                && native_context != nullptr
+                && native_context->sink.native_enabled()
+                && simplex_native_contact_targets_ready(info, *native_context);
             if(native_ready)
             {
-                assemble_ipc_simplex_normal_contact_native_exact(info);
+                assemble_ipc_simplex_normal_contact_native_exact(
+                    info,
+                    *native_context);
                 return;
             }
 
@@ -379,7 +409,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
                 "SOCU native-only build excludes legacy simplex normal "
                 "structured contact assembly and requires native target tables");
 #else
-            assemble_ipc_simplex_normal_contact_structured(info);
+            assemble_ipc_simplex_normal_contact_structured(
+                make_simplex_normal_structured_info(info));
 #endif
             return;
         }

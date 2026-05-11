@@ -1,6 +1,6 @@
 #pragma once
 
-#include <linear_system/socu_native_contact_writer.h>
+#include <linear_system/socu_native_contact_assembly_sink.h>
 #include <mixed_precision/policy.h>
 #include <utils/structured_contact_assembly_sink.h>
 
@@ -57,8 +57,8 @@ MUDA_DEVICE bool contact_targets_are_whole_stencil_fallback(
 
 template <int StencilSize, typename Stencil, typename HMat>
 MUDA_DEVICE void write_exact_targets(
-    StructuredContactAssemblySink<ActivePolicy::StoreScalar,
-                                  ActivePolicy::SolveScalar> structured_sink,
+    SocuNativeContactAssemblySink<ActivePolicy::StoreScalar,
+                                  ActivePolicy::SolveScalar> native_sink,
     muda::CBufferView<SocuNativeContactStencilTarget> targets,
     IndexT                                           contact_id,
     const Stencil&                                   indices,
@@ -69,10 +69,7 @@ MUDA_DEVICE void write_exact_targets(
     constexpr SizeT HalfBlockCount = StencilSize * (StencilSize + 1) / 2;
     const SizeT     base = static_cast<SizeT>(contact_id) * HalfBlockCount;
 
-    SocuNativeContactExactWriter<Store, Solve> writer{
-        structured_sink.sink.matrix,
-        structured_sink.abd_vertex_to_J,
-        structured_sink.counters};
+    SocuNativeContactExactWriter<Store, Solve> writer = native_sink.writer();
 
     if(!contact_targets_are_exact_or_skipped<StencilSize>(targets, base))
     {
