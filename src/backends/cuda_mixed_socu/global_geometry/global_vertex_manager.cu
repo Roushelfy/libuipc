@@ -1,11 +1,17 @@
 #include <global_geometry/global_vertex_manager.h>
-#include <active_set_system/global_active_set_manager.h>
 #include <uipc/common/enumerate.h>
 #include <uipc/common/range.h>
 #include <muda/cub/device/device_reduce.h>
 #include <global_geometry/vertex_reporter.h>
 #include <collision_detection/global_trajectory_filter.h>
 #include <sim_engine.h>
+
+#ifndef UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+#define UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE 0
+#endif
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+#include <active_set_system/global_active_set_manager.h>
+#endif
 
 /*************************************************************************************************
 * Core Implementation
@@ -20,7 +26,9 @@ void GlobalVertexManager::do_build()
     m_impl.default_d_hat = d_hat->view()[0];
 
     m_impl.global_trajectory_filter  = find<GlobalTrajectoryFilter>();
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
     m_impl.global_active_set_manager = find<GlobalActiveSetManager>();
+#endif
 }
 
 void GlobalVertexManager::Impl::init()
@@ -134,6 +142,7 @@ void GlobalVertexManager::Impl::collect_vertex_displacements()
 
 void GlobalVertexManager::Impl::prepare_AL_CCD()
 {
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
     UIPC_ASSERT(global_active_set_manager, "GlobalActiveSetManager not enabled");
     auto non_penetrate_positions = global_active_set_manager->non_penetrate_positions();
     auto& tmp_pos = safe_positions;
@@ -152,6 +161,10 @@ void GlobalVertexManager::Impl::prepare_AL_CCD()
                    tmp_pos(i) = pos(i);
                    pos(i)     = non_penetrate_pos(i);
                });
+#else
+    UIPC_ERROR_WITH_LOCATION(
+        "prepare_AL_CCD() requires UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=ON");
+#endif
 }
 
 void GlobalVertexManager::Impl::post_AL_CCD()
@@ -162,12 +175,17 @@ void GlobalVertexManager::Impl::post_AL_CCD()
 
 void GlobalVertexManager::Impl::recover_non_penetrate()
 {
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
     using namespace muda;
     UIPC_ASSERT(global_active_set_manager, "GlobalActiveSetManager not enabled");
     auto non_penetrate_positions = global_active_set_manager->non_penetrate_positions();
     UIPC_ASSERT(non_penetrate_positions.size() == positions.size(),
                 "Non-penetrate size not equal");
     BufferLaunch().copy<Vector3>(positions.view(), non_penetrate_positions);
+#else
+    UIPC_ERROR_WITH_LOCATION(
+        "recover_non_penetrate() requires UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=ON");
+#endif
 }
 
 void GlobalVertexManager::VertexAttributeInfo::require_discard_friction() const noexcept

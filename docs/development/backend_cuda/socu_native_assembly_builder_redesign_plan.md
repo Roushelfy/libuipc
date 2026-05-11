@@ -35,9 +35,49 @@ regular, preclassified matrix write microkernels.
   native builder passes all gates.
 - This plan does not make runtime reordering mandatory.
 
+## Starting Branch And Reused Baseline
+
+Implementation starts from commit `ea8c59bc` (`Record SOCU M6 fallback contact
+gates`) on a dedicated branch/worktree. That baseline is intentionally before
+the abandoned per-half-block native contact target series. The redesign reuses
+the stable M6 foundation and keeps the slower M8 native contact path only as an
+external reference on the original branch.
+
+Reuse directly:
+
+- SOCU runtime creation, descriptor upload, chain ordering, and solve/report
+  lifetime.
+- Native diagonal/RHS workspace initialization and its diff guard.
+- Native chain/base Hessian `D/E/RHS` writer, including the 3x3 exact fast path,
+  scalar fallback, and validation counters.
+- `StructuredContactOffbandPolicy` semantics for `Drop`, `Diag`, and
+  `DiagLump`.
+- Legacy structured contact assembly as the correctness oracle in fallback
+  builds.
+- Runtime reorder/report infrastructure and contact Hessian cache stamps where
+  they are already stable.
+
+Do not reuse as production code:
+
+- The M8 `SocuNativeContactStencilTarget` per-half-block target table.
+- Per-solve target rebuild kernels that repeat descriptor lookup and scalar
+  pair classification.
+- Any hot-path adapter that calls back into `StructuredContactAssemblySink`.
+- Host-copy contact signatures as the final cache validity mechanism.
+
+Temporary compatibility code may be copied only behind an explicit flag and
+must be deleted once the compact symbolic plan executor passes the M8 cutover
+criteria.
+
+Performance baselines must be reproducible. The abandoned per-half-block native
+target baseline is `8d0ad39b` on the original `mipc` branch unless the journal
+records a newer frozen baseline binary or artifact. Every performance result
+that claims a speedup over the old target path must record the baseline commit,
+binary path, CMake cache, GPU, driver, and scene seed.
+
 ## Current Pain Points
 
-The current native contact path is a useful bridge, but it is not the target
+The abandoned M8 native contact path is a useful bridge, but it is not the target
 architecture:
 
 - `SocuNativeContactStencilTarget` stores one large record per contact
@@ -106,6 +146,35 @@ a device-to-host copy in the hot path.
 `fixed_mapping_epoch` covers FEM/ABD fixed flags, vertex ownership, old DoF
 offsets, and global vertex offsets. `vertex_projection_epoch` covers ABD
 projection data such as `ABDJacobi` values used to precompute side weights.
+
+M1 is a hard prerequisite for all downstream implementation. No M2 compact side
+table work may be merged until the final assembly path can build a plan key
+without a host-copy contact signature and all cache-invalidation tests in M1
+pass.
+
+Epoch producers are part of the public contract:
+
+- `ordering_epoch` is owned by the SOCU ordering/runtime reorder layer and bumps
+  whenever native block order, horizon, block size, or old-to-new DoF layout can
+  change.
+- `native_descriptor_epoch` is owned by the native descriptor cache and bumps
+  whenever descriptor records or their device layout are rebuilt.
+- `contact_topology_epoch` and `contact_layout_hash` are owned by
+  `GlobalDyTopoEffectManager` or the dy-topology contact manager. They bump when
+  active contact stencil vertex ids, reporter/source ownership, source order, or
+  contact storage layout changes. They do not bump for geometry-only numeric
+  updates.
+- `fixed_mapping_epoch` is owned by the FEM/ABD mapping and global vertex
+  managers. It bumps when fixed flags, vertex ownership, old DoF offsets, global
+  vertex offsets, or in-place mapping tables change.
+- `vertex_projection_epoch` is owned by ABD projection/Jacobi producers. It
+  bumps when `ABDJacobi::x_bar()` or any precomputed projection weight used by a
+  side lane changes, even if contact topology and descriptor layout are stable.
+
+Runtime graph probes may still compute diagnostic signatures, but probe-only
+keys and final assembly keys must be isolated. A probe-built plan must never be
+inserted into the final assembly cache unless it was built from the final
+assembly key above.
 
 Contact generation should maintain:
 
@@ -371,11 +440,21 @@ Task flags have fixed semantics:
 Programs are bucketed by model, family, program kind, and execution strategy:
 
 ```cpp
+enum class SocuContactExecutionStrategy : std::uint8_t
+{
+    DirectScatter,
+    DetectOnlyHotBlock,
+    RecomputeOwnerReduce,
+    CachedMicroblockOwnerReduce,
+};
+
 struct SocuContactProgramBucket
 {
     SocuContactModelKind model;
     SocuContactFamily family;
     SocuContactProgramKind program_kind;
+    SocuContactExecutionStrategy execution_strategy =
+        SocuContactExecutionStrategy::DirectScatter;
     std::uint32_t first_program = 0;
     std::uint32_t program_count = 0;
 };
@@ -430,6 +509,19 @@ struct SocuContactAssemblyPlanView
 `local_contact_id`, then reads
 `source_to_program[first_source_to_program + local_contact_id]`. It must not
 scan `programs`.
+
+The O(1) lookup contract requires dense source ids:
+
+```cpp
+sources.size() == source_count;
+sources[source_id].source_id == source_id;
+```
+
+If an upstream reporter cannot provide dense ids, the builder must create a
+compact `source_id_to_source_index` table during symbolic build and the cost
+must be reported. Production milestones prefer dense ids; debug validation must
+fail on duplicate ids, sparse ids without a map, or any source header whose
+stored id does not match its array position.
 
 `SocuContactPlanStats` is copied to the report after build and after numeric
 execution:
@@ -849,10 +941,12 @@ native_contact_hot_reduce_strategy = "off" | "detect_only" | "recompute" | "cach
 
 Planned files:
 
+- `src/backends/cuda_mixed_socu/linear_system/socu_contact_plan_types.h`
 - `src/backends/cuda_mixed_socu/linear_system/socu_native_assembly_plan.h`
 - `src/backends/cuda_mixed_socu/linear_system/socu_contact_assembly_plan.h`
 - `src/backends/cuda_mixed_socu/linear_system/socu_contact_plan_builder.cu`
 - `src/backends/cuda_mixed_socu/linear_system/socu_contact_program_writer.h`
+- `src/backends/cuda_mixed_socu/linear_system/socu_contact_program_debug_compare.h`
 - `src/backends/cuda_mixed_socu/linear_system/socu_contact_executor.cu`
 - `src/backends/cuda_mixed_socu/linear_system/socu_contact_plan_report.h`
 
@@ -869,27 +963,81 @@ Existing integration points:
 - Existing `SocuNativeContactStencilTarget` remains behind a temporary
   compatibility flag until the compact plan is validated.
 
+Header hygiene rules:
+
+- `socu_contact_plan_types.h` contains only POD ids, enums, compact records, and
+  view types needed by kernels.
+- Builder and executor implementations live in `.cu` files. Model-specific
+  evaluator glue stays in contact-model native TUs.
+- `GlobalLinearSystem` and other widely included headers must not include heavy
+  template builders or legacy debug comparison helpers. They may store opaque
+  views or forward-declared owner types only.
+- `socu_contact_program_writer.h` is production-only. It must not contain
+  legacy target fields, debug compare state, or old writer helpers.
+- `socu_contact_program_debug_compare.h` is compiled only in debug/full-fallback
+  comparison builds and is the only compact-plan header allowed to reference
+  legacy target tables for oracle comparison.
+
 ## Build Matrix
 
 The redesign must keep three build modes healthy:
 
-1. Full fallback build.
-   - `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF`.
-   - Legacy structured contact TUs, current per-half-block native targets, and
-     compact plan code can all be compiled.
-   - Used for reference matrix diff and debug comparison.
+All three modes are SOCU native builder modes. They should keep the Augmented
+Lagrangian IPC pipeline out of the default compile set with
+`UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`; AL is a separate pipeline and its
+translation units are not part of the native contact builder performance path.
+If an AL scene is loaded in this build, initialization must fail explicitly
+instead of relying on missing registrations or link errors.
 
-2. Native-only compatibility build.
+Default iteration rule:
+
+- Native builder development and performance milestones use
+  `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` and
+  `UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`.
+- Builder-only contract and smoke tests may also enable
+  `UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD=ON`. This existing narrow build
+  removes unrelated heavy constitutions and coupling pipelines, including
+  `inter_primitive_effect_system/constitutions/*.cu`, while keeping the SOCU
+  chain/base/diag/RHS/native-contact development surface.
+- This keeps AL, legacy structured contact fallback TUs, and unrelated
+  inter-primitive stitch constitutions out of the compile queue, so M1-M5 can
+  iterate on the native builder without paying for unrelated CUDA template
+  instantiations.
+- Full fallback builds are reference/oracle builds only. Use them for explicit
+  matrix-diff gates and regression bisection, not for normal milestone work.
+
+1. Native-only development/performance build.
    - `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON`.
-   - Legacy structured contact TUs are excluded, but the current native target
-     path can remain until M8.
-   - Used to ensure native contact coverage does not depend on legacy TUs.
+   - `UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`.
+   - `UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD=ON` is allowed for
+     builder-only M0-M5 contract tests and Wrecking Ball scene gates.
+   - Legacy structured contact TUs are excluded.
+   - Inter-primitive stitch constitution TUs are excluded when the minimal flag
+     is enabled; this build does not validate scenes that require those
+     constitutions.
+   - This is the default build for M1-M5 implementation, focused unit tests,
+     synthetic builder tests, and performance gates.
+   - Before the compact plan covers a contact family, unsupported native-only
+     coverage must fail with an explicit gate reason instead of silently
+     linking the legacy sink.
+   - Used to ensure native contact coverage does not depend on legacy TUs or on
+     the abandoned per-half-block target adapter.
+
+2. Full fallback reference build.
+   - `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=OFF`.
+   - `UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`.
+   - Legacy structured contact TUs and compact plan code can both be compiled.
+   - The abandoned per-half-block native contact target path is not part of
+     this branch unless a short-lived comparison flag explicitly restores it.
+   - Used for reference matrix diff and debug comparison only.
 
 3. Native compact-plan performance build.
    - Adds a CMake or compile definition such as
      `UIPC_CUDA_MIXED_SOCU_CONTACT_PLAN_ONLY=ON`.
-   - Excludes legacy structured contact TUs and, after M8, excludes the old
-     per-half-block `SocuNativeContactStencilTarget` compatibility path.
+   - Keeps `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON`.
+   - Keeps `UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`.
+   - Excludes legacy structured contact TUs and any temporary compatibility
+     adapter.
    - Used for final performance gates.
 
 New CUDA translation units must be listed explicitly beside the existing native
@@ -908,6 +1056,10 @@ Compile-resource acceptance:
   exception.
 - If a TU exceeds that budget, split by model/family before adding more template
   instantiations.
+- Source-scan acceptance must inspect `build.ninja`, `ninja -n <test target>`,
+  and `compile_commands.json` when available. The native-only development and
+  compact-plan performance builds must not compile legacy structured contact
+  TUs, abandoned per-half-block target TUs, or AL pipeline TUs.
 
 ## Report Fields
 
@@ -915,6 +1067,9 @@ Add report fields under the existing SOCU report:
 
 ```text
 native_contact_plan_enabled
+native_contact_plan_executor_enabled
+native_contact_hot_reduce_enabled
+native_contact_scalar_diag_compat_enabled
 native_contact_plan_cache_hit
 native_contact_plan_rebuild_count
 native_contact_plan_build_ms
@@ -960,16 +1115,20 @@ enabled.
 
 ## Milestones
 
+Milestone implementation order assumes the native-only development/performance
+build above. Fallback reference builds are run only at the acceptance points that
+explicitly compare against the legacy structured sink.
+
 ### M0: Baseline Instrumentation And Guard Rails
 
 Deliverables:
 
 - Add feature flags:
-  - `SOCU_NATIVE_CONTACT_PLAN=0/1`
-  - `SOCU_NATIVE_CONTACT_PLAN_EXECUTOR=0/1`
-  - `SOCU_NATIVE_CONTACT_HOT_REDUCE=0/1`
-  - `SOCU_NATIVE_CONTACT_HOT_REDUCE_STRATEGY=off|detect_only|recompute|cached_microblock`
-  - `SOCU_NATIVE_CONTACT_SCALAR_DIAG_COMPAT=0/1`
+  - `linear_system/socu_approx/native_contact_plan=0/1`
+  - `linear_system/socu_approx/native_contact_plan_executor=0/1`
+  - `linear_system/socu_approx/native_contact_hot_reduce=0/1`
+  - `linear_system/socu_approx/native_contact_hot_reduce_strategy=off|detect_only|recompute|cached_microblock`
+  - `linear_system/socu_approx/native_contact_scalar_diag_compat=0/1`
 - Add separate timers for:
   - native descriptor rebuild
   - contact plan build
@@ -1003,19 +1162,28 @@ Deliverables:
 Unit tests:
 
 - Same contact count but different vertex ids changes the topology epoch/hash.
+- Same contact count but different vertex ids without a runtime graph probe
+  still rebuilds the final assembly plan.
 - Same vertex ids with changed geometry does not change topology epoch/hash.
 - Ordering epoch change invalidates the plan.
 - Off-band policy change invalidates the plan.
 - Fixed flag or ABD/FEM mapping epoch change invalidates the plan.
 - ABD projection epoch change invalidates the plan.
+- ABD `x_bar()` or precomputed projection weight changes invalidate the plan
+  even when contact topology and descriptor layout do not change.
 - Reordering reporters or changing source family order changes `layout_hash`
   unless the source order is explicitly canonicalized.
+- Probe-only graph signatures and bypassed probes do not pollute or refresh the
+  final assembly plan cache.
 
 Acceptance:
 
 - No stale target reuse when active contacts change with unchanged counts.
 - No device-to-host contact array copy is required in the final assembly hot
   path.
+- Cache-hit tests distinguish final assembly keys from probe/debug keys.
+- The journal records the owner and bump trigger for every epoch in
+  `SocuAssemblyPlanKey`.
 
 ### M2: Compact Side Table And Program Builder
 
@@ -1044,6 +1212,9 @@ Unit tests:
 - PH tests verify only `PH(0)` creates a matrix side and `PH(1)` remains
   evaluator data.
 - Source-to-program invalid entries are initialized and counted.
+- `source_id == sources[source_id].source_id` is validated for dense ids.
+- Non-dense, duplicate, or out-of-range source ids produce a debug validation
+  failure unless an explicit `source_id_to_source_index` map is built.
 - Record size checks with `static_assert` budget targets.
 
 Acceptance:
@@ -1061,8 +1232,9 @@ Deliverables:
 - Existing native contact kernels still compute `H`, then call
   `write_contact(source_id, local_contact_id, H)`.
 - Implement exact FEM/FEM and ABD/FEM paths first.
-- Implement debug validation that recomputes task targets and verifies the
-  symbolic task class before executing the write.
+- Implement debug validation in `socu_contact_program_debug_compare.h`. It
+  recomputes task targets and verifies the symbolic task class before executing
+  the write, but it is not included by the production writer header.
 
 Unit tests:
 
@@ -1071,11 +1243,16 @@ Unit tests:
 - Random small Hessian tests compare `D/E` values within mixed-precision
   tolerances.
 - Debug compare mode verifies old and new writers on the same contacts.
+- Production writer source-scan verifies that `socu_contact_program_writer.h`
+  does not include debug compare headers, legacy target headers, or structured
+  sink headers.
 
 Acceptance:
 
 - No production writer path reads `old_to_chain` or calls
   `classify_dof_pair`.
+- No production writer path includes legacy compare helpers or stores
+  `SocuNativeContactStencilTarget` compatibility fields.
 - No production writer path branches per scalar on diag/first-offdiag/off-band.
 - Exact FEM/FEM and ABD/FEM results match the legacy structured sink.
 - Plan build plus numeric exact writer is not slower than the current
@@ -1097,6 +1274,8 @@ Unit tests:
 - Exhaustive policy tests for `Drop`, `Diag`, and `DiagLump`.
 - Diag tests verify exact vertex diagonal block when representable and scalar
   diagonal fallback when configured or required.
+- Diag block fallback and scalar compatibility fallback use separate golden
+  matrices. A test failure must identify which policy was expected.
 - DiagLump tests verify absolute row-sum semantics against the legacy sink.
 - ABD projection tests use nontrivial `ABDJacobi::x_bar()` values.
 - Same-body ABD/ABD symmetry tests cover swapped local order and duplicate
@@ -1253,6 +1432,8 @@ Required test categories:
 3. Numeric writer tests.
    - Exact matrix equality against legacy structured sink.
    - `Diag` equality against legacy semantics.
+   - `Diag` block fallback equality and scalar compatibility equality use
+     separate golden outputs.
    - `DiagLump` equality against legacy absolute row-sum semantics.
    - ABD projection with nontrivial weights.
    - First-offdiag lane orientation, including transposed and non-transposed
@@ -1263,6 +1444,11 @@ Required test categories:
    - Cache hit when only geometry changes.
    - Rebuild when ordering, topology, mapping, fixed flags, or off-band policy
      changes.
+   - Same contact count but different stencil vertex ids rebuilds without
+     relying on a runtime graph probe.
+   - ABD projection weight or `x_bar()` changes rebuild when topology is stable.
+   - Probe-created or probe-skipped graph state cannot refresh or poison the
+     final assembly plan cache.
    - No host contact copy required for final assembly.
 
 5. Randomized property tests.
@@ -1282,8 +1468,11 @@ Source-scan tests:
   `structured_contact_assembly_sink.h`.
 - Production compact writer code must not reference `old_to_chain` or
   `classify_dof_pair`.
+- Production compact writer code must not include
+  `socu_contact_program_debug_compare.h` or legacy target headers.
 - Native compact-plan performance builds must not compile legacy structured
-  contact TUs.
+  contact TUs. This must be checked against `build.ninja`, `ninja -n`, and
+  `compile_commands.json` when the compile database is generated.
 
 Tolerance policy:
 
@@ -1317,9 +1506,16 @@ Correctness gates:
 Performance gates:
 
 - Same build, same scene, same variant, only toggling
-  `SOCU_NATIVE_CONTACT_PLAN`.
+  `linear_system/socu_approx/native_contact_plan` unless the gate explicitly
+  measures a compile-time build mode.
 - Report must include plan cache hit rate, plan build time, numeric contact
   time, exact/fallback/drop counts, and hot-reduce state.
+- Every performance result is split into:
+  - cold rebuild timing, where the plan is forced to rebuild;
+  - cache-hit numeric timing, where topology and symbolic keys are stable;
+  - amortized per-Newton-solve timing over the full nonlinear step.
+- Stable-topology Newton solves should report a cache-hit rate close to 100%.
+  Any miss must name the key field that changed or the result is rejected.
 - Native contact plan must beat the current per-half-block native target path
   on contact-heavy synthetic microbenchmarks before scene-level cutover.
 - Native contact plan must beat the legacy structured contact sink on the
@@ -1335,6 +1531,8 @@ Measurement protocol:
 - Exclude the first frame from per-frame timing summaries when it includes
   runtime construction or cold plan allocation.
 - Compare contact assembly timers separately from total frame time.
+- Report cold-rebuild and cache-hit medians separately before reporting any
+  amortized result.
 
 Quantitative cutover targets:
 
@@ -1372,10 +1570,14 @@ Before making the compact builder default:
 - All contact models are covered: simplex normal, simplex frictional,
   vertex-half-plane normal, vertex-half-plane frictional.
 - `Drop`, `Diag`, and `DiagLump` pass reference matrix tests.
+- `Diag` block fallback and scalar compatibility fallback have distinct golden
+  tests and report counters.
 - Final assembly cache keys use topology epochs, not hot-path host-copy
   signatures.
 - Multiple contact sources are represented with stable `source_id` values, and
   duplicate local contact ids across reporters are tested.
+- Dense source ids satisfy `source_id == sources[source_id].source_id`, or the
+  plan explicitly carries and tests a source-id remap table.
 - `program_for(source_id, local_contact_id)` is O(1) and covered by source-scan
   or unit tests.
 - Native `E` orientation tests cover transposed and non-transposed first
@@ -1384,6 +1586,8 @@ Before making the compact builder default:
 - Performance runs are made with debug diff and counters disabled.
 - Native-only build passes without legacy structured contact TUs.
 - Full fallback build still passes comparison tests.
+- Performance claims name the frozen baseline commit or artifact used for the
+  old per-half-block target comparison.
 - Documentation states whether `full_hessian_cached` is native replay or legacy
   replay for the tested variant.
 

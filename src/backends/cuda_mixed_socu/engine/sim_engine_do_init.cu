@@ -16,9 +16,14 @@
 #include <affine_body/inter_affine_body_constitution_manager.h>
 #include <newton_tolerance/newton_tolerance_manager.h>
 #include <time_integrator/time_integrator_manager.h>
-#include <active_set_system/global_active_set_manager.h>
 #include <pipeline/ipc_pipeline_flag.h>
+#ifndef UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+#define UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE 0
+#endif
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+#include <active_set_system/global_active_set_manager.h>
 #include <pipeline/al_ipc_pipeline_flag.h>
+#endif
 
 namespace uipc::backend::cuda_mixed
 {
@@ -50,8 +55,11 @@ void SimEngine::build()
         find<InterAffineBodyConstitutionManager>();
     m_finite_element_method = find<FiniteElementMethod>();
 
-    // Augmented Lagrangian Pipeline Systems
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
     m_global_active_set_manager = find<GlobalActiveSetManager>();
+#else
+    m_global_active_set_manager = nullptr;
+#endif
 
 
     // 3) dump system info
@@ -83,20 +91,33 @@ void SimEngine::init_scene()
 
     Vector3 gravity = info.find<Vector3>("gravity")->view()[0];
 
-    auto alipc = find<ALIPCPipelineFlag>();
-    auto ipc   = find<IPCPipelineFlag>();
-    if(alipc)
+    auto ctype_attr = info.find<std::string>("contact/constitution");
+    if(ctype_attr && ctype_attr->view()[0] == "al-ipc")
     {
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+        auto alipc = find<ALIPCPipelineFlag>();
+        if(!alipc)
+        {
+            throw SimEngineException("AL-IPC pipeline flag was not built");
+        }
         logger::info("Pipeline: Augmented Lagrangian IPC");
         m_pipeline_type = PipelineType::AugmentedLagrangian;
-    }
-    else if(ipc)
-    {
-        m_pipeline_type = PipelineType::Basic;
+#else
+        throw SimEngineException{
+            "contact/constitution='al-ipc' requires UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=ON"};
+#endif
     }
     else
     {
-        throw SimEngineException("No valid pipeline flag found in the scene!");
+        auto ipc = find<IPCPipelineFlag>();
+        if(ipc)
+        {
+            m_pipeline_type = PipelineType::Basic;
+        }
+        else
+        {
+            throw SimEngineException("No valid pipeline flag found in the scene!");
+        }
     }
 
 
@@ -127,8 +148,10 @@ void SimEngine::init_scene()
             m_global_animator->init();
         if(m_global_external_force_manager)
             m_global_external_force_manager->init();
+#if UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
         if(m_global_active_set_manager)
             m_global_active_set_manager->init();
+#endif
 
         m_line_searcher->init();
         m_global_linear_system->init();

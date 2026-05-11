@@ -5,6 +5,9 @@ enable_language(CUDA)
 option(UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
     "Build cuda_mixed_socu without legacy structured contact assembly translation units."
     OFF)
+option(UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE
+    "Build the Augmented Lagrangian IPC pipeline translation units in cuda_mixed_socu."
+    OFF)
 
 # ------------------------------------------------------------------------------
 # CUDA Backend
@@ -57,6 +60,11 @@ endif()
 if(UIPC_BUILD_TESTS)
     target_compile_definitions(cuda_mixed_socu PRIVATE UIPC_ENABLE_MUDA_MEMORY_TRACKING=1)
 endif()
+if(UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE)
+    target_compile_definitions(cuda_mixed_socu PRIVATE UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=1)
+else()
+    target_compile_definitions(cuda_mixed_socu PRIVATE UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=0)
+endif()
 
 # all files in this directory
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
@@ -82,6 +90,27 @@ if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
 
     list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER)
     uipc_info("cuda_mixed_socu wrecking_ball minimal build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER} source entries")
+endif()
+
+if(NOT UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE)
+    set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_AL_FILTER ${SOURCES})
+    list(LENGTH _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_AL_FILTER _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_AL_FILTER)
+
+    set(_UIPC_CUDA_MIXED_SOCU_AL_EXCLUDE_PATTERNS
+        ".*/active_set_system/.*\\.cu$"
+        ".*/affine_body/(abd_active_set_reporter|abd_al_stiffness_estimator)\\.cu$"
+        ".*/collision_detection/filters/al_.*\\.cu$"
+        ".*/contact_system/al_.*\\.cu$"
+        ".*/engine/advance_al\\.cu$"
+        ".*/finite_element/(fem_active_set_reporter|fem_al_stiffness_estimator)\\.cu$"
+        ".*/pipeline/al_ipc_pipeline_flag\\.cu$")
+
+    foreach(_UIPC_CUDA_MIXED_EXCLUDE_PATTERN IN LISTS _UIPC_CUDA_MIXED_SOCU_AL_EXCLUDE_PATTERNS)
+        list(FILTER SOURCES EXCLUDE REGEX "${_UIPC_CUDA_MIXED_EXCLUDE_PATTERN}")
+    endforeach()
+
+    list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_AL_FILTER)
+    uipc_info("cuda_mixed_socu AL pipeline disabled: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_AL_FILTER} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_AL_FILTER} source entries")
 endif()
 
 if(UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY)

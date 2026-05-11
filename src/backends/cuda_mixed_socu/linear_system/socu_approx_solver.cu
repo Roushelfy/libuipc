@@ -135,6 +135,50 @@ bool contact_hessian_cache_enabled(const std::string&             graph_source,
            && policy == StructuredContactOffbandPolicy::Drop;
 }
 
+bool native_contact_hot_reduce_strategy_valid(std::string_view strategy) noexcept
+{
+    return strategy == "off" || strategy == "detect_only"
+           || strategy == "recompute" || strategy == "cached_microblock";
+}
+
+void reset_native_contact_plan_report(SocuApproxSolveReport& report,
+                                      bool plan_enabled,
+                                      bool executor_enabled,
+                                      bool hot_reduce_enabled,
+                                      bool scalar_diag_compat_enabled,
+                                      std::string_view hot_reduce_strategy,
+                                      SizeT plan_rebuild_count)
+{
+    report.native_contact_plan_enabled = plan_enabled;
+    report.native_contact_plan_executor_enabled = executor_enabled;
+    report.native_contact_hot_reduce_enabled = hot_reduce_enabled;
+    report.native_contact_scalar_diag_compat_enabled =
+        scalar_diag_compat_enabled;
+    report.native_contact_hot_reduce_strategy =
+        std::string{hot_reduce_strategy};
+    report.native_contact_plan_cache_hit = false;
+    report.native_contact_plan_rebuild_count = plan_rebuild_count;
+    report.native_contact_plan_build_ms = 0.0;
+    report.native_contact_numeric_ms = 0.0;
+    report.native_contact_hot_reduce_ms = 0.0;
+    report.native_contact_side_count = 0;
+    report.native_contact_lane_count = 0;
+    report.native_contact_program_count = 0;
+    report.native_contact_task_count = 0;
+    report.native_contact_bucket_count = 0;
+    report.native_contact_exact_program_count = 0;
+    report.native_contact_diag_program_count = 0;
+    report.native_contact_diag_lump_program_count = 0;
+    report.native_contact_drop_program_count = 0;
+    report.native_contact_skipped_program_count = 0;
+    report.native_contact_mixed_rejected_program_count = 0;
+    report.native_contact_diag_block_task_count = 0;
+    report.native_contact_diag_scalar_task_count = 0;
+    report.native_contact_lump_scalar_task_count = 0;
+    report.native_contact_hot_diag_block_count = 0;
+    report.native_contact_hot_offdiag_block_count = 0;
+}
+
 socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
                                             bool normalize_edge_weight)
 {
@@ -279,6 +323,54 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_debug_compare_native_chain_base_hessian =
         debug_compare_native_chain_base_hessian_attr
         && debug_compare_native_chain_base_hessian_attr->view()[0] != 0;
+    auto native_contact_plan_attr =
+        config.find<IndexT>("linear_system/socu_approx/native_contact_plan");
+    auto native_contact_plan_executor_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/native_contact_plan_executor");
+    auto native_contact_hot_reduce_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/native_contact_hot_reduce");
+    auto native_contact_hot_reduce_strategy_attr =
+        config.find<std::string>(
+            "linear_system/socu_approx/native_contact_hot_reduce_strategy");
+    auto native_contact_scalar_diag_compat_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/native_contact_scalar_diag_compat");
+    m_native_contact_plan_enabled =
+        native_contact_plan_attr && native_contact_plan_attr->view()[0] != 0;
+    m_native_contact_plan_executor_enabled =
+        native_contact_plan_executor_attr
+        && native_contact_plan_executor_attr->view()[0] != 0;
+    m_native_contact_scalar_diag_compat_enabled =
+        native_contact_scalar_diag_compat_attr
+        && native_contact_scalar_diag_compat_attr->view()[0] != 0;
+    const bool native_contact_hot_reduce_requested =
+        native_contact_hot_reduce_attr
+        && native_contact_hot_reduce_attr->view()[0] != 0;
+    m_native_contact_hot_reduce_strategy =
+        native_contact_hot_reduce_strategy_attr
+            ? native_contact_hot_reduce_strategy_attr->view()[0]
+            : std::string{"off"};
+    if(native_contact_hot_reduce_requested
+       && m_native_contact_hot_reduce_strategy == "off")
+    {
+        m_native_contact_hot_reduce_strategy = "detect_only";
+    }
+    if(!native_contact_hot_reduce_strategy_valid(
+           m_native_contact_hot_reduce_strategy))
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/"
+                        "native_contact_hot_reduce_strategy must be 'off', "
+                        "'detect_only', 'recompute', or 'cached_microblock', "
+                        "got '{}'",
+                        m_native_contact_hot_reduce_strategy));
+        throw_gate_failure(m_gate_report);
+    }
+    m_native_contact_hot_reduce_enabled =
+        m_native_contact_hot_reduce_strategy != "off";
     auto debug_write_runtime_ordering_report_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/debug_write_runtime_ordering_report");
@@ -933,6 +1025,14 @@ bool SocuApproxSolver::install_ordering_report_impl(
     next_report.runtime_reorder_graph_source = m_runtime_reorder_graph_source;
     next_report.contact_offband_policy =
         std::string{contact_offband_policy_name(m_contact_offband_policy)};
+    reset_native_contact_plan_report(
+        next_report,
+        m_native_contact_plan_enabled,
+        m_native_contact_plan_executor_enabled,
+        m_native_contact_hot_reduce_enabled,
+        m_native_contact_scalar_diag_compat_enabled,
+        m_native_contact_hot_reduce_strategy,
+        0);
 
     m_gate_report = std::move(next_gate);
     m_gate_report.passed = true;
@@ -1223,6 +1323,14 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.complete_dof_coverage = true;
 
     m_report.damping_shift = m_damping_shift;
+    reset_native_contact_plan_report(
+        m_report,
+        m_native_contact_plan_enabled,
+        m_native_contact_plan_executor_enabled,
+        m_native_contact_hot_reduce_enabled,
+        m_native_contact_scalar_diag_compat_enabled,
+        m_native_contact_hot_reduce_strategy,
+        0);
 
     const cudaStream_t stream = system().stream();
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)

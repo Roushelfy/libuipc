@@ -3,7 +3,10 @@
 #include <linear_system/socu_approx_solver.h>
 #include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
+#include <uipc/common/json.h>
 #include <utils/structured_contact_assembly_sink.h>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <type_traits>
 
@@ -30,6 +33,65 @@ static_assert(std::is_same_v<decltype(socu_native::ProblemShape{}.n), int>);
 TEST_CASE("cuda_mixed_socu_policy_contract", "[cuda_mixed_socu][contract]")
 {
     SUCCEED();
+}
+
+TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
+          "[cuda_mixed_socu][contract][socu_approx]")
+{
+    using uipc::Json;
+    using uipc::SizeT;
+    using uipc::backend::cuda_mixed::SocuApproxSolveReport;
+    using uipc::backend::cuda_mixed::write_solve_report;
+
+    const auto report_path =
+        std::filesystem::temp_directory_path()
+        / "uipc_socu_report_native_contact_plan_defaults.json";
+    std::filesystem::remove(report_path);
+
+    SocuApproxSolveReport report;
+    report.report_path = report_path.string();
+    write_solve_report(report);
+
+    std::ifstream ifs{report_path};
+    REQUIRE(ifs.good());
+    const Json json = Json::parse(ifs);
+
+    const auto& timing = json.at("timing");
+    CHECK(timing.at("native_contact_plan_enabled").get<bool>() == false);
+    CHECK(timing.at("native_contact_plan_executor_enabled").get<bool>() == false);
+    CHECK(timing.at("native_contact_hot_reduce_enabled").get<bool>() == false);
+    CHECK(timing.at("native_contact_scalar_diag_compat_enabled").get<bool>() == false);
+    CHECK(timing.at("native_contact_hot_reduce_strategy").get<std::string>()
+          == "off");
+    CHECK(timing.at("native_contact_plan_build_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_numeric_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_hot_reduce_ms").get<double>() == 0.0);
+
+    const auto& contact = json.at("contact");
+    CHECK(contact.at("native_contact_plan_cache_hit").get<bool>() == false);
+    for(const char* field : {"native_contact_plan_rebuild_count",
+                             "native_contact_side_count",
+                             "native_contact_lane_count",
+                             "native_contact_program_count",
+                             "native_contact_task_count",
+                             "native_contact_bucket_count",
+                             "native_contact_exact_program_count",
+                             "native_contact_diag_program_count",
+                             "native_contact_diag_lump_program_count",
+                             "native_contact_drop_program_count",
+                             "native_contact_skipped_program_count",
+                             "native_contact_mixed_rejected_program_count",
+                             "native_contact_diag_block_task_count",
+                             "native_contact_diag_scalar_task_count",
+                             "native_contact_lump_scalar_task_count",
+                             "native_contact_hot_diag_block_count",
+                             "native_contact_hot_offdiag_block_count"})
+    {
+        CAPTURE(field);
+        CHECK(contact.at(field).get<SizeT>() == SizeT{0});
+    }
+
+    std::filesystem::remove(report_path);
 }
 
 TEST_CASE("cuda_mixed_socu_mixed_graph_fem_source_id",

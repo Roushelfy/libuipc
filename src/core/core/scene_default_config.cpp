@@ -61,6 +61,13 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/native_chain_base_hessian", IndexT{0});
     config.create("linear_system/socu_approx/debug_compare_native_chain_base_hessian",
                   IndexT{0});
+    config.create("linear_system/socu_approx/native_contact_plan", IndexT{0});
+    config.create("linear_system/socu_approx/native_contact_plan_executor", IndexT{0});
+    config.create("linear_system/socu_approx/native_contact_hot_reduce", IndexT{0});
+    config.create("linear_system/socu_approx/native_contact_hot_reduce_strategy",
+                  std::string{"off"});
+    config.create("linear_system/socu_approx/native_contact_scalar_diag_compat",
+                  IndexT{0});
     config.create("linear_system/socu_approx/debug_write_runtime_ordering_report",
                   IndexT{0});
     config.create("linear_system/socu_approx/debug_validation", IndexT{0});
