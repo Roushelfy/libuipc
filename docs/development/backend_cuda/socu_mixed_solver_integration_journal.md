@@ -1753,3 +1753,57 @@ Interpretation:
   baseline in this small scene, and the counter-enabled run is slower because it
   records debug counters. This is acceptable for M6; reducing contact assembly
   time is still M8.
+
+## 2026-05-11 Redesign Branch M1 First Slice
+
+Branch/worktree:
+
+- Worktree: `/home/zhaofeng/work/libuipc-socu-builder-redesign`
+- Branch: `socu-native-builder-redesign`
+- Base guardrail commit before this slice: `e58f572f socu: add native builder M0 guardrails`
+
+Implemented:
+
+- Added lightweight `linear_system/socu_contact_plan_types.h` with
+  `SocuContactTopologyStamp`, `SocuContactTopologySource`,
+  `SocuAssemblyPlanKey`, `SocuContactExecutionStrategy`, source-id dense
+  validation, and deterministic hash helpers.
+- Added `StructuredAssemblyInfo::contact_topology_stamp()` and setter.
+- Added `GlobalDyTopoEffectManager::contact_topology_stamp(cudaStream_t)`.
+  The first producer computes layout/source hashes on host and hashes active
+  contact vertex-id buffers with a small device reduction, then copies back only
+  two scalar hash accumulators. It does not host-copy full contact arrays in the
+  final assembly path.
+- Wired final structured assembly to set `contact_topology_stamp` after the
+  selected solver configures its workspace stream, gated by
+  `LinearSolver::needs_contact_topology_stamp_for_final()`. Current structured
+  fallback runs do not pay the stamp hash/sync cost unless the native contact
+  plan is enabled. Runtime graph probe logic still uses `contact_set_signature()`
+  only on the probe path.
+- Added M1 contract tests for same-count/different-topology hash behavior,
+  geometry-only stability, dense `source_id` invariants, and plan-key
+  invalidation for ordering/offband/fixed-mapping/projection/contact-content
+  inputs.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| build with M0 development flags (`UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD=ON`, `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON`, `UIPC_CUDA_MIXED_SOCU_BUILD_AL_PIPELINE=OFF`) | passed; CMake reported minimal `501 -> 470`, AL-off `470 -> 460`, native-only `460 -> 456` source entries |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 2` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `4945` assertions in `27` test cases |
+| `compile_commands.json` scan for legacy structured contact, AL, active-set, and inter-primitive stitch constitution TUs | passed; no matching compile entries |
+
+Current M1 status:
+
+- The final path now has a production topology stamp that is independent of
+  probe-only contact signatures.
+- The first stamp producer is deliberately conservative: buffer layout changes
+  also change the layout hash and may cause extra cold rebuilds. That is safe
+  for correctness and acceptable for M1; later contact-generation producers can
+  avoid the scalar hash sync when they can bump the epoch directly at generation
+  time.
+- Remaining M1 work before M2: connect the stamp to the native contact plan
+  cache once the cache object exists, add a final-plan cache-hit/rebuild test
+  using the real cache, and assign stable production `reporter_id/source_id`
+  records for the compact source table.

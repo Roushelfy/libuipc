@@ -1,10 +1,12 @@
 #include <app/app.h>
 #include <linear_system/linear_solver.h>
+#include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/socu_approx_solver.h>
 #include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
 #include <uipc/common/json.h>
 #include <utils/structured_contact_assembly_sink.h>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -21,6 +23,7 @@
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+using uipc::SizeT;
 
 static_assert(std::is_base_of_v<LinearSolver, SocuApproxSolver>);
 static_assert(UIPC_WITH_SOCU_NATIVE == 0 || UIPC_WITH_SOCU_NATIVE == 1);
@@ -166,4 +169,96 @@ TEST_CASE("cuda_mixed_socu_probe_mode_topology_flag",
 
     Sink sink{};
     CHECK(!sink.topology_probe_only());
+}
+
+TEST_CASE("cuda_mixed_socu_contact_topology_stamp_contract",
+          "[cuda_mixed_socu][contract][socu_approx][m1]")
+{
+    SocuContactTopologySource source;
+    source.reporter_id = 0;
+    source.source_id = 0;
+    source.family = SocuContactSourceFamily::SimplexNormalPT;
+    source.contact_count = 2;
+    source.layout_token = 17;
+    source.content_hash = 101;
+
+    auto same_count_different_vertices = source;
+    same_count_different_vertices.content_hash = 202;
+
+    CHECK(socu_contact_source_layout_hash(source)
+          == socu_contact_source_layout_hash(same_count_different_vertices));
+    CHECK(socu_contact_source_content_hash(source)
+          != socu_contact_source_content_hash(same_count_different_vertices));
+
+    auto geometry_only = source;
+    CHECK(socu_contact_source_layout_hash(source)
+          == socu_contact_source_layout_hash(geometry_only));
+    CHECK(socu_contact_source_content_hash(source)
+          == socu_contact_source_content_hash(geometry_only));
+
+    auto different_storage_layout = source;
+    different_storage_layout.layout_token = 18;
+    CHECK(socu_contact_source_layout_hash(source)
+          != socu_contact_source_layout_hash(different_storage_layout));
+}
+
+TEST_CASE("cuda_mixed_socu_contact_source_id_dense_contract",
+          "[cuda_mixed_socu][contract][socu_approx][m1]")
+{
+    std::array<SocuContactTopologySource, 3> dense{};
+    for(SizeT i = 0; i < dense.size(); ++i)
+        dense[i].source_id = i;
+    CHECK(socu_contact_source_ids_dense(dense));
+
+    auto non_dense = dense;
+    non_dense[1].source_id = 4;
+    CHECK(!socu_contact_source_ids_dense(non_dense));
+
+    auto duplicate = dense;
+    duplicate[2].source_id = 1;
+    CHECK(!socu_contact_source_ids_dense(duplicate));
+}
+
+TEST_CASE("cuda_mixed_socu_contact_plan_key_invalidates_on_symbolic_inputs",
+          "[cuda_mixed_socu][contract][socu_approx][m1]")
+{
+    SocuAssemblyPlanKey base;
+    base.ordering_epoch = 7;
+    base.native_descriptor_epoch = 11;
+    base.contact_topology_epoch = 13;
+    base.contact_layout_hash = 17;
+    base.contact_content_hash = 19;
+    base.fixed_mapping_epoch = 23;
+    base.vertex_projection_epoch = 29;
+    base.horizon = 31;
+    base.block_size = 12;
+    base.offband_policy = StructuredContactOffbandPolicy::Diag;
+    base.scalar_diag_fallback_compatibility = true;
+
+    const auto base_hash = socu_contact_plan_key_hash(base);
+
+    auto changed = base;
+    changed.ordering_epoch++;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.offband_policy = StructuredContactOffbandPolicy::DiagLump;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.fixed_mapping_epoch++;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.vertex_projection_epoch++;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.contact_content_hash++;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
 }

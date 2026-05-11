@@ -79,6 +79,11 @@ class LinearSolver : public SimSystem
         return false;
     }
 
+    virtual bool needs_contact_topology_stamp_for_final() const noexcept
+    {
+        return false;
+    }
+
     virtual void notify_line_search_result(
         const GlobalLinearSystem::LineSearchFeedback& feedback)
     {

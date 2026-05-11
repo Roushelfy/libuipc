@@ -6,6 +6,7 @@
 #include <muda/ext/linear_system.h>
 #include <algorithm/matrix_converter.h>
 #include <linear_system/assembly_mode.h>
+#include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/structured_chain_provider.h>
 #include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
@@ -198,6 +199,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_set_signature;
         }
+        SocuContactTopologyStamp contact_topology_stamp() const noexcept
+        {
+            return m_contact_topology_stamp;
+        }
         IndexT descriptor_epoch() const noexcept { return m_descriptor_epoch; }
         bool report_counters_enabled() const noexcept
         {
@@ -275,6 +280,10 @@ class GlobalLinearSystem : public SimSystem
         void set_contact_set_signature(SizeT signature) noexcept
         {
             m_contact_set_signature = signature;
+        }
+        void set_contact_topology_stamp(SocuContactTopologyStamp stamp) noexcept
+        {
+            m_contact_topology_stamp = stamp;
         }
         void set_descriptor_epoch(IndexT epoch) noexcept
         {
@@ -401,6 +410,7 @@ class GlobalLinearSystem : public SimSystem
         StructuredContactOffbandPolicy m_contact_offband_policy =
             StructuredContactOffbandPolicy::Drop;
         SizeT                      m_contact_set_signature = 0;
+        SocuContactTopologyStamp   m_contact_topology_stamp;
         IndexT                     m_descriptor_epoch = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;

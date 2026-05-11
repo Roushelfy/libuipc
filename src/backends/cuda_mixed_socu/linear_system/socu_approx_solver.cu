@@ -253,6 +253,18 @@ bool SocuApproxSolver::needs_contact_set_signature_for_probe(SizeT frame) const 
 #endif
 }
 
+bool SocuApproxSolver::needs_contact_topology_stamp_for_final() const noexcept
+{
+#if !UIPC_WITH_SOCU_NATIVE
+    return false;
+#else
+    return m_runtime
+           && (m_native_contact_plan_enabled
+               || m_native_contact_plan_executor_enabled
+               || m_native_contact_hot_reduce_enabled);
+#endif
+}
+
 void SocuApproxSolver::do_build(BuildInfo& info)
 {
     auto&      config      = world().scene().config();

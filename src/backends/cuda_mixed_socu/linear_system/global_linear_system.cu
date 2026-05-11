@@ -552,6 +552,13 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
                     throw SimSystemException{
                         "Selected solver requested structured chain assembly but did not configure a structured workspace"};
                 }
+                if(global_dytopo_effect_manager
+                   && selected_linear_solver->needs_contact_topology_stamp_for_final())
+                {
+                    info.set_contact_topology_stamp(
+                        global_dytopo_effect_manager->contact_topology_stamp(
+                            info.stream()));
+                }
                 assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
                 selected_linear_solver->finalize_structured_chain(info);
                 return;
@@ -567,6 +574,12 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
         {
             throw SimSystemException{
                 "Selected solver requested structured chain assembly but did not configure a structured workspace"};
+        }
+        if(global_dytopo_effect_manager
+           && selected_linear_solver->needs_contact_topology_stamp_for_final())
+        {
+            info.set_contact_topology_stamp(
+                global_dytopo_effect_manager->contact_topology_stamp(info.stream()));
         }
 
         assemble_into(info, LinearSolver::StructuredProbeAssembly::None);

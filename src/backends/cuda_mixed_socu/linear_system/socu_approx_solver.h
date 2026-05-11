@@ -44,6 +44,7 @@ class SocuApproxSolver : public LinearSolver
     virtual bool finalize_structured_probe(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual bool needs_contact_set_signature_for_probe(SizeT frame) const noexcept override;
+    virtual bool needs_contact_topology_stamp_for_final() const noexcept override;
     virtual void notify_line_search_result(
         const GlobalLinearSystem::LineSearchFeedback& feedback) override;
 

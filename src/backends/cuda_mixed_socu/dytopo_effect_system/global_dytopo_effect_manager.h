@@ -165,6 +165,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
         void ensure_structured_vertex_descriptors(
             GlobalLinearSystem::StructuredAssemblyInfo& info);
         SizeT contact_set_signature();
+        SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
 
         struct StructuredVertexDescriptorCacheKey
         {
@@ -244,6 +245,9 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::DeviceBuffer<SocuNativeVertexDescriptor> structured_vertex_descriptors;
         StructuredVertexDescriptorCacheKey structured_vertex_descriptor_key;
         IndexT structured_vertex_descriptor_epoch = 0;
+        muda::DeviceBuffer<unsigned long long> contact_topology_hash_storage;
+        SocuContactTopologyStamp              last_contact_topology_stamp;
+        SizeT                                 contact_topology_epoch = 0;
 
         void loose_resize_entries(muda::DeviceTripletMatrix<StoreScalar, 3>& m, SizeT size);
         void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);
@@ -264,6 +268,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
     void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
     void assemble_structured_hessian(GlobalLinearSystem::StructuredAssemblyInfo& info);
     SizeT contact_set_signature();
+    SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
 
   protected:
     virtual void do_build() override;
