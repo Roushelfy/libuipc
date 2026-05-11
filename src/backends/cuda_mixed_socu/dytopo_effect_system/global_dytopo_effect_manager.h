@@ -8,6 +8,7 @@
 #include <dytopo_effect_system/dytopo_classify_info.h>
 #include <linear_system/assembly_mode.h>
 #include <linear_system/global_linear_system.h>
+#include <linear_system/socu_native_contact_assembly_sink.h>
 #include <linear_system/socu_native_descriptors.h>
 #include <mixed_precision/policy.h>
 #include <utils/structured_contact_assembly_sink.h>
@@ -118,21 +119,33 @@ class GlobalDyTopoEffectManager final : public SimSystem
       public:
         using ContactSink =
             StructuredContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar>;
+        using NativeContactSink =
+            SocuNativeContactAssemblySink<StoreScalar, ActivePolicy::SolveScalar>;
 
         ContactSink contact_sink() const noexcept { return m_contact_sink; }
+        NativeContactSink native_contact_sink() const noexcept
+        {
+            return m_native_contact_sink;
+        }
         cudaStream_t stream() const noexcept { return m_stream; }
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors() const noexcept
         {
             return m_vertex_descriptors;
         }
         IndexT descriptor_epoch() const noexcept { return m_descriptor_epoch; }
+        SizeT contact_set_signature() const noexcept
+        {
+            return m_contact_set_signature;
+        }
 
       private:
         friend class Impl;
         ContactSink  m_contact_sink;
+        NativeContactSink m_native_contact_sink;
         cudaStream_t m_stream = cudaStreamLegacy;
         muda::CBufferView<SocuNativeVertexDescriptor> m_vertex_descriptors;
         IndexT m_descriptor_epoch = 0;
+        SizeT  m_contact_set_signature = 0;
     };
 
     class ComputeDyTopoEffectInfo

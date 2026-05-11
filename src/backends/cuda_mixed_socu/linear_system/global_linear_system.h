@@ -6,6 +6,8 @@
 #include <muda/ext/linear_system.h>
 #include <algorithm/matrix_converter.h>
 #include <linear_system/assembly_mode.h>
+#include <linear_system/socu_native_assembly_sink.h>
+#include <linear_system/socu_native_contact_assembly_sink.h>
 #include <linear_system/structured_chain_provider.h>
 #include <utils/assembly_sink.h>
 #include <utils/offset_count_collection.h>
@@ -194,6 +196,29 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_offband_policy;
         }
+        SocuNativeContactAssemblySink<StoreScalar, SolveScalar>
+        native_contact_sink() const noexcept
+        {
+            const auto native_view =
+                native_matrix_view(m_diag, m_first_offdiag, m_rhs);
+            return SocuNativeContactAssemblySink<StoreScalar, SolveScalar>{
+                native_view,
+                m_native_dof_descriptors,
+                m_old_to_chain,
+                m_shape.horizon,
+                m_shape.block_size,
+                m_native_contact_hessian_enabled,
+                m_contact_compare_diag,
+                m_contact_compare_first_offdiag,
+                native_matrix_view(m_contact_compare_diag,
+                                   m_contact_compare_first_offdiag,
+                                   m_contact_compare_rhs),
+                m_contact_compare_enabled,
+                m_contact_compare_uses_native,
+                {},
+                m_contact_counters,
+                m_contact_offband_policy};
+        }
         SizeT contact_set_signature() const noexcept
         {
             return m_contact_set_signature;
@@ -213,9 +238,10 @@ class GlobalLinearSystem : public SimSystem
             return m_contact_assembly_time_ms;
         }
 
-        StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
+        SocuNativeStructuredDeviceAssemblySink<StoreScalar, SolveScalar>
+        sink() const noexcept
         {
-            auto sink = StructuredDeviceAssemblySink<StoreScalar, SolveScalar>{
+            auto sink = SocuNativeStructuredDeviceAssemblySink<StoreScalar, SolveScalar>{
                 m_diag,
                 m_first_offdiag,
                 m_old_to_chain,

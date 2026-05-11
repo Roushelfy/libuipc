@@ -526,11 +526,13 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
     StructuredHessianInfo info;
     info.m_stream = structured_info.stream();
+    info.m_contact_set_signature = structured_info.contact_set_signature();
     auto contact_sink = structured_info.sink();
     info.m_contact_sink.sink = contact_sink;
     info.m_contact_sink.counters = structured_info.contact_counters();
     info.m_contact_sink.hessian_cache = structured_info.contact_hessian_cache();
     info.m_contact_sink.offband_policy = structured_info.contact_offband_policy();
+    info.m_native_contact_sink = structured_info.native_contact_sink();
     if(structured_vertex_descriptor_epoch == structured_info.descriptor_epoch())
     {
         info.m_vertex_descriptors =
@@ -554,6 +556,8 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
         info.m_contact_sink.abd_vertex_to_J =
             affine_body_dynamics->Js();
         info.m_contact_sink.abd_body_is_fixed = abd_body_is_fixed;
+        info.m_native_contact_sink.abd_vertex_to_J =
+            info.m_contact_sink.abd_vertex_to_J;
     }
 
     if(fem_linear_subsystem && finite_element_method && finite_element_vertex_reporter)

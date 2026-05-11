@@ -61,6 +61,39 @@ endif()
 # all files in this directory
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
 
+set(_UIPC_CUDA_MIXED_LEGACY_STRUCTURED_CONTACT_TUS
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_structured.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_structured.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact_structured.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_normal_contact_structured.cu")
+
+set(_UIPC_CUDA_MIXED_NATIVE_CONTACT_TUS
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_native.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_native_ee.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_native_pe.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_native_pp.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_frictional_contact_native_pt.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_native.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_native_ee.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_native_pe.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_native_pp.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_simplex_normal_contact_native_pt.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_frictional_contact_native.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contact_system/contact_models/ipc_vertex_half_plane_normal_contact_native.cu")
+
+set(_UIPC_CUDA_MIXED_NATIVE_LINEAR_SYSTEM_TUS
+    "${CMAKE_CURRENT_SOURCE_DIR}/linear_system/socu_native_contact_targets.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/linear_system/socu_native_descriptors.cu")
+
+foreach(_UIPC_CUDA_MIXED_EXPLICIT_TU IN LISTS
+        _UIPC_CUDA_MIXED_LEGACY_STRUCTURED_CONTACT_TUS
+        _UIPC_CUDA_MIXED_NATIVE_CONTACT_TUS
+        _UIPC_CUDA_MIXED_NATIVE_LINEAR_SYSTEM_TUS)
+    if(NOT EXISTS "${_UIPC_CUDA_MIXED_EXPLICIT_TU}")
+        message(FATAL_ERROR "Explicit cuda_mixed_socu source does not exist: ${_UIPC_CUDA_MIXED_EXPLICIT_TU}")
+    endif()
+endforeach()
+
 if(UIPC_CUDA_MIXED_WRECKING_BALL_MINIMAL_BUILD)
     set(_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE ${SOURCES})
     list(LENGTH _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE _UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE)
@@ -98,12 +131,7 @@ if(UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY)
         APPEND
         PROPERTY COMPILE_DEFINITIONS UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=1)
 
-    set(_UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_EXCLUDE_PATTERNS
-        ".*/contact_system/contact_models/.*_structured\\.cu$")
-
-    foreach(_UIPC_CUDA_MIXED_EXCLUDE_PATTERN IN LISTS _UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY_EXCLUDE_PATTERNS)
-        list(FILTER SOURCES EXCLUDE REGEX "${_UIPC_CUDA_MIXED_EXCLUDE_PATTERN}")
-    endforeach()
+    list(REMOVE_ITEM SOURCES ${_UIPC_CUDA_MIXED_LEGACY_STRUCTURED_CONTACT_TUS})
 
     list(LENGTH SOURCES _UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_NATIVE_ONLY)
     uipc_info("cuda_mixed_socu native-only build: ${_UIPC_CUDA_MIXED_SOURCE_COUNT_BEFORE_NATIVE_ONLY} -> ${_UIPC_CUDA_MIXED_SOURCE_COUNT_AFTER_NATIVE_ONLY} source entries")
@@ -117,3 +145,6 @@ uipc_target_set_relative_source_file(cuda_mixed_socu)
 # ------------------------------------------------------------------------------
 file(GLOB_RECURSE SOURCE_GROUP_FILES CONFIGURE_DEPENDS "*.h" "*.hpp" "*.cpp" "*.cu" "*.inl")
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/.." FILES ${SOURCE_GROUP_FILES})
+source_group("cuda_mixed_socu/contact/legacy_structured" FILES ${_UIPC_CUDA_MIXED_LEGACY_STRUCTURED_CONTACT_TUS})
+source_group("cuda_mixed_socu/contact/native" FILES ${_UIPC_CUDA_MIXED_NATIVE_CONTACT_TUS})
+source_group("cuda_mixed_socu/linear_system/native" FILES ${_UIPC_CUDA_MIXED_NATIVE_LINEAR_SYSTEM_TUS})

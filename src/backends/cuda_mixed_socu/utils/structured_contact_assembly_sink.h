@@ -3,6 +3,7 @@
 #include <affine_body/abd_jacobi_matrix.h>
 #include <mixed_precision/policy.h>
 #include <utils/assembly_sink.h>
+#include <utils/structured_assembly_counters.h>
 #include <utils/structured_contact_hessian_cache.h>
 #include <utils/structured_contact_offband_policy.h>
 #include <cuda_runtime_api.h>
