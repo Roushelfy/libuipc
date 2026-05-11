@@ -1,4 +1,4 @@
-#include <contact_system/vertex_half_plane_normal_contact.h>
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
 #include <mixed_precision/policy.h>
@@ -7,7 +7,7 @@
 namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_vertex_half_plane_normal_contact_structured(
-    VertexHalfPlaneNormalContact::ContactInfo& info,
+    VertexHalfPlaneNormalContactStructuredInfo info,
     const HalfPlane&                           half_plane)
 {
     using namespace muda;

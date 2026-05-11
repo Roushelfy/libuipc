@@ -10,7 +10,8 @@ namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_vertex_half_plane_normal_contact_native_exact(
     VertexHalfPlaneNormalContact::ContactInfo& info,
-    const HalfPlane&                           half_plane)
+    const HalfPlane&                           half_plane,
+    const VertexHalfPlaneNormalContactNativeContext& native_context)
 {
     using namespace muda;
     using Alu = ActivePolicy::AluScalar;
@@ -19,13 +20,13 @@ void assemble_ipc_vertex_half_plane_normal_contact_native_exact(
     if(info.PHs().size() == 0)
         return;
 
-    const auto structured_sink = info.structured_hessian_sink();
-    const auto targets         = info.PH_native_contact_targets();
+    const auto native_sink = native_context.sink;
+    const auto targets = native_context.PH_targets;
 
     ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(info.PHs().size(),
-               [structured_sink,
+               [native_sink,
                 targets,
                 PHs = info.PHs().viewer().name("PHs"),
                 plane_positions = half_plane.positions().viewer().name("plane_positions"),
@@ -76,7 +77,7 @@ void assemble_ipc_vertex_half_plane_normal_contact_native_exact(
                    indices(0) = vI;
                    ipc_simplex_normal_native_detail::
                        write_exact_targets<1>(
-                           structured_sink,
+                           native_sink,
                            targets,
                            I,
                            indices,
