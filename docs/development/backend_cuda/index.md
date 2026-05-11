@@ -15,6 +15,7 @@ The mixed-precision documentation is developer-focused and follows current code 
 - [Mixed Precision Validation](mixed_precision/validation.md)
 - [SOCU Mixed Solver Integration Plan](socu_mixed_solver_integration_plan.md)
 - [SOCU Mixed Solver Integration Journal](socu_mixed_solver_integration_journal.md)
+- [SOCU Native Assembly Builder Redesign Plan](socu_native_assembly_builder_redesign_plan.md)
 
 ## From Local to Global
 
