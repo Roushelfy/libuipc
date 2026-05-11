@@ -9,6 +9,7 @@
 #include <linear_system/assembly_mode.h>
 #include <linear_system/global_linear_system.h>
 #include <linear_system/socu_native_descriptors.h>
+#include <linear_system/socu_contact_topology_stamp.h>
 #include <mixed_precision/policy.h>
 #include <utils/structured_contact_assembly_sink.h>
 #include <muda/buffer/device_buffer.h>
@@ -245,9 +246,8 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::DeviceBuffer<SocuNativeVertexDescriptor> structured_vertex_descriptors;
         StructuredVertexDescriptorCacheKey structured_vertex_descriptor_key;
         IndexT structured_vertex_descriptor_epoch = 0;
-        muda::DeviceBuffer<unsigned long long> contact_topology_hash_storage;
-        SocuContactTopologyStamp              last_contact_topology_stamp;
-        SizeT                                 contact_topology_epoch = 0;
+        SocuContactTopologyHashWorkspace contact_topology_hash_workspace;
+        SocuContactTopologyStampCache    contact_topology_stamp_cache;
 
         void loose_resize_entries(muda::DeviceTripletMatrix<StoreScalar, 3>& m, SizeT size);
         void loose_resize_entries(muda::DeviceDoubletVector<StoreScalar, 3>& v, SizeT size);

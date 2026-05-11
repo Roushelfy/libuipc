@@ -209,14 +209,27 @@ TEST_CASE("cuda_mixed_socu_contact_source_id_dense_contract",
     for(SizeT i = 0; i < dense.size(); ++i)
         dense[i].source_id = i;
     CHECK(socu_contact_source_ids_dense(dense));
+    CHECK(socu_validate_contact_source_ids_dense(dense)
+          == SocuContactSourceIdValidationStatus::ValidDense);
 
     auto non_dense = dense;
-    non_dense[1].source_id = 4;
+    non_dense[1].source_id = 2;
+    non_dense[2].source_id = 1;
     CHECK(!socu_contact_source_ids_dense(non_dense));
+    CHECK(socu_validate_contact_source_ids_dense(non_dense)
+          == SocuContactSourceIdValidationStatus::NonDense);
 
     auto duplicate = dense;
     duplicate[2].source_id = 1;
     CHECK(!socu_contact_source_ids_dense(duplicate));
+    CHECK(socu_validate_contact_source_ids_dense(duplicate)
+          == SocuContactSourceIdValidationStatus::Duplicate);
+
+    auto out_of_range = dense;
+    out_of_range[2].source_id = 7;
+    CHECK(!socu_contact_source_ids_dense(out_of_range));
+    CHECK(socu_validate_contact_source_ids_dense(out_of_range)
+          == SocuContactSourceIdValidationStatus::OutOfRange);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_plan_key_invalidates_on_symbolic_inputs",
@@ -261,4 +274,79 @@ TEST_CASE("cuda_mixed_socu_contact_plan_key_invalidates_on_symbolic_inputs",
     changed.contact_content_hash++;
     CHECK(changed != base);
     CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_plan_cache_split_layers",
+          "[cuda_mixed_socu][contract][socu_approx][m1]")
+{
+    SocuAssemblyPlanKey base;
+    base.ordering_epoch = 7;
+    base.native_descriptor_epoch = 11;
+    base.contact_topology_epoch = 13;
+    base.contact_layout_hash = 17;
+    base.contact_content_hash = 19;
+    base.fixed_mapping_epoch = 23;
+    base.vertex_projection_epoch = 29;
+    base.horizon = 31;
+    base.block_size = 12;
+    base.offband_policy = StructuredContactOffbandPolicy::Drop;
+
+    SocuContactPlanCacheState cache;
+
+    auto decision = cache.update(base);
+    CHECK(decision.cold_start);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    decision = cache.update(base);
+    CHECK(!decision.cold_start);
+    CHECK(decision.side_plan_hit());
+    CHECK(decision.contact_program_hit());
+
+    auto topology_changed = base;
+    topology_changed.contact_content_hash++;
+    decision = cache.update(topology_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto offband_changed = topology_changed;
+    offband_changed.offband_policy = StructuredContactOffbandPolicy::Diag;
+    decision = cache.update(offband_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto scalar_diag_changed = offband_changed;
+    scalar_diag_changed.scalar_diag_fallback_compatibility = true;
+    decision = cache.update(scalar_diag_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto ordering_changed = scalar_diag_changed;
+    ordering_changed.ordering_epoch++;
+    decision = cache.update(ordering_changed);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto descriptor_changed = ordering_changed;
+    descriptor_changed.native_descriptor_epoch++;
+    decision = cache.update(descriptor_changed);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto fixed_mapping_changed = descriptor_changed;
+    fixed_mapping_changed.fixed_mapping_epoch++;
+    decision = cache.update(fixed_mapping_changed);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto projection_changed = fixed_mapping_changed;
+    projection_changed.vertex_projection_epoch++;
+    decision = cache.update(projection_changed);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto geometry_only = projection_changed;
+    decision = cache.update(geometry_only);
+    CHECK(decision.side_plan_hit());
+    CHECK(decision.contact_program_hit());
 }

@@ -1044,7 +1044,7 @@ bool SocuApproxSolver::install_ordering_report_impl(
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
         m_native_contact_hot_reduce_strategy,
-        0);
+        m_native_contact_plan_rebuild_count);
 
     m_gate_report = std::move(next_gate);
     m_gate_report.passed = true;
@@ -1342,7 +1342,7 @@ void SocuApproxSolver::prepare_structured_chain(
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
         m_native_contact_hot_reduce_strategy,
-        0);
+        m_native_contact_plan_rebuild_count);
 
     const cudaStream_t stream = system().stream();
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
@@ -1713,6 +1713,36 @@ void SocuApproxSolver::finalize_structured_chain(
             ? info.chain_base_assembly_time_ms()
             : 0.0;
     m_report.contact_assembly_time_ms = info.contact_assembly_time_ms();
+
+    if(needs_contact_topology_stamp_for_final())
+    {
+        const auto stamp = info.contact_topology_stamp();
+        if(stamp.valid())
+        {
+            const auto shape = info.shape();
+            SocuAssemblyPlanKey key;
+            key.ordering_epoch =
+                static_cast<SizeT>(std::max<IndexT>(info.descriptor_epoch(), 0));
+            key.native_descriptor_epoch =
+                static_cast<SizeT>(std::max<IndexT>(info.descriptor_epoch(), 0));
+            key.contact_topology_epoch = stamp.epoch;
+            key.contact_layout_hash = stamp.layout_hash;
+            key.contact_content_hash = stamp.content_hash;
+            key.horizon = shape.horizon;
+            key.block_size = shape.block_size;
+            key.offband_policy = info.contact_offband_policy();
+            key.scalar_diag_fallback_compatibility =
+                m_native_contact_scalar_diag_compat_enabled;
+
+            const auto decision = m_native_contact_plan_cache.update(key);
+            m_report.native_contact_plan_cache_hit =
+                decision.contact_program_hit();
+            if(!decision.contact_program_hit())
+                ++m_native_contact_plan_rebuild_count;
+            m_report.native_contact_plan_rebuild_count =
+                m_native_contact_plan_rebuild_count;
+        }
+    }
 
     if(info.report_counters_enabled())
     {

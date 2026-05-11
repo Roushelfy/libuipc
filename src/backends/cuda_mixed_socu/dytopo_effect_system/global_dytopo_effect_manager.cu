@@ -14,6 +14,7 @@
 #include <finite_element/fem_linear_subsystem.h>
 #include <finite_element/finite_element_method.h>
 #include <finite_element/finite_element_vertex_reporter.h>
+#include <linear_system/socu_contact_topology_stamp.h>
 #include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
 #include <kernel_cout.h>
@@ -22,7 +23,6 @@
 #include <energy_component_flags.h>
 #include <fmt/format.h>
 #include <muda/buffer/buffer_launch.h>
-#include <array>
 #include <vector>
 
 namespace uipc::backend
@@ -89,106 +89,6 @@ void mix_contact_vector_view(SizeT& signature,
         for(Eigen::Index i = 0; i < item.size(); ++i)
             mix_contact_signature(signature, static_cast<SizeT>(item(i)));
     }
-}
-
-cudaStream_t contact_topology_launch_stream(cudaStream_t stream) noexcept
-{
-    return stream == cudaStreamLegacy ? nullptr : stream;
-}
-
-MUDA_DEVICE SizeT device_mix_contact_topology(SizeT hash, SizeT value) noexcept
-{
-    return socu_contact_mix_hash(hash, value);
-}
-
-template <typename ValueT>
-__global__ void mix_contact_topology_view_kernel(
-    muda::CBufferView<ValueT> view,
-    SizeT                     tag,
-    unsigned long long*       accum)
-{
-    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(i >= view.size())
-        return;
-
-    SizeT hash = SocuContactPlanHashOffset;
-    hash = device_mix_contact_topology(hash, tag);
-    hash = device_mix_contact_topology(hash, i);
-
-    const auto item = view.data()[i];
-    constexpr int ValueSize = ValueT::SizeAtCompileTime;
-#pragma unroll
-    for(int c = 0; c < ValueSize; ++c)
-        hash = device_mix_contact_topology(hash, static_cast<SizeT>(item(c)));
-
-    const auto h = static_cast<unsigned long long>(hash);
-    atomicXor(accum, h);
-    atomicAdd(accum + 1, h);
-}
-
-template <typename ValueT>
-void mix_contact_topology_view(cudaStream_t                       stream,
-                               muda::DeviceBuffer<unsigned long long>& accum,
-                               SizeT                              tag,
-                               muda::CBufferView<ValueT>          view)
-{
-    if(view.size() == 0)
-        return;
-
-    constexpr int block_dim = 256;
-    const auto    grid_dim =
-        static_cast<unsigned int>((view.size() + block_dim - 1) / block_dim);
-    mix_contact_topology_view_kernel<<<grid_dim,
-                                       block_dim,
-                                       0,
-                                       contact_topology_launch_stream(stream)>>>(
-        view,
-        tag,
-        accum.data());
-}
-
-void mix_contact_topology_source(SocuContactTopologyStamp& stamp,
-                                 SizeT                     reporter_id,
-                                 SizeT                     source_id,
-                                 SocuContactSourceFamily    family,
-                                 SizeT                     count,
-                                 SizeT                     content_hash,
-                                 SizeT                     layout_token) noexcept
-{
-    SocuContactTopologySource source;
-    source.reporter_id = reporter_id;
-    source.source_id = source_id;
-    source.family = family;
-    source.contact_count = count;
-    source.content_hash = content_hash;
-    source.layout_token = layout_token;
-
-    socu_contact_mix_in_place(stamp.layout_hash,
-                              socu_contact_source_layout_hash(source));
-    socu_contact_mix_in_place(stamp.content_hash,
-                              socu_contact_source_content_hash(source));
-    ++stamp.source_count;
-}
-
-template <typename ValueT>
-void register_contact_topology_view(SocuContactTopologyStamp& stamp,
-                                    muda::DeviceBuffer<unsigned long long>& accum,
-                                    cudaStream_t                  stream,
-                                    SizeT                         reporter_id,
-                                    SizeT                         source_id,
-                                    SocuContactSourceFamily       family,
-                                    muda::CBufferView<ValueT>     view)
-{
-    const SizeT tag = static_cast<SizeT>(0x5f3759dfu)
-                      + socu_contact_source_family_value(family);
-    mix_contact_topology_source(stamp,
-                                reporter_id,
-                                source_id,
-                                family,
-                                view.size(),
-                                0,
-                                reinterpret_cast<SizeT>(view.data()));
-    mix_contact_topology_view(stream, accum, tag, view);
 }
 
 }  // namespace
@@ -843,13 +743,8 @@ SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()
 SocuContactTopologyStamp GlobalDyTopoEffectManager::Impl::contact_topology_stamp(
     cudaStream_t stream)
 {
-    SocuContactTopologyStamp stamp;
-    stamp.layout_hash = SocuContactPlanHashOffset;
-    stamp.content_hash = SocuContactPlanHashOffset;
-
-    muda::BufferLaunch(stream).resize(contact_topology_hash_storage, 2);
-    muda::BufferLaunch(stream)
-        .fill<unsigned long long>(contact_topology_hash_storage.view(), 0ull);
+    SocuContactTopologyStamp stamp = socu_contact_topology_make_stamp_seed();
+    socu_contact_topology_hash_reset(contact_topology_hash_workspace, stream);
 
     SizeT reporter_id = 0;
     SizeT source_id = 0;
@@ -863,8 +758,8 @@ SocuContactTopologyStamp GlobalDyTopoEffectManager::Impl::contact_topology_stamp
         auto register_view = [&](SocuContactSourceFamily family, auto view, SizeT& count)
         {
             count += view.size();
-            register_contact_topology_view(stamp,
-                                           contact_topology_hash_storage,
+            socu_contact_topology_mix_view(stamp,
+                                           contact_topology_hash_workspace,
                                            stream,
                                            current_reporter_id,
                                            source_id++,
@@ -922,66 +817,22 @@ SocuContactTopologyStamp GlobalDyTopoEffectManager::Impl::contact_topology_stamp
         GradientHessianExtentInfo extent_info;
         extent_info.m_gradient_only = false;
         reporter->report_gradient_hessian_extent(extent_info);
-        SocuContactTopologySource source;
-        source.reporter_id = current_reporter_id;
-        source.source_id = source_id++;
-        source.family = SocuContactSourceFamily::Unknown;
-        source.contact_count = extent_info.m_hessian_count;
-        socu_contact_mix_in_place(stamp.layout_hash,
-                                  socu_contact_source_layout_hash(source));
-        socu_contact_mix_in_place(stamp.content_hash,
-                                  socu_contact_source_content_hash(source));
-        ++stamp.source_count;
+        socu_contact_topology_mix_unknown_source(stamp,
+                                                 current_reporter_id,
+                                                 source_id++,
+                                                 extent_info.m_hessian_count);
     }
 
-    stamp.reporter_count = reporter_id;
-    socu_contact_mix_in_place(stamp.layout_hash, stamp.reporter_count);
-    socu_contact_mix_in_place(stamp.layout_hash, stamp.source_count);
-    socu_contact_mix_in_place(stamp.content_hash, stamp.reporter_count);
-    socu_contact_mix_in_place(stamp.content_hash, stamp.source_count);
+    socu_contact_topology_finalize_metadata(stamp, reporter_id);
 
     if(stamp.source_count != 0)
     {
-        std::array<unsigned long long, 2> host_hash{};
-        const cudaStream_t launch_stream = contact_topology_launch_stream(stream);
-        auto error = cudaMemcpyAsync(host_hash.data(),
-                                     contact_topology_hash_storage.data(),
-                                     host_hash.size() * sizeof(unsigned long long),
-                                     cudaMemcpyDeviceToHost,
-                                     launch_stream);
-        if(error != cudaSuccess)
-        {
-            throw SimSystemException{fmt::format(
-                "contact_topology_hash_copy_failed: {}",
-                cudaGetErrorString(error))};
-        }
-        error = cudaStreamSynchronize(launch_stream);
-        if(error != cudaSuccess)
-        {
-            throw SimSystemException{fmt::format(
-                "contact_topology_hash_sync_failed: {}",
-                cudaGetErrorString(error))};
-        }
-
-        socu_contact_mix_in_place(stamp.content_hash,
-                                  static_cast<SizeT>(host_hash[0]));
-        socu_contact_mix_in_place(stamp.content_hash,
-                                  static_cast<SizeT>(host_hash[1]));
+        const auto device_hash =
+            socu_contact_topology_hash_finish(contact_topology_hash_workspace, stream);
+        socu_contact_topology_mix_device_hash(stamp, device_hash);
     }
 
-    const bool changed =
-        contact_topology_epoch == 0
-        || stamp.layout_hash != last_contact_topology_stamp.layout_hash
-        || stamp.content_hash != last_contact_topology_stamp.content_hash
-        || stamp.reporter_count != last_contact_topology_stamp.reporter_count
-        || stamp.source_count != last_contact_topology_stamp.source_count
-        || !(stamp.counts == last_contact_topology_stamp.counts);
-    if(changed)
-        ++contact_topology_epoch;
-
-    stamp.epoch = contact_topology_epoch;
-    last_contact_topology_stamp = stamp;
-    return stamp;
+    return contact_topology_stamp_cache.update(stamp);
 }
 
 void GlobalDyTopoEffectManager::Impl::loose_resize_entries(

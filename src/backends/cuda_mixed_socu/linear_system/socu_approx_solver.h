@@ -130,6 +130,8 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_cached_contact_hessian_count = 0;
     SizeT       m_cached_contact_hessian_capacity = 0;
     SizeT       m_cached_contact_hessian_frame = static_cast<SizeT>(-1);
+    SocuContactPlanCacheState m_native_contact_plan_cache;
+    SizeT       m_native_contact_plan_rebuild_count = 0;
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";
