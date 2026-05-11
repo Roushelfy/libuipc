@@ -7,6 +7,9 @@
 
 namespace uipc::backend::cuda_mixed
 {
+struct SocuContactPlanCacheDecision;
+struct SocuContactPlanStats;
+
 enum class SocuApproxGateReason
 {
     None,
@@ -218,6 +221,15 @@ struct SocuApproxSolveReport
 
     std::vector<SocuApproxBlockLayout> blocks;
 };
+
+void apply_native_contact_plan_cache_decision(
+    SocuApproxSolveReport&               report,
+    const SocuContactPlanCacheDecision&  decision,
+    SizeT                                plan_rebuild_count) noexcept;
+
+void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
+                                     const SocuContactPlanStats& side_stats,
+                                     const SocuContactPlanStats& program_stats) noexcept;
 
 void write_solve_report(const SocuApproxSolveReport& report);
 }  // namespace uipc::backend::cuda_mixed

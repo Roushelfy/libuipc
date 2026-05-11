@@ -1994,3 +1994,42 @@ Current M2 status:
   reporting, split cache/report integration, production debug-validation
   reporting, and symbolic parity against the legacy target classification
   oracle.
+
+## 2026-05-11 Redesign Branch M2 Report Mapping Slice
+
+Implemented:
+
+- Added `apply_native_contact_plan_stats()` to map
+  `SocuContactPlanStats` from the split side/program plan into
+  `SocuApproxSolveReport` native contact JSON fields.
+- Added `apply_native_contact_plan_cache_decision()` so aggregate
+  `native_contact_plan_cache_hit` means both the side plan and contact program
+  plan hit. A topology-only contact change is now reported as an aggregate
+  native contact plan cache miss even if the side layer hits.
+- Updated `SocuApproxSolver::finalize_structured_chain()` to use that aggregate
+  hit policy for `native_contact_plan_rebuild_count`.
+
+Tests added:
+
+- `cuda_mixed_socu_report_native_contact_plan_stats_mapping` validates report
+  field mapping for side/program counts, program-kind counts, task-kind counts,
+  hot-block placeholders, JSON serialization, and aggregate split-cache
+  behavior across cold, topology-only, and full-hit updates.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; report header changes rebuilt report/ordering/runtime/solver and the policy test before link |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `229` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5220` assertions in `39` test cases |
+
+Current M2 status:
+
+- Builder stats can now flow into the public report schema, and aggregate cache
+  reporting matches the two-layer plan semantics.
+- M2 is still not accepted. Remaining work: wiring the real M2 plan owner into
+  the final solver path, invalid source/local-id counter reporting, production
+  debug-validation reporting, and symbolic parity against the legacy target
+  classification oracle.

@@ -1,6 +1,8 @@
 #include <app/app.h>
 #include <linear_system/linear_solver.h>
+#include <linear_system/socu_contact_assembly_plan.h>
 #include <linear_system/socu_contact_plan_types.h>
+#include <linear_system/socu_approx_report.h>
 #include <linear_system/socu_approx_solver.h>
 #include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
@@ -93,6 +95,108 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
         CAPTURE(field);
         CHECK(contact.at(field).get<SizeT>() == SizeT{0});
     }
+
+    std::filesystem::remove(report_path);
+}
+
+TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    using uipc::Json;
+
+    SocuApproxSolveReport report;
+    SocuContactPlanStats side_stats;
+    SocuContactPlanStats program_stats;
+    side_stats.side_count = 4;
+    side_stats.lane_count = 21;
+    program_stats.program_count = 7;
+    program_stats.task_count = 19;
+    program_stats.bucket_count = 5;
+    program_stats.exact_program_count = 2;
+    program_stats.diag_program_count = 1;
+    program_stats.diag_lump_program_count = 1;
+    program_stats.drop_program_count = 2;
+    program_stats.skipped_program_count = 1;
+    program_stats.mixed_rejected_program_count = 0;
+    program_stats.diag_block_task_count = 3;
+    program_stats.diag_scalar_task_count = 4;
+    program_stats.lump_scalar_task_count = 5;
+    program_stats.hot_diag_block_count = 6;
+    program_stats.hot_offdiag_block_count = 7;
+    apply_native_contact_plan_stats(report, side_stats, program_stats);
+
+    CHECK(report.native_contact_side_count == 4);
+    CHECK(report.native_contact_lane_count == 21);
+    CHECK(report.native_contact_program_count == 7);
+    CHECK(report.native_contact_task_count == 19);
+    CHECK(report.native_contact_bucket_count == 5);
+    CHECK(report.native_contact_exact_program_count == 2);
+    CHECK(report.native_contact_diag_program_count == 1);
+    CHECK(report.native_contact_diag_lump_program_count == 1);
+    CHECK(report.native_contact_drop_program_count == 2);
+    CHECK(report.native_contact_skipped_program_count == 1);
+    CHECK(report.native_contact_diag_block_task_count == 3);
+    CHECK(report.native_contact_diag_scalar_task_count == 4);
+    CHECK(report.native_contact_lump_scalar_task_count == 5);
+    CHECK(report.native_contact_hot_diag_block_count == 6);
+    CHECK(report.native_contact_hot_offdiag_block_count == 7);
+
+    SocuContactPlanCacheState cache;
+    SocuAssemblyPlanKey key;
+    key.ordering_epoch = 1;
+    key.native_descriptor_epoch = 2;
+    key.contact_topology_epoch = 3;
+    key.contact_layout_hash = 4;
+    key.contact_content_hash = 5;
+    key.fixed_mapping_epoch = 6;
+    key.vertex_projection_epoch = 7;
+    key.horizon = 8;
+    key.block_size = 16;
+    SizeT rebuild_count = 0;
+
+    auto decision = cache.update(key);
+    if(!(decision.side_plan_hit() && decision.contact_program_hit()))
+        ++rebuild_count;
+    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    CHECK(!report.native_contact_plan_cache_hit);
+    CHECK(report.native_contact_plan_rebuild_count == 1);
+
+    auto topology_changed = key;
+    ++topology_changed.contact_topology_epoch;
+    decision = cache.update(topology_changed);
+    if(!(decision.side_plan_hit() && decision.contact_program_hit()))
+        ++rebuild_count;
+    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+    CHECK(!report.native_contact_plan_cache_hit);
+    CHECK(report.native_contact_plan_rebuild_count == 2);
+
+    decision = cache.update(topology_changed);
+    if(!(decision.side_plan_hit() && decision.contact_program_hit()))
+        ++rebuild_count;
+    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    CHECK(report.native_contact_plan_cache_hit);
+    CHECK(report.native_contact_plan_rebuild_count == 2);
+
+    const auto report_path =
+        std::filesystem::temp_directory_path()
+        / "uipc_socu_report_native_contact_plan_stats.json";
+    std::filesystem::remove(report_path);
+    report.report_path = report_path.string();
+    write_solve_report(report);
+
+    std::ifstream ifs{report_path};
+    REQUIRE(ifs.good());
+    const Json json = Json::parse(ifs);
+    const auto& contact = json.at("contact");
+    CHECK(contact.at("native_contact_side_count").get<SizeT>() == 4);
+    CHECK(contact.at("native_contact_program_count").get<SizeT>() == 7);
+    CHECK(contact.at("native_contact_bucket_count").get<SizeT>() == 5);
+    CHECK(contact.at("native_contact_exact_program_count").get<SizeT>() == 2);
+    CHECK(contact.at("native_contact_drop_program_count").get<SizeT>() == 2);
+    CHECK(contact.at("native_contact_plan_cache_hit").get<bool>());
+    CHECK(contact.at("native_contact_plan_rebuild_count").get<SizeT>() == 2);
 
     std::filesystem::remove(report_path);
 }

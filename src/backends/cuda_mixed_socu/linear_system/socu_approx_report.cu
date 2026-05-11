@@ -1,4 +1,5 @@
 #include <linear_system/socu_approx_report.h>
+#include <linear_system/socu_contact_assembly_plan.h>
 
 #include <uipc/common/json.h>
 
@@ -246,6 +247,49 @@ Json to_json(const SocuApproxSolveReport& report)
 }
 
 }  // namespace
+
+void apply_native_contact_plan_cache_decision(
+    SocuApproxSolveReport&              report,
+    const SocuContactPlanCacheDecision& decision,
+    SizeT                               plan_rebuild_count) noexcept
+{
+    report.native_contact_plan_cache_hit =
+        decision.side_plan_hit() && decision.contact_program_hit();
+    report.native_contact_plan_rebuild_count = plan_rebuild_count;
+}
+
+void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
+                                     const SocuContactPlanStats& side_stats,
+                                     const SocuContactPlanStats& program_stats) noexcept
+{
+    report.native_contact_side_count = side_stats.side_count;
+    report.native_contact_lane_count = side_stats.lane_count;
+    report.native_contact_program_count = program_stats.program_count;
+    report.native_contact_task_count = program_stats.task_count;
+    report.native_contact_bucket_count = program_stats.bucket_count;
+    report.native_contact_exact_program_count =
+        program_stats.exact_program_count;
+    report.native_contact_diag_program_count =
+        program_stats.diag_program_count;
+    report.native_contact_diag_lump_program_count =
+        program_stats.diag_lump_program_count;
+    report.native_contact_drop_program_count =
+        program_stats.drop_program_count;
+    report.native_contact_skipped_program_count =
+        program_stats.skipped_program_count;
+    report.native_contact_mixed_rejected_program_count =
+        program_stats.mixed_rejected_program_count;
+    report.native_contact_diag_block_task_count =
+        program_stats.diag_block_task_count;
+    report.native_contact_diag_scalar_task_count =
+        program_stats.diag_scalar_task_count;
+    report.native_contact_lump_scalar_task_count =
+        program_stats.lump_scalar_task_count;
+    report.native_contact_hot_diag_block_count =
+        program_stats.hot_diag_block_count;
+    report.native_contact_hot_offdiag_block_count =
+        program_stats.hot_offdiag_block_count;
+}
 
 void write_solve_report(const SocuApproxSolveReport& report)
 {

@@ -1735,12 +1735,14 @@ void SocuApproxSolver::finalize_structured_chain(
                 m_native_contact_scalar_diag_compat_enabled;
 
             const auto decision = m_native_contact_plan_cache.update(key);
-            m_report.native_contact_plan_cache_hit =
-                decision.contact_program_hit();
-            if(!decision.contact_program_hit())
+            const bool aggregate_hit =
+                decision.side_plan_hit() && decision.contact_program_hit();
+            if(!aggregate_hit)
                 ++m_native_contact_plan_rebuild_count;
-            m_report.native_contact_plan_rebuild_count =
-                m_native_contact_plan_rebuild_count;
+            apply_native_contact_plan_cache_decision(
+                m_report,
+                decision,
+                m_native_contact_plan_rebuild_count);
         }
     }
 

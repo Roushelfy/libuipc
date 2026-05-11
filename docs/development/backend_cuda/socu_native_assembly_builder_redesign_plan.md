@@ -1728,10 +1728,14 @@ Current implementation status:
   half-plane omission, dense-source-id validation failures, and
   Drop/Diag/DiagLump off-band policies. They also validate exact/drop/skipped
   bucket ranges, execution strategies, and first program/task counters.
-- This is not full M2 acceptance yet. Remaining M2 work includes invalid
-  source/local-id counter reporting, split cache/report integration, production
-  dense-source debug validation/reporting, and parity against the legacy
-  symbolic classification oracle.
+- `SocuApproxReport` has helpers to map split contact plan stats into the
+  report JSON fields and to treat aggregate cache-hit as side-plan hit plus
+  contact-program hit. Topology-only changes therefore report an aggregate
+  native contact plan cache miss even when the side layer hits.
+- This is not full M2 acceptance yet. Remaining M2 work includes wiring the
+  real M2 plan owner into the final solver path, invalid source/local-id counter
+  reporting, production dense-source debug validation/reporting, and parity
+  against the legacy symbolic classification oracle.
 
 Acceptance:
 
