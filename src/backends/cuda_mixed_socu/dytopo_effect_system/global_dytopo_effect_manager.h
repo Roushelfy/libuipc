@@ -24,6 +24,8 @@ class AffineBodyDynamics;
 class FiniteElementMethod;
 class AffineBodyVertexReporter;
 class FiniteElementVertexReporter;
+struct SocuContactAssemblyPlan;
+struct SocuContactAssemblyPlanM2Workspace;
 
 class GlobalDyTopoEffectManager final : public SimSystem
 {
@@ -165,6 +167,14 @@ class GlobalDyTopoEffectManager final : public SimSystem
             GlobalLinearSystem::StructuredAssemblyInfo& info);
         void ensure_structured_vertex_descriptors(
             GlobalLinearSystem::StructuredAssemblyInfo& info);
+        void build_socu_contact_assembly_plan_m2_active_set_temporary(
+            SocuContactAssemblyPlan&            plan,
+            SocuContactAssemblyPlanM2Workspace& workspace,
+            const SocuVertexSidePlanKey&        side_key,
+            const SocuContactProgramPlanKey&    program_key,
+            muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+            StructuredContactOffbandPolicy offband_policy,
+            cudaStream_t                   stream);
         SizeT contact_set_signature();
         SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
 
@@ -267,6 +277,14 @@ class GlobalDyTopoEffectManager final : public SimSystem
 
     void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
     void assemble_structured_hessian(GlobalLinearSystem::StructuredAssemblyInfo& info);
+    void build_socu_contact_assembly_plan_m2_active_set_temporary(
+        SocuContactAssemblyPlan&            plan,
+        SocuContactAssemblyPlanM2Workspace& workspace,
+        const SocuVertexSidePlanKey&        side_key,
+        const SocuContactProgramPlanKey&    program_key,
+        muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+        StructuredContactOffbandPolicy offband_policy,
+        cudaStream_t                   stream);
     SizeT contact_set_signature();
     SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
 

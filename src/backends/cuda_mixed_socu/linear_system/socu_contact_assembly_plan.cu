@@ -743,18 +743,12 @@ SocuContactSourceHeader make_source_header(SocuContactSourceId source_id,
     return source;
 }
 
-enum class M2SourceSlot : std::uint8_t
+enum class M2SourceViewKind : std::uint8_t
 {
-    PT,
-    EE,
-    PE,
-    PP,
+    Vector4,
+    Vector3,
+    Vector2,
     PH,
-    FrictionPT,
-    FrictionEE,
-    FrictionPE,
-    FrictionPP,
-    FrictionPH,
 };
 
 struct M2SourceSpec
@@ -763,7 +757,10 @@ struct M2SourceSpec
     SocuContactFamily        family = SocuContactFamily::PT;
     std::uint16_t            stencil_size = 0;
     SizeT                    contact_count = 0;
-    M2SourceSlot             slot = M2SourceSlot::PT;
+    M2SourceViewKind         view_kind = M2SourceViewKind::Vector4;
+    muda::CBufferView<Vector4i> stencil4;
+    muda::CBufferView<Vector3i> stencil3;
+    muda::CBufferView<Vector2i> stencil2;
     SizeT                    first_program = 0;
     SizeT                    first_map = 0;
 };
@@ -782,22 +779,97 @@ void require_source_for_contacts(const SocuContactM2SourceInput& source,
                                     + " contacts require a valid dense source id"};
 }
 
+std::uint16_t expected_stencil_size(SocuContactFamily family) noexcept
+{
+    switch(family)
+    {
+        case SocuContactFamily::PT:
+        case SocuContactFamily::EE:
+            return 4;
+        case SocuContactFamily::PE:
+            return 3;
+        case SocuContactFamily::PP:
+        case SocuContactFamily::PH:
+            return 2;
+    }
+    return 0;
+}
+
+M2SourceViewKind view_kind_for(SocuContactFamily family,
+                               std::uint16_t     stencil_size)
+{
+    if(family == SocuContactFamily::PH)
+        return M2SourceViewKind::PH;
+    switch(stencil_size)
+    {
+        case 4:
+            return M2SourceViewKind::Vector4;
+        case 3:
+            return M2SourceViewKind::Vector3;
+        case 2:
+            return M2SourceViewKind::Vector2;
+        default:
+            throw std::invalid_argument{
+                "M2 source input has unsupported stencil_size"};
+    }
+}
+
+SizeT source_contact_count(const SocuContactM2SourceInput& source)
+{
+    if(source.family == SocuContactFamily::PH)
+        return source.stencil2.size();
+    switch(source.stencil_size)
+    {
+        case 4:
+            return source.stencil4.size();
+        case 3:
+            return source.stencil3.size();
+        case 2:
+            return source.stencil2.size();
+        default:
+            throw std::invalid_argument{
+                "M2 source input has unsupported stencil_size"};
+    }
+}
+
 void push_source_if_valid(std::vector<M2SourceSpec>& specs,
-                          const SocuContactM2SourceInput& source,
-                          SocuContactFamily family,
-                          std::uint16_t stencil_size,
-                          SizeT contact_count,
-                          M2SourceSlot slot)
+                          SocuContactM2SourceInput source)
 {
     if(!source_valid(source))
         return;
+    const auto expected = expected_stencil_size(source.family);
+    if(expected == 0 || source.stencil_size != expected)
+    {
+        throw std::invalid_argument{
+            "M2 source input family and stencil_size do not match"};
+    }
+    const auto view_kind = view_kind_for(source.family, source.stencil_size);
     specs.push_back(M2SourceSpec{source,
-                                 family,
-                                 stencil_size,
-                                 contact_count,
-                                 slot,
+                                 source.family,
+                                 source.stencil_size,
+                                 source_contact_count(source),
+                                 view_kind,
+                                 source.stencil4,
+                                 source.stencil3,
+                                 source.stencil2,
                                  0,
                                  0});
+}
+
+void push_legacy_source_if_valid(std::vector<M2SourceSpec>& specs,
+                                 SocuContactM2SourceInput source,
+                                 SocuContactFamily family,
+                                 std::uint16_t stencil_size,
+                                 muda::CBufferView<Vector4i> stencil4,
+                                 muda::CBufferView<Vector3i> stencil3,
+                                 muda::CBufferView<Vector2i> stencil2)
+{
+    source.family = family;
+    source.stencil_size = stencil_size;
+    source.stencil4 = stencil4;
+    source.stencil3 = stencil3;
+    source.stencil2 = stencil2;
+    push_source_if_valid(specs, source);
 }
 
 void sort_and_validate_dense_sources(std::vector<M2SourceSpec>& specs)
@@ -866,94 +938,116 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
     const SizeT friction_pp_count = input.friction_pp_contacts.size();
     const SizeT friction_ph_count = input.friction_ph_contacts.size();
 
-    require_source_for_contacts(input.pt_source, pt_count, "PT");
-    require_source_for_contacts(input.ee_source, ee_count, "EE");
-    require_source_for_contacts(input.pe_source, pe_count, "PE");
-    require_source_for_contacts(input.pp_source, pp_count, "PP");
-    require_source_for_contacts(input.ph_source, ph_count, "PH");
-    require_source_for_contacts(
-        input.friction_pt_source,
-        friction_pt_count,
-        "friction PT");
-    require_source_for_contacts(
-        input.friction_ee_source,
-        friction_ee_count,
-        "friction EE");
-    require_source_for_contacts(
-        input.friction_pe_source,
-        friction_pe_count,
-        "friction PE");
-    require_source_for_contacts(
-        input.friction_pp_source,
-        friction_pp_count,
-        "friction PP");
-    require_source_for_contacts(
-        input.friction_ph_source,
-        friction_ph_count,
-        "friction PH");
+    if(input.sources.size() == 0)
+    {
+        require_source_for_contacts(input.pt_source, pt_count, "PT");
+        require_source_for_contacts(input.ee_source, ee_count, "EE");
+        require_source_for_contacts(input.pe_source, pe_count, "PE");
+        require_source_for_contacts(input.pp_source, pp_count, "PP");
+        require_source_for_contacts(input.ph_source, ph_count, "PH");
+        require_source_for_contacts(
+            input.friction_pt_source,
+            friction_pt_count,
+            "friction PT");
+        require_source_for_contacts(
+            input.friction_ee_source,
+            friction_ee_count,
+            "friction EE");
+        require_source_for_contacts(
+            input.friction_pe_source,
+            friction_pe_count,
+            "friction PE");
+        require_source_for_contacts(
+            input.friction_pp_source,
+            friction_pp_count,
+            "friction PP");
+        require_source_for_contacts(
+            input.friction_ph_source,
+            friction_ph_count,
+            "friction PH");
+    }
 
     std::vector<M2SourceSpec> source_specs;
-    source_specs.reserve(10);
-    push_source_if_valid(source_specs,
-                         input.pt_source,
-                         SocuContactFamily::PT,
-                         4,
-                         pt_count,
-                         M2SourceSlot::PT);
-    push_source_if_valid(source_specs,
-                         input.ee_source,
-                         SocuContactFamily::EE,
-                         4,
-                         ee_count,
-                         M2SourceSlot::EE);
-    push_source_if_valid(source_specs,
-                         input.pe_source,
-                         SocuContactFamily::PE,
-                         3,
-                         pe_count,
-                         M2SourceSlot::PE);
-    push_source_if_valid(source_specs,
-                         input.pp_source,
-                         SocuContactFamily::PP,
-                         2,
-                         pp_count,
-                         M2SourceSlot::PP);
-    push_source_if_valid(source_specs,
-                         input.ph_source,
-                         SocuContactFamily::PH,
-                         2,
-                         ph_count,
-                         M2SourceSlot::PH);
-    push_source_if_valid(source_specs,
-                         input.friction_pt_source,
-                         SocuContactFamily::PT,
-                         4,
-                         friction_pt_count,
-                         M2SourceSlot::FrictionPT);
-    push_source_if_valid(source_specs,
-                         input.friction_ee_source,
-                         SocuContactFamily::EE,
-                         4,
-                         friction_ee_count,
-                         M2SourceSlot::FrictionEE);
-    push_source_if_valid(source_specs,
-                         input.friction_pe_source,
-                         SocuContactFamily::PE,
-                         3,
-                         friction_pe_count,
-                         M2SourceSlot::FrictionPE);
-    push_source_if_valid(source_specs,
-                         input.friction_pp_source,
-                         SocuContactFamily::PP,
-                         2,
-                         friction_pp_count,
-                         M2SourceSlot::FrictionPP);
-    push_source_if_valid(source_specs,
-                         input.friction_ph_source,
-                         SocuContactFamily::PH,
-                         2,
-                         friction_ph_count,
-                         M2SourceSlot::FrictionPH);
+    if(input.sources.size() != 0)
+    {
+        source_specs.reserve(input.sources.size());
+        for(const auto& source : input.sources)
+            push_source_if_valid(source_specs, source);
+    }
+    else
+    {
+        source_specs.reserve(10);
+        push_legacy_source_if_valid(source_specs,
+                                    input.pt_source,
+                                    SocuContactFamily::PT,
+                                    4,
+                                    input.pt_contacts,
+                                    {},
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.ee_source,
+                                    SocuContactFamily::EE,
+                                    4,
+                                    input.ee_contacts,
+                                    {},
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.pe_source,
+                                    SocuContactFamily::PE,
+                                    3,
+                                    {},
+                                    input.pe_contacts,
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.pp_source,
+                                    SocuContactFamily::PP,
+                                    2,
+                                    {},
+                                    {},
+                                    input.pp_contacts);
+        push_legacy_source_if_valid(source_specs,
+                                    input.ph_source,
+                                    SocuContactFamily::PH,
+                                    2,
+                                    {},
+                                    {},
+                                    input.ph_contacts);
+        push_legacy_source_if_valid(source_specs,
+                                    input.friction_pt_source,
+                                    SocuContactFamily::PT,
+                                    4,
+                                    input.friction_pt_contacts,
+                                    {},
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.friction_ee_source,
+                                    SocuContactFamily::EE,
+                                    4,
+                                    input.friction_ee_contacts,
+                                    {},
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.friction_pe_source,
+                                    SocuContactFamily::PE,
+                                    3,
+                                    {},
+                                    input.friction_pe_contacts,
+                                    {});
+        push_legacy_source_if_valid(source_specs,
+                                    input.friction_pp_source,
+                                    SocuContactFamily::PP,
+                                    2,
+                                    {},
+                                    {},
+                                    input.friction_pp_contacts);
+        push_legacy_source_if_valid(source_specs,
+                                    input.friction_ph_source,
+                                    SocuContactFamily::PH,
+                                    2,
+                                    {},
+                                    {},
+                                    input.friction_ph_contacts);
+    }
     sort_and_validate_dense_sources(source_specs);
 
     SizeT ref_count = 0;
@@ -1046,37 +1140,19 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
 
         for(const auto& spec : source_specs)
         {
-            switch(spec.slot)
+            switch(spec.view_kind)
             {
-                case M2SourceSlot::PT:
-                    collect_vec4(input.pt_contacts);
+                case M2SourceViewKind::Vector4:
+                    collect_vec4(spec.stencil4);
                     break;
-                case M2SourceSlot::EE:
-                    collect_vec4(input.ee_contacts);
+                case M2SourceViewKind::Vector3:
+                    collect_vec3(spec.stencil3);
                     break;
-                case M2SourceSlot::PE:
-                    collect_vec3(input.pe_contacts);
+                case M2SourceViewKind::Vector2:
+                    collect_vec2(spec.stencil2);
                     break;
-                case M2SourceSlot::PP:
-                    collect_vec2(input.pp_contacts);
-                    break;
-                case M2SourceSlot::PH:
-                    collect_ph(input.ph_contacts);
-                    break;
-                case M2SourceSlot::FrictionPT:
-                    collect_vec4(input.friction_pt_contacts);
-                    break;
-                case M2SourceSlot::FrictionEE:
-                    collect_vec4(input.friction_ee_contacts);
-                    break;
-                case M2SourceSlot::FrictionPE:
-                    collect_vec3(input.friction_pe_contacts);
-                    break;
-                case M2SourceSlot::FrictionPP:
-                    collect_vec2(input.friction_pp_contacts);
-                    break;
-                case M2SourceSlot::FrictionPH:
-                    collect_ph(input.friction_ph_contacts);
+                case M2SourceViewKind::PH:
+                    collect_ph(spec.stencil2);
                     break;
             }
         }
@@ -1308,37 +1384,19 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
 
     for(const auto& spec : source_specs)
     {
-        switch(spec.slot)
+        switch(spec.view_kind)
         {
-            case M2SourceSlot::PT:
-                launch_simplex4(input.pt_contacts, spec);
+            case M2SourceViewKind::Vector4:
+                launch_simplex4(spec.stencil4, spec);
                 break;
-            case M2SourceSlot::EE:
-                launch_simplex4(input.ee_contacts, spec);
+            case M2SourceViewKind::Vector3:
+                launch_simplex3(spec.stencil3, spec);
                 break;
-            case M2SourceSlot::PE:
-                launch_simplex3(input.pe_contacts, spec);
+            case M2SourceViewKind::Vector2:
+                launch_simplex2(spec.stencil2, spec);
                 break;
-            case M2SourceSlot::PP:
-                launch_simplex2(input.pp_contacts, spec);
-                break;
-            case M2SourceSlot::PH:
-                launch_ph(input.ph_contacts, spec);
-                break;
-            case M2SourceSlot::FrictionPT:
-                launch_simplex4(input.friction_pt_contacts, spec);
-                break;
-            case M2SourceSlot::FrictionEE:
-                launch_simplex4(input.friction_ee_contacts, spec);
-                break;
-            case M2SourceSlot::FrictionPE:
-                launch_simplex3(input.friction_pe_contacts, spec);
-                break;
-            case M2SourceSlot::FrictionPP:
-                launch_simplex2(input.friction_pp_contacts, spec);
-                break;
-            case M2SourceSlot::FrictionPH:
-                launch_ph(input.friction_ph_contacts, spec);
+            case M2SourceViewKind::PH:
+                launch_ph(spec.stencil2, spec);
                 break;
         }
     }

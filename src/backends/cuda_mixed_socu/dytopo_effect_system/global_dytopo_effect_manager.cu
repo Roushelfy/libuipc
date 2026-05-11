@@ -14,6 +14,7 @@
 #include <finite_element/fem_linear_subsystem.h>
 #include <finite_element/finite_element_method.h>
 #include <finite_element/finite_element_vertex_reporter.h>
+#include <linear_system/socu_contact_assembly_plan.h>
 #include <linear_system/socu_contact_topology_stamp.h>
 #include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
@@ -23,6 +24,7 @@
 #include <energy_component_flags.h>
 #include <fmt/format.h>
 #include <muda/buffer/buffer_launch.h>
+#include <type_traits>
 #include <vector>
 
 namespace uipc::backend
@@ -536,6 +538,7 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
     {
         info.m_vertex_descriptors =
             structured_vertex_descriptors.view().as_const();
+        structured_info.set_native_vertex_descriptors(info.m_vertex_descriptors);
         info.m_descriptor_epoch = structured_vertex_descriptor_epoch;
     }
 
@@ -688,6 +691,137 @@ void GlobalDyTopoEffectManager::Impl::ensure_structured_vertex_descriptors(
                                            abd_body_is_fixed);
     structured_vertex_descriptor_key = key;
     structured_vertex_descriptor_epoch = epoch;
+}
+
+void GlobalDyTopoEffectManager::Impl::
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        SocuContactAssemblyPlan&            plan,
+        SocuContactAssemblyPlanM2Workspace& workspace,
+        const SocuVertexSidePlanKey&        side_key,
+        const SocuContactProgramPlanKey&    program_key,
+        muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+        StructuredContactOffbandPolicy offband_policy,
+        cudaStream_t                   stream)
+{
+    SocuContactAssemblyPlanM2BuildInput input;
+    input.side_key = side_key;
+    input.program_key = program_key;
+    input.vertex_descriptors = vertex_descriptors;
+    input.offband_policy = offband_policy;
+    input.stream = stream;
+
+    std::vector<SocuContactM2SourceInput> sources;
+    sources.reserve(16);
+    SizeT reporter_id = 0;
+    SizeT source_id = 0;
+
+    auto push_source = [&](std::uint32_t reporter,
+                           SocuContactModelKind model,
+                           SocuContactFamily family,
+                           auto view)
+    {
+        SocuContactM2SourceInput source;
+        source.source_id = static_cast<SocuContactSourceId>(source_id++);
+        source.reporter_id = reporter;
+        source.model = model;
+        source.family = family;
+        if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
+                                    muda::CBufferView<Vector4i>>)
+        {
+            source.stencil_size = 4;
+            source.stencil4 = view;
+        }
+        else if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
+                                         muda::CBufferView<Vector3i>>)
+        {
+            source.stencil_size = 3;
+            source.stencil3 = view;
+        }
+        else
+        {
+            source.stencil_size = 2;
+            source.stencil2 = view;
+        }
+        sources.push_back(source);
+    };
+
+    for(auto&& reporter : dytopo_effect_reporters.view())
+    {
+        if(!has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
+            continue;
+
+        const auto current_reporter_id =
+            static_cast<std::uint32_t>(reporter_id++);
+
+        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+        {
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexNormal,
+                        SocuContactFamily::PT,
+                        normal->PTs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexNormal,
+                        SocuContactFamily::EE,
+                        normal->EEs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexNormal,
+                        SocuContactFamily::PE,
+                        normal->PEs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexNormal,
+                        SocuContactFamily::PP,
+                        normal->PPs());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
+        {
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexFrictional,
+                        SocuContactFamily::PT,
+                        friction->PTs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexFrictional,
+                        SocuContactFamily::EE,
+                        friction->EEs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexFrictional,
+                        SocuContactFamily::PE,
+                        friction->PEs());
+            push_source(current_reporter_id,
+                        SocuContactModelKind::SimplexFrictional,
+                        SocuContactFamily::PP,
+                        friction->PPs());
+            continue;
+        }
+        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+        {
+            push_source(current_reporter_id,
+                        SocuContactModelKind::VertexHalfPlaneNormal,
+                        SocuContactFamily::PH,
+                        normal->PHs());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
+        {
+            push_source(current_reporter_id,
+                        SocuContactModelKind::VertexHalfPlaneFrictional,
+                        SocuContactFamily::PH,
+                        friction->PHs());
+            continue;
+        }
+
+        throw SimSystemException{fmt::format(
+            "socu_native_contact_plan_unsupported_reporter: reporter '{}' is "
+            "a contact reporter but does not expose an M2 native contact source",
+            reporter->name())};
+    }
+
+    input.sources = span<const SocuContactM2SourceInput>{sources};
+    ::uipc::backend::cuda_mixed::
+        build_socu_contact_assembly_plan_m2_active_set_temporary(
+        plan,
+        workspace,
+        input);
 }
 
 SizeT GlobalDyTopoEffectManager::Impl::contact_set_signature()
@@ -875,6 +1009,26 @@ void GlobalDyTopoEffectManager::assemble_structured_hessian(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
     m_impl.assemble_structured_hessian(info);
+}
+
+void GlobalDyTopoEffectManager::
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        SocuContactAssemblyPlan&            plan,
+        SocuContactAssemblyPlanM2Workspace& workspace,
+        const SocuVertexSidePlanKey&        side_key,
+        const SocuContactProgramPlanKey&    program_key,
+        muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+        StructuredContactOffbandPolicy offband_policy,
+        cudaStream_t                   stream)
+{
+    m_impl.build_socu_contact_assembly_plan_m2_active_set_temporary(
+        plan,
+        workspace,
+        side_key,
+        program_key,
+        vertex_descriptors,
+        offband_policy,
+        stream);
 }
 
 SizeT GlobalDyTopoEffectManager::contact_set_signature()

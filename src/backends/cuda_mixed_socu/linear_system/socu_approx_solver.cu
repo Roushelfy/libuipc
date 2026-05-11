@@ -5,6 +5,7 @@
 #include <linear_system/socu_approx_kernels.h>
 #include <linear_system/socu_approx_ordering.h>
 #include <linear_system/socu_approx_runtime.h>
+#include <linear_system/socu_contact_assembly_plan.h>
 #include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
 #include <sim_engine.h>
@@ -1734,6 +1735,8 @@ void SocuApproxSolver::finalize_structured_chain(
             key.scalar_diag_fallback_compatibility =
                 m_native_contact_scalar_diag_compat_enabled;
 
+            const auto side_key = socu_vertex_side_plan_key_from(key);
+            const auto program_key = socu_contact_program_plan_key_from(key);
             const auto decision = m_native_contact_plan_cache.update(key);
             const bool aggregate_hit =
                 decision.side_plan_hit() && decision.contact_program_hit();
@@ -1743,6 +1746,52 @@ void SocuApproxSolver::finalize_structured_chain(
                 m_report,
                 decision,
                 m_native_contact_plan_rebuild_count);
+
+            const bool plan_requested =
+                m_native_contact_plan_enabled
+                || m_native_contact_plan_executor_enabled
+                || m_native_contact_hot_reduce_enabled;
+            if(plan_requested)
+            {
+                if(!m_native_contact_plan)
+                    m_native_contact_plan =
+                        std::make_unique<SocuContactAssemblyPlan>();
+                if(!m_native_contact_plan_workspace)
+                    m_native_contact_plan_workspace =
+                        std::make_unique<SocuContactAssemblyPlanM2Workspace>();
+
+                const bool plan_valid =
+                    m_native_contact_plan->side_plan.key == side_key
+                    && m_native_contact_plan->program_plan.key == program_key;
+                const bool rebuild = !aggregate_hit || !plan_valid;
+                if(rebuild)
+                {
+                    const auto begin = std::chrono::steady_clock::now();
+                    const bool built =
+                        info.build_socu_contact_assembly_plan_m2_active_set_temporary(
+                            *m_native_contact_plan,
+                            *m_native_contact_plan_workspace,
+                            side_key,
+                            program_key);
+                    const auto end = std::chrono::steady_clock::now();
+                    if(built)
+                    {
+                        m_report.native_contact_plan_build_ms =
+                            std::chrono::duration<double, std::milli>(
+                                end - begin)
+                                .count();
+                    }
+                }
+
+                if(m_native_contact_plan->side_plan.key == side_key
+                   && m_native_contact_plan->program_plan.key == program_key)
+                {
+                    apply_native_contact_plan_stats(
+                        m_report,
+                        m_native_contact_plan->side_plan.last_stats,
+                        m_native_contact_plan->program_plan.last_stats);
+                }
+            }
         }
     }
 

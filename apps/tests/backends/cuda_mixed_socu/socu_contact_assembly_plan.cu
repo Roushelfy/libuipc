@@ -18,6 +18,7 @@ using uipc::SizeT;
 using uipc::Vector2i;
 using uipc::Vector3i;
 using uipc::Vector4i;
+using uipc::span;
 
 static_assert(std::is_trivially_copyable_v<SocuAssemblyDofLane>);
 static_assert(std::is_trivially_copyable_v<SocuAssemblySideRecord>);
@@ -400,6 +401,71 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_simplex_families_and_friction_s
     CHECK(programs[8].family == SocuContactFamily::PH);
     CHECK(programs[8].model == SocuContactModelKind::VertexHalfPlaneFrictional);
     CHECK(programs[8].side_ids[1] == SocuInvalidAssemblySideId);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_span_multiple_reporters",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<Vector4i> reporter_a_pts{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> reporter_b_pts{
+        std::vector<Vector4i>{Vector4i{1, 2, 0, 1}}};
+
+    std::vector<SocuContactM2SourceInput> sources(2);
+    sources[0].source_id = 0;
+    sources[0].reporter_id = 10;
+    sources[0].model = SocuContactModelKind::SimplexNormal;
+    sources[0].family = SocuContactFamily::PT;
+    sources[0].stencil_size = 4;
+    sources[0].stencil4 = reporter_a_pts.view();
+    sources[1].source_id = 1;
+    sources[1].reporter_id = 11;
+    sources[1].model = SocuContactModelKind::SimplexNormal;
+    sources[1].family = SocuContactFamily::PT;
+    sources[1].stencil_size = 4;
+    sources[1].stencil4 = reporter_b_pts.view();
+
+    muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+    muda::DeviceBuffer<Vector2i> empty_phs{std::vector<Vector2i>{}};
+    auto input = make_input(vertices,
+                            empty_pts,
+                            empty_phs,
+                            StructuredContactOffbandPolicy::Drop);
+    input.vertex_descriptors = vertices.view();
+    input.sources = span<const SocuContactM2SourceInput>{sources};
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        plan,
+        workspace,
+        input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactSourceHeader> headers;
+    std::vector<SocuContactProgramHeader> programs;
+    std::vector<SocuContactSourceToProgram> maps;
+    plan.program_plan.sources.copy_to(headers);
+    plan.program_plan.programs.copy_to(programs);
+    plan.program_plan.source_to_program.copy_to(maps);
+
+    REQUIRE(headers.size() == 2);
+    REQUIRE(programs.size() == 2);
+    REQUIRE(maps.size() == 2);
+    CHECK(headers[0].source_id == 0);
+    CHECK(headers[0].reporter_id == 10);
+    CHECK(headers[1].source_id == 1);
+    CHECK(headers[1].reporter_id == 11);
+    CHECK(programs[0].source_id == 0);
+    CHECK(programs[0].local_contact_id == 0);
+    CHECK(programs[1].source_id == 1);
+    CHECK(programs[1].local_contact_id == 0);
+    CHECK(maps[0].program_id == 0);
+    CHECK(maps[1].program_id == 1);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_dense_source_validation",

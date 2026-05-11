@@ -2033,3 +2033,51 @@ Current M2 status:
   the final solver path, invalid source/local-id counter reporting, production
   debug-validation reporting, and symbolic parity against the legacy target
   classification oracle.
+
+## 2026-05-11 Redesign Branch M2 Final-Path Plan Owner Slice
+
+Implemented:
+
+- Extended the M2 build input with an explicit source span. The compatibility
+  PT/EE/PE/PP/PH fields still work for unit fixtures, but production code can
+  now pass any number of dense `(reporter_id, source_id, family)` sources in
+  reporter order.
+- Added source-span builder coverage for multiple reporters with duplicate
+  local contact ids. The compact plan now keeps them unambiguous through
+  `(source_id, local_contact_id)`.
+- Exposed the dy-topology manager's cached native vertex descriptors through
+  `StructuredAssemblyInfo` after structured contact descriptor preparation.
+- Added a `GlobalDyTopoEffectManager` M2 plan-build adapter that enumerates
+  simplex normal, simplex frictional, normal PH, and frictional PH reporters in
+  the same source order as `SocuContactTopologyStamp`.
+- Added a `StructuredAssemblyInfo` final-path helper so `SocuApproxSolver` can
+  build the active-set temporary M2 plan without taking a direct dependency on
+  the dy-topology manager.
+- Added persistent `SocuContactAssemblyPlan` and M2 workspace ownership to
+  `SocuApproxSolver`. Final structured assembly now rebuilds the plan on split
+  cache misses and maps the resulting side/program stats into the solve report.
+
+Tests added:
+
+- `cuda_mixed_socu_contact_assembly_plan_source_span_multiple_reporters`
+  validates explicit source-span input, multiple PT reporters, dense source
+  headers, per-source reporter ids, duplicate local contact id `0`, and
+  source-to-program map separation.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; broad CUDA rebuild occurred because the source-span type touched common native contact headers |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `243` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5234` assertions in `40` test cases |
+
+Current M2 status:
+
+- The real final solver path now owns and builds the M2 symbolic plan in
+  plan-only mode. Native numeric contact execution is still not enabled.
+- M2 is still not accepted. Remaining work: invalid source/local-id counter
+  reporting, production debug-validation reporting, explicit final-path
+  integration coverage beyond compile/report plumbing, and symbolic parity
+  against the legacy target classification oracle.

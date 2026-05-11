@@ -2,6 +2,7 @@
 
 #include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/socu_native_descriptors.h>
+#include <uipc/common/span.h>
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/buffer_view.h>
 #include <cuda_runtime_api.h>
@@ -312,6 +313,11 @@ struct SocuContactM2SourceInput
     SocuContactSourceId source_id = SocuInvalidContactSourceId;
     std::uint32_t reporter_id = 0;
     SocuContactModelKind model = SocuContactModelKind::SimplexNormal;
+    SocuContactFamily family = SocuContactFamily::PT;
+    std::uint16_t stencil_size = 0;
+    muda::CBufferView<Vector4i> stencil4;
+    muda::CBufferView<Vector3i> stencil3;
+    muda::CBufferView<Vector2i> stencil2;
 };
 
 struct SocuContactAssemblyPlanM2BuildInput
@@ -319,6 +325,7 @@ struct SocuContactAssemblyPlanM2BuildInput
     SocuVertexSidePlanKey side_key;
     SocuContactProgramPlanKey program_key;
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors;
+    span<const SocuContactM2SourceInput> sources;
 
     muda::CBufferView<Vector4i> pt_contacts;
     muda::CBufferView<Vector4i> ee_contacts;

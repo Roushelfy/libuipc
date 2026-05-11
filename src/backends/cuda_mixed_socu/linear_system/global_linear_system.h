@@ -31,6 +31,8 @@ class LinearSolver;
 class LocalPreconditioner;
 class GlobalPreconditioner;
 class GlobalDyTopoEffectManager;
+struct SocuContactAssemblyPlan;
+struct SocuContactAssemblyPlanM2Workspace;
 
 class GlobalLinearSystem : public SimSystem
 {
@@ -203,6 +205,11 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_topology_stamp;
         }
+        muda::CBufferView<SocuNativeVertexDescriptor> native_vertex_descriptors()
+            const noexcept
+        {
+            return m_native_vertex_descriptors;
+        }
         IndexT descriptor_epoch() const noexcept { return m_descriptor_epoch; }
         bool report_counters_enabled() const noexcept
         {
@@ -285,6 +292,11 @@ class GlobalLinearSystem : public SimSystem
         {
             m_contact_topology_stamp = stamp;
         }
+        void set_native_vertex_descriptors(
+            muda::CBufferView<SocuNativeVertexDescriptor> descriptors) noexcept
+        {
+            m_native_vertex_descriptors = descriptors;
+        }
         void set_descriptor_epoch(IndexT epoch) noexcept
         {
             m_descriptor_epoch = epoch;
@@ -319,6 +331,11 @@ class GlobalLinearSystem : public SimSystem
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
+        bool build_socu_contact_assembly_plan_m2_active_set_temporary(
+            SocuContactAssemblyPlan&            plan,
+            SocuContactAssemblyPlanM2Workspace& workspace,
+            const SocuVertexSidePlanKey&        side_key,
+            const SocuContactProgramPlanKey&    program_key) const;
         void record_diag_writes(SizeT count) noexcept { m_diag_write_count += count; }
         void record_first_offdiag_writes(SizeT count) noexcept
         {
@@ -411,6 +428,7 @@ class GlobalLinearSystem : public SimSystem
             StructuredContactOffbandPolicy::Drop;
         SizeT                      m_contact_set_signature = 0;
         SocuContactTopologyStamp   m_contact_topology_stamp;
+        muda::CBufferView<SocuNativeVertexDescriptor> m_native_vertex_descriptors;
         IndexT                     m_descriptor_epoch = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;
         SizeT                      m_old_dof_offset = 0;

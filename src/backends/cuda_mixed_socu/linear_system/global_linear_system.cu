@@ -936,6 +936,30 @@ void GlobalLinearSystem::StructuredAssemblyInfo::set_subsystem_extent(
     m_old_dof_count  = old_dof_count;
 }
 
+bool GlobalLinearSystem::StructuredAssemblyInfo::
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        SocuContactAssemblyPlan&            plan,
+        SocuContactAssemblyPlanM2Workspace& workspace,
+        const SocuVertexSidePlanKey&        side_key,
+        const SocuContactProgramPlanKey&    program_key) const
+{
+    if(!m_impl || !m_impl->global_dytopo_effect_manager)
+        return false;
+    if(m_native_vertex_descriptors.data() == nullptr)
+        return false;
+
+    m_impl->global_dytopo_effect_manager
+        ->build_socu_contact_assembly_plan_m2_active_set_temporary(
+            plan,
+            workspace,
+            side_key,
+            program_key,
+            m_native_vertex_descriptors,
+            m_contact_offband_policy,
+            m_stream);
+    return true;
+}
+
 auto GlobalLinearSystem::AssemblyInfo::A() const -> CBCOOMatrixView
 {
     return m_impl->bcoo_A.cview();
