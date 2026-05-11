@@ -1,4 +1,7 @@
 #include <contact_system/simplex_frictional_contact.h>
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
+#endif
 #include <contact_system/contact_models/ipc_simplex_frictional_contact_native.h>
 #include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
 #include <utils/codim_thickness.h>
@@ -14,11 +17,33 @@ namespace uipc::backend::cuda_mixed
 {
 #ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_simplex_frictional_contact_structured(
-    SimplexFrictionalContact::ContactInfo& info);
+    SimplexFrictionalContactStructuredInfo info);
 #endif
 
 namespace
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+SimplexFrictionalContactStructuredInfo make_simplex_frictional_structured_info(
+    SimplexFrictionalContact::ContactInfo& info)
+{
+    return SimplexFrictionalContactStructuredInfo{
+        info.contact_tabular(),
+        info.friction_PTs(),
+        info.friction_EEs(),
+        info.friction_PEs(),
+        info.friction_PPs(),
+        info.positions(),
+        info.prev_positions(),
+        info.rest_positions(),
+        info.thicknesses(),
+        info.contact_element_ids(),
+        info.d_hats(),
+        info.dt(),
+        info.eps_velocity(),
+        info.structured_hessian_sink()};
+}
+#endif
+
 bool simplex_friction_contact_target_view_ready(
     SizeT contact_count,
     SizeT half_hessian_size,
@@ -30,24 +55,25 @@ bool simplex_friction_contact_target_view_ready(
 }
 
 bool simplex_friction_native_contact_targets_ready(
-    SimplexFrictionalContact::ContactInfo& info)
+    SimplexFrictionalContact::ContactInfo&          info,
+    const SimplexFrictionalContactNativeContext& native_context)
 {
     return simplex_friction_contact_target_view_ready(
                info.friction_PTs().size(),
                SimplexFrictionalContact::PTHalfHessianSize,
-               info.friction_PT_native_contact_targets())
+               native_context.PT_targets)
            && simplex_friction_contact_target_view_ready(
                info.friction_EEs().size(),
                SimplexFrictionalContact::EEHalfHessianSize,
-               info.friction_EE_native_contact_targets())
+               native_context.EE_targets)
            && simplex_friction_contact_target_view_ready(
                info.friction_PEs().size(),
                SimplexFrictionalContact::PEHalfHessianSize,
-               info.friction_PE_native_contact_targets())
+               native_context.PE_targets)
            && simplex_friction_contact_target_view_ready(
                info.friction_PPs().size(),
                SimplexFrictionalContact::PPHalfHessianSize,
-               info.friction_PP_native_contact_targets());
+               native_context.PP_targets);
 }
 }  // namespace
 
@@ -379,13 +405,19 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                 return;
             }
 
+            const auto* native_context =
+                static_cast<const SimplexFrictionalContactNativeContext*>(
+                    info.exact_contact_context());
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
-                && info.structured_hessian_sink().sink.matrix.native_enabled()
-                && simplex_friction_native_contact_targets_ready(info);
+                && native_context != nullptr
+                && native_context->sink.native_enabled()
+                && simplex_friction_native_contact_targets_ready(info, *native_context);
             if(native_ready)
             {
-                assemble_ipc_simplex_frictional_contact_native_exact(info);
+                assemble_ipc_simplex_frictional_contact_native_exact(
+                    info,
+                    *native_context);
                 return;
             }
 
@@ -394,7 +426,8 @@ class IPCSimplexFrictionalContact final : public SimplexFrictionalContact
                 "SOCU native-only build excludes legacy simplex frictional "
                 "structured contact assembly and requires native target tables");
 #else
-            assemble_ipc_simplex_frictional_contact_structured(info);
+            assemble_ipc_simplex_frictional_contact_structured(
+                make_simplex_frictional_structured_info(info));
 #endif
             return;
         }

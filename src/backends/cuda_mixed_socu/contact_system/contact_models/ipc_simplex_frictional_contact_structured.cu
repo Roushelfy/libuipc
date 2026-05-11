@@ -1,4 +1,4 @@
-#include <contact_system/simplex_frictional_contact.h>
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
 #include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
 #include <utils/codim_thickness.h>
 #include <utils/make_spd.h>
@@ -9,7 +9,7 @@
 namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_simplex_frictional_contact_structured(
-    SimplexFrictionalContact::ContactInfo& info)
+    SimplexFrictionalContactStructuredInfo info)
 {
     using namespace muda;
     using namespace sym::codim_ipc_contact;
