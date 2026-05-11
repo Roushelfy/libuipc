@@ -1,4 +1,7 @@
 #include <contact_system/vertex_half_plane_frictional_contact.h>
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
+#endif
 #include <contact_system/contact_models/ipc_vertex_half_plane_frictional_contact_native.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
@@ -14,12 +17,31 @@ namespace uipc::backend::cuda_mixed
 {
 #ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
 void assemble_ipc_vertex_half_plane_frictional_contact_structured(
-    VertexHalfPlaneFrictionalContact::ContactInfo& info,
+    VertexHalfPlaneFrictionalContactStructuredInfo info,
     const HalfPlane&                               half_plane);
 #endif
 
 namespace
 {
+#ifndef UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY
+VertexHalfPlaneFrictionalContactStructuredInfo make_ph_frictional_structured_info(
+    VertexHalfPlaneFrictionalContact::ContactInfo& info)
+{
+    return VertexHalfPlaneFrictionalContactStructuredInfo{
+        info.contact_tabular(),
+        info.friction_PHs(),
+        info.positions(),
+        info.prev_positions(),
+        info.thicknesses(),
+        info.contact_element_ids(),
+        info.d_hats(),
+        info.half_plane_vertex_offset(),
+        info.dt(),
+        info.eps_velocity(),
+        info.structured_hessian_sink()};
+}
+#endif
+
 bool ph_friction_contact_target_view_ready(
     SizeT contact_count,
     muda::CBufferView<SocuNativeContactStencilTarget> targets)
@@ -32,11 +54,12 @@ bool ph_friction_contact_target_view_ready(
 }
 
 bool ph_friction_native_contact_targets_ready(
-    VertexHalfPlaneFrictionalContact::ContactInfo& info)
+    VertexHalfPlaneFrictionalContact::ContactInfo&          info,
+    const VertexHalfPlaneFrictionalContactNativeContext& native_context)
 {
     return ph_friction_contact_target_view_ready(
         info.friction_PHs().size(),
-        info.PH_native_contact_targets());
+        native_context.PH_targets);
 }
 }  // namespace
 
@@ -129,15 +152,20 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
                 return;
             }
 
+            const auto* native_context =
+                static_cast<const VertexHalfPlaneFrictionalContactNativeContext*>(
+                    info.exact_contact_context());
             const bool native_ready =
                 !info.structured_hessian_sink().approximate_weight_probe_only()
-                && info.structured_hessian_sink().sink.matrix.native_enabled()
-                && ph_friction_native_contact_targets_ready(info);
+                && native_context != nullptr
+                && native_context->sink.native_enabled()
+                && ph_friction_native_contact_targets_ready(info, *native_context);
             if(native_ready)
             {
                 assemble_ipc_vertex_half_plane_frictional_contact_native_exact(
                     info,
-                    *half_plane);
+                    *half_plane,
+                    *native_context);
                 return;
             }
 
@@ -147,7 +175,7 @@ class IPCVertexHalfPlaneFrictionalContact final : public VertexHalfPlaneFriction
                 "frictional structured contact assembly and requires native target tables");
 #else
             assemble_ipc_vertex_half_plane_frictional_contact_structured(
-                info,
+                make_ph_frictional_structured_info(info),
                 *half_plane);
 #endif
             return;

@@ -1,4 +1,4 @@
-#include <contact_system/vertex_half_plane_frictional_contact.h>
+#include <contact_system/contact_models/ipc_contact_structured_infos.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
 #include <utils/make_spd.h>
@@ -8,7 +8,7 @@
 namespace uipc::backend::cuda_mixed
 {
 void assemble_ipc_vertex_half_plane_frictional_contact_structured(
-    VertexHalfPlaneFrictionalContact::ContactInfo& info,
+    VertexHalfPlaneFrictionalContactStructuredInfo info,
     const HalfPlane&                               half_plane)
 {
     using namespace muda;

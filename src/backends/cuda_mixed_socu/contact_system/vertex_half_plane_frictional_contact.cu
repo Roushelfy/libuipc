@@ -1,4 +1,5 @@
 #include <contact_system/vertex_half_plane_frictional_contact.h>
+#include <contact_system/contact_models/ipc_vertex_half_plane_frictional_contact_native.h>
 #include <collision_detection/vertex_half_plane_trajectory_filter.h>
 #include <utils/make_spd.h>
 #include <implicit_geometry/half_plane_vertex_reporter.h>
@@ -8,6 +9,24 @@ namespace uipc::backend::cuda_mixed
 {
 namespace
 {
+struct VertexHalfPlaneFrictionalContactExactCache
+{
+    muda::DeviceBuffer<SocuNativeContactStencilTarget> PH_targets;
+    IndexT descriptor_epoch = -1;
+    SizeT  contact_signature = ~SizeT{0};
+    StructuredContactOffbandPolicy offband_policy =
+        StructuredContactOffbandPolicy::Drop;
+};
+
+VertexHalfPlaneFrictionalContactExactCache& exact_cache(
+    std::shared_ptr<void>& cache)
+{
+    if(!cache)
+        cache = std::make_shared<VertexHalfPlaneFrictionalContactExactCache>();
+    return *std::static_pointer_cast<VertexHalfPlaneFrictionalContactExactCache>(
+        cache);
+}
+
 template <typename ContactSink>
 void record_friction_ph_contact_topology(cudaStream_t               stream,
                                          ContactSink                structured_sink,
@@ -158,6 +177,7 @@ void VertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
     this_info.m_hessian_only       = true;
     this_info.m_structured_hessian = true;
     this_info.m_structured_sink    = info.contact_sink();
+    VertexHalfPlaneFrictionalContactNativeContext native_context;
 
     if(this_info.m_structured_sink.topology_probe_only())
     {
@@ -179,29 +199,46 @@ void VertexHalfPlaneFrictionalContact::do_assemble_structured_hessian(
         return;
     }
 
-    const auto matrix = this_info.m_structured_sink.sink.matrix;
-    if(matrix.native_enabled())
+    if(info.native_contact_sink().native_enabled())
     {
         const auto descriptors = info.vertex_descriptors();
-        if(descriptors.data() != nullptr && matrix.old_to_chain.data() != nullptr
-           && matrix.horizon != 0 && matrix.block_size != 0)
+        const auto native_sink = info.native_contact_sink();
+        if(descriptors.data() != nullptr && native_sink.old_to_chain.data() != nullptr
+           && native_sink.horizon != 0 && native_sink.block_size != 0)
         {
-            m_impl.loose_resize(m_impl.PH_native_contact_targets,
-                                this_info.friction_PHs().size() * PHHalfHessianSize);
+            auto& cache = exact_cache(m_impl.exact_contact_cache);
+            const SizeT ph_target_count =
+                this_info.friction_PHs().size() * PHHalfHessianSize;
+            const bool targets_valid =
+                cache.descriptor_epoch == info.descriptor_epoch()
+                && cache.contact_signature == info.contact_set_signature()
+                && cache.offband_policy
+                       == this_info.m_structured_sink.offband_policy
+                && cache.PH_targets.size() == ph_target_count;
 
-            rebuild_socu_native_vertex_half_plane_contact_targets(
-                info.stream(),
-                m_impl.PH_native_contact_targets.view(),
-                this_info.friction_PHs(),
-                descriptors,
-                matrix.old_to_chain,
-                this_info.m_structured_sink.abd_vertex_to_J,
-                matrix.horizon,
-                matrix.block_size,
-                this_info.m_structured_sink.offband_policy);
+            if(!targets_valid)
+            {
+                m_impl.loose_resize(cache.PH_targets, ph_target_count);
 
-            this_info.m_PH_native_contact_targets =
-                m_impl.PH_native_contact_targets.view().as_const();
+                rebuild_socu_native_vertex_half_plane_contact_targets(
+                    info.stream(),
+                    cache.PH_targets.view(),
+                    this_info.friction_PHs(),
+                    descriptors,
+                    native_sink.old_to_chain,
+                    this_info.m_structured_sink.abd_vertex_to_J,
+                    native_sink.horizon,
+                    native_sink.block_size,
+                    this_info.m_structured_sink.offband_policy);
+
+                cache.descriptor_epoch = info.descriptor_epoch();
+                cache.contact_signature = info.contact_set_signature();
+                cache.offband_policy = this_info.m_structured_sink.offband_policy;
+            }
+
+            native_context.sink = native_sink;
+            native_context.PH_targets = cache.PH_targets.view().as_const();
+            this_info.m_exact_contact_context = &native_context;
         }
     }
 
