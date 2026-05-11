@@ -1803,7 +1803,56 @@ Current M1 status:
   for correctness and acceptable for M1; later contact-generation producers can
   avoid the scalar hash sync when they can bump the epoch directly at generation
   time.
-- Remaining M1 work before M2: connect the stamp to the native contact plan
-  cache once the cache object exists, add a final-plan cache-hit/rebuild test
-  using the real cache, and assign stable production `reporter_id/source_id`
-  records for the compact source table.
+- At the end of this first slice, remaining work before strict M1 acceptance was
+  to connect the stamp to the native contact plan cache, add final-plan
+  cache-hit/rebuild tests using the real cache, and assign stable production
+  `reporter_id/source_id` records for the compact source table.
+
+## 2026-05-11 Redesign Branch M1 Strict Acceptance
+
+Implemented:
+
+- Factored the production topology stamp helper into
+  `linear_system/socu_contact_topology_stamp.{h,cu}`. The helper owns the device
+  hash reducer, scalar hash finish, metadata mixing, and
+  `SocuContactTopologyStampCache` epoch semantics.
+- `GlobalDyTopoEffectManager::contact_topology_stamp()` now calls that shared
+  helper instead of carrying a private anonymous-namespace reducer.
+- Added split key/cache contracts:
+  `SocuVertexSidePlanKey`, `SocuContactProgramPlanKey`, and
+  `SocuContactPlanCacheState`.
+- `SocuApproxSolver::finalize_structured_chain()` now updates the M1 native
+  contact plan cache when the final path requested a valid topology stamp.
+  Topology-only changes are represented as side-plan hits and contact-program
+  rebuilds; ordering/descriptor/mapping/projection changes rebuild both layers.
+- Strengthened `source_id` validation to report dense, non-dense, duplicate, and
+  out-of-range states separately.
+
+M1 acceptance tests added:
+
+- `socu_contact_topology_stamp.cu` runs the production device hash reducer on
+  real `muda::DeviceBuffer<Vector4i>` inputs.
+- Same contact count with different vertex ids keeps `layout_hash` stable,
+  changes `content_hash`, and bumps the stamp cache epoch.
+- Repeating identical topology keeps the epoch stable.
+- Empty family stamps remain valid and stable on repeat.
+- Reordered contacts change content hash; reordered source families change
+  layout/content hash.
+- A topology-only stamp change feeds the real split cache state and rebuilds
+  only the contact program layer.
+- `policy_contract.cu` covers split cache decisions for topology, off-band
+  `Drop/Diag/DiagLump`, scalar-diag compatibility, ordering, descriptor,
+  fixed-mapping, projection, and geometry-only no-op changes.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed; native-only build reused the M0 development matrix and linked `Release/bin/uipc_test_backend_cuda_mixed_socu` |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `4991` assertions in `32` test cases |
+
+M1 status: accepted for the redesign branch. M2 may now start from the compact
+side table and contact program builder. The remaining source-table work belongs
+to M2 because it creates the compact production source records consumed by the
+program builder.

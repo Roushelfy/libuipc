@@ -1563,7 +1563,7 @@ Acceptance:
 
 Current implementation status:
 
-- M1 first slice is implemented in `socu-native-builder-redesign` as of
+- M1 strict acceptance is implemented in `socu-native-builder-redesign` as of
   2026-05-11.
 - `StructuredAssemblyInfo` carries `SocuContactTopologyStamp`, and final
   structured assembly fills it from `GlobalDyTopoEffectManager` after solver
@@ -1571,18 +1571,21 @@ Current implementation status:
   plan stamp.
 - Probe-only runtime graph signatures remain isolated on the probe path through
   `contact_set_signature()`.
-- The first topology producer hashes contact vertex-id buffers on device and
-  copies back only scalar hash accumulators. It is correctness-first and may
-  conservatively bump on storage-layout changes.
-- The current `SocuAssemblyPlanKey`, `SocuContactExecutionStrategy`,
-  topology/source hash helpers, and dense `source_id` validation are available
-  as lightweight POD contracts.
-- Remaining before M2: wire the stamp into the actual final plan cache object,
-  split the cache semantics into side and contact program keys, add
-  cache-hit/rebuild tests against both layers, add the side coverage stamp so
-  active-set refresh cannot be confused with semantic side rebuild, and promote
-  stable production `reporter_id/source_id` assignment into the compact source
-  table.
+- The topology producer is factored into `socu_contact_topology_stamp.{h,cu}` so
+  tests and `GlobalDyTopoEffectManager` exercise the same device hash reducer.
+  It hashes contact vertex-id buffers on device and copies back only scalar hash
+  accumulators. It is correctness-first and may conservatively bump on
+  storage-layout changes.
+- `SocuContactTopologyStampCache` owns epoch bump semantics.
+- `SocuVertexSidePlanKey`, `SocuContactProgramPlanKey`, and
+  `SocuContactPlanCacheState` provide the M1 split-cache decision contract used
+  by `SocuApproxSolver` final structured assembly.
+- Contract tests now execute the production device hash reducer on real
+  `muda::DeviceBuffer` inputs and verify same-count/different-vertex topology
+  changes rebuild only the contact program layer while the side key hits.
+- M1 is accepted for the redesign branch. Remaining M2 work: implement compact
+  side/program buffers, side coverage stamps, production compact
+  `reporter_id/source_id` records, and numeric executor coverage.
 
 ### M2: Compact Side Table And Program Builder
 
