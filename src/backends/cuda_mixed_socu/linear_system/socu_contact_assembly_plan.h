@@ -228,7 +228,15 @@ struct SocuContactPlanStats
     SizeT program_rebuild_count = 0;
     SizeT side_count = 0;
     SizeT lane_count = 0;
+    SizeT source_count = 0;
     SizeT program_count = 0;
+    SizeT source_to_program_count = 0;
+    SizeT valid_program_map_count = 0;
+    SizeT missing_program_map_count = 0;
+    SizeT invalid_program_map_count = 0;
+    SizeT dropped_program_map_count = 0;
+    SizeT skipped_program_map_count = 0;
+    SizeT mixed_rejected_program_map_count = 0;
     SizeT task_count = 0;
     SizeT bucket_count = 0;
     SizeT exact_program_count = 0;

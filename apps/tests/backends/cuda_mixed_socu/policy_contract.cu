@@ -77,7 +77,15 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     for(const char* field : {"native_contact_plan_rebuild_count",
                              "native_contact_side_count",
                              "native_contact_lane_count",
+                             "native_contact_source_count",
                              "native_contact_program_count",
+                             "native_contact_source_to_program_count",
+                             "native_contact_valid_program_map_count",
+                             "native_contact_missing_program_map_count",
+                             "native_contact_invalid_program_map_count",
+                             "native_contact_dropped_program_map_count",
+                             "native_contact_skipped_program_map_count",
+                             "native_contact_mixed_rejected_program_map_count",
                              "native_contact_task_count",
                              "native_contact_bucket_count",
                              "native_contact_exact_program_count",
@@ -109,7 +117,15 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     SocuContactPlanStats program_stats;
     side_stats.side_count = 4;
     side_stats.lane_count = 21;
+    program_stats.source_count = 3;
     program_stats.program_count = 7;
+    program_stats.source_to_program_count = 7;
+    program_stats.valid_program_map_count = 4;
+    program_stats.missing_program_map_count = 0;
+    program_stats.invalid_program_map_count = 0;
+    program_stats.dropped_program_map_count = 2;
+    program_stats.skipped_program_map_count = 1;
+    program_stats.mixed_rejected_program_map_count = 0;
     program_stats.task_count = 19;
     program_stats.bucket_count = 5;
     program_stats.exact_program_count = 2;
@@ -127,7 +143,15 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
 
     CHECK(report.native_contact_side_count == 4);
     CHECK(report.native_contact_lane_count == 21);
+    CHECK(report.native_contact_source_count == 3);
     CHECK(report.native_contact_program_count == 7);
+    CHECK(report.native_contact_source_to_program_count == 7);
+    CHECK(report.native_contact_valid_program_map_count == 4);
+    CHECK(report.native_contact_missing_program_map_count == 0);
+    CHECK(report.native_contact_invalid_program_map_count == 0);
+    CHECK(report.native_contact_dropped_program_map_count == 2);
+    CHECK(report.native_contact_skipped_program_map_count == 1);
+    CHECK(report.native_contact_mixed_rejected_program_map_count == 0);
     CHECK(report.native_contact_task_count == 19);
     CHECK(report.native_contact_bucket_count == 5);
     CHECK(report.native_contact_exact_program_count == 2);
@@ -191,7 +215,10 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     const Json json = Json::parse(ifs);
     const auto& contact = json.at("contact");
     CHECK(contact.at("native_contact_side_count").get<SizeT>() == 4);
+    CHECK(contact.at("native_contact_source_count").get<SizeT>() == 3);
     CHECK(contact.at("native_contact_program_count").get<SizeT>() == 7);
+    CHECK(contact.at("native_contact_valid_program_map_count").get<SizeT>() == 4);
+    CHECK(contact.at("native_contact_dropped_program_map_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_bucket_count").get<SizeT>() == 5);
     CHECK(contact.at("native_contact_exact_program_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_drop_program_count").get<SizeT>() == 2);

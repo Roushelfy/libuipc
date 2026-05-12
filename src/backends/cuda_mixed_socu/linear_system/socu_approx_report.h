@@ -130,7 +130,15 @@ struct SocuApproxSolveReport
     SizeT native_contact_plan_rebuild_count = 0;
     SizeT native_contact_side_count = 0;
     SizeT native_contact_lane_count = 0;
+    SizeT native_contact_source_count = 0;
     SizeT native_contact_program_count = 0;
+    SizeT native_contact_source_to_program_count = 0;
+    SizeT native_contact_valid_program_map_count = 0;
+    SizeT native_contact_missing_program_map_count = 0;
+    SizeT native_contact_invalid_program_map_count = 0;
+    SizeT native_contact_dropped_program_map_count = 0;
+    SizeT native_contact_skipped_program_map_count = 0;
+    SizeT native_contact_mixed_rejected_program_map_count = 0;
     SizeT native_contact_task_count = 0;
     SizeT native_contact_bucket_count = 0;
     SizeT native_contact_exact_program_count = 0;

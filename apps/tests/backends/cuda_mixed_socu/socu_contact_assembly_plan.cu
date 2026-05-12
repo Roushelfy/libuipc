@@ -551,6 +551,7 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_offband_policy",
         CHECK(programs[0].task_count == 0);
         REQUIRE(!maps.empty());
         CHECK(maps[0].status == SocuContactProgramMapStatus::Dropped);
+        CHECK(maps[0].program_id == SocuInvalidContactProgramId);
         CHECK(tasks.empty());
     }
 
@@ -620,6 +621,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(maps[0].status == SocuContactProgramMapStatus::Valid);
     CHECK(maps[1].status == SocuContactProgramMapStatus::Dropped);
     CHECK(maps[2].status == SocuContactProgramMapStatus::Skipped);
+    CHECK(maps[0].program_id == 0);
+    CHECK(maps[1].program_id == SocuInvalidContactProgramId);
+    CHECK(maps[2].program_id == SocuInvalidContactProgramId);
 
     REQUIRE(buckets.size() == 3);
     CHECK(buckets[0].program_kind == SocuContactProgramKind::Exact);
@@ -637,7 +641,15 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(buckets[2].program_count == 1);
 
     const auto& stats = plan.program_plan.last_stats;
+    CHECK(stats.source_count == 2);
     CHECK(stats.program_count == 3);
+    CHECK(stats.source_to_program_count == 3);
+    CHECK(stats.valid_program_map_count == 1);
+    CHECK(stats.missing_program_map_count == 0);
+    CHECK(stats.invalid_program_map_count == 0);
+    CHECK(stats.dropped_program_map_count == 1);
+    CHECK(stats.skipped_program_map_count == 1);
+    CHECK(stats.mixed_rejected_program_map_count == 0);
     CHECK(stats.bucket_count == 3);
     CHECK(stats.exact_program_count == 1);
     CHECK(stats.drop_program_count == 1);

@@ -2081,3 +2081,45 @@ Current M2 status:
   reporting, production debug-validation reporting, explicit final-path
   integration coverage beyond compile/report plumbing, and symbolic parity
   against the legacy target classification oracle.
+
+## 2026-05-11 Redesign Branch M2 Program Map Status Slice
+
+Implemented:
+
+- Tightened `SocuContactSourceToProgram` semantics: only `Valid` map entries
+  carry an executable `program_id`. `Dropped`, `Skipped`, `Missing`, and future
+  debug-rejected entries keep `SocuInvalidContactProgramId`.
+- Extended program-plan stats with source count, source-to-program count, valid
+  map count, missing map count, invalid/malformed map count, dropped map count,
+  skipped map count, and mixed-rejected map count.
+- Counted map statuses on CUDA in the existing program stats pass, so the
+  builder detects malformed maps without scanning the program table on host.
+- Mapped the new map counters into `SocuApproxSolveReport` JSON fields and
+  reset them with the other native contact plan counters.
+
+Tests updated:
+
+- M2 bucket/stats coverage now verifies that dropped and skipped contacts have
+  invalid program ids, while valid contacts still map directly to their compact
+  program.
+- Report contract tests now validate zero defaults, direct stats mapping, and
+  JSON serialization for the new source/map counters.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `266` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `382` assertions in `20` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5265` assertions in `40` test cases |
+
+Current M2 status:
+
+- Invalid/skipped source-to-program reporting is now covered by CUDA builder
+  stats and public SOCU reports.
+- M2 is still not accepted. Remaining work: production dense-source debug
+  validation/reporting, explicit final-path integration coverage beyond
+  compile/report plumbing, and symbolic parity against the legacy target
+  classification oracle.

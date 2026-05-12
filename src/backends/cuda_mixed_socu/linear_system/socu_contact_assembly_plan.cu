@@ -469,10 +469,12 @@ __global__ void emit_simplex_programs_kernel(
 
     const SizeT program_id = first_program + i;
     programs.data()[program_id] = program;
+    const auto mapped_program =
+        status == SocuContactProgramMapStatus::Valid
+            ? static_cast<SocuContactProgramId>(program_id)
+            : SocuInvalidContactProgramId;
     source_to_program.data()[first_source_to_program + i] =
-        SocuContactSourceToProgram{static_cast<SocuContactProgramId>(program_id),
-                                   status,
-                                   0};
+        SocuContactSourceToProgram{mapped_program, status, 0};
 }
 
 __global__ void emit_ph_programs_kernel(
@@ -529,10 +531,12 @@ __global__ void emit_ph_programs_kernel(
 
     const SizeT program_id = first_program + i;
     programs.data()[program_id] = program;
+    const auto mapped_program =
+        status == SocuContactProgramMapStatus::Valid
+            ? static_cast<SocuContactProgramId>(program_id)
+            : SocuInvalidContactProgramId;
     source_to_program.data()[first_source_to_program + i] =
-        SocuContactSourceToProgram{static_cast<SocuContactProgramId>(program_id),
-                                   status,
-                                   0};
+        SocuContactSourceToProgram{mapped_program, status, 0};
 }
 
 enum class M2ProgramStatSlot : int
@@ -548,6 +552,12 @@ enum class M2ProgramStatSlot : int
     LumpScalarTask,
     HotDiagBlock,
     HotOffdiagBlock,
+    ValidProgramMap,
+    MissingProgramMap,
+    InvalidProgramMap,
+    DroppedProgramMap,
+    SkippedProgramMap,
+    MixedRejectedProgramMap,
     Count,
 };
 
@@ -640,9 +650,48 @@ MUDA_DEVICE void count_task_kind(const SocuContactMicroTask& task,
     }
 }
 
+MUDA_DEVICE void count_program_map_status(
+    const SocuContactSourceToProgram& map,
+    SizeT                             program_count,
+    muda::BufferView<int>             counters)
+{
+    const bool valid_program_id =
+        map.program_id != SocuInvalidContactProgramId
+        && static_cast<SizeT>(map.program_id) < program_count;
+    switch(map.status)
+    {
+        case SocuContactProgramMapStatus::Valid:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::ValidProgramMap)], 1);
+            if(!valid_program_id)
+                atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
+            break;
+        case SocuContactProgramMapStatus::Missing:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::MissingProgramMap)], 1);
+            if(map.program_id != SocuInvalidContactProgramId)
+                atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
+            break;
+        case SocuContactProgramMapStatus::Dropped:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::DroppedProgramMap)], 1);
+            if(map.program_id != SocuInvalidContactProgramId)
+                atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
+            break;
+        case SocuContactProgramMapStatus::Skipped:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::SkippedProgramMap)], 1);
+            if(map.program_id != SocuInvalidContactProgramId)
+                atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
+            break;
+        case SocuContactProgramMapStatus::MixedRejected:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::MixedRejectedProgramMap)], 1);
+            if(map.program_id != SocuInvalidContactProgramId)
+                atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
+            break;
+    }
+}
+
 __global__ void mark_program_buckets_and_stats_kernel(
     muda::CBufferView<SocuContactProgramHeader> programs,
     muda::CBufferView<SocuContactMicroTask> tasks,
+    muda::CBufferView<SocuContactSourceToProgram> source_to_program,
     muda::BufferView<int> bucket_flags,
     muda::BufferView<int> counters)
 {
@@ -654,6 +703,10 @@ __global__ void mark_program_buckets_and_stats_kernel(
     const bool is_bucket_start =
         i == 0 || !same_bucket_key(programs.data()[i - 1], program);
     bucket_flags.data()[i] = is_bucket_start ? 1 : 0;
+    if(i < source_to_program.size())
+        count_program_map_status(source_to_program.data()[i],
+                                 programs.size(),
+                                 counters);
 
     count_program_kind(program.program_kind, counters);
     for(std::uint16_t task = 0; task < program.task_count; ++task)
@@ -1403,7 +1456,10 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
 
     const int task_count = copy_first_int(workspace.task_cursor);
     plan.program_plan.tasks.resize(static_cast<SizeT>(task_count));
+    plan.program_plan.last_stats.source_count = plan.program_plan.sources.size();
     plan.program_plan.last_stats.program_count = total_program_count;
+    plan.program_plan.last_stats.source_to_program_count =
+        plan.program_plan.source_to_program.size();
     plan.program_plan.last_stats.task_count = static_cast<SizeT>(task_count);
 
     if(total_program_count == 0)
@@ -1429,6 +1485,7 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
                                                           launch_stream(input.stream)>>>(
                       plan.program_plan.programs.view(),
                       plan.program_plan.tasks.view(),
+                      plan.program_plan.source_to_program.view(),
                       workspace.program_bucket_flags.view(),
                       workspace.program_stats.view());
               });
@@ -1486,5 +1543,17 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
         stat(M2ProgramStatSlot::HotDiagBlock);
     plan.program_plan.last_stats.hot_offdiag_block_count =
         stat(M2ProgramStatSlot::HotOffdiagBlock);
+    plan.program_plan.last_stats.valid_program_map_count =
+        stat(M2ProgramStatSlot::ValidProgramMap);
+    plan.program_plan.last_stats.missing_program_map_count =
+        stat(M2ProgramStatSlot::MissingProgramMap);
+    plan.program_plan.last_stats.invalid_program_map_count =
+        stat(M2ProgramStatSlot::InvalidProgramMap);
+    plan.program_plan.last_stats.dropped_program_map_count =
+        stat(M2ProgramStatSlot::DroppedProgramMap);
+    plan.program_plan.last_stats.skipped_program_map_count =
+        stat(M2ProgramStatSlot::SkippedProgramMap);
+    plan.program_plan.last_stats.mixed_rejected_program_map_count =
+        stat(M2ProgramStatSlot::MixedRejectedProgramMap);
 }
 }  // namespace uipc::backend::cuda_mixed
