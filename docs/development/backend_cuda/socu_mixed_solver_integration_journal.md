@@ -2402,3 +2402,47 @@ Decision:
 - M3 writer correctness and interface acceptance are complete. M4 should extend
   the same writer to the full exact/diag/diag-lump policy set and add the
   performance comparison table before making numeric-speed claims.
+
+## 2026-05-12 Redesign Branch M4 Exact/Diag/DiagLump Writer
+
+Implemented:
+
+- Completed the compatibility writer's M4 task set:
+  exact FEM/FEM, ABD/FEM, FEM/ABD, ABD/ABD same-body, ABD/ABD cross-body,
+  `DiagBlockFem`, `DiagBlockAbd`, `DiagScalarFem`, `DiagScalarAbd`,
+  `LumpScalarFem`, and `LumpScalarAbd`.
+- Added separate writer counters for exact, diag-block, diag-scalar, and
+  lump-scalar task writes.
+- Matched legacy ABD/ABD same-body semantics by using the half-Hessian upper
+  block as `A + A^T`; the writer does not read the lower local block for this
+  case.
+- Kept the production writer isolated from the structured sink, old target
+  table, `old_to_chain`, and `classify_dof_pair`.
+
+Tests updated:
+
+- Added `[m4]` CUDA parity tests for ABD/ABD same-body and cross-body exact
+  writes against the legacy structured sink.
+- Added FEM `Drop`, `Diag`, and `DiagLump` policy tests driven by M2-emitted
+  compact plans.
+- Added ABD/FEM `Diag` and `DiagLump` fallback tests with nontrivial
+  `ABDJacobi::x_bar()` weights.
+- Added separate `DiagScalarFem` and `DiagScalarAbd` CPU-golden compatibility
+  tests so scalar diag fallback cannot be conflated with diag-block fallback.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m4]"` | passed, `15452` assertions in `5` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m3]"` | passed, `6234` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `638` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `22441` assertions in `35` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `27324` assertions in `55` test cases |
+
+Decision:
+
+- M4 writer correctness is accepted. M5 can now build the plan-owned numeric
+  executor against the compatibility writer as its reference.

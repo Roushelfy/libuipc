@@ -2044,6 +2044,39 @@ M4 cannot be accepted until `Diag` block fallback and scalar compatibility have
 separate tests and separate counters. A single "diag fallback" golden is not
 sufficient.
 
+Current implementation status:
+
+- M4 writer correctness is implemented in `socu-native-builder-redesign` as of
+  2026-05-12.
+- `SocuContactProgramWriter` now supports the full M4 task set:
+  exact FEM/FEM, ABD/FEM, FEM/ABD, ABD/ABD same-body, ABD/ABD cross-body,
+  `DiagBlockFem`, `DiagBlockAbd`, `DiagScalarFem`, `DiagScalarAbd`,
+  `LumpScalarFem`, and `LumpScalarAbd`.
+- ABD/ABD same-body writes use the half-Hessian convention `A + A^T` from the
+  upper contact block, matching the legacy structured sink. They do not read the
+  lower local Hessian block.
+- Writer counters now distinguish exact task writes, diag-block writes,
+  diag-scalar compatibility writes, and lump-scalar writes.
+- Added `[m4]` CUDA tests for ABD/ABD same-body and cross-body parity with the
+  legacy structured sink, FEM `Drop/Diag/DiagLump` policy parity through M2
+  plans, ABD/FEM `Diag/DiagLump` fallback parity with nontrivial ABD projection
+  weights, and separate CPU-golden `DiagScalarFem`/`DiagScalarAbd`
+  compatibility tests.
+- M4 writer validation:
+  - `git diff --check`: passed.
+  - `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12`:
+    passed.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m4]"`:
+    passed, `15452` assertions in `5` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m3]"`:
+    passed, `6234` assertions in `6` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"`:
+    passed, `638` assertions in `12` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"`:
+    passed, `22441` assertions in `35` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"`:
+    passed, `27324` assertions in `55` test cases.
+
 Acceptance:
 
 - Matrix diff against legacy structured contact passes for all policies.
