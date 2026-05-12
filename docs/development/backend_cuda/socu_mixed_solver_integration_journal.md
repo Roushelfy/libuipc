@@ -2279,3 +2279,51 @@ Next milestone:
 
 - Start M2b persistent side coverage cache if the goal is to remove the
   temporary active-set side rebuild/refresh cost before M3 numeric writer work.
+
+## 2026-05-11 Redesign Branch M2b Global Side Coverage
+
+Implemented:
+
+- Added `global` side coverage for the M2 contact builder. In this mode the
+  side plan materializes the native vertex descriptor table once for a side key
+  and keeps side ids stable across contact topology changes.
+- Added generic `build_socu_contact_assembly_plan_m2()` entry points through
+  `StructuredAssemblyInfo` and `GlobalDyTopoEffectManager`. The old
+  `active_set_temporary` function remains as an explicit wrapper for debug and
+  M2 correctness bisection.
+- Added scene config
+  `linear_system/socu_approx/native_contact_side_coverage_mode`, defaulting to
+  `"global"`. `"active_set_temporary"` is still accepted for debugging.
+- Updated the final solver path so a side-key hit plus program-key miss in
+  `global` mode reports a side coverage hit instead of an active-side-set
+  refresh/change.
+- Left `demand_filled` as a later memory optimization. M2b acceptance uses the
+  `global` option allowed by the plan.
+
+Tests updated:
+
+- Added `[m2b]` CUDA builder coverage that builds a global side plan, changes
+  contact topology under the same side key, verifies the sorted side table and
+  side ids remain stable, and verifies an empty contact set does not clear the
+  global side cache.
+- Added report mapping coverage for `global`, `demand_filled`, and
+  `active_set_temporary` coverage-mode strings.
+- Extended the source scan to require the generic M2 builder call, the new
+  coverage-mode config, and the default `"global"` scene config.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2b]"` | passed, `60` assertions in `3` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `584` assertions in `11` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `718` assertions in `24` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5601` assertions in `44` test cases |
+
+Decision:
+
+- Accept M2b with `global` persistent side coverage. Topology-churn performance
+  work may now proceed to M3/M5 without active-set side rebuild cost being
+  hidden in the M2 builder.

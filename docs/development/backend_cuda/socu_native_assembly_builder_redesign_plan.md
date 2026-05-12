@@ -1398,6 +1398,7 @@ Deliverables:
   - `linear_system/socu_approx/native_contact_hot_reduce=0/1`
   - `linear_system/socu_approx/native_contact_hot_reduce_strategy=off|detect_only|recompute|cached_microblock`
   - `linear_system/socu_approx/native_contact_scalar_diag_compat=0/1`
+  - `linear_system/socu_approx/native_contact_side_coverage_mode=global|active_set_temporary`
 - Add separate timers for:
   - native descriptor rebuild
   - contact plan build
@@ -1779,19 +1780,33 @@ M2b is the milestone that turns the split-key design into the intended
 performance design. It must land before using M3 or M5 numbers as topology-churn
 performance evidence.
 
+Current implementation status:
+
+- M2b is accepted on `socu-native-builder-redesign` as of 2026-05-11 using the
+  `global` side coverage path.
+- The scene default
+  `linear_system/socu_approx/native_contact_side_coverage_mode` is `"global"`.
+  `"active_set_temporary"` remains available only as a debug/correctness
+  bisection mode.
+- `demand_filled` remains a later memory/performance optimization. It is not
+  part of the accepted M2b surface because M2b's deliverable allowed either
+  `global` or `demand_filled` persistent side coverage.
+- The generic `build_socu_contact_assembly_plan_m2()` builder now preserves the
+  global side plan when the side key hits and only rebuilds contact programs on
+  topology/content/off-band changes.
+- The old `build_socu_contact_assembly_plan_m2_active_set_temporary()` entry
+  remains as an explicit wrapper for debug tests and M2 correctness bisection.
+
 Deliverables:
 
-- Replace `active_set_temporary` for performance builds with either:
-  - `global` side coverage, materializing every contact-addressable FEM/ABD
-    vertex for the current `SocuVertexSidePlanKey`; or
-  - `demand_filled` side coverage, using a persistent device lookup from global
-    vertex to side id and filling only previously unseen vertices.
-- Keep side ids stable for the lifetime of a side key in `demand_filled` mode.
+- Replace `active_set_temporary` for performance builds with `global` side
+  coverage, materializing every vertex descriptor for the current
+  `SocuVertexSidePlanKey`.
+- Keep side ids stable for the lifetime of a side key in `global` mode.
   Contact program plans may be rebuilt on topology changes, but previously
   emitted side ids must not silently change underneath a still-valid plan view.
-- Implement device-side missing-vertex detection for `demand_filled` mode:
-  active contact stencils are scanned on device, missing vertices are compacted,
-  side records are materialized, and the vertex-to-side lookup is updated.
+- Defer device-side missing-vertex detection for `demand_filled` mode until a
+  later memory optimization milestone.
 - Keep host work limited to key checks, buffer growth decisions, kernel
   launches, and scalar report copies.
 - Add report fields for side coverage mode, coverage hit/refresh/fill count,
@@ -1807,12 +1822,7 @@ Unit tests:
     programs;
   - side semantic cache hits and side coverage hits;
   - no active-side-set refresh is reported.
-- `demand_filled` mode:
-  - first topology using new vertices fills missing side records and reports
-    coverage fill, not semantic side rebuild;
-  - repeated topology over already covered vertices rebuilds only contact
-    programs;
-  - side ids for already covered vertices remain stable after additional fills.
+- `demand_filled` mode is not required for M2b acceptance on this branch.
 - `active_set_temporary` mode:
   - topology changes that change the active vertex set report
     `active_side_set_changed`;
@@ -1833,6 +1843,18 @@ Acceptance:
   comparison. It blocks final topology-churn performance acceptance.
 - The report makes it impossible to confuse semantic side rebuild time,
   coverage fill/refresh time, and contact program rebuild time.
+- M2b final acceptance validation:
+  - `git diff --check`: passed.
+  - `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12`:
+    passed.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2b]"`:
+    passed, `60` assertions in `3` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"`:
+    passed, `584` assertions in `11` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"`:
+    passed, `718` assertions in `24` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"`:
+    passed, `5601` assertions in `44` test cases.
 
 ### M3: Compatibility Program Writer For Exact Writes
 
