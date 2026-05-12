@@ -49,6 +49,14 @@ bool has_cuda_device()
     return true;
 }
 
+__global__ void query_zero_count_programs_kernel(
+    SocuContactAssemblyPlanView      plan,
+    SocuContactSourceToProgram* maps)
+{
+    maps[0] = plan.program_for(0, 0);
+    maps[1] = plan.program_for(1, 0);
+}
+
 SocuNativeVertexDescriptor make_vertex(SocuNativeDescriptorKind kind,
                                        bool fixed,
                                        IndexT old_dof,
@@ -512,6 +520,18 @@ SizeT total_program_task_count(
     for(const auto& program : programs)
         total += program.task_count;
     return total;
+}
+
+SizeT count_occurrences(const std::string& text, const std::string& token)
+{
+    SizeT count = 0;
+    std::string::size_type pos = 0;
+    while((pos = text.find(token, pos)) != std::string::npos)
+    {
+        ++count;
+        pos += token.size();
+    }
+    return count;
 }
 
 std::string read_text_file(const std::filesystem::path& path)
@@ -1291,6 +1311,158 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_demand_filled_side_coverage",
     CHECK(plan.side_plan.last_stats.side_count == 3);
 }
 
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_empty_noop_contract",
+          "[cuda_mixed_socu][contract][socu_approx][m2][m5][regression]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+    muda::DeviceBuffer<Vector2i> empty_phs{std::vector<Vector2i>{}};
+
+    auto input = make_input(vertices,
+                            empty_pts,
+                            empty_phs,
+                            StructuredContactOffbandPolicy::Drop);
+    input.pt_source = {};
+    input.ph_source = {};
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+    build_socu_contact_assembly_plan_m2_active_set_temporary(
+        plan,
+        workspace,
+        input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    CHECK(socu_contact_assembly_plan_empty(plan));
+    CHECK(plan.side_plan.coverage.mode
+          == SocuVertexSideCoverageMode::ActiveSetTemporary);
+    CHECK(plan.side_plan.coverage.complete_for_current_contacts);
+    CHECK(plan.side_plan.sorted_side_vertices.size() == 0);
+    CHECK(plan.side_plan.sides.size() == 0);
+    CHECK(plan.side_plan.lanes.size() == 0);
+    CHECK(plan.program_plan.sources.size() == 0);
+    CHECK(plan.program_plan.programs.size() == 0);
+    CHECK(plan.program_plan.source_to_program.size() == 0);
+    CHECK(plan.program_plan.tasks.size() == 0);
+    CHECK(plan.program_plan.buckets.size() == 0);
+
+    CHECK(plan.side_plan.last_stats.side_count == 0);
+    CHECK(plan.side_plan.last_stats.lane_count == 0);
+    CHECK(plan.side_plan.last_stats.active_side_vertex_count == 0);
+    CHECK(plan.program_plan.last_stats.source_id_validation_status
+          == SocuContactSourceIdValidationStatus::ValidDense);
+    CHECK(plan.program_plan.last_stats.source_count == 0);
+    CHECK(plan.program_plan.last_stats.program_count == 0);
+    CHECK(plan.program_plan.last_stats.source_to_program_count == 0);
+    CHECK(plan.program_plan.last_stats.task_count == 0);
+    CHECK(plan.program_plan.last_stats.bucket_count == 0);
+
+    const auto view = socu_contact_assembly_plan_view(plan);
+    CHECK(!view.valid());
+    const auto map = view.program_for(0, 0);
+    CHECK(map.program_id == SocuInvalidContactProgramId);
+    CHECK(map.status == SocuContactProgramMapStatus::Missing);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_zero_count_sources_are_empty_noop",
+          "[cuda_mixed_socu][contract][socu_approx][m2][m5][regression]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<Vector4i> empty_stencil4{std::vector<Vector4i>{}};
+    muda::DeviceBuffer<Vector2i> empty_stencil2{std::vector<Vector2i>{}};
+
+    std::vector<SocuContactM2SourceInput> sources(2);
+    sources[0].source_id = 0;
+    sources[0].reporter_id = 10;
+    sources[0].model = SocuContactModelKind::SimplexNormal;
+    sources[0].family = SocuContactFamily::PT;
+    sources[0].stencil_size = 4;
+    sources[0].stencil4 = empty_stencil4.view();
+    sources[1].source_id = 1;
+    sources[1].reporter_id = 11;
+    sources[1].model = SocuContactModelKind::VertexHalfPlaneNormal;
+    sources[1].family = SocuContactFamily::PH;
+    sources[1].stencil_size = 2;
+    sources[1].stencil2 = empty_stencil2.view();
+
+    SocuVertexSidePlanKey side_key;
+    side_key.ordering_epoch = 1;
+    side_key.native_descriptor_epoch = 7;
+    side_key.horizon = 4;
+    side_key.block_size = 16;
+
+    SocuContactProgramPlanKey program_key;
+    program_key.side_key = side_key;
+    program_key.contact_topology_epoch = 11;
+    program_key.contact_layout_hash = 13;
+    program_key.contact_content_hash = 17;
+    program_key.offband_policy = StructuredContactOffbandPolicy::Drop;
+
+    SocuContactAssemblyPlanM2BuildInput input;
+    input.side_key = side_key;
+    input.program_key = program_key;
+    input.vertex_descriptors = vertices.view();
+    input.sources = span<const SocuContactM2SourceInput>{sources};
+    input.offband_policy = StructuredContactOffbandPolicy::Drop;
+    input.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactSourceHeader> headers;
+    plan.program_plan.sources.copy_to(headers);
+
+    CHECK(socu_contact_assembly_plan_empty(plan));
+    REQUIRE(headers.size() == 2);
+    CHECK(headers[0].source_id == 0);
+    CHECK(headers[0].contact_count == 0);
+    CHECK(headers[0].first_program == 0);
+    CHECK(headers[0].first_source_to_program == 0);
+    CHECK(headers[1].source_id == 1);
+    CHECK(headers[1].contact_count == 0);
+    CHECK(headers[1].first_program == 0);
+    CHECK(headers[1].first_source_to_program == 0);
+
+    CHECK(plan.side_plan.coverage.mode
+          == SocuVertexSideCoverageMode::DemandFilled);
+    CHECK(plan.side_plan.last_stats.active_side_vertex_count == 0);
+    CHECK(plan.side_plan.last_stats.side_count == 0);
+    CHECK(plan.program_plan.programs.size() == 0);
+    CHECK(plan.program_plan.source_to_program.size() == 0);
+    CHECK(plan.program_plan.tasks.size() == 0);
+    CHECK(plan.program_plan.buckets.size() == 0);
+    CHECK(plan.program_plan.last_stats.source_id_validation_status
+          == SocuContactSourceIdValidationStatus::ValidDense);
+    CHECK(plan.program_plan.last_stats.source_count == 2);
+    CHECK(plan.program_plan.last_stats.program_count == 0);
+    CHECK(plan.program_plan.last_stats.source_to_program_count == 0);
+    CHECK(plan.program_plan.last_stats.task_count == 0);
+    CHECK(plan.program_plan.last_stats.bucket_count == 0);
+
+    const auto view = socu_contact_assembly_plan_view(plan);
+    muda::DeviceBuffer<SocuContactSourceToProgram> queried_maps{2};
+    query_zero_count_programs_kernel<<<1, 1>>>(view, queried_maps.data());
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactSourceToProgram> maps;
+    queried_maps.copy_to(maps);
+    REQUIRE(maps.size() == 2);
+    const auto map0 = maps[0];
+    const auto map1 = maps[1];
+    CHECK(map0.program_id == SocuInvalidContactProgramId);
+    CHECK(map0.status == SocuContactProgramMapStatus::Missing);
+    CHECK(map1.program_id == SocuInvalidContactProgramId);
+    CHECK(map1.status == SocuContactProgramMapStatus::Missing);
+}
+
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_symbolic_cpu_oracle",
           "[cuda_mixed_socu][contract][socu_approx][m2]")
 {
@@ -1504,13 +1676,72 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("native_contact_empty_plan_replay")
           != std::string::npos);
+    CHECK(dytopo.find("socu_contact_assembly_plan_empty(*plan)")
+          != std::string::npos);
     CHECK(dytopo.find("native_contact_executor_duplicate_source")
           != std::string::npos);
     CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")
           != std::string::npos);
+    CHECK(count_occurrences(dytopo,
+                            "structured_info.set_native_vertex_descriptors(")
+          >= 2);
+
+    const auto descriptor_cache_marker =
+        dytopo.find("native_contact_descriptor_cache_hit_exports_view");
+    REQUIRE(descriptor_cache_marker != std::string::npos);
+    const auto descriptor_cache_export = dytopo.find(
+        "structured_info.set_native_vertex_descriptors(",
+        descriptor_cache_marker);
+    const auto descriptor_cache_return =
+        dytopo.find("return;", descriptor_cache_marker);
+    REQUIRE(descriptor_cache_export != std::string::npos);
+    REQUIRE(descriptor_cache_return != std::string::npos);
+    CHECK(descriptor_cache_export < descriptor_cache_return);
+
+    const auto descriptor_rebuild =
+        dytopo.find("rebuild_socu_native_vertex_descriptors(");
+    REQUIRE(descriptor_rebuild != std::string::npos);
+    CHECK(dytopo.find("structured_info.set_native_vertex_descriptors(",
+                      descriptor_rebuild)
+          != std::string::npos);
+
+    const auto empty_marker = dytopo.find("native_contact_empty_plan_replay");
+    REQUIRE(empty_marker != std::string::npos);
+    const auto empty_native_path =
+        dytopo.find("set_native_contact_replay_path(\"native_plan\")",
+                    empty_marker);
+    const auto empty_return = dytopo.find("return;", empty_marker);
+    const auto nonempty_view =
+        dytopo.find("socu_contact_assembly_plan_view(*plan)", empty_marker);
+    REQUIRE(empty_native_path != std::string::npos);
+    REQUIRE(empty_return != std::string::npos);
+    REQUIRE(nonempty_view != std::string::npos);
+    CHECK(empty_native_path < empty_return);
+    CHECK(empty_return < nonempty_view);
+
+    const auto legacy_zero_marker =
+        dytopo.find("native_contact_legacy_zero_extent_skip");
+    REQUIRE(legacy_zero_marker != std::string::npos);
+    const auto legacy_skip_continue =
+        dytopo.find("continue;", legacy_zero_marker);
+    const auto legacy_support_check =
+        dytopo.find("supports_structured_hessian()", legacy_zero_marker);
+    REQUIRE(legacy_skip_continue != std::string::npos);
+    REQUIRE(legacy_support_check != std::string::npos);
+    CHECK(legacy_skip_continue < legacy_support_check);
 
     const auto defaults =
         read_text_file(root / "src/core/core/scene_default_config.cpp");
     CHECK(defaults.find("native_contact_side_coverage_mode") != std::string::npos);
     CHECK(defaults.find("std::string{\"global\"}") != std::string::npos);
+
+    const auto wrecking_ball =
+        read_text_file(root / "python/examples/cuda_mixed_wrecking_ball_compare.py");
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_PLAN") != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_PLAN_EXECUTOR")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_SIDE_COVERAGE_MODE")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("native_contact_plan_executor")
+          != std::string::npos);
 }

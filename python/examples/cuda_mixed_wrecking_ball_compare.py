@@ -213,6 +213,17 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     socu["debug_compare_native_chain_base_hessian"] = (
         1 if os.environ.get("SOCU_NATIVE_CHAIN_BASE_DIFF") == "1" else 0
     )
+    socu["native_contact_plan"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT_PLAN") == "1" else 0
+    )
+    socu["native_contact_plan_executor"] = (
+        1 if os.environ.get("SOCU_NATIVE_CONTACT_PLAN_EXECUTOR") == "1" else 0
+    )
+    native_contact_side_coverage_mode = os.environ.get(
+        "SOCU_NATIVE_CONTACT_SIDE_COVERAGE_MODE"
+    )
+    if native_contact_side_coverage_mode:
+        socu["native_contact_side_coverage_mode"] = native_contact_side_coverage_mode
     socu["runtime_reorder_frame_interval"] = int(spec["runtime_interval"])
     socu["runtime_reorder_graph_source"] = spec.get(
         "runtime_graph_source",

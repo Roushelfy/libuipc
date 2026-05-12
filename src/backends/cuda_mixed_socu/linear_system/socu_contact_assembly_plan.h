@@ -279,6 +279,12 @@ struct SocuContactAssemblyPlan
     SocuContactProgramPlan program_plan;
 };
 
+inline bool socu_contact_assembly_plan_empty(
+    const SocuContactAssemblyPlan& plan) noexcept
+{
+    return plan.program_plan.programs.size() == 0;
+}
+
 struct SocuContactAssemblyPlanView
 {
     SocuVertexSidePlanKey side_key;

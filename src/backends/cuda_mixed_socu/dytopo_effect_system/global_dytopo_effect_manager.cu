@@ -682,7 +682,7 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 "enabled without a prepared contact assembly plan"};
         }
 
-        if(plan->program_plan.programs.size() == 0)
+        if(socu_contact_assembly_plan_empty(*plan))
         {
             // native_contact_empty_plan_replay: an empty contact topology is a
             // valid native no-op and must not fall back to legacy contact TUs.
