@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -481,18 +482,30 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_dense_source_validation",
         std::vector<Vector4i>{Vector4i{0, 1, 2, 3}}};
     muda::DeviceBuffer<Vector2i> phs{std::vector<Vector2i>{}};
 
+    auto require_invalid_argument_containing =
+        [](SocuContactAssemblyPlanM2BuildInput input, const char* token)
+    {
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        try
+        {
+            build_socu_contact_assembly_plan_m2_active_set_temporary(
+                plan,
+                workspace,
+                input);
+            FAIL("expected invalid_argument");
+        }
+        catch(const std::invalid_argument& e)
+        {
+            CHECK(std::string{e.what()}.find(token) != std::string::npos);
+        }
+    };
+
     {
         auto input = make_input(vertices, pts, phs, StructuredContactOffbandPolicy::Drop);
         input.pt_source.source_id = 1;
         input.ph_source = {};
-        SocuContactAssemblyPlanM2Workspace workspace;
-        SocuContactAssemblyPlan plan;
-        CHECK_THROWS_AS(
-            build_socu_contact_assembly_plan_m2_active_set_temporary(
-                plan,
-                workspace,
-                input),
-            std::invalid_argument);
+        require_invalid_argument_containing(input, "out_of_range");
     }
 
     {
@@ -503,14 +516,7 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_dense_source_validation",
             10,
             SocuContactModelKind::SimplexNormal};
         input.ph_source = {};
-        SocuContactAssemblyPlanM2Workspace workspace;
-        SocuContactAssemblyPlan plan;
-        CHECK_THROWS_AS(
-            build_socu_contact_assembly_plan_m2_active_set_temporary(
-                plan,
-                workspace,
-                input),
-            std::invalid_argument);
+        require_invalid_argument_containing(input, "duplicate");
     }
 
     {
@@ -641,6 +647,8 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(buckets[2].program_count == 1);
 
     const auto& stats = plan.program_plan.last_stats;
+    CHECK(stats.source_id_validation_status
+          == SocuContactSourceIdValidationStatus::ValidDense);
     CHECK(stats.source_count == 2);
     CHECK(stats.program_count == 3);
     CHECK(stats.source_to_program_count == 3);

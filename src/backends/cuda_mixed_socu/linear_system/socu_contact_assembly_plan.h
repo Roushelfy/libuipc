@@ -230,6 +230,8 @@ struct SocuContactPlanStats
     SizeT program_rebuild_count = 0;
     SizeT side_count = 0;
     SizeT lane_count = 0;
+    SocuContactSourceIdValidationStatus source_id_validation_status =
+        SocuContactSourceIdValidationStatus::NotRun;
     SizeT source_count = 0;
     SizeT program_count = 0;
     SizeT source_to_program_count = 0;

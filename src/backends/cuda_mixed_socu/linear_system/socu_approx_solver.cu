@@ -186,6 +186,7 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_hot_reduce_ms = 0.0;
     report.native_contact_side_count = 0;
     report.native_contact_lane_count = 0;
+    report.native_contact_source_id_validation_status = "not_run";
     report.native_contact_source_count = 0;
     report.native_contact_program_count = 0;
     report.native_contact_source_to_program_count = 0;

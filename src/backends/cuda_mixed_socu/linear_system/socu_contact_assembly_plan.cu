@@ -926,7 +926,8 @@ void push_legacy_source_if_valid(std::vector<M2SourceSpec>& specs,
     push_source_if_valid(specs, source);
 }
 
-void sort_and_validate_dense_sources(std::vector<M2SourceSpec>& specs)
+SocuContactSourceIdValidationStatus sort_and_validate_dense_sources(
+    std::vector<M2SourceSpec>& specs)
 {
     std::sort(specs.begin(),
               specs.end(),
@@ -935,15 +936,33 @@ void sort_and_validate_dense_sources(std::vector<M2SourceSpec>& specs)
                   return lhs.source.source_id < rhs.source.source_id;
               });
 
+    auto status = SocuContactSourceIdValidationStatus::ValidDense;
     for(SizeT i = 0; i < static_cast<SizeT>(specs.size()); ++i)
     {
+        if(specs[i].source.source_id >= static_cast<SizeT>(specs.size()))
+        {
+            status = SocuContactSourceIdValidationStatus::OutOfRange;
+            break;
+        }
+        if(i != 0 && specs[i].source.source_id == specs[i - 1].source.source_id)
+        {
+            status = SocuContactSourceIdValidationStatus::Duplicate;
+            break;
+        }
         if(specs[i].source.source_id != static_cast<SocuContactSourceId>(i))
         {
-            throw std::invalid_argument{
-                "M2 active_set_temporary builder requires dense source ids: "
-                "source_id == sources[source_id].source_id"};
+            status = SocuContactSourceIdValidationStatus::NonDense;
+            break;
         }
     }
+    if(status != SocuContactSourceIdValidationStatus::ValidDense)
+    {
+        throw std::invalid_argument{
+            std::string{
+                "M2 active_set_temporary builder requires dense source ids: "}
+            + socu_contact_source_id_validation_status_name(status)};
+    }
+    return status;
 }
 
 SizeT max_tasks_per_contact(const M2SourceSpec& spec) noexcept
@@ -1102,7 +1121,8 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
                                     {},
                                     input.friction_ph_contacts);
     }
-    sort_and_validate_dense_sources(source_specs);
+    plan.program_plan.last_stats.source_id_validation_status =
+        sort_and_validate_dense_sources(source_specs);
 
     SizeT ref_count = 0;
     for(const auto& spec : source_specs)

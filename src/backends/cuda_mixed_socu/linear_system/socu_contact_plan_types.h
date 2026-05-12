@@ -146,11 +146,31 @@ struct SocuContactProgramPlanKey
 
 enum class SocuContactSourceIdValidationStatus : std::uint8_t
 {
+    NotRun,
     ValidDense,
     NonDense,
     Duplicate,
     OutOfRange,
 };
+
+inline const char* socu_contact_source_id_validation_status_name(
+    SocuContactSourceIdValidationStatus status) noexcept
+{
+    switch(status)
+    {
+        case SocuContactSourceIdValidationStatus::NotRun:
+            return "not_run";
+        case SocuContactSourceIdValidationStatus::ValidDense:
+            return "valid_dense";
+        case SocuContactSourceIdValidationStatus::NonDense:
+            return "non_dense";
+        case SocuContactSourceIdValidationStatus::Duplicate:
+            return "duplicate";
+        case SocuContactSourceIdValidationStatus::OutOfRange:
+            return "out_of_range";
+    }
+    return "unknown";
+}
 
 enum class SocuContactPlanCacheAction : std::uint8_t
 {

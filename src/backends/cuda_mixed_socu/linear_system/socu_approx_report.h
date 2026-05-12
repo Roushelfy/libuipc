@@ -141,6 +141,7 @@ struct SocuApproxSolveReport
     SizeT native_contact_active_side_vertex_count = 0;
     SizeT native_contact_side_count = 0;
     SizeT native_contact_lane_count = 0;
+    std::string native_contact_source_id_validation_status = "not_run";
     SizeT native_contact_source_count = 0;
     SizeT native_contact_program_count = 0;
     SizeT native_contact_source_to_program_count = 0;

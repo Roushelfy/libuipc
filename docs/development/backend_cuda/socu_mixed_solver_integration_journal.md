@@ -2160,3 +2160,43 @@ Current M2 status:
   validation/reporting, explicit final-path integration coverage beyond
   compile/report plumbing, and symbolic parity against the legacy target
   classification oracle.
+
+## 2026-05-11 Redesign Branch M2 Source Validation Report Slice
+
+Implemented:
+
+- Added an explicit `not_run` state for source-id validation reports, while
+  preserving `valid_dense`, `non_dense`, `duplicate`, and `out_of_range`
+  outcomes for production M2 builder checks.
+- Tightened `active_set_temporary` source validation to classify duplicate,
+  non-dense, and out-of-range source ids before throwing, so failures expose the
+  concrete dense-source contract violation.
+- Stored the validation outcome in `SocuContactPlanStats` and mapped it into
+  `SocuApproxSolveReport` plus JSON output.
+
+Tests updated:
+
+- M2 dense-source validation now asserts the specific failure class in the
+  thrown diagnostic for out-of-range and duplicate source ids.
+- M2 bucket/stats coverage asserts that valid dense sources report
+  `ValidDense`.
+- SOCU report contract tests assert the default `not_run` value and the mapped
+  `valid_dense` value in both the report object and JSON.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `287` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `418` assertions in `20` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5301` assertions in `40` test cases |
+
+Current M2 status:
+
+- Production M2 dense-source validation is now reported through the public SOCU
+  report path and covered by focused contract tests.
+- M2 is still not accepted. Remaining work: symbolic CPU-oracle parity,
+  explicit final-path/source-scan coverage, final documentation update, and one
+  clean full validation pass.

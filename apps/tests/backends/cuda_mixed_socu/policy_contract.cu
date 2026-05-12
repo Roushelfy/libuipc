@@ -83,6 +83,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     CHECK(contact.at("native_contact_active_side_set_changed").get<bool>() == false);
     CHECK(contact.at("native_contact_side_coverage_mode").get<std::string>()
           == "off");
+    CHECK(contact.at("native_contact_source_id_validation_status").get<std::string>()
+          == "not_run");
     for(const char* field : {"native_contact_plan_rebuild_count",
                              "native_contact_side_plan_rebuild_count",
                              "native_contact_program_plan_rebuild_count",
@@ -135,6 +137,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     side_stats.coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
     side_stats.active_side_vertex_count = 4;
     program_stats.source_count = 3;
+    program_stats.source_id_validation_status =
+        SocuContactSourceIdValidationStatus::ValidDense;
     program_stats.program_count = 7;
     program_stats.source_to_program_count = 7;
     program_stats.valid_program_map_count = 4;
@@ -162,6 +166,7 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(report.native_contact_lane_count == 21);
     CHECK(report.native_contact_side_coverage_mode == "active_set_temporary");
     CHECK(report.native_contact_active_side_vertex_count == 4);
+    CHECK(report.native_contact_source_id_validation_status == "valid_dense");
     CHECK(report.native_contact_source_count == 3);
     CHECK(report.native_contact_program_count == 7);
     CHECK(report.native_contact_source_to_program_count == 7);
@@ -270,6 +275,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
           == "active_set_temporary");
     CHECK(contact.at("native_contact_active_side_vertex_count").get<SizeT>() == 4);
     CHECK(contact.at("native_contact_source_count").get<SizeT>() == 3);
+    CHECK(contact.at("native_contact_source_id_validation_status").get<std::string>()
+          == "valid_dense");
     CHECK(contact.at("native_contact_program_count").get<SizeT>() == 7);
     CHECK(contact.at("native_contact_valid_program_map_count").get<SizeT>() == 4);
     CHECK(contact.at("native_contact_dropped_program_map_count").get<SizeT>() == 2);

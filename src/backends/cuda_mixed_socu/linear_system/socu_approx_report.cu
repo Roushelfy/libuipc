@@ -137,6 +137,8 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_side_count},
                   {"native_contact_lane_count",
                    report.native_contact_lane_count},
+                  {"native_contact_source_id_validation_status",
+                   report.native_contact_source_id_validation_status},
                   {"native_contact_source_count",
                    report.native_contact_source_count},
                   {"native_contact_program_count",
@@ -330,6 +332,9 @@ void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
 {
     report.native_contact_side_count = side_stats.side_count;
     report.native_contact_lane_count = side_stats.lane_count;
+    report.native_contact_source_id_validation_status =
+        socu_contact_source_id_validation_status_name(
+            program_stats.source_id_validation_status);
     report.native_contact_side_coverage_mode =
         std::string{coverage_mode_name(side_stats.coverage_mode)};
     report.native_contact_active_side_vertex_count =
