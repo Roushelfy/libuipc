@@ -113,6 +113,8 @@ struct NativeContactTimingEvents
     cudaEvent_t hessian_done = nullptr;
     cudaEvent_t executor_start = nullptr;
     cudaEvent_t executor_done = nullptr;
+    cudaEvent_t hot_reduce_start = nullptr;
+    cudaEvent_t hot_reduce_done = nullptr;
 
     ~NativeContactTimingEvents() noexcept { destroy(); }
 
@@ -126,6 +128,10 @@ struct NativeContactTimingEvents
                                   "cudaEventCreate(executor_start)");
         check_native_contact_cuda(cudaEventCreate(&executor_done),
                                   "cudaEventCreate(executor_done)");
+        check_native_contact_cuda(cudaEventCreate(&hot_reduce_start),
+                                  "cudaEventCreate(hot_reduce_start)");
+        check_native_contact_cuda(cudaEventCreate(&hot_reduce_done),
+                                  "cudaEventCreate(hot_reduce_done)");
     }
 
     void destroy() noexcept
@@ -138,10 +144,16 @@ struct NativeContactTimingEvents
             cudaEventDestroy(executor_start);
         if(executor_done)
             cudaEventDestroy(executor_done);
+        if(hot_reduce_start)
+            cudaEventDestroy(hot_reduce_start);
+        if(hot_reduce_done)
+            cudaEventDestroy(hot_reduce_done);
         hessian_start = nullptr;
         hessian_done = nullptr;
         executor_start = nullptr;
         executor_done = nullptr;
+        hot_reduce_start = nullptr;
+        hot_reduce_done = nullptr;
     }
 };
 
@@ -839,24 +851,47 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             cudaEventRecord(timing_events.executor_start,
                             structured_info.stream()),
             "cudaEventRecord(executor_start)");
-        launch_socu_contact_executor<StoreScalar,
-                                     GlobalLinearSystem::SolveScalar>(
+        const SocuContactTripletEvaluator<StoreScalar> evaluator{plan_view,
+                                                                  sources};
+        launch_socu_contact_executor_direct_scatter<
+            StoreScalar,
+            GlobalLinearSystem::SolveScalar>(
             plan_view,
             matrix,
-            SocuContactTripletEvaluator<StoreScalar>{plan_view, sources},
+            evaluator,
             {},
             structured_info.stream());
-        check_native_contact_cuda(cudaGetLastError(), "native contact executor launch");
+        check_native_contact_cuda(cudaGetLastError(),
+                                  "native contact direct scatter launch");
         check_native_contact_cuda(
             cudaEventRecord(timing_events.executor_done,
                             structured_info.stream()),
             "cudaEventRecord(executor_done)");
         check_native_contact_cuda(
-            cudaEventSynchronize(timing_events.executor_done),
+            cudaEventRecord(timing_events.hot_reduce_start,
+                            structured_info.stream()),
+            "cudaEventRecord(hot_reduce_start)");
+        launch_socu_contact_executor_hot_reduce<
+            StoreScalar,
+            GlobalLinearSystem::SolveScalar>(
+            plan_view,
+            matrix,
+            evaluator,
+            {},
+            structured_info.stream());
+        check_native_contact_cuda(cudaGetLastError(),
+                                  "native contact hot reduce launch");
+        check_native_contact_cuda(
+            cudaEventRecord(timing_events.hot_reduce_done,
+                            structured_info.stream()),
+            "cudaEventRecord(hot_reduce_done)");
+        check_native_contact_cuda(
+            cudaEventSynchronize(timing_events.hot_reduce_done),
             "native contact executor synchronize");
 
         float hessian_ms = 0.0f;
         float executor_ms = 0.0f;
+        float hot_reduce_ms = 0.0f;
         check_native_contact_cuda(
             cudaEventElapsedTime(&hessian_ms,
                                  timing_events.hessian_start,
@@ -867,11 +902,18 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                                  timing_events.executor_start,
                                  timing_events.executor_done),
             "cudaEventElapsedTime(executor_scatter)");
+        check_native_contact_cuda(
+            cudaEventElapsedTime(&hot_reduce_ms,
+                                 timing_events.hot_reduce_start,
+                                 timing_events.hot_reduce_done),
+            "cudaEventElapsedTime(hot_reduce)");
         const auto end = std::chrono::steady_clock::now();
         structured_info.record_native_contact_hessian_triplet_time_ms(
             static_cast<double>(hessian_ms));
         structured_info.record_native_contact_executor_scatter_time_ms(
             static_cast<double>(executor_ms));
+        structured_info.record_native_contact_hot_reduce_time_ms(
+            static_cast<double>(hot_reduce_ms));
         structured_info.record_native_contact_numeric_time_ms(
             std::chrono::duration<double, std::milli>(end - begin).count());
         structured_info.set_native_contact_replay_path("native_plan");
@@ -1025,6 +1067,7 @@ void GlobalDyTopoEffectManager::Impl::
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
         bool                            build_hot_block_plan,
+        SocuContactExecutionStrategy    hot_block_strategy,
         SizeT                           hot_block_threshold,
         cudaStream_t                   stream)
 {
@@ -1035,6 +1078,7 @@ void GlobalDyTopoEffectManager::Impl::
     input.offband_policy = offband_policy;
     input.side_coverage_mode = coverage_mode;
     input.build_hot_block_plan = build_hot_block_plan;
+    input.hot_block_strategy = hot_block_strategy;
     input.hot_block_threshold = hot_block_threshold;
     input.stream = stream;
 
@@ -1354,6 +1398,7 @@ void GlobalDyTopoEffectManager::
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
         bool                            build_hot_block_plan,
+        SocuContactExecutionStrategy    hot_block_strategy,
         SizeT                           hot_block_threshold,
         cudaStream_t                   stream)
 {
@@ -1366,6 +1411,7 @@ void GlobalDyTopoEffectManager::
         offband_policy,
         coverage_mode,
         build_hot_block_plan,
+        hot_block_strategy,
         hot_block_threshold,
         stream);
 }

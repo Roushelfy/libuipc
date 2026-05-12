@@ -176,6 +176,12 @@ MUDA_DEVICE SocuContactMicroTask make_task(SocuAssemblySideId row_side,
     return task;
 }
 
+MUDA_DEVICE void assign_program_id(SocuContactMicroTask& task,
+                                   SocuContactProgramId program_id) noexcept
+{
+    task.program_id = program_id;
+}
+
 template <typename VectorT, int StencilSize>
 __global__ void collect_stencil_vertices_kernel(muda::CBufferView<VectorT> contacts,
                                                 SizeT output_offset,
@@ -515,16 +521,21 @@ __global__ void emit_simplex_programs_kernel(
         status = SocuContactProgramMapStatus::Skipped;
     }
 
+    const SizeT program_id = first_program + i;
     if(emit_task_count > 0)
     {
         const int first_task = atomicAdd(task_cursor.data(), emit_task_count);
         program.first_task = static_cast<std::uint32_t>(first_task);
         program.task_count = static_cast<std::uint16_t>(emit_task_count);
         for(int task = 0; task < emit_task_count; ++task)
+        {
+            assign_program_id(
+                local_tasks[task],
+                static_cast<SocuContactProgramId>(program_id));
             tasks.data()[first_task + task] = local_tasks[task];
+        }
     }
 
-    const SizeT program_id = first_program + i;
     programs.data()[program_id] = program;
     const auto mapped_program =
         status == SocuContactProgramMapStatus::Valid
@@ -570,20 +581,23 @@ __global__ void emit_ph_programs_kernel(
     SocuContactProgramMapStatus status = SocuContactProgramMapStatus::Skipped;
     if(side_id_valid(side_id, sides) && sides.data()[side_id].writable)
     {
+        const SizeT program_id = first_program + i;
         const auto side = sides.data()[side_id];
         const int first_task = atomicAdd(task_cursor.data(), 1);
         std::uint8_t flags = 0;
         program.first_task = static_cast<std::uint32_t>(first_task);
         program.task_count = 1;
         program.program_kind = SocuContactProgramKind::Exact;
-        tasks.data()[first_task] = make_task(side_id,
-                                             side_id,
-                                             0,
-                                             0,
-                                             SocuAssemblyBand::Diag,
-                                             exact_write_kind(side, side, flags),
-                                             static_cast<std::uint32_t>(side.block),
-                                             flags);
+        auto task = make_task(side_id,
+                              side_id,
+                              0,
+                              0,
+                              SocuAssemblyBand::Diag,
+                              exact_write_kind(side, side, flags),
+                              static_cast<std::uint32_t>(side.block),
+                              flags);
+        assign_program_id(task, static_cast<SocuContactProgramId>(program_id));
+        tasks.data()[first_task] = task;
         status = SocuContactProgramMapStatus::Valid;
     }
     else
@@ -754,7 +768,7 @@ MUDA_GENERIC std::uint32_t hot_block_block_from_key(
 }
 
 __global__ void fill_hot_block_keys_kernel(
-    muda::CBufferView<SocuContactMicroTask> tasks,
+    muda::BufferView<SocuContactMicroTask> tasks,
     muda::BufferView<std::uint64_t> keys,
     muda::BufferView<std::uint32_t> task_ids,
     muda::BufferView<int> counts)
@@ -763,10 +777,13 @@ __global__ void fill_hot_block_keys_kernel(
     if(i >= tasks.size())
         return;
 
-    const auto task = tasks.data()[i];
+    auto task = tasks.data()[i];
     task_ids.data()[i] = static_cast<std::uint32_t>(i);
     if(hot_block_task_eligible(task.write_kind))
     {
+        task.flags |=
+            static_cast<std::uint8_t>(SocuContactTaskFlag::HotReduceEligible);
+        tasks.data()[i] = task;
         keys.data()[i] = make_hot_block_key(task.band,
                                             task.block_or_left_block);
         atomicAdd(&counts.data()[0], 1);
@@ -808,9 +825,11 @@ __global__ void compact_hot_block_ranges_kernel(
     muda::CBufferView<std::uint32_t> sorted_task_ids,
     muda::CBufferView<int> range_flags,
     muda::CBufferView<int> range_offsets,
+    muda::BufferView<SocuContactMicroTask> tasks,
     muda::BufferView<SocuHotBlockRef> refs,
     muda::BufferView<SocuHotBlockRange> ranges,
-    muda::BufferView<int> counts)
+    muda::BufferView<int> counts,
+    bool mark_selected_tasks)
 {
     const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(i >= sorted_keys.size())
@@ -825,6 +844,21 @@ __global__ void compact_hot_block_ranges_kernel(
     while(i + run_count < sorted_keys.size()
           && sorted_keys.data()[i + run_count] == key)
         ++run_count;
+
+    if(mark_selected_tasks)
+    {
+        for(SizeT ref = 0; ref < run_count; ++ref)
+        {
+            const SizeT task_id =
+                static_cast<SizeT>(sorted_task_ids.data()[i + ref]);
+            if(task_id >= tasks.size())
+                continue;
+            auto task = tasks.data()[task_id];
+            task.flags |= static_cast<std::uint8_t>(
+                SocuContactTaskFlag::HotReduceSelected);
+            tasks.data()[task_id] = task;
+        }
+    }
 
     SocuHotBlockRange range;
     range.band = hot_block_band_from_key(key);
@@ -951,13 +985,15 @@ int copy_first_int(muda::DeviceBuffer<int>& buffer)
 
 void clear_hot_block_plan(SocuContactProgramPlan& program_plan,
                           SizeT threshold,
-                          bool detect_only)
+                          SocuContactExecutionStrategy strategy)
 {
     program_plan.hot_blocks.refs.resize(0);
     program_plan.hot_blocks.ranges.resize(0);
+    program_plan.hot_blocks.strategy = strategy;
     program_plan.hot_blocks.threshold = threshold;
     program_plan.hot_blocks.eligible_task_count = 0;
-    program_plan.hot_blocks.detect_only = detect_only;
+    program_plan.hot_blocks.detect_only =
+        strategy == SocuContactExecutionStrategy::DetectOnly;
     program_plan.last_stats.hot_diag_block_count = 0;
     program_plan.last_stats.hot_offdiag_block_count = 0;
 }
@@ -1047,13 +1083,14 @@ void materialize_side_records_and_lanes(
               });
 }
 
-void build_detect_only_hot_block_plan(
+void build_hot_block_plan(
     SocuContactProgramPlan&              program_plan,
     SocuContactAssemblyPlanM2Workspace&  workspace,
     SizeT                                threshold,
+    SocuContactExecutionStrategy         strategy,
     cudaStream_t                         stream)
 {
-    clear_hot_block_plan(program_plan, threshold, true);
+    clear_hot_block_plan(program_plan, threshold, strategy);
 
     const SizeT task_count = program_plan.tasks.size();
     if(task_count == 0)
@@ -1120,9 +1157,14 @@ void build_detect_only_hot_block_plan(
                       workspace.hot_block_sorted_task_ids.view(),
                       workspace.hot_block_range_flags.view(),
                       workspace.hot_block_range_offsets.view(),
+                      program_plan.tasks.view(),
                       program_plan.hot_blocks.refs.view(),
                       program_plan.hot_blocks.ranges.view(),
-                      workspace.hot_block_counts.view());
+                      workspace.hot_block_counts.view(),
+                      strategy == SocuContactExecutionStrategy::Recompute
+                          || strategy
+                                 == SocuContactExecutionStrategy::
+                                        CachedMicroblock);
               });
     cudaStreamSynchronize(launch_stream(stream));
     program_plan.hot_blocks.ranges.resize(static_cast<SizeT>(range_count));
@@ -1353,7 +1395,8 @@ SocuContactAssemblyPlanView socu_contact_assembly_plan_view(
                                        plan.program_plan.buckets.view(),
                                        plan.program_plan.hot_blocks.refs.view(),
                                        plan.program_plan.hot_blocks.ranges.view(),
-                                       plan.program_plan.source_to_program.view()};
+                                       plan.program_plan.source_to_program.view(),
+                                       plan.program_plan.hot_blocks.strategy};
 }
 
 void build_socu_contact_assembly_plan_m2(
@@ -1988,7 +2031,9 @@ void build_socu_contact_assembly_plan_m2(
         plan.program_plan.last_stats.bucket_count = 0;
         clear_hot_block_plan(plan.program_plan,
                              input.hot_block_threshold,
-                             input.build_hot_block_plan);
+                             input.build_hot_block_plan
+                                 ? input.hot_block_strategy
+                                 : SocuContactExecutionStrategy::DirectScatter);
         return;
     }
 
@@ -2080,14 +2125,15 @@ void build_socu_contact_assembly_plan_m2(
         stat(M2ProgramStatSlot::MixedRejectedProgramMap);
 
     if(input.build_hot_block_plan)
-        build_detect_only_hot_block_plan(plan.program_plan,
-                                         workspace,
-                                         input.hot_block_threshold,
-                                         input.stream);
+        build_hot_block_plan(plan.program_plan,
+                             workspace,
+                             input.hot_block_threshold,
+                             input.hot_block_strategy,
+                             input.stream);
     else
         clear_hot_block_plan(plan.program_plan,
                              input.hot_block_threshold,
-                             false);
+                             SocuContactExecutionStrategy::DirectScatter);
 }
 
 void build_socu_contact_assembly_plan_m2_active_set_temporary(

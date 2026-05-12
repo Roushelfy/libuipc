@@ -274,6 +274,10 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_native_contact_executor_scatter_time_ms;
         }
+        double native_contact_hot_reduce_time_ms() const noexcept
+        {
+            return m_native_contact_hot_reduce_time_ms;
+        }
         const std::string& native_contact_replay_path() const noexcept
         {
             return m_native_contact_replay_path;
@@ -434,6 +438,8 @@ class GlobalLinearSystem : public SimSystem
             const SocuContactProgramPlanKey&    program_key,
             SocuVertexSideCoverageMode          coverage_mode,
             bool                                build_hot_block_plan = false,
+            SocuContactExecutionStrategy        hot_block_strategy =
+                SocuContactExecutionStrategy::DirectScatter,
             SizeT                               hot_block_threshold = 0) const;
         bool build_socu_contact_assembly_plan_m2_active_set_temporary(
             SocuContactAssemblyPlan&            plan,
@@ -500,6 +506,10 @@ class GlobalLinearSystem : public SimSystem
             double elapsed_ms) noexcept
         {
             m_native_contact_executor_scatter_time_ms += elapsed_ms;
+        }
+        void record_native_contact_hot_reduce_time_ms(double elapsed_ms) noexcept
+        {
+            m_native_contact_hot_reduce_time_ms += elapsed_ms;
         }
         void set_native_contact_replay_path(std::string path)
         {
@@ -577,6 +587,7 @@ class GlobalLinearSystem : public SimSystem
             0.0;
         double                     m_native_contact_executor_scatter_time_ms =
             0.0;
+        double                     m_native_contact_hot_reduce_time_ms = 0.0;
         std::string                m_native_contact_replay_path = "off";
         muda::CBufferView<SocuNativeVertexDescriptor> m_native_vertex_descriptors;
         IndexT                     m_descriptor_epoch = 0;

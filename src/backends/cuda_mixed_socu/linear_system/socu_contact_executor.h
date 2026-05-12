@@ -22,6 +22,10 @@ enum class SocuContactExecutorCounterSlot : IndexT
     MixedRejectedProgram,
     TaskWrite,
     UnsupportedProgram,
+    DirectHotTaskSkipped,
+    HotBlockRangeVisit,
+    HotReduceTaskVisit,
+    HotMicroblockCacheWrite,
     Count,
 };
 
@@ -310,6 +314,26 @@ struct SocuContactBucketExecutor
             muda::atomic_add(counters.data(static_cast<SizeT>(index)), amount);
     }
 
+    MUDA_GENERIC static bool owner_reduce_strategy(
+        SocuContactExecutionStrategy strategy) noexcept
+    {
+        return strategy == SocuContactExecutionStrategy::Recompute
+               || strategy == SocuContactExecutionStrategy::CachedMicroblock;
+    }
+
+    MUDA_GENERIC static bool has_flag(const SocuContactMicroTask& task,
+                                      SocuContactTaskFlag flag) noexcept
+    {
+        return (task.flags & static_cast<std::uint8_t>(flag)) != 0;
+    }
+
+    MUDA_DEVICE bool skip_direct_task(
+        const SocuContactMicroTask& task) const noexcept
+    {
+        return owner_reduce_strategy(plan.hot_block_strategy)
+               && has_flag(task, SocuContactTaskFlag::HotReduceSelected);
+    }
+
     MUDA_DEVICE void execute_program(SizeT program_id) const noexcept
     {
         if(!valid() || program_id >= plan.programs.size())
@@ -354,7 +378,13 @@ struct SocuContactBucketExecutor
             const SizeT task_id = static_cast<SizeT>(program.first_task) + task_index;
             if(task_id >= plan.tasks.size())
                 continue;
-            writer.write_task(program, plan.tasks.data()[task_id], H);
+            const auto task = plan.tasks.data()[task_id];
+            if(skip_direct_task(task))
+            {
+                record(SocuContactExecutorCounterSlot::DirectHotTaskSkipped);
+                continue;
+            }
+            writer.write_task(program, task, H);
             record(SocuContactExecutorCounterSlot::TaskWrite);
         }
     }
@@ -383,6 +413,182 @@ struct SocuContactBucketExecutor
             execute_program(static_cast<SizeT>(bucket.first_program) + local_program);
         }
     }
+
+    MUDA_DEVICE SolveT hot_task_cell_value(const SocuContactMicroTask& task,
+                                           SizeT storage_row,
+                                           SizeT storage_col) const noexcept
+    {
+        if(task.program_id == SocuInvalidContactProgramId
+           || static_cast<SizeT>(task.program_id) >= plan.programs.size())
+            return SolveT{0};
+        const auto program =
+            plan.programs.data()[static_cast<SizeT>(task.program_id)];
+        const auto H = evaluator(program);
+        const SocuContactProgramWriter<StoreT, SolveT> writer{plan, matrix, {}};
+        return static_cast<SolveT>(
+            writer.task_storage_cell_contribution(program,
+                                                  task,
+                                                  H,
+                                                  storage_row,
+                                                  storage_col));
+    }
+
+    MUDA_DEVICE SolveT hot_ref_cell_value(const SocuHotBlockRef& ref,
+                                          const SocuHotBlockRange& range,
+                                          SizeT storage_row,
+                                          SizeT storage_col) const noexcept
+    {
+        if(static_cast<SizeT>(ref.task_id) >= plan.tasks.size())
+            return SolveT{0};
+        const auto task = plan.tasks.data()[static_cast<SizeT>(ref.task_id)];
+        if(!has_flag(task, SocuContactTaskFlag::HotReduceSelected)
+           || task.band != range.band
+           || task.block_or_left_block != range.block_or_left_block)
+            return SolveT{0};
+        return hot_task_cell_value(task, storage_row, storage_col);
+    }
+
+    MUDA_DEVICE void add_hot_reduced_cell(const SocuHotBlockRange& range,
+                                          SizeT storage_row,
+                                          SizeT storage_col,
+                                          SolveT value) const noexcept
+    {
+        if(value == SolveT{0})
+            return;
+
+        if(range.band == SocuAssemblyBand::Diag)
+        {
+            if(!matrix.valid_block_entry(range.block_or_left_block,
+                                         storage_row,
+                                         storage_col))
+                return;
+            const SizeT index =
+                matrix.diag_index(range.block_or_left_block,
+                                  storage_row,
+                                  storage_col);
+            if(index < matrix.D.size())
+                *matrix.D.data(index) += value;
+            return;
+        }
+
+        if(range.block_or_left_block >= matrix.first_offdiag_block_count
+           || storage_row >= matrix.block_size
+           || storage_col >= matrix.block_size)
+            return;
+        const SizeT index =
+            matrix.first_offdiag_index(range.block_or_left_block,
+                                       storage_row,
+                                       storage_col);
+        if(index < matrix.E.size())
+            *matrix.E.data(index) += value;
+    }
+
+    MUDA_DEVICE void execute_hot_range_recompute(SizeT range_id) const noexcept
+    {
+        if(!valid() || range_id >= plan.hot_block_ranges.size())
+            return;
+        const auto range = plan.hot_block_ranges.data()[range_id];
+        if(range.ref_count == 0)
+            return;
+
+        if(threadIdx.x == 0)
+            record(SocuContactExecutorCounterSlot::HotBlockRangeVisit);
+        const SizeT cell_count = matrix.block_size * matrix.block_size;
+        for(SizeT cell = static_cast<SizeT>(threadIdx.x);
+            cell < cell_count;
+            cell += static_cast<SizeT>(blockDim.x))
+        {
+            const SizeT storage_row = cell / matrix.block_size;
+            const SizeT storage_col = cell % matrix.block_size;
+            SolveT sum = SolveT{0};
+            for(SizeT ref_offset = 0;
+                ref_offset < static_cast<SizeT>(range.ref_count);
+                ++ref_offset)
+            {
+                const SizeT ref_index =
+                    static_cast<SizeT>(range.first_ref) + ref_offset;
+                if(ref_index >= plan.hot_block_refs.size())
+                    continue;
+                sum += hot_ref_cell_value(plan.hot_block_refs.data()[ref_index],
+                                          range,
+                                          storage_row,
+                                          storage_col);
+            }
+            add_hot_reduced_cell(range, storage_row, storage_col, sum);
+        }
+    }
+
+    MUDA_DEVICE void fill_hot_microblock_cache(
+        SizeT range_id,
+        muda::BufferView<SolveT> microblocks) const noexcept
+    {
+        if(!valid() || range_id >= plan.hot_block_ranges.size())
+            return;
+        const auto range = plan.hot_block_ranges.data()[range_id];
+        if(range.ref_count == 0)
+            return;
+
+        const SizeT cell_count = matrix.block_size * matrix.block_size;
+        for(SizeT cell = static_cast<SizeT>(threadIdx.x);
+            cell < cell_count;
+            cell += static_cast<SizeT>(blockDim.x))
+        {
+            const SizeT storage_row = cell / matrix.block_size;
+            const SizeT storage_col = cell % matrix.block_size;
+            for(SizeT ref_offset = 0;
+                ref_offset < static_cast<SizeT>(range.ref_count);
+                ++ref_offset)
+            {
+                const SizeT ref_index =
+                    static_cast<SizeT>(range.first_ref) + ref_offset;
+                const SizeT cache_index = ref_index * cell_count + cell;
+                if(ref_index >= plan.hot_block_refs.size()
+                   || cache_index >= microblocks.size())
+                    continue;
+                microblocks.data()[cache_index] =
+                    hot_ref_cell_value(plan.hot_block_refs.data()[ref_index],
+                                       range,
+                                       storage_row,
+                                       storage_col);
+                record(SocuContactExecutorCounterSlot::HotMicroblockCacheWrite);
+            }
+        }
+    }
+
+    MUDA_DEVICE void execute_hot_range_cached(
+        SizeT range_id,
+        muda::CBufferView<SolveT> microblocks) const noexcept
+    {
+        if(!valid() || range_id >= plan.hot_block_ranges.size())
+            return;
+        const auto range = plan.hot_block_ranges.data()[range_id];
+        if(range.ref_count == 0)
+            return;
+
+        if(threadIdx.x == 0)
+            record(SocuContactExecutorCounterSlot::HotBlockRangeVisit);
+        const SizeT cell_count = matrix.block_size * matrix.block_size;
+        for(SizeT cell = static_cast<SizeT>(threadIdx.x);
+            cell < cell_count;
+            cell += static_cast<SizeT>(blockDim.x))
+        {
+            const SizeT storage_row = cell / matrix.block_size;
+            const SizeT storage_col = cell % matrix.block_size;
+            SolveT sum = SolveT{0};
+            for(SizeT ref_offset = 0;
+                ref_offset < static_cast<SizeT>(range.ref_count);
+                ++ref_offset)
+            {
+                const SizeT ref_index =
+                    static_cast<SizeT>(range.first_ref) + ref_offset;
+                const SizeT cache_index = ref_index * cell_count + cell;
+                if(cache_index >= microblocks.size())
+                    continue;
+                sum += microblocks.data()[cache_index];
+            }
+            add_hot_reduced_cell(range, storage_row, storage_col, sum);
+        }
+    }
 };
 
 template <typename StoreT, typename SolveT, typename EvaluatorT>
@@ -399,13 +605,51 @@ __global__ void socu_contact_execute_buckets_kernel(
                             static_cast<SizeT>(threadIdx.x));
 }
 
+template <typename StoreT, typename SolveT, typename EvaluatorT>
+__global__ void socu_contact_hot_reduce_recompute_kernel(
+    SocuContactBucketExecutor<StoreT, SolveT, EvaluatorT> executor,
+    SizeT first_range,
+    SizeT range_count)
+{
+    const SizeT local_range = static_cast<SizeT>(blockIdx.x);
+    if(local_range >= range_count)
+        return;
+    executor.execute_hot_range_recompute(first_range + local_range);
+}
+
+template <typename StoreT, typename SolveT, typename EvaluatorT>
+__global__ void socu_contact_hot_microblock_fill_kernel(
+    SocuContactBucketExecutor<StoreT, SolveT, EvaluatorT> executor,
+    muda::BufferView<SolveT> microblocks,
+    SizeT first_range,
+    SizeT range_count)
+{
+    const SizeT local_range = static_cast<SizeT>(blockIdx.x);
+    if(local_range >= range_count)
+        return;
+    executor.fill_hot_microblock_cache(first_range + local_range, microblocks);
+}
+
+template <typename StoreT, typename SolveT, typename EvaluatorT>
+__global__ void socu_contact_hot_microblock_reduce_kernel(
+    SocuContactBucketExecutor<StoreT, SolveT, EvaluatorT> executor,
+    muda::CBufferView<SolveT> microblocks,
+    SizeT first_range,
+    SizeT range_count)
+{
+    const SizeT local_range = static_cast<SizeT>(blockIdx.x);
+    if(local_range >= range_count)
+        return;
+    executor.execute_hot_range_cached(first_range + local_range, microblocks);
+}
+
 inline cudaStream_t socu_contact_executor_stream(cudaStream_t stream) noexcept
 {
     return stream == cudaStreamLegacy ? nullptr : stream;
 }
 
 template <typename StoreT, typename SolveT, typename EvaluatorT>
-void launch_socu_contact_executor(
+void launch_socu_contact_executor_direct_scatter(
     SocuContactAssemblyPlanView plan,
     SocuNativeMatrixView<SolveT> matrix,
     EvaluatorT evaluator,
@@ -438,5 +682,100 @@ void launch_socu_contact_executor(
            socu_contact_executor_stream(stream)>>>(executor,
                                                    first_bucket,
                                                    launch_count);
+}
+
+template <typename StoreT, typename SolveT, typename EvaluatorT>
+void launch_socu_contact_executor_hot_reduce(
+    SocuContactAssemblyPlanView plan,
+    SocuNativeMatrixView<SolveT> matrix,
+    EvaluatorT evaluator,
+    muda::BufferView<IndexT> counters = {},
+    cudaStream_t stream = cudaStreamLegacy,
+    SizeT first_range = 0,
+    SizeT range_count = std::numeric_limits<SizeT>::max())
+{
+    if(!SocuContactBucketExecutor<StoreT, SolveT, EvaluatorT>::owner_reduce_strategy(
+           plan.hot_block_strategy)
+       || plan.hot_block_ranges.size() == 0
+       || first_range >= plan.hot_block_ranges.size())
+        return;
+
+    const SizeT available = plan.hot_block_ranges.size() - first_range;
+    const SizeT launch_count =
+        range_count == std::numeric_limits<SizeT>::max()
+            ? available
+            : (range_count < available ? range_count : available);
+    if(launch_count == 0)
+        return;
+
+    constexpr unsigned int block_dim = 256;
+    SocuContactBucketExecutor<StoreT, SolveT, EvaluatorT> executor{
+        plan,
+        matrix,
+        evaluator,
+        counters};
+    const auto cuda_stream = socu_contact_executor_stream(stream);
+    if(plan.hot_block_strategy == SocuContactExecutionStrategy::Recompute)
+    {
+        socu_contact_hot_reduce_recompute_kernel<StoreT, SolveT, EvaluatorT>
+            <<<static_cast<unsigned int>(launch_count),
+               block_dim,
+               0,
+               cuda_stream>>>(executor, first_range, launch_count);
+        return;
+    }
+
+    if(plan.hot_block_strategy == SocuContactExecutionStrategy::CachedMicroblock)
+    {
+        const SizeT cell_count = matrix.block_size * matrix.block_size;
+        const SizeT cache_count = plan.hot_block_refs.size() * cell_count;
+        if(cache_count == 0)
+            return;
+        muda::DeviceBuffer<SolveT> microblocks;
+        microblocks.resize(cache_count);
+        socu_contact_hot_microblock_fill_kernel<StoreT, SolveT, EvaluatorT>
+            <<<static_cast<unsigned int>(launch_count),
+               block_dim,
+               0,
+               cuda_stream>>>(executor,
+                              microblocks.view(),
+                              first_range,
+                              launch_count);
+        socu_contact_hot_microblock_reduce_kernel<StoreT, SolveT, EvaluatorT>
+            <<<static_cast<unsigned int>(launch_count),
+               block_dim,
+               0,
+               cuda_stream>>>(executor,
+                              microblocks.view().as_const(),
+                              first_range,
+                              launch_count);
+        cudaStreamSynchronize(cuda_stream);
+    }
+}
+
+template <typename StoreT, typename SolveT, typename EvaluatorT>
+void launch_socu_contact_executor(
+    SocuContactAssemblyPlanView plan,
+    SocuNativeMatrixView<SolveT> matrix,
+    EvaluatorT evaluator,
+    muda::BufferView<IndexT> counters = {},
+    cudaStream_t stream = cudaStreamLegacy,
+    SizeT first_bucket = 0,
+    SizeT bucket_count = std::numeric_limits<SizeT>::max())
+{
+    launch_socu_contact_executor_direct_scatter<StoreT, SolveT>(
+        plan,
+        matrix,
+        evaluator,
+        counters,
+        stream,
+        first_bucket,
+        bucket_count);
+    launch_socu_contact_executor_hot_reduce<StoreT, SolveT>(
+        plan,
+        matrix,
+        evaluator,
+        counters,
+        stream);
 }
 }  // namespace uipc::backend::cuda_mixed

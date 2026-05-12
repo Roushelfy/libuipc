@@ -176,6 +176,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
             StructuredContactOffbandPolicy offband_policy,
             SocuVertexSideCoverageMode     coverage_mode,
             bool                            build_hot_block_plan,
+            SocuContactExecutionStrategy    hot_block_strategy,
             SizeT                           hot_block_threshold,
             cudaStream_t                   stream);
         SizeT contact_set_signature();
@@ -291,6 +292,7 @@ class GlobalDyTopoEffectManager final : public SimSystem
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
         bool                            build_hot_block_plan,
+        SocuContactExecutionStrategy    hot_block_strategy,
         SizeT                           hot_block_threshold,
         cudaStream_t                   stream);
     SizeT contact_set_signature();

@@ -55,7 +55,9 @@ std::vector<SocuNativeVertexDescriptor> hot_block_vertices()
 SocuContactAssemblyPlan build_hot_block_plan(
     const std::vector<Vector2i>& contacts,
     SizeT threshold,
-    SocuContactAssemblyPlanM2Workspace& workspace)
+    SocuContactAssemblyPlanM2Workspace& workspace,
+    SocuContactExecutionStrategy strategy =
+        SocuContactExecutionStrategy::DetectOnly)
 {
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{hot_block_vertices()};
     muda::DeviceBuffer<Vector2i> pp_contacts{contacts};
@@ -83,6 +85,7 @@ SocuContactAssemblyPlan build_hot_block_plan(
     input.offband_policy = StructuredContactOffbandPolicy::Drop;
     input.side_coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
     input.build_hot_block_plan = true;
+    input.hot_block_strategy = strategy;
     input.hot_block_threshold = threshold;
 
     SocuContactAssemblyPlan plan;
@@ -155,6 +158,8 @@ TEST_CASE("cuda_mixed_socu_contact_hot_blocks_detects_repeated_diag_blocks",
     require_range_refs_match_tasks(*diag, refs, tasks);
 
     CHECK(plan.program_plan.hot_blocks.detect_only);
+    CHECK(plan.program_plan.hot_blocks.strategy
+          == SocuContactExecutionStrategy::DetectOnly);
     CHECK(plan.program_plan.hot_blocks.threshold == 4);
     CHECK(plan.program_plan.hot_blocks.eligible_task_count == 12);
     CHECK(plan.program_plan.last_stats.hot_diag_block_count == 1);
@@ -216,6 +221,8 @@ TEST_CASE("cuda_mixed_socu_contact_hot_blocks_threshold_extremes",
         plan.program_plan.hot_blocks.ranges.copy_to(ranges);
         CHECK(ranges.size() == 3);
         CHECK(plan.program_plan.hot_blocks.eligible_task_count == 6);
+        CHECK(plan.program_plan.hot_blocks.strategy
+              == SocuContactExecutionStrategy::DetectOnly);
         CHECK(plan.program_plan.last_stats.hot_diag_block_count == 2);
         CHECK(plan.program_plan.last_stats.hot_offdiag_block_count == 1);
     }
@@ -229,7 +236,50 @@ TEST_CASE("cuda_mixed_socu_contact_hot_blocks_threshold_extremes",
         plan.program_plan.hot_blocks.ranges.copy_to(ranges);
         CHECK(ranges.empty());
         CHECK(plan.program_plan.hot_blocks.eligible_task_count == 6);
+        CHECK(plan.program_plan.hot_blocks.strategy
+              == SocuContactExecutionStrategy::DetectOnly);
         CHECK(plan.program_plan.last_stats.hot_diag_block_count == 0);
         CHECK(plan.program_plan.last_stats.hot_offdiag_block_count == 0);
     }
+}
+
+TEST_CASE("cuda_mixed_socu_contact_hot_blocks_marks_owner_reduce_tasks",
+          "[cuda_mixed_socu][contract][socu_approx][m6][socu_contact_hot_blocks]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact hot-block tests");
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_hot_block_plan({Vector2i{0, 2},
+                                      Vector2i{0, 2},
+                                      Vector2i{0, 2}},
+                                     2,
+                                     workspace,
+                                     SocuContactExecutionStrategy::Recompute);
+
+    std::vector<SocuContactMicroTask> tasks;
+    plan.program_plan.tasks.copy_to(tasks);
+    REQUIRE(!tasks.empty());
+    SizeT selected_count = 0;
+    SizeT eligible_count = 0;
+    for(const auto& task : tasks)
+    {
+        if((task.flags
+            & static_cast<std::uint8_t>(
+                SocuContactTaskFlag::HotReduceEligible))
+           != 0)
+            ++eligible_count;
+        if((task.flags
+            & static_cast<std::uint8_t>(
+                SocuContactTaskFlag::HotReduceSelected))
+           != 0)
+            ++selected_count;
+        CHECK(task.program_id != SocuInvalidContactProgramId);
+    }
+
+    CHECK(plan.program_plan.hot_blocks.detect_only == false);
+    CHECK(plan.program_plan.hot_blocks.strategy
+          == SocuContactExecutionStrategy::Recompute);
+    CHECK(eligible_count == plan.program_plan.hot_blocks.eligible_task_count);
+    CHECK(selected_count == plan.program_plan.hot_blocks.eligible_task_count);
 }

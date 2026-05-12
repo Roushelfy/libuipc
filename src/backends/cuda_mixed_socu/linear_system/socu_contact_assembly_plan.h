@@ -60,6 +60,7 @@ enum class SocuContactTaskFlag : std::uint8_t
     SameAbdBody = 1u << 2,
     HotReduceEligible = 1u << 3,
     DebugRejected = 1u << 4,
+    HotReduceSelected = 1u << 5,
 };
 
 UIPC_GENERIC inline std::uint8_t operator|(SocuContactTaskFlag lhs,
@@ -176,6 +177,7 @@ struct SocuContactProgramHeader
 
 struct SocuContactMicroTask
 {
+    SocuContactProgramId program_id = SocuInvalidContactProgramId;
     SocuAssemblySideId row_side = SocuInvalidAssemblySideId;
     SocuAssemblySideId col_side = SocuInvalidAssemblySideId;
 
@@ -217,6 +219,8 @@ struct SocuHotBlockPlan
 {
     muda::DeviceBuffer<SocuHotBlockRef> refs;
     muda::DeviceBuffer<SocuHotBlockRange> ranges;
+    SocuContactExecutionStrategy strategy =
+        SocuContactExecutionStrategy::DirectScatter;
     SizeT threshold = 0;
     SizeT eligible_task_count = 0;
     bool detect_only = false;
@@ -323,6 +327,8 @@ struct SocuContactAssemblyPlanView
     muda::CBufferView<SocuHotBlockRef> hot_block_refs;
     muda::CBufferView<SocuHotBlockRange> hot_block_ranges;
     muda::CBufferView<SocuContactSourceToProgram> source_to_program;
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter;
 
     MUDA_GENERIC bool valid() const noexcept
     {
@@ -393,6 +399,8 @@ struct SocuContactAssemblyPlanM2BuildInput
     SocuVertexSideCoverageMode side_coverage_mode =
         SocuVertexSideCoverageMode::ActiveSetTemporary;
     bool build_hot_block_plan = false;
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter;
     SizeT hot_block_threshold = 0;
     cudaStream_t stream = cudaStreamLegacy;
 };

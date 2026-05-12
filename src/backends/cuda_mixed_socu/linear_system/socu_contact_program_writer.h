@@ -152,6 +152,56 @@ struct SocuContactProgramWriter
         record(SocuContactProgramWriterCounterSlot::UnsupportedTask);
     }
 
+    template <typename HMat>
+    MUDA_DEVICE StoreT task_storage_cell_contribution(
+        const SocuContactProgramHeader& program,
+        const SocuContactMicroTask& task,
+        const HMat& H,
+        SizeT storage_row,
+        SizeT storage_col) const noexcept
+    {
+        const auto row_lanes = lanes_for(task.row_side);
+        const auto col_lanes = lanes_for(task.col_side);
+        if(row_lanes.data() == nullptr || col_lanes.data() == nullptr)
+            return StoreT{0};
+
+        if(task.write_kind == SocuAssemblyWriteKind::ExactAbdAbdSameBody
+           && task.row_side != task.col_side)
+        {
+            return abd_same_body_cell_contribution(task,
+                                                   row_lanes,
+                                                   col_lanes,
+                                                   H,
+                                                   storage_row,
+                                                   storage_col);
+        }
+
+        if(task.band == SocuAssemblyBand::Diag
+           && (exact_task(task.write_kind) || diag_block_task(task.write_kind)))
+        {
+            return diag_cell_contribution(task,
+                                          row_lanes,
+                                          col_lanes,
+                                          H,
+                                          storage_row,
+                                          storage_col);
+        }
+
+        if(task.band == SocuAssemblyBand::FirstOffdiag
+           && exact_task(task.write_kind))
+        {
+            return first_offdiag_cell_contribution(task,
+                                                   row_lanes,
+                                                   col_lanes,
+                                                   H,
+                                                   storage_row,
+                                                   storage_col);
+        }
+
+        (void)program;
+        return StoreT{0};
+    }
+
     MUDA_GENERIC static bool exact_task(SocuAssemblyWriteKind kind) noexcept
     {
         return kind == SocuAssemblyWriteKind::ExactFemFem
@@ -292,6 +342,40 @@ struct SocuContactProgramWriter
     }
 
     template <typename HMat>
+    MUDA_DEVICE StoreT diag_cell_contribution(
+        const SocuContactMicroTask& task,
+        muda::CBufferView<SocuAssemblyDofLane> row_lanes,
+        muda::CBufferView<SocuAssemblyDofLane> col_lanes,
+        const HMat& H,
+        SizeT storage_row,
+        SizeT storage_col) const noexcept
+    {
+        StoreT sum = StoreT{0};
+        const bool mirror =
+            has_flag(task, SocuContactTaskFlag::MirrorDiagBlock);
+        for(SizeT row = 0; row < row_lanes.size(); ++row)
+        {
+            const auto row_lane = row_lanes.data()[row];
+            for(SizeT col = 0; col < col_lanes.size(); ++col)
+            {
+                const auto col_lane = col_lanes.data()[col];
+                const auto value = projected_value(task, row_lane, col_lane, H);
+                if(row_lane.lane == storage_row && col_lane.lane == storage_col)
+                    sum += value;
+                if(mirror
+                   && (row_lane.block != col_lane.block
+                       || row_lane.lane != col_lane.lane)
+                   && col_lane.lane == storage_row
+                   && row_lane.lane == storage_col)
+                {
+                    sum += value;
+                }
+            }
+        }
+        return sum;
+    }
+
+    template <typename HMat>
     MUDA_DEVICE void write_abd_same_body_task(
         const SocuContactMicroTask& task,
         muda::CBufferView<SocuAssemblyDofLane> row_lanes,
@@ -335,6 +419,52 @@ struct SocuContactProgramWriter
     }
 
     template <typename HMat>
+    MUDA_DEVICE StoreT abd_same_body_cell_contribution(
+        const SocuContactMicroTask& task,
+        muda::CBufferView<SocuAssemblyDofLane> row_lanes,
+        muda::CBufferView<SocuAssemblyDofLane> col_lanes,
+        const HMat& H,
+        SizeT storage_row,
+        SizeT storage_col) const noexcept
+    {
+        StoreT sum = StoreT{0};
+        for(SizeT row = 0; row < row_lanes.size(); ++row)
+        {
+            const auto row_lane = row_lanes.data()[row];
+            for(SizeT col = 0; col < col_lanes.size(); ++col)
+            {
+                const auto col_lane = col_lanes.data()[col];
+                if(row_lane.lane != storage_row || col_lane.lane != storage_col)
+                    continue;
+                auto value = projected_value(task, row_lane, col_lane, H);
+                if(row < col_lanes.size() && col < row_lanes.size())
+                {
+                    const auto col_body_row_lane = col_lanes.data()[row];
+                    const auto row_body_col_lane = row_lanes.data()[col];
+                    if(col_body_row_lane.component < 3
+                       && row_body_col_lane.component < 3)
+                    {
+                        const IndexT h_row =
+                            static_cast<IndexT>(task.local_row_vertex) * 3
+                            + static_cast<IndexT>(
+                                row_body_col_lane.component);
+                        const IndexT h_col =
+                            static_cast<IndexT>(task.local_col_vertex) * 3
+                            + static_cast<IndexT>(
+                                col_body_row_lane.component);
+                        value += static_cast<StoreT>(
+                            static_cast<StoreT>(col_body_row_lane.weight)
+                            * static_cast<StoreT>(H(h_row, h_col))
+                            * static_cast<StoreT>(row_body_col_lane.weight));
+                    }
+                }
+                sum += value;
+            }
+        }
+        return sum;
+    }
+
+    template <typename HMat>
     MUDA_DEVICE void write_first_offdiag_task(
         const SocuContactMicroTask& task,
         muda::CBufferView<SocuAssemblyDofLane> row_lanes,
@@ -360,6 +490,36 @@ struct SocuContactProgramWriter
                                                 static_cast<SolveT>(value));
             }
         }
+    }
+
+    template <typename HMat>
+    MUDA_DEVICE StoreT first_offdiag_cell_contribution(
+        const SocuContactMicroTask& task,
+        muda::CBufferView<SocuAssemblyDofLane> row_lanes,
+        muda::CBufferView<SocuAssemblyDofLane> col_lanes,
+        const HMat& H,
+        SizeT storage_row,
+        SizeT storage_col) const noexcept
+    {
+        StoreT sum = StoreT{0};
+        const bool transposed =
+            has_flag(task, SocuContactTaskFlag::TransposedFirstOffdiag);
+        for(SizeT row = 0; row < row_lanes.size(); ++row)
+        {
+            const auto row_lane = row_lanes.data()[row];
+            for(SizeT col = 0; col < col_lanes.size(); ++col)
+            {
+                const auto col_lane = col_lanes.data()[col];
+                const auto target_row =
+                    transposed ? col_lane.lane : row_lane.lane;
+                const auto target_col =
+                    transposed ? row_lane.lane : col_lane.lane;
+                if(target_row != storage_row || target_col != storage_col)
+                    continue;
+                sum += projected_value(task, row_lane, col_lane, H);
+            }
+        }
+        return sum;
     }
 
     template <typename HMat>

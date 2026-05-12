@@ -138,7 +138,20 @@ bool contact_hessian_cache_enabled(const std::string&             graph_source,
 
 bool native_contact_hot_reduce_strategy_valid(std::string_view strategy) noexcept
 {
-    return strategy == "off" || strategy == "detect_only";
+    return strategy == "off" || strategy == "detect_only"
+           || strategy == "recompute" || strategy == "cached_microblock";
+}
+
+SocuContactExecutionStrategy native_contact_hot_reduce_strategy_from_string(
+    std::string_view strategy) noexcept
+{
+    if(strategy == "detect_only")
+        return SocuContactExecutionStrategy::DetectOnly;
+    if(strategy == "recompute")
+        return SocuContactExecutionStrategy::Recompute;
+    if(strategy == "cached_microblock")
+        return SocuContactExecutionStrategy::CachedMicroblock;
+    return SocuContactExecutionStrategy::DirectScatter;
 }
 
 bool parse_native_contact_side_coverage_mode(
@@ -456,8 +469,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         m_gate_report = make_failure(
             SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/"
-                        "native_contact_hot_reduce_strategy currently supports "
-                        "only 'off' or 'detect_only' before owner-reduce lands, "
+                        "native_contact_hot_reduce_strategy must be one of "
+                        "'off', 'detect_only', 'recompute', or "
+                        "'cached_microblock', "
                         "got '{}'",
                         m_native_contact_hot_reduce_strategy));
         throw_gate_failure(m_gate_report);
@@ -1880,11 +1894,20 @@ void SocuApproxSolver::prepare_structured_contact_plan(
         m_native_contact_plan_workspace =
             std::make_unique<SocuContactAssemblyPlanM2Workspace>();
 
+    const auto requested_hot_strategy =
+        m_native_contact_hot_reduce_enabled
+            ? native_contact_hot_reduce_strategy_from_string(
+                  m_native_contact_hot_reduce_strategy)
+            : SocuContactExecutionStrategy::DirectScatter;
     const bool plan_valid =
         m_native_contact_plan->side_plan.key == side_key
         && m_native_contact_plan->side_plan.coverage.mode
                == m_native_contact_side_coverage_mode
-        && m_native_contact_plan->program_plan.key == program_key;
+        && m_native_contact_plan->program_plan.key == program_key
+        && m_native_contact_plan->program_plan.hot_blocks.strategy
+               == requested_hot_strategy
+        && m_native_contact_plan->program_plan.hot_blocks.threshold
+               == m_native_contact_hot_reduce_threshold;
     const bool rebuild = !aggregate_hit || !plan_valid;
     if(rebuild)
     {
@@ -1897,6 +1920,7 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                 program_key,
                 m_native_contact_side_coverage_mode,
                 m_native_contact_hot_reduce_enabled,
+                requested_hot_strategy,
                 m_native_contact_hot_reduce_threshold);
         const auto end = std::chrono::steady_clock::now();
         if(built)
@@ -1953,7 +1977,11 @@ void SocuApproxSolver::prepare_structured_contact_plan(
         m_native_contact_plan->side_plan.key == side_key
         && m_native_contact_plan->side_plan.coverage.mode
                == m_native_contact_side_coverage_mode
-        && m_native_contact_plan->program_plan.key == program_key;
+        && m_native_contact_plan->program_plan.key == program_key
+        && m_native_contact_plan->program_plan.hot_blocks.strategy
+               == requested_hot_strategy
+        && m_native_contact_plan->program_plan.hot_blocks.threshold
+               == m_native_contact_hot_reduce_threshold;
     if(ready)
     {
         apply_native_contact_plan_stats(
@@ -1989,6 +2017,8 @@ void SocuApproxSolver::finalize_structured_chain(
         info.native_contact_hessian_triplet_time_ms();
     m_report.native_contact_executor_scatter_ms =
         info.native_contact_executor_scatter_time_ms();
+    m_report.native_contact_hot_reduce_ms =
+        info.native_contact_hot_reduce_time_ms();
     m_report.native_contact_replay_path = info.native_contact_replay_path();
 
     if(info.report_counters_enabled())

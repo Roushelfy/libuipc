@@ -94,7 +94,11 @@ SocuContactAssemblyPlanM2BuildInput make_executor_input(
     const muda::DeviceBuffer<Vector2i>& pp_contacts,
     const muda::DeviceBuffer<Vector2i>& ph_contacts,
     const muda::DeviceBuffer<Vector2i>& friction_pp_contacts,
-    StructuredContactOffbandPolicy policy)
+    StructuredContactOffbandPolicy policy,
+    bool build_hot_block_plan = false,
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter,
+    SizeT hot_block_threshold = 0)
 {
     SocuVertexSidePlanKey side_key;
     side_key.ordering_epoch = 2;
@@ -130,6 +134,9 @@ SocuContactAssemblyPlanM2BuildInput make_executor_input(
         SocuContactModelKind::SimplexFrictional};
     input.offband_policy = policy;
     input.side_coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
+    input.build_hot_block_plan = build_hot_block_plan;
+    input.hot_block_strategy = hot_block_strategy;
+    input.hot_block_threshold = hot_block_threshold;
     return input;
 }
 
@@ -138,7 +145,11 @@ SocuContactAssemblyPlan build_executor_plan(
     const std::vector<Vector2i>& ph_host,
     const std::vector<Vector2i>& friction_pp_host,
     StructuredContactOffbandPolicy policy,
-    SocuContactAssemblyPlanM2Workspace& workspace)
+    SocuContactAssemblyPlanM2Workspace& workspace,
+    bool build_hot_block_plan = false,
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter,
+    SizeT hot_block_threshold = 0)
 {
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{
         executor_fixture_vertices()};
@@ -154,7 +165,10 @@ SocuContactAssemblyPlan build_executor_plan(
                             pp_contacts,
                             ph_contacts,
                             friction_pp_contacts,
-                            policy));
+                            policy,
+                            build_hot_block_plan,
+                            hot_block_strategy,
+                            hot_block_threshold));
     REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
     return plan;
 }
@@ -339,6 +353,123 @@ TEST_CASE("cuda_mixed_socu_contact_executor_matches_program_writer",
     CHECK(counter_value(result.executor_counters,
                         SocuContactExecutorCounterSlot::TaskWrite)
           > 0);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_executor_recompute_owner_reduce_matches_writer",
+          "[cuda_mixed_socu][contract][socu_approx][m6][socu_contact_hot_blocks]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact executor tests");
+
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_executor_plan({Vector2i{0, 2},
+                                     Vector2i{0, 2},
+                                     Vector2i{0, 2},
+                                     Vector2i{0, 2}},
+                                    {},
+                                    {},
+                                    StructuredContactOffbandPolicy::Drop,
+                                    workspace,
+                                    true,
+                                    SocuContactExecutionStrategy::Recompute,
+                                    2);
+    REQUIRE(plan.program_plan.hot_blocks.ranges.size() == 3);
+    REQUIRE(plan.program_plan.hot_blocks.strategy
+            == SocuContactExecutionStrategy::Recompute);
+
+    const auto result = run_executor_against_writer<Store, Solve>(plan);
+    require_vectors_close(result.executor_snapshot.D,
+                          result.writer_snapshot.D,
+                          1e-8);
+    require_vectors_close(result.executor_snapshot.E,
+                          result.writer_snapshot.E,
+                          1e-8);
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::DirectHotTaskSkipped)
+          == static_cast<IndexT>(plan.program_plan.hot_blocks.eligible_task_count));
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::HotBlockRangeVisit)
+          == static_cast<IndexT>(plan.program_plan.hot_blocks.ranges.size()));
+}
+
+TEST_CASE("cuda_mixed_socu_contact_executor_cached_microblock_matches_writer",
+          "[cuda_mixed_socu][contract][socu_approx][m6][socu_contact_hot_blocks]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact executor tests");
+
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_executor_plan({Vector2i{0, 2},
+                                     Vector2i{0, 2},
+                                     Vector2i{0, 2}},
+                                    {},
+                                    {},
+                                    StructuredContactOffbandPolicy::Drop,
+                                    workspace,
+                                    true,
+                                    SocuContactExecutionStrategy::CachedMicroblock,
+                                    2);
+    REQUIRE(plan.program_plan.hot_blocks.ranges.size() == 3);
+    REQUIRE(plan.program_plan.hot_blocks.strategy
+            == SocuContactExecutionStrategy::CachedMicroblock);
+
+    const auto result = run_executor_against_writer<Store, Solve>(plan);
+    require_vectors_close(result.executor_snapshot.D,
+                          result.writer_snapshot.D,
+                          1e-8);
+    require_vectors_close(result.executor_snapshot.E,
+                          result.writer_snapshot.E,
+                          1e-8);
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::HotBlockRangeVisit)
+          == static_cast<IndexT>(plan.program_plan.hot_blocks.ranges.size()));
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::HotMicroblockCacheWrite)
+          > 0);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_executor_detect_only_keeps_direct_scatter",
+          "[cuda_mixed_socu][contract][socu_approx][m6][socu_contact_hot_blocks]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact executor tests");
+
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_executor_plan({Vector2i{0, 2},
+                                     Vector2i{0, 2},
+                                     Vector2i{0, 2}},
+                                    {},
+                                    {},
+                                    StructuredContactOffbandPolicy::Drop,
+                                    workspace,
+                                    true,
+                                    SocuContactExecutionStrategy::DetectOnly,
+                                    2);
+    REQUIRE(plan.program_plan.hot_blocks.detect_only);
+    REQUIRE(plan.program_plan.hot_blocks.ranges.size() == 3);
+
+    const auto result = run_executor_against_writer<Store, Solve>(plan);
+    require_vectors_close(result.executor_snapshot.D,
+                          result.writer_snapshot.D,
+                          1e-8);
+    require_vectors_close(result.executor_snapshot.E,
+                          result.writer_snapshot.E,
+                          1e-8);
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::DirectHotTaskSkipped)
+          == 0);
+    CHECK(counter_value(result.executor_counters,
+                        SocuContactExecutorCounterSlot::HotBlockRangeVisit)
+          == 0);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_executor_policy_buckets_match_writer",
