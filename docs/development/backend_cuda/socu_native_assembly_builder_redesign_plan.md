@@ -2179,8 +2179,93 @@ Implementation status on `socu-native-builder-redesign`:
     `45259` assertions in `41` test cases.
   - `[cuda_mixed_socu][contract]` passed,
     `50142` assertions in `61` test cases.
-- Remaining before making performance claims: scene-level replay wiring and
-  timed cold/cache-hit numeric comparisons against the M4 compatibility writer.
+- Remaining before making performance claims: scene benchmark cold/cache-hit
+  numeric comparisons against the M4 compatibility writer and profiler evidence
+  that separates contact Hessian triplet generation from plan-owned scatter.
+
+### M5.5: Scene-Level Native Executor Replay Wiring
+
+This is a pre-performance slice between M5 and M6. Its purpose is to make the
+final structured contact assembly path observable and switchable before using
+any scene timings as evidence.
+
+Deliverables:
+
+- Add a `LinearSolver::prepare_structured_contact_plan()` hook that runs after
+  the structured workspace is configured and after the final contact topology
+  stamp is available, but before dy-topology contact Hessian assembly begins.
+- Ensure `StructuredAssemblyInfo` can prepare native contact descriptors,
+  expose stable side/program keys, hold the prepared
+  `SocuContactAssemblyPlan`, and record native contact plan-build/numeric
+  timings.
+- When `linear_system/socu_approx/native_contact_plan_executor=1`, build or
+  reuse the M2 symbolic contact plan before final contact assembly and pass that
+  plan to `GlobalDyTopoEffectManager`.
+- In final contact assembly, choose exactly one replay path:
+  - `native_contact_replay_path = "native_plan"`: collect reporter-layout
+    half-Hessian triplets, feed them to `SocuContactTripletEvaluator`, and
+    launch `launch_socu_contact_executor`;
+  - `native_contact_replay_path = "legacy_structured"`: use the legacy
+    structured contact sink or existing structured Hessian cache replay;
+  - `native_contact_replay_path = "off"`: no contact replay ran.
+- Preserve `native_contact_probe_path` through the same solve report even when
+  `prepare_structured_chain()` resets per-solve native contact statistics.
+- Reject ambiguous M5.5 source-table states: multiple non-empty reporters for
+  the same model/family must fail loudly until the evaluator table is made
+  source-id indexed.
+
+Implementation status on `socu-native-builder-redesign`:
+
+- Added the post-topology `prepare_structured_contact_plan()` hook and wired it
+  into both final assembly paths, including the path after a runtime graph probe
+  installs a new ordering.
+- Moved native contact plan cache update and M2 plan build out of
+  `finalize_structured_chain()` and into the new pre-contact hook, so cold
+  rebuilds happen before executor replay and cache-hit solves do not rebuild
+  symbolic state.
+- Added `StructuredAssemblyInfo` fields and accessors for native contact plan
+  pointers, side coverage mode, scalar-diag compatibility, replay path, native
+  matrix view, and native contact timing.
+- Added a scene-level native executor branch in
+  `GlobalDyTopoEffectManager::assemble_structured_hessian()`. It currently
+  uses reporter half-Hessian triplet views as the evaluator input, then launches
+  the plan-owned executor against the native `D/E/RHS` matrix.
+- Added report fields:
+  - `runtime_reorder.native_contact_probe_path`;
+  - `runtime_reorder.native_contact_replay_path`;
+  - existing timing fields `native_contact_plan_build_ms` and
+    `native_contact_numeric_ms` now cover the pre-contact plan build and native
+    executor replay branch.
+- Added source-scan and report JSON tests for the M5.5 hook/path contract.
+
+M5.5 limitations:
+
+- The `native_plan` replay branch is intentionally not yet a final performance
+  claim. It feeds the executor from the existing non-structured reporter
+  half-Hessian triplet layout, so the measured numeric time includes this
+  compatibility triplet generation step and may recompute contact gradients.
+- The M5.5 evaluator source table is keyed by model/family, not by
+  `source_id`. It rejects multiple non-empty same-family reporter sources
+  instead of silently assembling the wrong Hessians. A source-id indexed
+  evaluator table is required before claiming production coverage for multiple
+  reporters of the same family.
+- Existing `full_hessian_cached` replay remains
+  `native_contact_replay_path = "legacy_structured"` unless a later milestone
+  adds a native replay plan.
+
+Current validation:
+
+- `cmake --build build --target backend_cuda_mixed_socu -j 16` passed.
+- `[cuda_mixed_socu][contract][socu_approx][m5]` passed,
+  `22824` assertions in `7` test cases.
+- `[cuda_mixed_socu][contract][socu_approx][m2]` passed,
+  `642` assertions in `12` test cases.
+- `cuda_mixed_socu_report_native_contact_replay_paths` passed,
+  `6` assertions in `1` test case.
+- `[cuda_mixed_socu][contract][socu_approx]` passed,
+  `45271` assertions in `42` test cases.
+- `[cuda_mixed_socu][contract]` passed,
+  `50154` assertions in `62` test cases.
 
 ### M6: Hot-Block Detection And Owner-Reduce
 

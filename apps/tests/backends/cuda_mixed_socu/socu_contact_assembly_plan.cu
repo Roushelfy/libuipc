@@ -1477,6 +1477,8 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
                               "socu_approx_solver.cu");
     CHECK(solver.find("info.build_socu_contact_assembly_plan_m2(")
           != std::string::npos);
+    CHECK(solver.find("prepare_structured_contact_plan")
+          != std::string::npos);
     CHECK(solver.find("native_contact_side_coverage_mode") != std::string::npos);
     CHECK(solver.find("\"demand_filled\"") != std::string::npos);
     CHECK(solver.find("apply_native_contact_plan_stats")
@@ -1489,6 +1491,12 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(dytopo.find("input.sources = span<const SocuContactM2SourceInput>")
           != std::string::npos);
     CHECK(dytopo.find("socu_native_contact_plan_unsupported_reporter")
+          != std::string::npos);
+    CHECK(dytopo.find("launch_socu_contact_executor")
+          != std::string::npos);
+    CHECK(dytopo.find("native_contact_executor_duplicate_source")
+          != std::string::npos);
+    CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")
           != std::string::npos);
 
     const auto defaults =

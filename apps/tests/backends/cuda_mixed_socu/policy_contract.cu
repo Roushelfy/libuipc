@@ -75,6 +75,12 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     CHECK(timing.at("native_contact_numeric_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_hot_reduce_ms").get<double>() == 0.0);
 
+    const auto& runtime_reorder = json.at("runtime_reorder");
+    CHECK(runtime_reorder.at("native_contact_probe_path").get<std::string>()
+          == "off");
+    CHECK(runtime_reorder.at("native_contact_replay_path").get<std::string>()
+          == "off");
+
     const auto& contact = json.at("contact");
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>() == false);
     CHECK(contact.at("native_contact_side_plan_cache_hit").get<bool>() == false);
@@ -289,6 +295,44 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>());
     CHECK(contact.at("native_contact_side_plan_rebuild_count").get<SizeT>() == 1);
     CHECK(contact.at("native_contact_program_plan_rebuild_count").get<SizeT>() == 2);
+
+    std::filesystem::remove(report_path);
+}
+
+TEST_CASE("cuda_mixed_socu_report_native_contact_replay_paths",
+          "[cuda_mixed_socu][contract][socu_approx][m5]")
+{
+    using uipc::Json;
+
+    const auto report_path =
+        std::filesystem::temp_directory_path()
+        / "uipc_socu_report_native_contact_replay_paths.json";
+    std::filesystem::remove(report_path);
+
+    SocuApproxSolveReport report;
+    report.report_path = report_path.string();
+    report.native_contact_probe_path = "legacy_structured";
+    report.native_contact_replay_path = "native_plan";
+    report.native_contact_plan_cache_hit = true;
+    report.native_contact_plan_build_ms = 0.0;
+    report.native_contact_numeric_ms = 1.25;
+    write_solve_report(report);
+
+    std::ifstream ifs{report_path};
+    REQUIRE(ifs.good());
+    const Json json = Json::parse(ifs);
+    const auto& runtime_reorder = json.at("runtime_reorder");
+    CHECK(runtime_reorder.at("native_contact_probe_path").get<std::string>()
+          == "legacy_structured");
+    CHECK(runtime_reorder.at("native_contact_replay_path").get<std::string>()
+          == "native_plan");
+    CHECK(json.at("contact")
+              .at("native_contact_plan_cache_hit")
+              .get<bool>());
+    CHECK(json.at("timing").at("native_contact_plan_build_ms").get<double>()
+          == 0.0);
+    CHECK(json.at("timing").at("native_contact_numeric_ms").get<double>()
+          == 1.25);
 
     std::filesystem::remove(report_path);
 }

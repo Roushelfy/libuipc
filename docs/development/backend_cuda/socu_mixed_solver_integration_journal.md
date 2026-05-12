@@ -2494,3 +2494,64 @@ Decision:
 - No performance claim is made yet. Scene-level replay wiring and timed
   cold/cache-hit comparisons against the M4 compatibility writer remain for the
   next milestone slice.
+
+## 2026-05-12 Redesign Branch M5.5 Native Executor Replay Wiring
+
+Implemented:
+
+- Added `LinearSolver::prepare_structured_contact_plan()` and call it after
+  final contact topology stamping but before dy-topology structured contact
+  assembly. This gives the SOCU solver a real pre-contact point where the M2
+  symbolic plan can be built for the final assembly path.
+- Moved native contact plan cache update and M2 plan construction from
+  `finalize_structured_chain()` into the new pre-contact hook. Cold rebuilds
+  now happen before contact assembly; cache-hit solves can enter contact
+  assembly with the previous symbolic plan already valid.
+- Added `StructuredAssemblyInfo` storage/accessors for native contact plan
+  pointers, side coverage mode, scalar-diag compatibility, native matrix view,
+  plan-build timing, numeric executor timing, and replay path.
+- Exposed `GlobalDyTopoEffectManager::ensure_structured_vertex_descriptors()` so
+  descriptor preparation can happen before the symbolic plan build.
+- Added a `native_plan` branch in
+  `GlobalDyTopoEffectManager::assemble_structured_hessian()`. When
+  `native_contact_plan_executor=1`, it collects reporter-layout half-Hessian
+  triplets, constructs `SocuContactEvaluatorSourceTable`, and launches
+  `launch_socu_contact_executor()` against the native structured matrix.
+- Preserved non-contact structured dy-topology reporters by running their
+  legacy structured assembly after the native contact executor branch.
+- Added report paths:
+  `runtime_reorder.native_contact_probe_path` and
+  `runtime_reorder.native_contact_replay_path`.
+- Added loud duplicate-source rejection for the M5.5 evaluator table: multiple
+  non-empty reporters for the same model/family now fail instead of silently
+  aliasing Hessian sources.
+
+Tests updated:
+
+- Added report JSON coverage for default `off` probe/replay paths and an
+  explicit `legacy_structured` probe plus `native_plan` replay report.
+- Extended M2 source-scan tests to assert the pre-contact hook, scene-level
+  executor launch, duplicate-source guard, and native replay-path report write
+  are present.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target backend_cuda_mixed_socu -j 16` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m5]"` | passed, `22824` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m2]"` | passed, `642` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_report_native_contact_replay_paths"` | passed, `6` assertions in `1` test case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `45271` assertions in `42` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `50154` assertions in `62` test cases |
+
+Decision:
+
+- M5.5 is accepted as the scene-level wiring slice. The final structured contact
+  path can now choose and report `native_plan` versus `legacy_structured`.
+- This is still not a performance acceptance. The current `native_plan` branch
+  feeds the executor from compatibility half-Hessian triplet generation, so its
+  numeric time includes that preparation step and may recompute contact
+  gradients. Before claiming speedup, benchmark cold rebuild, cache-hit numeric,
+  and amortized Newton solve time against the M4 compatibility writer and
+  separate Hessian triplet generation from executor scatter in the report.
