@@ -2608,3 +2608,52 @@ Decision:
 - No scene performance claim is made by this entry. Real cold rebuild,
   cache-hit numeric, and amortized Newton solve comparisons should be generated
   from actual scene reports using the M5.6 analyzer.
+
+## 2026-05-12 Redesign Branch Wrecking-Ball Native-Only Smoke
+
+The first native-only Wrecking Ball run exposed three scene-level gaps that the
+contract tests did not catch:
+
+- `ensure_structured_vertex_descriptors()` rebuilt or reused the descriptor
+  cache but did not publish the cached view back into the current
+  `StructuredAssemblyInfo`. As a result, `prepare_structured_contact_plan()`
+  could never build a scene-level native contact plan and active contacts fell
+  back to legacy structured contact assembly.
+- Empty contact topologies produced an empty M2 program plan. That is a valid
+  native no-op, but the executor path treated the empty view as invalid and
+  aborted before frame 1 could complete.
+- Native-only builds also need to skip zero-extent contact reporters in the
+  legacy fallback loop; otherwise an empty contact reporter can call a legacy
+  contact TU that was intentionally excluded from the build.
+
+Implemented:
+
+- Export the cached native vertex descriptor view on both descriptor-cache hit
+  and descriptor-cache rebuild.
+- Treat an empty native contact program plan as a legal `native_plan` no-op and
+  continue with non-contact structured reporters.
+- Skip zero-gradient/zero-Hessian contact reporters in the legacy structured
+  fallback loop.
+- Added source-scan checks for all three scene-gate guardrails.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target backend_cuda_mixed_socu -j 16` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m2]"` | passed, `655` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m5]"` | passed, `22826` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `45290` assertions in `42` test cases |
+| `git diff --check` | passed |
+| Wrecking Ball, `socu_rt50_topology_diag_lump`, `native_contact_plan=1`, `native_contact_plan_executor=1`, `native_contact_side_coverage_mode=demand_filled`, `SOCU_REPORT_COUNTERS=1`, `--frames 20` | passed, `final_frame=20`, `wall_time_s=39.72148215898778`, `mean_frame_ms=1933.327321401157`; final report has `native_contact_replay_path=native_plan`, `native_contact_plan_build_ms=1.302093`, `native_contact_hessian_triplet_ms=4.034912109375`, `native_contact_executor_scatter_ms=0.016704000532627106`, `contact_assembly_time_ms=4.114336013793945` |
+| Same Wrecking Ball setup with `SOCU_REPORT_COUNTERS=0` | passed, `final_frame=20`, `wall_time_s=53.252292808989296`, `mean_frame_ms=2610.310179049702` |
+| `scripts/analyze_socu_native_contact_m56.py output/examples/wrecking_ball_native_m56_20f_retry2 --require-native-plan --format markdown` | passed; final report grouped as `partial_rebuild/native_plan` |
+
+Decision:
+
+- The current native-only build can run the 20-frame Wrecking Ball smoke with
+  compact native contact replay enabled.
+- This is still not a performance acceptance. The scene is rebuilding contact
+  programs heavily (`native_contact_plan_rebuild_count=1539` in the final
+  report), so M6/M7 work must focus on reducing rebuild churn and then rerun
+  cold/cache-hit/amortized timing gates.
