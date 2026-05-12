@@ -2446,3 +2446,51 @@ Decision:
 
 - M4 writer correctness is accepted. M5 can now build the plan-owned numeric
   executor against the compatibility writer as its reference.
+
+## 2026-05-12 Redesign Branch M5 Plan-Owned Contact Executor
+
+Implemented:
+
+- Added production `SocuContactBucketExecutor` and
+  `launch_socu_contact_executor` for M2 symbolic contact plans.
+- Added executor counters for bucket visits, program visits, exact/diag/drop
+  program classes, task writes, empty buckets, and unsupported programs.
+- Added `SocuDeterministicContactEvaluator` so scheduling correctness can be
+  tested independently from IPC Hessian math.
+- Added typed evaluator source views for simplex normal/frictional and
+  vertex-half-plane normal/frictional sources. `SocuContactTripletEvaluator`
+  consumes the reporter-style contiguous half-Hessian triplet layout and expands
+  each contact into one full local Hessian before task execution.
+- Kept the production executor free of structured sink/debug compare/legacy
+  target dependencies. The executor reuses the production task writer primitive
+  for the actual native `D/E` writes.
+
+Tests updated:
+
+- Added `[m5]` CUDA tests in `socu_contact_executor.cu`.
+- Compared production bucket executor output against the compatibility writer
+  on M2-emitted plans.
+- Covered exact, `Drop`, `Diag`, and `DiagLump` program buckets, including
+  simplex normal, simplex frictional, and vertex-half-plane families.
+- Added bucket-order stability and empty bucket/family no-op tests.
+- Added PP simplex plus PH half-plane triplet-source smoke to verify typed
+  source views load reporter-layout Hessian blocks into local contact Hessians.
+- Added source/compile isolation checks for the executor production TU.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target backend_cuda_mixed_socu -j 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m5]"` | passed, `22818` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m2],[cuda_mixed_socu][contract][socu_approx][m3],[cuda_mixed_socu][contract][socu_approx][m4],[cuda_mixed_socu][contract][socu_approx][m5]"` | passed, `45125` assertions in `28` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `45259` assertions in `41` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `50142` assertions in `61` test cases |
+
+Decision:
+
+- M5 is accepted for the plan-owned numeric executor contract. It has a real
+  production bucket launch path and typed reporter-Hessian source views.
+- No performance claim is made yet. Scene-level replay wiring and timed
+  cold/cache-hit comparisons against the M4 compatibility writer remain for the
+  next milestone slice.

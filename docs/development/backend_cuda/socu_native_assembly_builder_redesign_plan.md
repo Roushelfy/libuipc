@@ -2146,6 +2146,42 @@ Acceptance:
 - Native executor TUs do not pull legacy structured sink templates into
   performance builds.
 
+Implementation status on `socu-native-builder-redesign`:
+
+- `SocuContactBucketExecutor` and `launch_socu_contact_executor` are implemented
+  in `linear_system/socu_contact_executor.h` with a tiny
+  `socu_contact_executor.cu` translation-unit anchor.
+- The executor consumes M2-emitted `SocuContactAssemblyPlanView` buckets,
+  visits programs by bucket, evaluates one full local Hessian per program, and
+  executes that program's micro-tasks through the production task writer.
+- Added typed source views:
+  `SocuSimplexContactEvaluatorSourceView`,
+  `SocuVertexHalfPlaneContactEvaluatorSourceView`, and
+  `SocuContactEvaluatorSourceTable`. `SocuContactTripletEvaluator` consumes the
+  reporter-style per-family half-Hessian triplet layout for simplex and
+  vertex-half-plane sources without including contact model or structured sink
+  translation units.
+- Added `SocuDeterministicContactEvaluator` for scheduling/writer parity tests.
+- Added `[m5]` CUDA contract tests in `socu_contact_executor.cu`:
+  - production executor versus compatibility writer on M2 plans;
+  - `Drop`, `Diag`, and `DiagLump` bucket policies;
+  - bucket-order stability;
+  - empty buckets/families no-op;
+  - PP simplex normal plus PH vertex-half-plane triplet source-view smoke;
+  - production executor source/compile isolation.
+- Current validation:
+  - `cmake --build build --target backend_cuda_mixed_socu -j 12` passed.
+  - `[cuda_mixed_socu][contract][socu_approx][m5]` passed,
+    `22818` assertions in `6` test cases.
+  - `[m2] | [m3] | [m4] | [m5]` combined regression passed,
+    `45125` assertions in `28` test cases.
+  - `[cuda_mixed_socu][contract][socu_approx]` passed,
+    `45259` assertions in `41` test cases.
+  - `[cuda_mixed_socu][contract]` passed,
+    `50142` assertions in `61` test cases.
+- Remaining before making performance claims: scene-level replay wiring and
+  timed cold/cache-hit numeric comparisons against the M4 compatibility writer.
+
 ### M6: Hot-Block Detection And Owner-Reduce
 
 Deliverables:
