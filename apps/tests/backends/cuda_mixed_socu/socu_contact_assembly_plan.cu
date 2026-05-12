@@ -5,6 +5,10 @@
 #include <muda/buffer/device_buffer.h>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -146,6 +150,377 @@ const SocuAssemblySideRecord& side_for(
                                  });
     REQUIRE(it != sides.end());
     return *it;
+}
+
+SocuAssemblySideKind cpu_side_kind(SocuNativeDescriptorKind kind) noexcept
+{
+    switch(kind)
+    {
+        case SocuNativeDescriptorKind::Fem:
+            return SocuAssemblySideKind::Fem;
+        case SocuNativeDescriptorKind::Abd:
+            return SocuAssemblySideKind::Abd;
+        case SocuNativeDescriptorKind::None:
+        default:
+            return SocuAssemblySideKind::None;
+    }
+}
+
+SocuAssemblySideRecord cpu_make_side(
+    const std::vector<SocuNativeVertexDescriptor>& vertices,
+    IndexT                                         vertex)
+{
+    SocuAssemblySideRecord side;
+    side.global_vertex = vertex;
+    if(vertex < 0 || static_cast<SizeT>(vertex) >= vertices.size())
+        return side;
+
+    const auto& descriptor = vertices[static_cast<SizeT>(vertex)];
+    side.kind = cpu_side_kind(descriptor.kind);
+    side.fixed = descriptor.fixed;
+    side.writable = descriptor.writable();
+    side.old_dof = descriptor.old_dof;
+    side.dof_count = descriptor.dof_count;
+    side.abd_body = descriptor.abd_body;
+    side.abd_jacobian_index = descriptor.abd_j_index;
+    side.block = static_cast<std::uint32_t>(descriptor.block);
+    side.lane = static_cast<std::uint16_t>(descriptor.lane);
+    side.lane_count = descriptor.mapped()
+                          ? static_cast<std::uint16_t>(descriptor.dof_count)
+                          : std::uint16_t{0};
+    return side;
+}
+
+bool cpu_find_side_id(const std::vector<IndexT>& sorted_vertices,
+                      IndexT                     vertex,
+                      SocuAssemblySideId&        side_id)
+{
+    const auto it = std::lower_bound(sorted_vertices.begin(),
+                                     sorted_vertices.end(),
+                                     vertex);
+    if(it == sorted_vertices.end() || *it != vertex)
+    {
+        side_id = SocuInvalidAssemblySideId;
+        return false;
+    }
+    side_id =
+        static_cast<SocuAssemblySideId>(std::distance(sorted_vertices.begin(), it));
+    return true;
+}
+
+bool cpu_side_pair_in_band(const SocuAssemblySideRecord& row,
+                           const SocuAssemblySideRecord& col,
+                           SocuAssemblyBand&             band,
+                           std::uint32_t&                block_or_left_block,
+                           std::uint8_t&                 flags) noexcept
+{
+    flags = 0;
+    if(row.block == col.block)
+    {
+        band = SocuAssemblyBand::Diag;
+        block_or_left_block = row.block;
+        if(row.global_vertex != col.global_vertex)
+            flags |= static_cast<std::uint8_t>(
+                SocuContactTaskFlag::MirrorDiagBlock);
+        return true;
+    }
+
+    const SizeT row_block = row.block;
+    const SizeT col_block = col.block;
+    const SizeT distance =
+        row_block > col_block ? row_block - col_block : col_block - row_block;
+    if(distance != 1)
+        return false;
+
+    band = SocuAssemblyBand::FirstOffdiag;
+    block_or_left_block =
+        static_cast<std::uint32_t>(row_block < col_block ? row_block : col_block);
+    if(row_block < col_block)
+        flags |= static_cast<std::uint8_t>(
+            SocuContactTaskFlag::TransposedFirstOffdiag);
+    return true;
+}
+
+SocuAssemblyWriteKind cpu_exact_write_kind(const SocuAssemblySideRecord& row,
+                                           const SocuAssemblySideRecord& col,
+                                           std::uint8_t& flags) noexcept
+{
+    if(row.kind == SocuAssemblySideKind::Fem
+       && col.kind == SocuAssemblySideKind::Fem)
+        return SocuAssemblyWriteKind::ExactFemFem;
+    if(row.kind == SocuAssemblySideKind::Abd
+       && col.kind == SocuAssemblySideKind::Fem)
+        return SocuAssemblyWriteKind::ExactAbdFem;
+    if(row.kind == SocuAssemblySideKind::Fem
+       && col.kind == SocuAssemblySideKind::Abd)
+        return SocuAssemblyWriteKind::ExactFemAbd;
+    if(row.kind == SocuAssemblySideKind::Abd
+       && col.kind == SocuAssemblySideKind::Abd)
+    {
+        if(row.abd_body == col.abd_body)
+        {
+            flags |= static_cast<std::uint8_t>(
+                SocuContactTaskFlag::SameAbdBody);
+            return SocuAssemblyWriteKind::ExactAbdAbdSameBody;
+        }
+        return SocuAssemblyWriteKind::ExactAbdAbdCrossBody;
+    }
+    return SocuAssemblyWriteKind::Skipped;
+}
+
+SocuAssemblyWriteKind cpu_diag_block_write_kind(
+    const SocuAssemblySideRecord& side) noexcept
+{
+    return side.kind == SocuAssemblySideKind::Abd
+               ? SocuAssemblyWriteKind::DiagBlockAbd
+               : SocuAssemblyWriteKind::DiagBlockFem;
+}
+
+SocuAssemblyWriteKind cpu_lump_write_kind(
+    const SocuAssemblySideRecord& side) noexcept
+{
+    return side.kind == SocuAssemblySideKind::Abd
+               ? SocuAssemblyWriteKind::LumpScalarAbd
+               : SocuAssemblyWriteKind::LumpScalarFem;
+}
+
+struct CpuOracleTask
+{
+    SocuAssemblySideId row_side = SocuInvalidAssemblySideId;
+    SocuAssemblySideId col_side = SocuInvalidAssemblySideId;
+    std::uint8_t local_row = 0;
+    std::uint8_t local_col = 0;
+    SocuAssemblyBand band = SocuAssemblyBand::Diag;
+    SocuAssemblyWriteKind write_kind = SocuAssemblyWriteKind::Skipped;
+    std::uint32_t block_or_left_block = 0;
+    std::uint8_t flags = 0;
+};
+
+struct CpuOracleProgram
+{
+    SocuContactProgramKind program_kind = SocuContactProgramKind::Skipped;
+    SocuContactProgramMapStatus map_status =
+        SocuContactProgramMapStatus::Missing;
+    std::vector<CpuOracleTask> tasks;
+};
+
+void cpu_append_diag_tasks_for_stencil(
+    const std::array<SocuAssemblySideId, 4>&      side_ids,
+    const std::array<SocuAssemblySideRecord, 4>&  sides,
+    int                                           stencil_size,
+    bool                                          lump,
+    std::vector<CpuOracleTask>&                   tasks)
+{
+    for(int local = 0; local < stencil_size; ++local)
+    {
+        if(side_ids[static_cast<SizeT>(local)] == SocuInvalidAssemblySideId)
+            continue;
+        const auto& side = sides[static_cast<SizeT>(local)];
+        if(!side.writable)
+            continue;
+
+        CpuOracleTask task;
+        task.row_side = side_ids[static_cast<SizeT>(local)];
+        task.col_side = side_ids[static_cast<SizeT>(local)];
+        task.local_row = static_cast<std::uint8_t>(local);
+        task.local_col = static_cast<std::uint8_t>(local);
+        task.band = SocuAssemblyBand::Diag;
+        task.write_kind =
+            lump ? cpu_lump_write_kind(side) : cpu_diag_block_write_kind(side);
+        task.block_or_left_block = side.block;
+        tasks.push_back(task);
+    }
+}
+
+CpuOracleProgram cpu_oracle_simplex_program(
+    const std::vector<SocuNativeVertexDescriptor>& vertices,
+    const std::vector<IndexT>&                     sorted_vertices,
+    const std::array<IndexT, 4>&                   stencil,
+    int                                           stencil_size,
+    StructuredContactOffbandPolicy                policy)
+{
+    std::array<SocuAssemblySideId, 4> side_ids = {SocuInvalidAssemblySideId,
+                                                  SocuInvalidAssemblySideId,
+                                                  SocuInvalidAssemblySideId,
+                                                  SocuInvalidAssemblySideId};
+    std::array<SocuAssemblySideRecord, 4> sides;
+    for(int local = 0; local < stencil_size; ++local)
+    {
+        cpu_find_side_id(sorted_vertices,
+                         stencil[static_cast<SizeT>(local)],
+                         side_ids[static_cast<SizeT>(local)]);
+        sides[static_cast<SizeT>(local)] =
+            cpu_make_side(vertices, stencil[static_cast<SizeT>(local)]);
+    }
+
+    CpuOracleProgram oracle;
+    oracle.map_status = SocuContactProgramMapStatus::Valid;
+    bool has_offband = false;
+    for(int row = 0; row < stencil_size; ++row)
+    {
+        for(int col = row; col < stencil_size; ++col)
+        {
+            if(side_ids[static_cast<SizeT>(row)] == SocuInvalidAssemblySideId
+               || side_ids[static_cast<SizeT>(col)] == SocuInvalidAssemblySideId)
+                continue;
+            const auto& row_side = sides[static_cast<SizeT>(row)];
+            const auto& col_side = sides[static_cast<SizeT>(col)];
+            if(!row_side.writable || !col_side.writable)
+                continue;
+
+            SocuAssemblyBand band = SocuAssemblyBand::Diag;
+            std::uint32_t block_or_left_block = 0;
+            std::uint8_t flags = 0;
+            if(!cpu_side_pair_in_band(row_side,
+                                      col_side,
+                                      band,
+                                      block_or_left_block,
+                                      flags))
+            {
+                has_offband = true;
+                continue;
+            }
+
+            const auto write_kind =
+                cpu_exact_write_kind(row_side, col_side, flags);
+            if(write_kind == SocuAssemblyWriteKind::Skipped)
+                continue;
+
+            CpuOracleTask task;
+            task.row_side = side_ids[static_cast<SizeT>(row)];
+            task.col_side = side_ids[static_cast<SizeT>(col)];
+            task.local_row = static_cast<std::uint8_t>(row);
+            task.local_col = static_cast<std::uint8_t>(col);
+            task.band = band;
+            task.write_kind = write_kind;
+            task.block_or_left_block = block_or_left_block;
+            task.flags = flags;
+            oracle.tasks.push_back(task);
+        }
+    }
+
+    if(has_offband)
+    {
+        if(policy == StructuredContactOffbandPolicy::Drop)
+        {
+            oracle.program_kind = SocuContactProgramKind::Drop;
+            oracle.map_status = SocuContactProgramMapStatus::Dropped;
+            oracle.tasks.clear();
+        }
+        else if(policy == StructuredContactOffbandPolicy::Diag)
+        {
+            oracle.program_kind = SocuContactProgramKind::Diag;
+            oracle.tasks.clear();
+            cpu_append_diag_tasks_for_stencil(
+                side_ids,
+                sides,
+                stencil_size,
+                false,
+                oracle.tasks);
+        }
+        else
+        {
+            oracle.program_kind = SocuContactProgramKind::DiagLump;
+            oracle.tasks.clear();
+            cpu_append_diag_tasks_for_stencil(
+                side_ids,
+                sides,
+                stencil_size,
+                true,
+                oracle.tasks);
+        }
+    }
+    else if(!oracle.tasks.empty())
+    {
+        oracle.program_kind = SocuContactProgramKind::Exact;
+    }
+    else
+    {
+        oracle.program_kind = SocuContactProgramKind::Skipped;
+        oracle.map_status = SocuContactProgramMapStatus::Skipped;
+    }
+    return oracle;
+}
+
+CpuOracleProgram cpu_oracle_ph_program(
+    const std::vector<SocuNativeVertexDescriptor>& vertices,
+    const std::vector<IndexT>&                     sorted_vertices,
+    IndexT                                        vertex)
+{
+    SocuAssemblySideId side_id = SocuInvalidAssemblySideId;
+    cpu_find_side_id(sorted_vertices, vertex, side_id);
+    const auto side = cpu_make_side(vertices, vertex);
+
+    CpuOracleProgram oracle;
+    if(side_id != SocuInvalidAssemblySideId && side.writable)
+    {
+        std::uint8_t flags = 0;
+        CpuOracleTask task;
+        task.row_side = side_id;
+        task.col_side = side_id;
+        task.band = SocuAssemblyBand::Diag;
+        task.write_kind = cpu_exact_write_kind(side, side, flags);
+        task.block_or_left_block = side.block;
+        task.flags = flags;
+        oracle.program_kind = SocuContactProgramKind::Exact;
+        oracle.map_status = SocuContactProgramMapStatus::Valid;
+        oracle.tasks.push_back(task);
+    }
+    else
+    {
+        oracle.program_kind = SocuContactProgramKind::Skipped;
+        oracle.map_status = SocuContactProgramMapStatus::Skipped;
+    }
+    return oracle;
+}
+
+void require_program_matches_oracle(
+    const SocuContactProgramHeader&       program,
+    const SocuContactSourceToProgram&     map,
+    const std::vector<SocuContactMicroTask>& tasks,
+    const CpuOracleProgram&               oracle)
+{
+    CHECK(program.program_kind == oracle.program_kind);
+    CHECK(map.status == oracle.map_status);
+    if(oracle.map_status == SocuContactProgramMapStatus::Valid)
+        CHECK(map.program_id != SocuInvalidContactProgramId);
+    else
+        CHECK(map.program_id == SocuInvalidContactProgramId);
+
+    CHECK(program.task_count == oracle.tasks.size());
+    REQUIRE(static_cast<SizeT>(program.first_task) + program.task_count
+            <= tasks.size());
+    for(SizeT i = 0; i < oracle.tasks.size(); ++i)
+    {
+        const auto& task = tasks[static_cast<SizeT>(program.first_task) + i];
+        const auto& expected = oracle.tasks[i];
+        CHECK(task.row_side == expected.row_side);
+        CHECK(task.col_side == expected.col_side);
+        CHECK(task.local_row_vertex == expected.local_row);
+        CHECK(task.local_col_vertex == expected.local_col);
+        CHECK(task.band == expected.band);
+        CHECK(task.write_kind == expected.write_kind);
+        CHECK(task.block_or_left_block == expected.block_or_left_block);
+        CHECK(task.flags == expected.flags);
+    }
+}
+
+SizeT total_program_task_count(
+    const std::vector<SocuContactProgramHeader>& programs) noexcept
+{
+    SizeT total = 0;
+    for(const auto& program : programs)
+        total += program.task_count;
+    return total;
+}
+
+std::string read_text_file(const std::filesystem::path& path)
+{
+    std::ifstream ifs{path};
+    REQUIRE(ifs.good());
+    std::ostringstream oss;
+    oss << ifs.rdbuf();
+    return oss.str();
 }
 }  // namespace
 
@@ -665,4 +1040,203 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(stats.diag_program_count == 0);
     CHECK(stats.diag_lump_program_count == 0);
     CHECK(stats.task_count == programs[0].task_count);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_symbolic_cpu_oracle",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    const auto vertices_host = fixture_vertices();
+    auto require_single_program =
+        [&](SocuContactAssemblyPlan& plan, const CpuOracleProgram& oracle)
+    {
+        std::vector<SocuContactProgramHeader> programs;
+        std::vector<SocuContactSourceToProgram> maps;
+        std::vector<SocuContactMicroTask> tasks;
+        plan.program_plan.programs.copy_to(programs);
+        plan.program_plan.source_to_program.copy_to(maps);
+        plan.program_plan.tasks.copy_to(tasks);
+
+        REQUIRE(programs.size() == 1);
+        REQUIRE(maps.size() == 1);
+        CHECK(total_program_task_count(programs) == tasks.size());
+        require_program_matches_oracle(programs[0], maps[0], tasks, oracle);
+    };
+
+    {
+        SocuContactAssemblyPlanM2Workspace workspace;
+        auto plan = build_plan({Vector4i{0, 1, 2, 0}},
+                               {},
+                               StructuredContactOffbandPolicy::Drop,
+                               workspace);
+        std::vector<IndexT> sorted_vertices;
+        plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+        const auto oracle = cpu_oracle_simplex_program(
+            vertices_host,
+            sorted_vertices,
+            std::array<IndexT, 4>{0, 1, 2, 0},
+            4,
+            StructuredContactOffbandPolicy::Drop);
+        require_single_program(plan, oracle);
+    }
+
+    for(const auto policy : {StructuredContactOffbandPolicy::Drop,
+                            StructuredContactOffbandPolicy::Diag,
+                            StructuredContactOffbandPolicy::DiagLump})
+    {
+        SocuContactAssemblyPlanM2Workspace workspace;
+        auto plan = build_plan({Vector4i{0, 5, 2, 0}}, {}, policy, workspace);
+        std::vector<IndexT> sorted_vertices;
+        plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+        const auto oracle = cpu_oracle_simplex_program(
+            vertices_host,
+            sorted_vertices,
+            std::array<IndexT, 4>{0, 5, 2, 0},
+            4,
+            policy);
+        require_single_program(plan, oracle);
+    }
+
+    {
+        SocuContactAssemblyPlanM2Workspace workspace;
+        auto plan = build_plan({Vector4i{3, 4, 3, 4}},
+                               {},
+                               StructuredContactOffbandPolicy::Drop,
+                               workspace);
+        std::vector<IndexT> sorted_vertices;
+        plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+        const auto oracle = cpu_oracle_simplex_program(
+            vertices_host,
+            sorted_vertices,
+            std::array<IndexT, 4>{3, 4, 3, 4},
+            4,
+            StructuredContactOffbandPolicy::Drop);
+        require_single_program(plan, oracle);
+    }
+
+    {
+        muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{vertices_host};
+        muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+        muda::DeviceBuffer<Vector2i> empty_phs{std::vector<Vector2i>{}};
+        muda::DeviceBuffer<Vector2i> pps{
+            std::vector<Vector2i>{Vector2i{5, 2}}};
+
+        auto input = make_input(vertices,
+                                empty_pts,
+                                empty_phs,
+                                StructuredContactOffbandPolicy::Drop);
+        input.pt_source = {};
+        input.ph_source = {};
+        input.pp_contacts = pps.view();
+        input.pp_source = SocuContactM2SourceInput{
+            0,
+            12,
+            SocuContactModelKind::SimplexNormal};
+
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        build_socu_contact_assembly_plan_m2_active_set_temporary(
+            plan,
+            workspace,
+            input);
+        REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+        std::vector<IndexT> sorted_vertices;
+        plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+        const auto oracle = cpu_oracle_simplex_program(
+            vertices_host,
+            sorted_vertices,
+            std::array<IndexT, 4>{5, 2, -1, -1},
+            2,
+            StructuredContactOffbandPolicy::Drop);
+        require_single_program(plan, oracle);
+    }
+
+    {
+        muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{vertices_host};
+        muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+        muda::DeviceBuffer<Vector2i> phs{
+            std::vector<Vector2i>{Vector2i{2, 90}}};
+
+        auto input = make_input(vertices,
+                                empty_pts,
+                                phs,
+                                StructuredContactOffbandPolicy::Drop);
+        input.pt_source = {};
+        input.ph_source = SocuContactM2SourceInput{
+            0,
+            13,
+            SocuContactModelKind::VertexHalfPlaneNormal};
+
+        SocuContactAssemblyPlanM2Workspace workspace;
+        SocuContactAssemblyPlan plan;
+        build_socu_contact_assembly_plan_m2_active_set_temporary(
+            plan,
+            workspace,
+            input);
+        REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+        std::vector<IndexT> sorted_vertices;
+        plan.side_plan.sorted_side_vertices.copy_to(sorted_vertices);
+        CHECK(std::find(sorted_vertices.begin(), sorted_vertices.end(), 90)
+              == sorted_vertices.end());
+        const auto oracle =
+            cpu_oracle_ph_program(vertices_host, sorted_vertices, 2);
+        require_single_program(plan, oracle);
+    }
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
+          "[cuda_mixed_socu][contract][socu_approx][m2]")
+{
+    const auto root = std::filesystem::path{UIPC_PROJECT_DIR};
+    const auto builder_path =
+        root / "src/backends/cuda_mixed_socu/linear_system/"
+               "socu_contact_assembly_plan.cu";
+    const auto builder = read_text_file(builder_path);
+
+    for(const char* token : {"structured_contact_assembly_sink.h",
+                             "socu_native_contact_target",
+                             "SocuNativeContactStencilTarget",
+                             "old_to_chain",
+                             "classify_dof_pair"})
+    {
+        CHECK(builder.find(token) == std::string::npos);
+    }
+
+    for(const char* token : {"pt_contacts.copy_to",
+                             "ee_contacts.copy_to",
+                             "pe_contacts.copy_to",
+                             "pp_contacts.copy_to",
+                             "ph_contacts.copy_to",
+                             "friction_pt_contacts.copy_to",
+                             "friction_ee_contacts.copy_to",
+                             "friction_pe_contacts.copy_to",
+                             "friction_pp_contacts.copy_to",
+                             "friction_ph_contacts.copy_to",
+                             "stencil4.copy_to",
+                             "stencil3.copy_to",
+                             "stencil2.copy_to"})
+    {
+        CHECK(builder.find(token) == std::string::npos);
+    }
+
+    const auto solver =
+        read_text_file(root / "src/backends/cuda_mixed_socu/linear_system/"
+                              "socu_approx_solver.cu");
+    CHECK(solver.find("info.build_socu_contact_assembly_plan_m2_active_set_temporary")
+          != std::string::npos);
+    CHECK(solver.find("apply_native_contact_plan_stats")
+          != std::string::npos);
+
+    const auto dytopo =
+        read_text_file(root / "src/backends/cuda_mixed_socu/"
+                              "dytopo_effect_system/"
+                              "global_dytopo_effect_manager.cu");
+    CHECK(dytopo.find("input.sources = span<const SocuContactM2SourceInput>")
+          != std::string::npos);
+    CHECK(dytopo.find("socu_native_contact_plan_unsupported_reporter")
+          != std::string::npos);
 }

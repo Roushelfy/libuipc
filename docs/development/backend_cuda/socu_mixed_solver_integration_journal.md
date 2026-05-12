@@ -2200,3 +2200,40 @@ Current M2 status:
 - M2 is still not accepted. Remaining work: symbolic CPU-oracle parity,
   explicit final-path/source-scan coverage, final documentation update, and one
   clean full validation pass.
+
+## 2026-05-11 Redesign Branch M2 Oracle And Source-Scan Slice
+
+Implemented:
+
+- Added an independent CPU symbolic oracle to the M2 builder contract tests. The
+  oracle uses the same synthetic native descriptors but does not use the legacy
+  sink, old target table, or production builder classification helpers.
+- Compared CUDA-emitted program headers, source-to-program map statuses, task
+  counts, task packing, bands, write kinds, side ids, local stencil ids,
+  block ids, and task flags against the CPU oracle.
+- Covered exact PT, off-band drop/diag/diag-lump PT, fixed/unmapped skipped PT,
+  mixed ABD/FEM PP, and PH where only `PH(0)` becomes a matrix side.
+- Added a source-scan contract for the production M2 builder TU. The scan
+  rejects legacy sink/target/debug-table tokens and full contact-topology
+  `copy_to` patterns, while allowing scalar stat copies.
+- Added source-scan checks that the final solver path calls the M2 plan builder
+  and maps plan stats, and that the dy-topology adapter feeds source spans into
+  the builder.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `552` assertions in `10` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `683` assertions in `22` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5566` assertions in `42` test cases |
+
+Current M2 status:
+
+- Symbolic classification now has a CUDA builder versus CPU-oracle parity test,
+  and the production builder is guarded against the legacy sink/target path.
+- M2 is close to acceptance. Remaining work: update the redesign plan's current
+  implementation status/acceptance notes and run one final clean validation
+  pass from the committed state.
