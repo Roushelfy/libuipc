@@ -2391,6 +2391,60 @@ Acceptance:
   owner-reduce behavior run at least 20 frames and include hot-block report
   counters from a frame that reached contact assembly.
 
+Implementation status on `socu-native-builder-redesign`:
+
+- M6 correctness implementation is in place:
+  - `SocuHotBlockPlan` carries strategy, threshold, hot ranges, and hot refs;
+  - every emitted micro-task records its owning program id so owner-reduce can
+    recompute the same program Hessian used by direct scatter;
+  - plan build marks `HotReduceEligible` tasks, compacts repeated diagonal and
+    first-offdiag block ranges, and marks `HotReduceSelected` only for explicit
+    owner-reduce strategies;
+  - executor direct scatter skips selected hot tasks only for `recompute` and
+    `cached_microblock`;
+  - recompute owner-reduce and cached-microblock owner-reduce both write one
+    owner block per hot range and are compared against direct scatter in CUDA
+    contract tests.
+- Production default remains conservative. `off`/`detect_only` are the only
+  acceptable default scene modes until a dense scene with real native contact
+  tasks proves a faster owner-reduce strategy. `recompute` and
+  `cached_microblock` are explicit experimental strategies.
+- Current validation:
+  - `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 16`
+    passed.
+  - `[cuda_mixed_socu][contract][socu_approx][m6]` passed,
+    `12451` assertions in `7` test cases.
+  - `[cuda_mixed_socu][contract]` passed, `62706` assertions in `71` test
+    cases.
+  - Nsight Compute targeted report:
+    `output/profiles/socu_m6_recompute_owner_reduce_targeted.ncu-rep`.
+  - Nsight Compute full report:
+    `output/profiles/socu_m6_recompute_owner_reduce_full.ncu-rep`.
+- Profiling result:
+  - on the small deterministic synthetic fixture, direct scatter for the hot
+    block plan is about `22 us`;
+  - recompute owner-reduce is about `12 us` for skip-scatter plus `135-139 us`
+    for owner-reduce, so it is not a default production strategy;
+  - the full report is retained as evidence that M6 owner-reduce launches and is
+    currently dominated by recomputation/low occupancy on the tiny fixture, not
+    as a scene speedup claim.
+- Scene validation:
+  - Wrecking Ball `socu_rt50_topology_diag_lump`, native contact plan/executor,
+    hot reduce `detect_only`, `demand_filled`, `20` frames: passed with
+    `final_frame=20`, `native_contact_replay_path=native_plan`, but final
+    report has `native_contact_task_count=0` and all programs skipped.
+  - Same scene with `global` side coverage, `20` frames: passed with
+    `final_frame=20`, `native_contact_replay_path=native_plan`, but final
+    report again has `native_contact_task_count=0` and all programs skipped.
+  - Wrecking Ball `socu_rt1_contact_hessian`, `20` frames, native-only build:
+    aborts at frame 9 because contact-hessian probing reaches legacy
+    vertex-half-plane normal structured contact assembly, which
+    `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` intentionally excludes.
+- Therefore M6 is closed for builder/executor correctness and observability, but
+  not for enabling owner-reduce by default. A later scene gate must first make
+  real Wrecking Ball native contact tasks non-skipped, then rerun the 20-frame
+  hot-block counter/performance acceptance.
+
 ### M7: Runtime Reorder And Cached Replay Integration
 
 Runtime reorder cadence does not change for the native contact builder. The

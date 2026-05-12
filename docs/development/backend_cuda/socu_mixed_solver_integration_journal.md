@@ -2657,3 +2657,64 @@ Decision:
   programs heavily (`native_contact_plan_rebuild_count=1539` in the final
   report), so M6/M7 work must focus on reducing rebuild churn and then rerun
   cold/cache-hit/amortized timing gates.
+
+## 2026-05-12 Redesign Branch M6 Hot-Block Owner-Reduce
+
+Implemented:
+
+- Added the M6 hot-block strategy path to the compact native contact plan:
+  `off`, `detect_only`, `recompute`, and `cached_microblock`.
+- Added per-task `program_id` so owner-reduce can recompute a selected task's
+  owning contact program without relying on legacy structured writer state.
+- Added hot-block range/ref compaction for repeated diagonal and first-offdiag
+  writes. Plan build now marks `HotReduceEligible`, and only explicit
+  owner-reduce strategies mark `HotReduceSelected`.
+- Split executor launch into direct scatter and hot reduce phases. Direct
+  scatter skips selected hot tasks only for owner-reduce strategies.
+- Implemented recompute owner-reduce and a correctness-first cached-microblock
+  owner-reduce path.
+- Added writer cell-contribution helpers so owner-reduce can use the same
+  storage-cell semantics as the production writer.
+- Added scene/report timing for `native_contact_hot_reduce_ms` and preserved the
+  hot-reduce strategy in final `socu_approx` reports.
+
+Tests updated:
+
+- `socu_contact_hot_blocks.cu` now checks strategy propagation, selected-task
+  marking, threshold behavior, and program-id availability.
+- `socu_contact_executor.cu` now compares direct scatter, `detect_only`,
+  `recompute`, and `cached_microblock` outputs against the program writer on
+  deterministic hot diagonal and first-offdiag fixtures.
+- Report contract tests cover hot-reduce defaults and hot-block counters.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 16` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m6]"` | passed, `12451` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `62706` assertions in `71` test cases |
+| Wrecking Ball, `socu_rt50_topology_diag_lump`, native contact plan/executor, hot reduce `detect_only`, `demand_filled`, `--frames 20` | passed, `final_frame=20`, `wall_time_s=54.34170525500667`, `mean_frame_ms=2678.3930654943106`, `native_contact_replay_path=native_plan`, final report has `native_contact_task_count=0` and `native_contact_skipped_program_count=9423` |
+| Same Wrecking Ball setup with `native_contact_side_coverage_mode=global` | passed, `final_frame=20`, `wall_time_s=39.43355819597491`, `mean_frame_ms=1930.0689311523456`, `native_contact_replay_path=native_plan`, final report has `native_contact_task_count=0` and `native_contact_skipped_program_count=9484` |
+| Wrecking Ball, `socu_rt1_contact_hessian`, native-only build, hot reduce `detect_only`, `--frames 20` | aborts at frame 9 as expected for this build: contact-hessian probing reaches legacy vertex-half-plane normal structured contact assembly, which `UIPC_CUDA_MIXED_SOCU_NATIVE_ONLY=ON` excludes |
+| Nsight Compute targeted profile, recompute fixture | generated `output/profiles/socu_m6_recompute_owner_reduce_targeted.ncu-rep` |
+| Nsight Compute full profile, recompute fixture | generated `output/profiles/socu_m6_recompute_owner_reduce_full.ncu-rep` |
+
+Profiling notes:
+
+- On the small deterministic owner-reduce fixture, direct scatter for the same
+  hot plan is about `22 us`.
+- The recompute path profiles as about `12 us` for skip-scatter plus
+  `135-139 us` for the owner-reduce kernel, so it is correctly not a production
+  default.
+- The full NCU report shows the recompute fixture is tiny and low-occupancy
+  rather than a realistic dense-scene performance result. Treat it as launch and
+  correctness evidence, not a speedup claim.
+
+Decision:
+
+- M6 builder/executor correctness and observability are accepted.
+- Owner-reduce remains opt-in and experimental. Production defaults should stay
+  `off` or `detect_only` until a scene-level gate produces non-skipped native
+  contact tasks and profiler evidence shows a real reduction in atomic
+  contention on dense contact clusters.
