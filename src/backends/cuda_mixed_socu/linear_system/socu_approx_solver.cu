@@ -185,6 +185,8 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_hot_reduce_strategy =
         std::string{hot_reduce_strategy};
     report.native_contact_plan_cache_hit = false;
+    report.native_contact_plan_cold_start = false;
+    report.native_contact_plan_rebuilt_this_solve = false;
     report.native_contact_plan_rebuild_count = plan_rebuild_count;
     report.native_contact_side_plan_cache_hit = false;
     report.native_contact_side_plan_rebuild_count = side_plan_rebuild_count;
@@ -205,6 +207,8 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_program_plan_build_ms = 0.0;
     report.native_contact_side_coverage_refresh_ms = 0.0;
     report.native_contact_numeric_ms = 0.0;
+    report.native_contact_hessian_triplet_ms = 0.0;
+    report.native_contact_executor_scatter_ms = 0.0;
     report.native_contact_hot_reduce_ms = 0.0;
     report.native_contact_probe_path = "off";
     report.native_contact_replay_path = "off";
@@ -1962,6 +1966,10 @@ void SocuApproxSolver::finalize_structured_chain(
         info.native_contact_plan_build_time_ms();
     m_report.native_contact_numeric_ms =
         info.native_contact_numeric_time_ms();
+    m_report.native_contact_hessian_triplet_ms =
+        info.native_contact_hessian_triplet_time_ms();
+    m_report.native_contact_executor_scatter_ms =
+        info.native_contact_executor_scatter_time_ms();
     m_report.native_contact_replay_path = info.native_contact_replay_path();
 
     if(info.report_counters_enabled())

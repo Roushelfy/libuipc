@@ -109,6 +109,10 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.contact_offband_lump_fallback_count},
                   {"native_contact_plan_cache_hit",
                    report.native_contact_plan_cache_hit},
+                  {"native_contact_plan_cold_start",
+                   report.native_contact_plan_cold_start},
+                  {"native_contact_plan_rebuilt_this_solve",
+                   report.native_contact_plan_rebuilt_this_solve},
                   {"native_contact_plan_rebuild_count",
                    report.native_contact_plan_rebuild_count},
                   {"native_contact_side_plan_cache_hit",
@@ -208,6 +212,10 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_side_coverage_refresh_ms},
                   {"native_contact_numeric_ms",
                    report.native_contact_numeric_ms},
+                  {"native_contact_hessian_triplet_ms",
+                   report.native_contact_hessian_triplet_ms},
+                  {"native_contact_executor_scatter_ms",
+                   report.native_contact_executor_scatter_ms},
                   {"native_contact_hot_reduce_ms",
                    report.native_contact_hot_reduce_ms},
                   {"native_contact_plan_enabled",
@@ -321,6 +329,9 @@ void apply_native_contact_plan_cache_decision(
 {
     report.native_contact_plan_cache_hit =
         decision.side_plan_hit() && decision.contact_program_hit();
+    report.native_contact_plan_cold_start = decision.cold_start;
+    report.native_contact_plan_rebuilt_this_solve =
+        !report.native_contact_plan_cache_hit;
     report.native_contact_plan_rebuild_count = plan_rebuild_count;
     report.native_contact_side_plan_cache_hit = decision.side_plan_hit();
     report.native_contact_side_plan_rebuild_count = side_plan_rebuild_count;

@@ -107,6 +107,44 @@ void check_native_contact_cuda(cudaError_t error, std::string_view operation)
     }
 }
 
+struct NativeContactTimingEvents
+{
+    cudaEvent_t hessian_start = nullptr;
+    cudaEvent_t hessian_done = nullptr;
+    cudaEvent_t executor_start = nullptr;
+    cudaEvent_t executor_done = nullptr;
+
+    ~NativeContactTimingEvents() noexcept { destroy(); }
+
+    void create()
+    {
+        check_native_contact_cuda(cudaEventCreate(&hessian_start),
+                                  "cudaEventCreate(hessian_start)");
+        check_native_contact_cuda(cudaEventCreate(&hessian_done),
+                                  "cudaEventCreate(hessian_done)");
+        check_native_contact_cuda(cudaEventCreate(&executor_start),
+                                  "cudaEventCreate(executor_start)");
+        check_native_contact_cuda(cudaEventCreate(&executor_done),
+                                  "cudaEventCreate(executor_done)");
+    }
+
+    void destroy() noexcept
+    {
+        if(hessian_start)
+            cudaEventDestroy(hessian_start);
+        if(hessian_done)
+            cudaEventDestroy(hessian_done);
+        if(executor_start)
+            cudaEventDestroy(executor_start);
+        if(executor_done)
+            cudaEventDestroy(executor_done);
+        hessian_start = nullptr;
+        hessian_done = nullptr;
+        executor_start = nullptr;
+        executor_done = nullptr;
+    }
+};
+
 template <typename StoreT>
 void assign_native_contact_hessian_view(
     muda::CTripletMatrixView<StoreT, 3>& target,
@@ -633,7 +671,13 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 "native structured matrix view is invalid"};
         }
 
+        NativeContactTimingEvents timing_events;
+        timing_events.create();
         const auto begin = std::chrono::steady_clock::now();
+        check_native_contact_cuda(
+            cudaEventRecord(timing_events.hessian_start,
+                            structured_info.stream()),
+            "cudaEventRecord(hessian_start)");
 
         auto vertex_count = global_vertex_manager->positions().size();
         auto reporter_gradient_counts = reporter_gradient_offsets_counts.counts();
@@ -685,6 +729,10 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             Timer timer{"Assemble Contact Hessian Triplets For SOCU Native Plan"};
             reporter->assemble(hessian_info);
         }
+        check_native_contact_cuda(
+            cudaEventRecord(timing_events.hessian_done,
+                            structured_info.stream()),
+            "cudaEventRecord(hessian_done)");
 
         SocuContactEvaluatorSourceTable<StoreScalar> sources;
         for(auto&& reporter : dytopo_effect_reporters.view())
@@ -758,6 +806,10 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 reporter->name())};
         }
 
+        check_native_contact_cuda(
+            cudaEventRecord(timing_events.executor_start,
+                            structured_info.stream()),
+            "cudaEventRecord(executor_start)");
         launch_socu_contact_executor<StoreScalar,
                                      GlobalLinearSystem::SolveScalar>(
             plan_view,
@@ -766,10 +818,31 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             {},
             structured_info.stream());
         check_native_contact_cuda(cudaGetLastError(), "native contact executor launch");
-        check_native_contact_cuda(cudaStreamSynchronize(structured_info.stream()),
-                                  "native contact executor synchronize");
+        check_native_contact_cuda(
+            cudaEventRecord(timing_events.executor_done,
+                            structured_info.stream()),
+            "cudaEventRecord(executor_done)");
+        check_native_contact_cuda(
+            cudaEventSynchronize(timing_events.executor_done),
+            "native contact executor synchronize");
 
+        float hessian_ms = 0.0f;
+        float executor_ms = 0.0f;
+        check_native_contact_cuda(
+            cudaEventElapsedTime(&hessian_ms,
+                                 timing_events.hessian_start,
+                                 timing_events.hessian_done),
+            "cudaEventElapsedTime(hessian_triplet)");
+        check_native_contact_cuda(
+            cudaEventElapsedTime(&executor_ms,
+                                 timing_events.executor_start,
+                                 timing_events.executor_done),
+            "cudaEventElapsedTime(executor_scatter)");
         const auto end = std::chrono::steady_clock::now();
+        structured_info.record_native_contact_hessian_triplet_time_ms(
+            static_cast<double>(hessian_ms));
+        structured_info.record_native_contact_executor_scatter_time_ms(
+            static_cast<double>(executor_ms));
         structured_info.record_native_contact_numeric_time_ms(
             std::chrono::duration<double, std::milli>(end - begin).count());
         structured_info.set_native_contact_replay_path("native_plan");

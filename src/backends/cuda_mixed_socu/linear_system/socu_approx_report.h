@@ -127,6 +127,8 @@ struct SocuApproxSolveReport
     bool native_contact_hot_reduce_enabled = false;
     bool native_contact_scalar_diag_compat_enabled = false;
     bool native_contact_plan_cache_hit = false;
+    bool native_contact_plan_cold_start = false;
+    bool native_contact_plan_rebuilt_this_solve = false;
     SizeT native_contact_plan_rebuild_count = 0;
     bool native_contact_side_plan_cache_hit = false;
     SizeT native_contact_side_plan_rebuild_count = 0;
@@ -179,6 +181,8 @@ struct SocuApproxSolveReport
     double native_contact_program_plan_build_ms = 0.0;
     double native_contact_side_coverage_refresh_ms = 0.0;
     double native_contact_numeric_ms = 0.0;
+    double native_contact_hessian_triplet_ms = 0.0;
+    double native_contact_executor_scatter_ms = 0.0;
     double native_contact_hot_reduce_ms = 0.0;
     std::string native_contact_hot_reduce_strategy = "off";
     std::string stream_source;
