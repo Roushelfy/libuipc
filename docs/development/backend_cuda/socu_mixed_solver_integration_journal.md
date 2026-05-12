@@ -2237,3 +2237,45 @@ Current M2 status:
 - M2 is close to acceptance. Remaining work: update the redesign plan's current
   implementation status/acceptance notes and run one final clean validation
   pass from the committed state.
+
+## 2026-05-11 Redesign Branch M2 Acceptance
+
+Decision:
+
+- Accept M2 correctness on `socu-native-builder-redesign`.
+- Scope is explicit: M2 uses `active_set_temporary` side coverage and is not the
+  final performance two-level side coverage design. M2b remains responsible for
+  persistent `global` or `demand_filled` side coverage before any M3/M5
+  topology-churn performance claims.
+
+Accepted surface:
+
+- Compact POD side/program/task/source/map records and split side/program plan
+  owners.
+- CUDA active-set side collection, sort/unique, side/lane materialization,
+  lower-bound side lookup, program/task emission, bucket compaction, and stats
+  counting.
+- Normal and frictional simplex PT/EE/PE/PP sources, normal and frictional PH
+  sources, dense source ids, O(1) `program_for`, explicit invalid map entries,
+  and split report observability.
+- Final solver path owns and rebuilds the M2 plan through
+  `StructuredAssemblyInfo`, with dy-topology source-span production and report
+  mapping.
+- Symbolic parity is covered by CUDA builder output versus an independent CPU
+  oracle, and source scans guard against legacy target/sink/debug-table coupling
+  in the production builder.
+
+Final validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed, no work to do |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `552` assertions in `10` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `683` assertions in `22` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5566` assertions in `42` test cases |
+
+Next milestone:
+
+- Start M2b persistent side coverage cache if the goal is to remove the
+  temporary active-set side rebuild/refresh cost before M3 numeric writer work.

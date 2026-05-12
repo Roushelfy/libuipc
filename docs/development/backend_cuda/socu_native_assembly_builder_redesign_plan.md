@@ -1706,8 +1706,10 @@ contents.
 
 Current implementation status:
 
-- M2 first and second symbolic slices are implemented in
-  `socu-native-builder-redesign` as of 2026-05-11.
+- M2 correctness is accepted in `socu-native-builder-redesign` as of
+  2026-05-11, with `active_set_temporary` side coverage explicitly reported as
+  the temporary M2 mode. It is not accepted as a performance two-level side
+  coverage design; that belongs to M2b.
 - Added `socu_contact_assembly_plan.{h,cu}` with compact POD records,
   split side/program owners, combined device view, dense O(1)
   `program_for(source_id, local_contact_id)` lookup, and an
@@ -1728,19 +1730,31 @@ Current implementation status:
   half-plane omission, dense-source-id validation failures, and
   Drop/Diag/DiagLump off-band policies. They also validate exact/drop/skipped
   bucket ranges, execution strategies, and first program/task counters.
+- M2 symbolic classification is checked against an independent CPU oracle that
+  does not include the legacy sink, old target table, or production builder
+  classification helpers. The oracle compares program kind, map status, task
+  packing, side ids, local stencil ids, bands, write kinds, block ids, and task
+  flags for exact, off-band, skipped, ABD/FEM mixed, and PH cases.
+- Source scans guard the production builder TU against
+  `structured_contact_assembly_sink.h`, legacy target/debug-table tokens,
+  full contact-topology `copy_to` patterns, `old_to_chain`, and
+  `classify_dof_pair`. The scans also assert that the final solver path calls
+  the M2 plan builder and maps plan stats, and that the dy-topology adapter
+  passes explicit M2 source spans.
 - `SocuApproxReport` has helpers to map split contact plan stats into the
   report JSON fields and to treat aggregate cache-hit as side-plan hit plus
   contact-program hit. Topology-only changes therefore report an aggregate
   native contact plan cache miss even when the side layer hits.
-- This is not full M2 acceptance yet. Remaining M2 work includes wiring the
-  real M2 plan owner into the final solver path, invalid source/local-id counter
-  reporting, production dense-source debug validation/reporting, and parity
-  against the legacy symbolic classification oracle.
+- The real final solver path owns a persistent `SocuContactAssemblyPlan` and M2
+  workspace, rebuilds through `StructuredAssemblyInfo` on split cache misses,
+  and maps side/program stats, dense-source validation status, coverage mode,
+  active-side-set changes, and source-to-program counters into public reports.
 
 Acceptance:
 
-- Compact builder emits the same symbolic classes as the current target builder
-  for all covered synthetic cases.
+- Compact builder emits the expected symbolic classes for all covered synthetic
+  cases, verified by production CUDA builder output versus the independent CPU
+  oracle.
 - PT/EE-style contacts no longer duplicate full lane arrays per half-block.
 - `program_for` does not scan the program table.
 - Reports show separate side/program plan cache hits, rebuild counts, and build
@@ -1748,6 +1762,16 @@ Acceptance:
 - If M2 ships with `active_set_temporary`, reports explicitly show that mode.
   M2 correctness acceptance may pass in that mode, but M3/M5 performance claims
   must not treat active-side-set refresh as final two-level behavior.
+- M2 final acceptance validation:
+  - `git diff --check`: passed.
+  - `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12`:
+    passed, no work to do in the final doc-only validation pass.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"`:
+    passed, `552` assertions in `10` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"`:
+    passed, `683` assertions in `22` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"`:
+    passed, `5566` assertions in `42` test cases.
 
 ### M2b: Persistent Side Coverage Cache
 
