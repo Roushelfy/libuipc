@@ -2276,6 +2276,9 @@ Current validation:
   `45271` assertions in `42` test cases.
 - `[cuda_mixed_socu][contract]` passed,
   `50154` assertions in `62` test cases.
+- Any Wrecking Ball scene validation for M5.5 must follow the global
+  Wrecking Ball frame floor in the Scene And Benchmark Gates section. Runs with
+  fewer than 20 frames are wiring checks only and cannot close this milestone.
 
 ### M5.6: Cold/Cache-Hit Timing Baseline
 
@@ -2318,6 +2321,9 @@ Acceptance:
   Markdown, and fails when `--require-native-plan` is requested but no
   `native_plan` replay report is present.
 - No M6 hot-block or owner-reduce code is introduced in this slice.
+- Any Wrecking Ball cold/cache-hit timing baseline used for M5.6 acceptance
+  runs at least 20 frames and reports the final frame count beside the timing
+  summary. Shorter runs are non-acceptance config wiring checks.
 
 ### M6: Hot-Block Detection And Owner-Reduce
 
@@ -2381,6 +2387,9 @@ Acceptance:
 - Owner-reduce is disabled automatically when it is slower than direct scatter.
 - Default production mode cannot use recompute owner-reduce unless Hessian
   evaluation time is proven negligible for the selected model/family.
+- Wrecking Ball scene checks used to validate hot-block detection or
+  owner-reduce behavior run at least 20 frames and include hot-block report
+  counters from a frame that reached contact assembly.
 
 ### M7: Runtime Reorder And Cached Replay Integration
 
@@ -2541,6 +2550,8 @@ Detailed M8 test specifications:
      - compact native contact on;
      - debug diff off for timing;
      - counters/report fields on for one correctness run.
+   - Every Wrecking Ball run counted for cutover acceptance uses at least
+     20 frames; one-frame runs are allowed only to confirm scene/config wiring.
    - Assert no unexpected mixed-rejected programs in production gates.
    - Assert `native_contact_plan_cache_hit` approaches 100% on stable topology
      Newton solves after the cold build.
@@ -2696,10 +2707,23 @@ SOCU_NATIVE_DIAG_RHS_DIFF=0
 SOCU_REPORT_COUNTERS=0
 ```
 
+Wrecking Ball frame floor:
+
+- Any Wrecking Ball scene run used as a smoke, regression, milestone
+  acceptance, performance, or cutover gate must run at least 20 frames.
+- Runs with fewer than 20 frames are allowed only for local scene loading,
+  config wiring, or binary wiring checks. They must be recorded as
+  non-acceptance wiring checks and cannot close a milestone.
+- Wrecking Ball summaries must include the requested frame count, reached final
+  frame, variant/config, native replay path, side coverage mode, and, for M6 or
+  later, hot-reduce strategy and hot-block counters.
+- Existing 100-frame gates remain unchanged; the 20-frame floor is the minimum,
+  not a replacement for longer stability or performance runs.
+
 Correctness gates:
 
 - `backend_cuda_mixed_socu_contract`.
-- Wrecking-ball fused PCG through the existing smoke frame count.
+- Wrecking-ball fused PCG through at least 20 frames.
 - Wrecking-ball SOCU native contact exact through 20 frames.
 - Wrecking-ball SOCU native contact `Diag` and `DiagLump` policy runs through
   20 frames.
