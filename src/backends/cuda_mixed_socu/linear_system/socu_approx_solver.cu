@@ -142,6 +142,23 @@ bool native_contact_hot_reduce_strategy_valid(std::string_view strategy) noexcep
            || strategy == "recompute" || strategy == "cached_microblock";
 }
 
+bool parse_native_contact_side_coverage_mode(
+    std::string_view mode,
+    SocuVertexSideCoverageMode& out) noexcept
+{
+    if(mode == "global")
+    {
+        out = SocuVertexSideCoverageMode::Global;
+        return true;
+    }
+    if(mode == "active_set_temporary")
+    {
+        out = SocuVertexSideCoverageMode::ActiveSetTemporary;
+        return true;
+    }
+    return false;
+}
+
 void reset_native_contact_plan_report(SocuApproxSolveReport& report,
                                       bool plan_enabled,
                                       bool executor_enabled,
@@ -381,6 +398,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     auto native_contact_scalar_diag_compat_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/native_contact_scalar_diag_compat");
+    auto native_contact_side_coverage_mode_attr =
+        config.find<std::string>(
+            "linear_system/socu_approx/native_contact_side_coverage_mode");
     m_native_contact_plan_enabled =
         native_contact_plan_attr && native_contact_plan_attr->view()[0] != 0;
     m_native_contact_plan_executor_enabled =
@@ -389,6 +409,22 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_native_contact_scalar_diag_compat_enabled =
         native_contact_scalar_diag_compat_attr
         && native_contact_scalar_diag_compat_attr->view()[0] != 0;
+    const std::string native_contact_side_coverage_mode =
+        native_contact_side_coverage_mode_attr
+            ? native_contact_side_coverage_mode_attr->view()[0]
+            : std::string{"global"};
+    if(!parse_native_contact_side_coverage_mode(
+           native_contact_side_coverage_mode,
+           m_native_contact_side_coverage_mode))
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/"
+                        "native_contact_side_coverage_mode must be 'global' "
+                        "or 'active_set_temporary', got '{}'",
+                        native_contact_side_coverage_mode));
+        throw_gate_failure(m_gate_report);
+    }
     const bool native_contact_hot_reduce_requested =
         native_contact_hot_reduce_attr
         && native_contact_hot_reduce_attr->view()[0] != 0;
@@ -1809,17 +1845,20 @@ void SocuApproxSolver::finalize_structured_chain(
 
                 const bool plan_valid =
                     m_native_contact_plan->side_plan.key == side_key
+                    && m_native_contact_plan->side_plan.coverage.mode
+                           == m_native_contact_side_coverage_mode
                     && m_native_contact_plan->program_plan.key == program_key;
                 const bool rebuild = !aggregate_hit || !plan_valid;
                 if(rebuild)
                 {
                     const auto begin = std::chrono::steady_clock::now();
                     const bool built =
-                        info.build_socu_contact_assembly_plan_m2_active_set_temporary(
+                        info.build_socu_contact_assembly_plan_m2(
                             *m_native_contact_plan,
                             *m_native_contact_plan_workspace,
                             side_key,
-                            program_key);
+                            program_key,
+                            m_native_contact_side_coverage_mode);
                     const auto end = std::chrono::steady_clock::now();
                     if(built)
                     {
@@ -1835,7 +1874,9 @@ void SocuApproxSolver::finalize_structured_chain(
                             m_report.native_contact_program_plan_build_ms =
                                 build_ms;
                         if(decision.side_plan_hit()
-                           && !decision.contact_program_hit())
+                           && !decision.contact_program_hit()
+                           && m_native_contact_side_coverage_mode
+                                  == SocuVertexSideCoverageMode::ActiveSetTemporary)
                         {
                             ++m_native_contact_side_coverage_refresh_count;
                             ++m_native_contact_active_side_set_changed_count;
@@ -1848,6 +1889,10 @@ void SocuApproxSolver::finalize_structured_chain(
                             m_report.native_contact_side_coverage_refresh_ms =
                                 build_ms;
                         }
+                        else if(decision.side_plan_hit())
+                        {
+                            m_report.native_contact_side_coverage_cache_hit = true;
+                        }
                     }
                 }
                 else
@@ -1856,6 +1901,8 @@ void SocuApproxSolver::finalize_structured_chain(
                 }
 
                 if(m_native_contact_plan->side_plan.key == side_key
+                   && m_native_contact_plan->side_plan.coverage.mode
+                          == m_native_contact_side_coverage_mode
                    && m_native_contact_plan->program_plan.key == program_key)
                 {
                     apply_native_contact_plan_stats(

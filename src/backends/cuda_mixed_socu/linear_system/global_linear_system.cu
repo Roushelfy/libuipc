@@ -936,12 +936,12 @@ void GlobalLinearSystem::StructuredAssemblyInfo::set_subsystem_extent(
     m_old_dof_count  = old_dof_count;
 }
 
-bool GlobalLinearSystem::StructuredAssemblyInfo::
-    build_socu_contact_assembly_plan_m2_active_set_temporary(
+bool GlobalLinearSystem::StructuredAssemblyInfo::build_socu_contact_assembly_plan_m2(
         SocuContactAssemblyPlan&            plan,
         SocuContactAssemblyPlanM2Workspace& workspace,
         const SocuVertexSidePlanKey&        side_key,
-        const SocuContactProgramPlanKey&    program_key) const
+        const SocuContactProgramPlanKey&    program_key,
+        SocuVertexSideCoverageMode          coverage_mode) const
 {
     if(!m_impl || !m_impl->global_dytopo_effect_manager)
         return false;
@@ -949,13 +949,14 @@ bool GlobalLinearSystem::StructuredAssemblyInfo::
         return false;
 
     m_impl->global_dytopo_effect_manager
-        ->build_socu_contact_assembly_plan_m2_active_set_temporary(
+        ->build_socu_contact_assembly_plan_m2(
             plan,
             workspace,
             side_key,
             program_key,
             m_native_vertex_descriptors,
             m_contact_offband_policy,
+            coverage_mode,
             m_stream);
     return true;
 }

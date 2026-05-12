@@ -1042,6 +1042,102 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(stats.task_count == programs[0].task_count);
 }
 
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_global_side_coverage",
+          "[cuda_mixed_socu][contract][socu_approx][m2][m2b]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    const auto vertices_host = fixture_vertices();
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{vertices_host};
+    muda::DeviceBuffer<Vector4i> pts_a{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> pts_b{
+        std::vector<Vector4i>{Vector4i{0, 5, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+    muda::DeviceBuffer<Vector2i> empty_phs{std::vector<Vector2i>{}};
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+
+    auto input_a = make_input(vertices,
+                              pts_a,
+                              empty_phs,
+                              StructuredContactOffbandPolicy::Drop);
+    input_a.ph_source = {};
+    input_a.side_coverage_mode = SocuVertexSideCoverageMode::Global;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_a);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> sorted_a;
+    std::vector<SocuAssemblySideRecord> sides_a;
+    std::vector<SocuAssemblyDofLane> lanes_a;
+    plan.side_plan.sorted_side_vertices.copy_to(sorted_a);
+    plan.side_plan.sides.copy_to(sides_a);
+    plan.side_plan.lanes.copy_to(lanes_a);
+
+    CHECK(sorted_a == std::vector<IndexT>{0, 1, 2, 3, 4, 5, 6, 7});
+    CHECK(sides_a.size() == vertices_host.size());
+    CHECK(lanes_a.size() == 36);
+    CHECK(plan.side_plan.coverage.mode == SocuVertexSideCoverageMode::Global);
+    CHECK(plan.side_plan.last_stats.coverage_mode
+          == SocuVertexSideCoverageMode::Global);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 0);
+    CHECK(plan.side_plan.last_stats.side_count == vertices_host.size());
+    CHECK(side_for(sides_a, 5).kind == SocuAssemblySideKind::Abd);
+    CHECK(side_for(sides_a, 5).writable);
+
+    auto input_b = make_input(vertices,
+                              pts_b,
+                              empty_phs,
+                              StructuredContactOffbandPolicy::Drop);
+    input_b.ph_source = {};
+    input_b.side_coverage_mode = SocuVertexSideCoverageMode::Global;
+    input_b.program_key.contact_topology_epoch++;
+    input_b.program_key.contact_content_hash++;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_b);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> sorted_b;
+    std::vector<SocuContactProgramHeader> programs_b;
+    std::vector<SocuContactSourceToProgram> maps_b;
+    plan.side_plan.sorted_side_vertices.copy_to(sorted_b);
+    plan.program_plan.programs.copy_to(programs_b);
+    plan.program_plan.source_to_program.copy_to(maps_b);
+
+    CHECK(sorted_b == sorted_a);
+    CHECK(plan.side_plan.coverage.mode == SocuVertexSideCoverageMode::Global);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 1);
+    CHECK(plan.side_plan.last_stats.side_coverage_refresh_count == 0);
+    CHECK(plan.side_plan.last_stats.active_side_set_changed_count == 0);
+    REQUIRE(programs_b.size() == 1);
+    REQUIRE(maps_b.size() == 1);
+    CHECK(programs_b[0].program_kind == SocuContactProgramKind::Drop);
+    CHECK(programs_b[0].side_ids[1] == 5);
+    CHECK(maps_b[0].status == SocuContactProgramMapStatus::Dropped);
+
+    auto input_empty = make_input(vertices,
+                                  empty_pts,
+                                  empty_phs,
+                                  StructuredContactOffbandPolicy::Drop);
+    input_empty.pt_source = {};
+    input_empty.ph_source = {};
+    input_empty.side_coverage_mode = SocuVertexSideCoverageMode::Global;
+    input_empty.program_key.contact_topology_epoch += 2;
+    input_empty.program_key.contact_content_hash += 2;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_empty);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> sorted_empty;
+    std::vector<SocuContactProgramHeader> programs_empty;
+    plan.side_plan.sorted_side_vertices.copy_to(sorted_empty);
+    plan.program_plan.programs.copy_to(programs_empty);
+    CHECK(sorted_empty == sorted_a);
+    CHECK(programs_empty.empty());
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 1);
+    CHECK(plan.side_plan.last_stats.side_count == vertices_host.size());
+}
+
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_symbolic_cpu_oracle",
           "[cuda_mixed_socu][contract][socu_approx][m2]")
 {
@@ -1189,7 +1285,7 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_symbolic_cpu_oracle",
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
-          "[cuda_mixed_socu][contract][socu_approx][m2]")
+          "[cuda_mixed_socu][contract][socu_approx][m2][m2b]")
 {
     const auto root = std::filesystem::path{UIPC_PROJECT_DIR};
     const auto builder_path =
@@ -1226,8 +1322,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     const auto solver =
         read_text_file(root / "src/backends/cuda_mixed_socu/linear_system/"
                               "socu_approx_solver.cu");
-    CHECK(solver.find("info.build_socu_contact_assembly_plan_m2_active_set_temporary")
+    CHECK(solver.find("info.build_socu_contact_assembly_plan_m2(")
           != std::string::npos);
+    CHECK(solver.find("native_contact_side_coverage_mode") != std::string::npos);
     CHECK(solver.find("apply_native_contact_plan_stats")
           != std::string::npos);
 
@@ -1239,4 +1336,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("socu_native_contact_plan_unsupported_reporter")
           != std::string::npos);
+
+    const auto defaults =
+        read_text_file(root / "src/core/core/scene_default_config.cpp");
+    CHECK(defaults.find("native_contact_side_coverage_mode") != std::string::npos);
+    CHECK(defaults.find("std::string{\"global\"}") != std::string::npos);
 }

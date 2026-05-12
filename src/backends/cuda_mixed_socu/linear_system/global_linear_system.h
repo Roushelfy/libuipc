@@ -331,11 +331,25 @@ class GlobalLinearSystem : public SimSystem
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
+        bool build_socu_contact_assembly_plan_m2(
+            SocuContactAssemblyPlan&            plan,
+            SocuContactAssemblyPlanM2Workspace& workspace,
+            const SocuVertexSidePlanKey&        side_key,
+            const SocuContactProgramPlanKey&    program_key,
+            SocuVertexSideCoverageMode          coverage_mode) const;
         bool build_socu_contact_assembly_plan_m2_active_set_temporary(
             SocuContactAssemblyPlan&            plan,
             SocuContactAssemblyPlanM2Workspace& workspace,
             const SocuVertexSidePlanKey&        side_key,
-            const SocuContactProgramPlanKey&    program_key) const;
+            const SocuContactProgramPlanKey&    program_key) const
+        {
+            return build_socu_contact_assembly_plan_m2(
+                plan,
+                workspace,
+                side_key,
+                program_key,
+                SocuVertexSideCoverageMode::ActiveSetTemporary);
+        }
         void record_diag_writes(SizeT count) noexcept { m_diag_write_count += count; }
         void record_first_offdiag_writes(SizeT count) noexcept
         {

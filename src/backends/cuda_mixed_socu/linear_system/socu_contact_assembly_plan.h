@@ -200,13 +200,6 @@ struct SocuContactProgramBucket
     std::uint32_t program_count = 0;
 };
 
-enum class SocuVertexSideCoverageMode : std::uint8_t
-{
-    Global,
-    DemandFilled,
-    ActiveSetTemporary,
-};
-
 struct SocuVertexSideCoverageStamp
 {
     SocuVertexSideCoverageMode mode = SocuVertexSideCoverageMode::Global;
@@ -365,6 +358,8 @@ struct SocuContactAssemblyPlanM2BuildInput
 
     StructuredContactOffbandPolicy offband_policy =
         StructuredContactOffbandPolicy::Drop;
+    SocuVertexSideCoverageMode side_coverage_mode =
+        SocuVertexSideCoverageMode::ActiveSetTemporary;
     cudaStream_t stream = cudaStreamLegacy;
 };
 
@@ -385,6 +380,11 @@ struct SocuContactAssemblyPlanM2Workspace
 
 SocuContactAssemblyPlanView socu_contact_assembly_plan_view(
     const SocuContactAssemblyPlan& plan) noexcept;
+
+void build_socu_contact_assembly_plan_m2(
+    SocuContactAssemblyPlan&                 plan,
+    SocuContactAssemblyPlanM2Workspace&      workspace,
+    const SocuContactAssemblyPlanM2BuildInput& input);
 
 void build_socu_contact_assembly_plan_m2_active_set_temporary(
     SocuContactAssemblyPlan&                 plan,

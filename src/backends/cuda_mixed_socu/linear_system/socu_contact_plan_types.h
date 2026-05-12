@@ -47,6 +47,13 @@ enum class SocuContactExecutionStrategy : std::uint8_t
     CachedMicroblock,
 };
 
+enum class SocuVertexSideCoverageMode : std::uint8_t
+{
+    Global,
+    DemandFilled,
+    ActiveSetTemporary,
+};
+
 struct SocuContactTopologyCounts
 {
     SizeT simplex_normal_pt = 0;

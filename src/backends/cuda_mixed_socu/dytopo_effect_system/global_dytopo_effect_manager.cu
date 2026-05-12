@@ -694,13 +694,14 @@ void GlobalDyTopoEffectManager::Impl::ensure_structured_vertex_descriptors(
 }
 
 void GlobalDyTopoEffectManager::Impl::
-    build_socu_contact_assembly_plan_m2_active_set_temporary(
+    build_socu_contact_assembly_plan_m2(
         SocuContactAssemblyPlan&            plan,
         SocuContactAssemblyPlanM2Workspace& workspace,
         const SocuVertexSidePlanKey&        side_key,
         const SocuContactProgramPlanKey&    program_key,
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
         StructuredContactOffbandPolicy offband_policy,
+        SocuVertexSideCoverageMode     coverage_mode,
         cudaStream_t                   stream)
 {
     SocuContactAssemblyPlanM2BuildInput input;
@@ -708,6 +709,7 @@ void GlobalDyTopoEffectManager::Impl::
     input.program_key = program_key;
     input.vertex_descriptors = vertex_descriptors;
     input.offband_policy = offband_policy;
+    input.side_coverage_mode = coverage_mode;
     input.stream = stream;
 
     std::vector<SocuContactM2SourceInput> sources;
@@ -817,8 +819,7 @@ void GlobalDyTopoEffectManager::Impl::
     }
 
     input.sources = span<const SocuContactM2SourceInput>{sources};
-    ::uipc::backend::cuda_mixed::
-        build_socu_contact_assembly_plan_m2_active_set_temporary(
+    ::uipc::backend::cuda_mixed::build_socu_contact_assembly_plan_m2(
         plan,
         workspace,
         input);
@@ -1012,22 +1013,24 @@ void GlobalDyTopoEffectManager::assemble_structured_hessian(
 }
 
 void GlobalDyTopoEffectManager::
-    build_socu_contact_assembly_plan_m2_active_set_temporary(
+    build_socu_contact_assembly_plan_m2(
         SocuContactAssemblyPlan&            plan,
         SocuContactAssemblyPlanM2Workspace& workspace,
         const SocuVertexSidePlanKey&        side_key,
         const SocuContactProgramPlanKey&    program_key,
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
         StructuredContactOffbandPolicy offband_policy,
+        SocuVertexSideCoverageMode     coverage_mode,
         cudaStream_t                   stream)
 {
-    m_impl.build_socu_contact_assembly_plan_m2_active_set_temporary(
+    m_impl.build_socu_contact_assembly_plan_m2(
         plan,
         workspace,
         side_key,
         program_key,
         vertex_descriptors,
         offband_policy,
+        coverage_mode,
         stream);
 }
 

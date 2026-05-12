@@ -1,6 +1,7 @@
 #pragma once
 
 #include <linear_system/linear_solver.h>
+#include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/socu_native_descriptors.h>
 #include <linear_system/socu_approx_report.h>
 #include <linear_system/structured_chain_provider.h>
@@ -141,6 +142,8 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_native_contact_active_side_set_changed_count = 0;
     std::unique_ptr<SocuContactAssemblyPlan> m_native_contact_plan;
     std::unique_ptr<SocuContactAssemblyPlanM2Workspace> m_native_contact_plan_workspace;
+    SocuVertexSideCoverageMode m_native_contact_side_coverage_mode =
+        SocuVertexSideCoverageMode::Global;
     std::string m_ordering_orderer = "rcm";
     std::string m_ordering_block_size = "64";
     std::string m_runtime_reorder_graph_source = "topology";

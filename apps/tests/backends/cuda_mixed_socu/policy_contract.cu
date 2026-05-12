@@ -293,6 +293,26 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     std::filesystem::remove(report_path);
 }
 
+TEST_CASE("cuda_mixed_socu_report_native_contact_side_coverage_modes",
+          "[cuda_mixed_socu][contract][socu_approx][m2b]")
+{
+    SocuApproxSolveReport report;
+    SocuContactPlanStats side_stats;
+    SocuContactPlanStats program_stats;
+
+    side_stats.coverage_mode = SocuVertexSideCoverageMode::Global;
+    apply_native_contact_plan_stats(report, side_stats, program_stats);
+    CHECK(report.native_contact_side_coverage_mode == "global");
+
+    side_stats.coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    apply_native_contact_plan_stats(report, side_stats, program_stats);
+    CHECK(report.native_contact_side_coverage_mode == "demand_filled");
+
+    side_stats.coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
+    apply_native_contact_plan_stats(report, side_stats, program_stats);
+    CHECK(report.native_contact_side_coverage_mode == "active_set_temporary");
+}
+
 TEST_CASE("cuda_mixed_socu_mixed_graph_fem_source_id",
           "[cuda_mixed_socu][contract][socu_approx]")
 {
