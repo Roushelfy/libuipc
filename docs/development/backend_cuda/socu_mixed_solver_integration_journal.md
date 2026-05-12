@@ -2555,3 +2555,56 @@ Decision:
   gradients. Before claiming speedup, benchmark cold rebuild, cache-hit numeric,
   and amortized Newton solve time against the M4 compatibility writer and
   separate Hessian triplet generation from executor scatter in the report.
+
+## 2026-05-12 Redesign Branch M5.6 Cold/Cache-Hit Timing Baseline
+
+Implemented:
+
+- Split native contact replay timing into `native_contact_hessian_triplet_ms`
+  and `native_contact_executor_scatter_ms`, both measured with CUDA events on
+  the structured assembly stream.
+- Kept the existing `native_contact_numeric_ms` field as the native replay
+  branch host-wall aggregate so old timing semantics stay comparable.
+- Added explicit cache-state report fields:
+  `native_contact_plan_cold_start` and
+  `native_contact_plan_rebuilt_this_solve`.
+- Added `scripts/analyze_socu_native_contact_m56.py` to summarize one or more
+  `socu_approx` report JSON files by cache state and replay path. It emits JSON
+  or Markdown and can fail fast when no `native_plan` replay report is present.
+- Extended source-scan tests to require scene-level recording of both split
+  timings.
+
+Tests updated:
+
+- Report JSON defaults now cover the new false/zero M5.6 fields.
+- Cache-decision tests now distinguish cold rebuild, partial rebuild, and full
+  cache-hit solves.
+- Native replay-path tests now include split Hessian-triplet and
+  executor-scatter timing fields.
+- Script smoke tests cover directory input, JSON output, Markdown output, and
+  the `--require-native-plan` failure mode.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target backend_cuda_mixed_socu -j 16` | passed |
+| `python3 -m py_compile scripts/analyze_socu_native_contact_m56.py` | passed |
+| `scripts/analyze_socu_native_contact_m56.py <synthetic reports> --require-native-plan` | passed |
+| `scripts/analyze_socu_native_contact_m56.py <synthetic reports> --format markdown` | passed |
+| `scripts/analyze_socu_native_contact_m56.py <fallback-only report> --require-native-plan` | failed as expected |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m5]"` | passed, `22826` assertions in `7` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx][m2]"` | passed, `652` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_report_native_contact_replay_paths"` | passed, `8` assertions in `1` test case |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `45287` assertions in `42` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `50170` assertions in `62` test cases |
+| `git diff --check` | passed |
+
+Decision:
+
+- M5.6 is accepted as the pre-M6 observability slice. M6 can now add hot-block
+  detection and owner-reduce without changing the report schema needed for
+  cold/cache-hit timing tables.
+- No scene performance claim is made by this entry. Real cold rebuild,
+  cache-hit numeric, and amortized Newton solve comparisons should be generated
+  from actual scene reports using the M5.6 analyzer.

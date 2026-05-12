@@ -1296,6 +1296,8 @@ native_contact_plan_executor_enabled
 native_contact_hot_reduce_enabled
 native_contact_scalar_diag_compat_enabled
 native_contact_plan_cache_hit
+native_contact_plan_cold_start
+native_contact_plan_rebuilt_this_solve
 native_contact_plan_rebuild_count
 native_contact_plan_build_ms
 native_contact_side_plan_cache_hit
@@ -1312,6 +1314,8 @@ native_contact_program_plan_cache_hit
 native_contact_program_plan_rebuild_count
 native_contact_program_plan_build_ms
 native_contact_numeric_ms
+native_contact_hessian_triplet_ms
+native_contact_executor_scatter_ms
 native_contact_hot_reduce_ms
 native_contact_hot_reduce_strategy
 native_contact_probe_path
@@ -1347,12 +1351,15 @@ JSON placement:
 - `timing`: aggregate `native_contact_plan_build_ms`, split
   `native_contact_side_plan_build_ms` and
   `native_contact_program_plan_build_ms`,
-  `native_contact_side_coverage_refresh_ms`, `native_contact_numeric_ms`,
-  `native_contact_hot_reduce_ms`, and `native_contact_hot_reduce_strategy`.
+  `native_contact_side_coverage_refresh_ms`, aggregate
+  `native_contact_numeric_ms`, split
+  `native_contact_hessian_triplet_ms`,
+  `native_contact_executor_scatter_ms`, `native_contact_hot_reduce_ms`, and
+  `native_contact_hot_reduce_strategy`.
 - `contact`: all plan size, exact/fallback/drop, mixed-rejected, and hot-block
   count fields, plus split side/program cache hit and rebuild counters, side
-  coverage mode, coverage hit/refresh/fill counters, and active-side-set
-  counters.
+  coverage mode, coverage hit/refresh/fill counters, cold-start and
+  rebuilt-this-solve booleans, and active-side-set counters.
 - `status`: any nonzero mixed-rejected count in a production run adds a
   diagnostic detail even if the solve continues.
 - `runtime_reorder`: `native_contact_probe_path`,
@@ -1365,9 +1372,12 @@ JSON placement:
 only when both layers hit. Split rebuild counts are cumulative for the runtime
 and are reset when the SOCU runtime is rebuilt.
 `native_contact_plan_rebuild_count` is the aggregate count of solves where at
-least one layer rebuilt. Plan size and fallback counters are per solve. Plan
-timings are recorded even when `SOCU_REPORT_COUNTERS=0`; they are timers, not
-optional scalar counters.
+least one layer rebuilt. Plan size and fallback counters are per solve.
+`native_contact_plan_cold_start` is true only for the first cache update after
+runtime/cache construction; `native_contact_plan_rebuilt_this_solve` is true
+when at least one side/program layer missed in the current solve.
+Plan timings are recorded even when `SOCU_REPORT_COUNTERS=0`; they are timers,
+not optional scalar counters.
 
 `native_contact_side_coverage_refresh_count` is separate from
 `native_contact_side_plan_rebuild_count`. A refresh means the side key hit but
@@ -2266,6 +2276,48 @@ Current validation:
   `45271` assertions in `42` test cases.
 - `[cuda_mixed_socu][contract]` passed,
   `50154` assertions in `62` test cases.
+
+### M5.6: Cold/Cache-Hit Timing Baseline
+
+This is the final pre-M6 slice. It completes observability needed before
+hot-block detection changes executor behavior.
+
+Deliverables:
+
+- Split native contact numeric timing into:
+  - `native_contact_hessian_triplet_ms`: GPU time spent generating
+    reporter-layout half-Hessian triplets for the current M5 compatibility
+    evaluator input;
+  - `native_contact_executor_scatter_ms`: GPU time spent inside the
+    plan-owned executor scatter launch;
+  - `native_contact_numeric_ms`: host-wall aggregate native contact numeric
+    time for the current solve, kept comparable with the existing M5/M5.5
+    metric.
+- Add explicit cache-state fields:
+  - `native_contact_plan_cold_start`;
+  - `native_contact_plan_rebuilt_this_solve`;
+  - existing side/program/aggregate cache-hit booleans remain unchanged.
+- Provide a repeatable report summarizer for cold/cache-hit tables:
+  `scripts/analyze_socu_native_contact_m56.py`.
+  The script groups one or more `socu_approx` report JSON files by cache state
+  and `native_contact_replay_path`, then reports median/mean timing fields for
+  plan build, Hessian triplet generation, executor scatter, aggregate numeric
+  time, and total contact assembly time.
+- Source-scan tests must prove the scene-level native executor branch records
+  both split timings.
+
+Acceptance:
+
+- Report JSON defaults include all new M5.6 fields with zero/false values.
+- Cache-state tests cover cold rebuild, partial rebuild, and full cache-hit
+  decisions.
+- M5.6 report-path tests cover a native replay report where
+  `native_contact_numeric_ms` is split into Hessian-triplet and executor-scatter
+  fields.
+- The summarizer accepts report files and directories, can emit JSON and
+  Markdown, and fails when `--require-native-plan` is requested but no
+  `native_plan` replay report is present.
+- No M6 hot-block or owner-reduce code is introduced in this slice.
 
 ### M6: Hot-Block Detection And Owner-Reduce
 

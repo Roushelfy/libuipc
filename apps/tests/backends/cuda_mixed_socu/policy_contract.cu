@@ -73,6 +73,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     CHECK(timing.at("native_contact_program_plan_build_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_side_coverage_refresh_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_numeric_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_hessian_triplet_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_executor_scatter_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_hot_reduce_ms").get<double>() == 0.0);
 
     const auto& runtime_reorder = json.at("runtime_reorder");
@@ -83,6 +85,9 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
 
     const auto& contact = json.at("contact");
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>() == false);
+    CHECK(contact.at("native_contact_plan_cold_start").get<bool>() == false);
+    CHECK(contact.at("native_contact_plan_rebuilt_this_solve").get<bool>()
+          == false);
     CHECK(contact.at("native_contact_side_plan_cache_hit").get<bool>() == false);
     CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>() == false);
     CHECK(contact.at("native_contact_side_coverage_cache_hit").get<bool>() == false);
@@ -219,6 +224,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
                                              side_rebuild_count,
                                              program_rebuild_count);
     CHECK(!report.native_contact_plan_cache_hit);
+    CHECK(report.native_contact_plan_cold_start);
+    CHECK(report.native_contact_plan_rebuilt_this_solve);
     CHECK(report.native_contact_plan_rebuild_count == 1);
     CHECK(!report.native_contact_side_plan_cache_hit);
     CHECK(!report.native_contact_program_plan_cache_hit);
@@ -242,6 +249,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(decision.side_plan_hit());
     CHECK(!decision.contact_program_hit());
     CHECK(!report.native_contact_plan_cache_hit);
+    CHECK(!report.native_contact_plan_cold_start);
+    CHECK(report.native_contact_plan_rebuilt_this_solve);
     CHECK(report.native_contact_plan_rebuild_count == 2);
     CHECK(report.native_contact_side_plan_cache_hit);
     CHECK(!report.native_contact_program_plan_cache_hit);
@@ -261,6 +270,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
                                              side_rebuild_count,
                                              program_rebuild_count);
     CHECK(report.native_contact_plan_cache_hit);
+    CHECK(!report.native_contact_plan_cold_start);
+    CHECK(!report.native_contact_plan_rebuilt_this_solve);
     CHECK(report.native_contact_plan_rebuild_count == 2);
     CHECK(report.native_contact_side_plan_cache_hit);
     CHECK(report.native_contact_program_plan_cache_hit);
@@ -290,6 +301,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(contact.at("native_contact_exact_program_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_drop_program_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>());
+    CHECK(!contact.at("native_contact_plan_cold_start").get<bool>());
+    CHECK(!contact.at("native_contact_plan_rebuilt_this_solve").get<bool>());
     CHECK(contact.at("native_contact_plan_rebuild_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_side_plan_cache_hit").get<bool>());
     CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>());
@@ -316,6 +329,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_replay_paths",
     report.native_contact_plan_cache_hit = true;
     report.native_contact_plan_build_ms = 0.0;
     report.native_contact_numeric_ms = 1.25;
+    report.native_contact_hessian_triplet_ms = 0.75;
+    report.native_contact_executor_scatter_ms = 0.50;
     write_solve_report(report);
 
     std::ifstream ifs{report_path};
@@ -333,6 +348,14 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_replay_paths",
           == 0.0);
     CHECK(json.at("timing").at("native_contact_numeric_ms").get<double>()
           == 1.25);
+    CHECK(json.at("timing")
+              .at("native_contact_hessian_triplet_ms")
+              .get<double>()
+          == 0.75);
+    CHECK(json.at("timing")
+              .at("native_contact_executor_scatter_ms")
+              .get<double>()
+          == 0.50);
 
     std::filesystem::remove(report_path);
 }
