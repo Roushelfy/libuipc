@@ -15,6 +15,7 @@
 #include <finite_element/finite_element_method.h>
 #include <finite_element/finite_element_vertex_reporter.h>
 #include <linear_system/socu_contact_assembly_plan.h>
+#include <linear_system/socu_contact_executor.h>
 #include <linear_system/socu_contact_topology_stamp.h>
 #include <uipc/common/timer.h>
 #include <uipc/common/enumerate.h>
@@ -24,6 +25,8 @@
 #include <energy_component_flags.h>
 #include <fmt/format.h>
 #include <muda/buffer/buffer_launch.h>
+#include <chrono>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -91,6 +94,36 @@ void mix_contact_vector_view(SizeT& signature,
         for(Eigen::Index i = 0; i < item.size(); ++i)
             mix_contact_signature(signature, static_cast<SizeT>(item(i)));
     }
+}
+
+void check_native_contact_cuda(cudaError_t error, std::string_view operation)
+{
+    if(error != cudaSuccess)
+    {
+        throw SimSystemException{fmt::format(
+            "{} failed during SOCU native contact executor replay: {}",
+            operation,
+            cudaGetErrorString(error))};
+    }
+}
+
+template <typename StoreT>
+void assign_native_contact_hessian_view(
+    muda::CTripletMatrixView<StoreT, 3>& target,
+    muda::CTripletMatrixView<StoreT, 3>  source,
+    std::string_view                     label)
+{
+    if(source.triplet_count() == 0)
+        return;
+    if(target.triplet_count() != 0)
+    {
+        throw SimSystemException{fmt::format(
+            "socu_native_contact_executor_duplicate_source: multiple "
+            "non-empty Hessian source views for {} are not supported by "
+            "the M5.5 single-source evaluator table",
+            label)};
+    }
+    target = source;
 }
 
 }  // namespace
@@ -574,12 +607,193 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
     if(info.m_contact_sink.hessian_cache.replay_valid())
     {
+        structured_info.set_native_contact_replay_path("legacy_structured");
         Timer timer{"Replay Structured Contact Hessian Cache"};
         replay_structured_contact_hessian_cache(structured_info.stream(),
                                                 info.m_contact_sink);
         return;
     }
 
+    if(structured_info.native_contact_plan_executor_enabled())
+    {
+        auto* plan = structured_info.native_contact_assembly_plan();
+        if(!plan)
+        {
+            throw SimSystemException{
+                "socu_native_contact_executor_missing_plan: executor was "
+                "enabled without a prepared contact assembly plan"};
+        }
+
+        const auto plan_view = socu_contact_assembly_plan_view(*plan);
+        const auto matrix = structured_info.native_matrix();
+        if(!plan_view.valid() || !matrix.valid())
+        {
+            throw SimSystemException{
+                "socu_native_contact_executor_invalid_view: executor plan or "
+                "native structured matrix view is invalid"};
+        }
+
+        const auto begin = std::chrono::steady_clock::now();
+
+        auto vertex_count = global_vertex_manager->positions().size();
+        auto reporter_gradient_counts = reporter_gradient_offsets_counts.counts();
+        auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
+        for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
+        {
+            reporter_gradient_counts[i] = 0;
+            reporter_hessian_counts[i] = 0;
+            if(!has_flags(EnergyComponentFlags::Contact,
+                          reporter->component_flags()))
+                continue;
+
+            GradientHessianExtentInfo extent_info;
+            extent_info.m_gradient_only = false;
+            reporter->report_gradient_hessian_extent(extent_info);
+            reporter_gradient_counts[i] = extent_info.m_gradient_count;
+            reporter_hessian_counts[i] = extent_info.m_hessian_count;
+        }
+        reporter_gradient_offsets_counts.scan();
+        reporter_hessian_offsets_counts.scan();
+
+        const auto total_gradient_count =
+            reporter_gradient_offsets_counts.total_count();
+        const auto total_hessian_count =
+            reporter_hessian_offsets_counts.total_count();
+        loose_resize_entries(collected_dytopo_effect_gradient,
+                             total_gradient_count);
+        loose_resize_entries(collected_dytopo_effect_hessian,
+                             total_hessian_count);
+        collected_dytopo_effect_gradient.reshape(vertex_count);
+        collected_dytopo_effect_hessian.reshape(vertex_count, vertex_count);
+
+        for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
+        {
+            if(!has_flags(EnergyComponentFlags::Contact,
+                          reporter->component_flags()))
+                continue;
+
+            const auto [g_offset, g_count] = reporter_gradient_offsets_counts[i];
+            const auto [h_offset, h_count] = reporter_hessian_offsets_counts[i];
+
+            GradientHessianInfo hessian_info;
+            hessian_info.m_gradient_only = false;
+            hessian_info.m_gradients =
+                collected_dytopo_effect_gradient.view().subview(g_offset, g_count);
+            hessian_info.m_hessians =
+                collected_dytopo_effect_hessian.view().subview(h_offset, h_count);
+
+            Timer timer{"Assemble Contact Hessian Triplets For SOCU Native Plan"};
+            reporter->assemble(hessian_info);
+        }
+
+        SocuContactEvaluatorSourceTable<StoreScalar> sources;
+        for(auto&& reporter : dytopo_effect_reporters.view())
+        {
+            if(!has_flags(EnergyComponentFlags::Contact,
+                          reporter->component_flags()))
+                continue;
+
+            if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+            {
+                assign_native_contact_hessian_view(
+                    sources.simplex_normal.pt_hessians,
+                    normal->PT_hessians(),
+                    "simplex_normal/PT");
+                assign_native_contact_hessian_view(
+                    sources.simplex_normal.ee_hessians,
+                    normal->EE_hessians(),
+                    "simplex_normal/EE");
+                assign_native_contact_hessian_view(
+                    sources.simplex_normal.pe_hessians,
+                    normal->PE_hessians(),
+                    "simplex_normal/PE");
+                assign_native_contact_hessian_view(
+                    sources.simplex_normal.pp_hessians,
+                    normal->PP_hessians(),
+                    "simplex_normal/PP");
+                continue;
+            }
+            if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
+            {
+                assign_native_contact_hessian_view(
+                    sources.simplex_frictional.pt_hessians,
+                    friction->PT_hessians(),
+                    "simplex_frictional/PT");
+                assign_native_contact_hessian_view(
+                    sources.simplex_frictional.ee_hessians,
+                    friction->EE_hessians(),
+                    "simplex_frictional/EE");
+                assign_native_contact_hessian_view(
+                    sources.simplex_frictional.pe_hessians,
+                    friction->PE_hessians(),
+                    "simplex_frictional/PE");
+                assign_native_contact_hessian_view(
+                    sources.simplex_frictional.pp_hessians,
+                    friction->PP_hessians(),
+                    "simplex_frictional/PP");
+                continue;
+            }
+            if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+            {
+                assign_native_contact_hessian_view(
+                    sources.vertex_half_plane_normal.ph_hessians,
+                    normal->hessians(),
+                    "vertex_half_plane_normal/PH");
+                continue;
+            }
+            if(auto* friction =
+                   dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
+            {
+                assign_native_contact_hessian_view(
+                    sources.vertex_half_plane_frictional.ph_hessians,
+                    friction->hessians(),
+                    "vertex_half_plane_frictional/PH");
+                continue;
+            }
+
+            throw SimSystemException{fmt::format(
+                "socu_native_contact_executor_unsupported_reporter: reporter "
+                "'{}' is a contact reporter but does not expose native "
+                "executor Hessian source views",
+                reporter->name())};
+        }
+
+        launch_socu_contact_executor<StoreScalar,
+                                     GlobalLinearSystem::SolveScalar>(
+            plan_view,
+            matrix,
+            SocuContactTripletEvaluator<StoreScalar>{plan_view, sources},
+            {},
+            structured_info.stream());
+        check_native_contact_cuda(cudaGetLastError(), "native contact executor launch");
+        check_native_contact_cuda(cudaStreamSynchronize(structured_info.stream()),
+                                  "native contact executor synchronize");
+
+        const auto end = std::chrono::steady_clock::now();
+        structured_info.record_native_contact_numeric_time_ms(
+            std::chrono::duration<double, std::milli>(end - begin).count());
+        structured_info.set_native_contact_replay_path("native_plan");
+
+        for(auto&& reporter : dytopo_effect_reporters.view())
+        {
+            if(has_flags(EnergyComponentFlags::Contact,
+                         reporter->component_flags()))
+                continue;
+            if(!reporter->supports_structured_hessian())
+            {
+                throw SimSystemException{fmt::format(
+                    "structured_dytopo_reporter_not_supported: reporter '{}' does not "
+                    "support direct StructuredAssemblySink Hessian writes",
+                    reporter->name())};
+            }
+
+            Timer timer{dytopo_assemble_timer_name(*reporter)};
+            reporter->assemble_structured_hessian(info);
+        }
+        return;
+    }
+
+    structured_info.set_native_contact_replay_path("legacy_structured");
     for(auto&& reporter : dytopo_effect_reporters.view())
     {
         if(!reporter->supports_structured_hessian())
@@ -1010,6 +1224,12 @@ void GlobalDyTopoEffectManager::assemble_structured_hessian(
     GlobalLinearSystem::StructuredAssemblyInfo& info)
 {
     m_impl.assemble_structured_hessian(info);
+}
+
+void GlobalDyTopoEffectManager::ensure_structured_vertex_descriptors(
+    GlobalLinearSystem::StructuredAssemblyInfo& info)
+{
+    m_impl.ensure_structured_vertex_descriptors(info);
 }
 
 void GlobalDyTopoEffectManager::

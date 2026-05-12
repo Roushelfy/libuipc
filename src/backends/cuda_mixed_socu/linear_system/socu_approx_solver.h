@@ -39,6 +39,8 @@ class SocuApproxSolver : public LinearSolver
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void finalize_structured_chain(
         GlobalLinearSystem::StructuredAssemblyInfo& info) override;
+    virtual void prepare_structured_contact_plan(
+        GlobalLinearSystem::StructuredAssemblyInfo& info) override;
     virtual void debug_dump_structured_chain_checkpoint(
         GlobalLinearSystem::StructuredAssemblyInfo& info,
         std::string_view                            label) override;

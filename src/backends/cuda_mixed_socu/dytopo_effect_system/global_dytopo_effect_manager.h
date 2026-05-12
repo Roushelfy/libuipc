@@ -278,6 +278,8 @@ class GlobalDyTopoEffectManager final : public SimSystem
 
     void compute_dytopo_effect(ComputeDyTopoEffectInfo& info);
     void assemble_structured_hessian(GlobalLinearSystem::StructuredAssemblyInfo& info);
+    void ensure_structured_vertex_descriptors(
+        GlobalLinearSystem::StructuredAssemblyInfo& info);
     void build_socu_contact_assembly_plan_m2(
         SocuContactAssemblyPlan&            plan,
         SocuContactAssemblyPlanM2Workspace& workspace,

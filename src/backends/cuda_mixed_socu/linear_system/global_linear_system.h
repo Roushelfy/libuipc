@@ -1,6 +1,9 @@
 #pragma once
 #include <sim_system.h>
+#include <algorithm>
 #include <functional>
+#include <string>
+#include <utility>
 #include <uipc/common/list.h>
 #include <uipc/common/vector.h>
 #include <muda/ext/linear_system.h>
@@ -205,6 +208,37 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_contact_topology_stamp;
         }
+        SocuAssemblyPlanKey socu_contact_assembly_plan_key(
+            bool scalar_diag_fallback_compatibility) const noexcept
+        {
+            const auto stamp = m_contact_topology_stamp;
+            return SocuAssemblyPlanKey{
+                static_cast<SizeT>(std::max<IndexT>(m_descriptor_epoch, 0)),
+                static_cast<SizeT>(std::max<IndexT>(m_descriptor_epoch, 0)),
+                stamp.epoch,
+                stamp.layout_hash,
+                stamp.content_hash,
+                0,
+                0,
+                m_shape.horizon,
+                m_shape.block_size,
+                m_contact_offband_policy,
+                scalar_diag_fallback_compatibility};
+        }
+        SocuVertexSidePlanKey socu_contact_side_plan_key(
+            bool scalar_diag_fallback_compatibility) const noexcept
+        {
+            return socu_vertex_side_plan_key_from(
+                socu_contact_assembly_plan_key(
+                    scalar_diag_fallback_compatibility));
+        }
+        SocuContactProgramPlanKey socu_contact_program_plan_key(
+            bool scalar_diag_fallback_compatibility) const noexcept
+        {
+            return socu_contact_program_plan_key_from(
+                socu_contact_assembly_plan_key(
+                    scalar_diag_fallback_compatibility));
+        }
         muda::CBufferView<SocuNativeVertexDescriptor> native_vertex_descriptors()
             const noexcept
         {
@@ -223,6 +257,44 @@ class GlobalLinearSystem : public SimSystem
         double contact_assembly_time_ms() const noexcept
         {
             return m_contact_assembly_time_ms;
+        }
+        double native_contact_plan_build_time_ms() const noexcept
+        {
+            return m_native_contact_plan_build_time_ms;
+        }
+        double native_contact_numeric_time_ms() const noexcept
+        {
+            return m_native_contact_numeric_time_ms;
+        }
+        const std::string& native_contact_replay_path() const noexcept
+        {
+            return m_native_contact_replay_path;
+        }
+        bool native_contact_plan_executor_enabled() const noexcept
+        {
+            return m_native_contact_plan_executor_enabled;
+        }
+        SocuContactAssemblyPlan* native_contact_assembly_plan() const noexcept
+        {
+            return m_native_contact_plan;
+        }
+        SocuContactAssemblyPlanM2Workspace*
+        native_contact_assembly_plan_workspace() const noexcept
+        {
+            return m_native_contact_plan_workspace;
+        }
+        SocuVertexSideCoverageMode native_contact_side_coverage_mode()
+            const noexcept
+        {
+            return m_native_contact_side_coverage_mode;
+        }
+        bool native_contact_scalar_diag_compatibility() const noexcept
+        {
+            return m_native_contact_scalar_diag_compatibility;
+        }
+        SocuNativeMatrixView<SolveScalar> native_matrix() const noexcept
+        {
+            return native_matrix_view(m_diag, m_first_offdiag, m_rhs);
         }
 
         StructuredDeviceAssemblySink<StoreScalar, SolveScalar> sink() const noexcept
@@ -292,6 +364,7 @@ class GlobalLinearSystem : public SimSystem
         {
             m_contact_topology_stamp = stamp;
         }
+        bool ensure_socu_contact_native_descriptors();
         void set_native_vertex_descriptors(
             muda::CBufferView<SocuNativeVertexDescriptor> descriptors) noexcept
         {
@@ -328,6 +401,21 @@ class GlobalLinearSystem : public SimSystem
             m_chain_base_compare_uses_native   = compare_uses_native;
             m_chain_base_compare_enabled =
                 compare_diag.data() != nullptr;
+        }
+        void set_native_contact_plan_executor(
+            SocuContactAssemblyPlan*            plan,
+            SocuContactAssemblyPlanM2Workspace* workspace,
+            SocuVertexSideCoverageMode          coverage_mode,
+            bool scalar_diag_compatibility,
+            bool enabled) noexcept
+        {
+            m_native_contact_plan = plan;
+            m_native_contact_plan_workspace = workspace;
+            m_native_contact_side_coverage_mode = coverage_mode;
+            m_native_contact_scalar_diag_compatibility =
+                scalar_diag_compatibility;
+            m_native_contact_plan_executor_enabled =
+                enabled && plan != nullptr && workspace != nullptr;
         }
 
         void set_subsystem_extent(SizeT old_dof_offset, SizeT old_dof_count) noexcept;
@@ -384,6 +472,18 @@ class GlobalLinearSystem : public SimSystem
         void record_contact_assembly_time_ms(double elapsed_ms) noexcept
         {
             m_contact_assembly_time_ms += elapsed_ms;
+        }
+        void record_native_contact_plan_build_time_ms(double elapsed_ms) noexcept
+        {
+            m_native_contact_plan_build_time_ms += elapsed_ms;
+        }
+        void record_native_contact_numeric_time_ms(double elapsed_ms) noexcept
+        {
+            m_native_contact_numeric_time_ms += elapsed_ms;
+        }
+        void set_native_contact_replay_path(std::string path)
+        {
+            m_native_contact_replay_path = std::move(path);
         }
         SizeT diag_write_count() const noexcept { return m_diag_write_count; }
         SizeT first_offdiag_write_count() const noexcept
@@ -442,6 +542,18 @@ class GlobalLinearSystem : public SimSystem
             StructuredContactOffbandPolicy::Drop;
         SizeT                      m_contact_set_signature = 0;
         SocuContactTopologyStamp   m_contact_topology_stamp;
+        SocuContactAssemblyPlan*   m_native_contact_plan = nullptr;
+        SocuContactAssemblyPlanM2Workspace* m_native_contact_plan_workspace =
+            nullptr;
+        SocuVertexSideCoverageMode m_native_contact_side_coverage_mode =
+            SocuVertexSideCoverageMode::Global;
+        bool                       m_native_contact_scalar_diag_compatibility =
+            false;
+        bool                       m_native_contact_plan_executor_enabled =
+            false;
+        double                     m_native_contact_plan_build_time_ms = 0.0;
+        double                     m_native_contact_numeric_time_ms = 0.0;
+        std::string                m_native_contact_replay_path = "off";
         muda::CBufferView<SocuNativeVertexDescriptor> m_native_vertex_descriptors;
         IndexT                     m_descriptor_epoch = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;

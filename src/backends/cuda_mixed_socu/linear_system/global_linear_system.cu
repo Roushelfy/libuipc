@@ -559,6 +559,7 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
                         global_dytopo_effect_manager->contact_topology_stamp(
                             info.stream()));
                 }
+                selected_linear_solver->prepare_structured_contact_plan(info);
                 assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
                 selected_linear_solver->finalize_structured_chain(info);
                 return;
@@ -581,6 +582,7 @@ void GlobalLinearSystem::Impl::_assemble_structured_chain()
             info.set_contact_topology_stamp(
                 global_dytopo_effect_manager->contact_topology_stamp(info.stream()));
         }
+        selected_linear_solver->prepare_structured_contact_plan(info);
 
         assemble_into(info, LinearSolver::StructuredProbeAssembly::None);
         selected_linear_solver->finalize_structured_chain(info);
@@ -934,6 +936,16 @@ void GlobalLinearSystem::StructuredAssemblyInfo::set_subsystem_extent(
 {
     m_old_dof_offset = old_dof_offset;
     m_old_dof_count  = old_dof_count;
+}
+
+bool GlobalLinearSystem::StructuredAssemblyInfo::
+    ensure_socu_contact_native_descriptors()
+{
+    if(!m_impl || !m_impl->global_dytopo_effect_manager)
+        return false;
+    m_impl->global_dytopo_effect_manager
+        ->ensure_structured_vertex_descriptors(*this);
+    return m_native_vertex_descriptors.data() != nullptr;
 }
 
 bool GlobalLinearSystem::StructuredAssemblyInfo::build_socu_contact_assembly_plan_m2(

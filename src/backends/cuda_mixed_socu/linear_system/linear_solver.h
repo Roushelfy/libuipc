@@ -46,6 +46,12 @@ class LinearSolver : public SimSystem
     {
     }
 
+    virtual void prepare_structured_contact_plan(
+        GlobalLinearSystem::StructuredAssemblyInfo& info)
+    {
+        (void)info;
+    }
+
     virtual void debug_dump_structured_chain_checkpoint(
         GlobalLinearSystem::StructuredAssemblyInfo& info,
         std::string_view                            label)
