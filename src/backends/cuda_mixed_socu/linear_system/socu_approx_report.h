@@ -128,6 +128,17 @@ struct SocuApproxSolveReport
     bool native_contact_scalar_diag_compat_enabled = false;
     bool native_contact_plan_cache_hit = false;
     SizeT native_contact_plan_rebuild_count = 0;
+    bool native_contact_side_plan_cache_hit = false;
+    SizeT native_contact_side_plan_rebuild_count = 0;
+    bool native_contact_program_plan_cache_hit = false;
+    SizeT native_contact_program_plan_rebuild_count = 0;
+    std::string native_contact_side_coverage_mode = "off";
+    bool native_contact_side_coverage_cache_hit = false;
+    SizeT native_contact_side_coverage_refresh_count = 0;
+    SizeT native_contact_side_coverage_fill_count = 0;
+    bool native_contact_active_side_set_changed = false;
+    SizeT native_contact_active_side_set_changed_count = 0;
+    SizeT native_contact_active_side_vertex_count = 0;
     SizeT native_contact_side_count = 0;
     SizeT native_contact_lane_count = 0;
     SizeT native_contact_source_count = 0;
@@ -163,6 +174,9 @@ struct SocuApproxSolveReport
     double native_chain_base_assembly_time_ms = 0.0;
     double contact_assembly_time_ms = 0.0;
     double native_contact_plan_build_ms = 0.0;
+    double native_contact_side_plan_build_ms = 0.0;
+    double native_contact_program_plan_build_ms = 0.0;
+    double native_contact_side_coverage_refresh_ms = 0.0;
     double native_contact_numeric_ms = 0.0;
     double native_contact_hot_reduce_ms = 0.0;
     std::string native_contact_hot_reduce_strategy = "off";
@@ -233,7 +247,9 @@ struct SocuApproxSolveReport
 void apply_native_contact_plan_cache_decision(
     SocuApproxSolveReport&               report,
     const SocuContactPlanCacheDecision&  decision,
-    SizeT                                plan_rebuild_count) noexcept;
+    SizeT                                plan_rebuild_count,
+    SizeT                                side_plan_rebuild_count,
+    SizeT                                program_plan_rebuild_count) noexcept;
 
 void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
                                      const SocuContactPlanStats& side_stats,

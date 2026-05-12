@@ -69,12 +69,27 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     CHECK(timing.at("native_contact_hot_reduce_strategy").get<std::string>()
           == "off");
     CHECK(timing.at("native_contact_plan_build_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_side_plan_build_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_program_plan_build_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_side_coverage_refresh_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_numeric_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_hot_reduce_ms").get<double>() == 0.0);
 
     const auto& contact = json.at("contact");
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>() == false);
+    CHECK(contact.at("native_contact_side_plan_cache_hit").get<bool>() == false);
+    CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>() == false);
+    CHECK(contact.at("native_contact_side_coverage_cache_hit").get<bool>() == false);
+    CHECK(contact.at("native_contact_active_side_set_changed").get<bool>() == false);
+    CHECK(contact.at("native_contact_side_coverage_mode").get<std::string>()
+          == "off");
     for(const char* field : {"native_contact_plan_rebuild_count",
+                             "native_contact_side_plan_rebuild_count",
+                             "native_contact_program_plan_rebuild_count",
+                             "native_contact_side_coverage_refresh_count",
+                             "native_contact_side_coverage_fill_count",
+                             "native_contact_active_side_set_changed_count",
+                             "native_contact_active_side_vertex_count",
                              "native_contact_side_count",
                              "native_contact_lane_count",
                              "native_contact_source_count",
@@ -117,6 +132,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     SocuContactPlanStats program_stats;
     side_stats.side_count = 4;
     side_stats.lane_count = 21;
+    side_stats.coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
+    side_stats.active_side_vertex_count = 4;
     program_stats.source_count = 3;
     program_stats.program_count = 7;
     program_stats.source_to_program_count = 7;
@@ -143,6 +160,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
 
     CHECK(report.native_contact_side_count == 4);
     CHECK(report.native_contact_lane_count == 21);
+    CHECK(report.native_contact_side_coverage_mode == "active_set_temporary");
+    CHECK(report.native_contact_active_side_vertex_count == 4);
     CHECK(report.native_contact_source_count == 3);
     CHECK(report.native_contact_program_count == 7);
     CHECK(report.native_contact_source_to_program_count == 7);
@@ -181,27 +200,59 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     auto decision = cache.update(key);
     if(!(decision.side_plan_hit() && decision.contact_program_hit()))
         ++rebuild_count;
-    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    SizeT side_rebuild_count = decision.side_plan_hit() ? 0 : 1;
+    SizeT program_rebuild_count = decision.contact_program_hit() ? 0 : 1;
+    apply_native_contact_plan_cache_decision(report,
+                                             decision,
+                                             rebuild_count,
+                                             side_rebuild_count,
+                                             program_rebuild_count);
     CHECK(!report.native_contact_plan_cache_hit);
     CHECK(report.native_contact_plan_rebuild_count == 1);
+    CHECK(!report.native_contact_side_plan_cache_hit);
+    CHECK(!report.native_contact_program_plan_cache_hit);
+    CHECK(report.native_contact_side_plan_rebuild_count == 1);
+    CHECK(report.native_contact_program_plan_rebuild_count == 1);
 
     auto topology_changed = key;
     ++topology_changed.contact_topology_epoch;
     decision = cache.update(topology_changed);
     if(!(decision.side_plan_hit() && decision.contact_program_hit()))
         ++rebuild_count;
-    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    if(!decision.side_plan_hit())
+        ++side_rebuild_count;
+    if(!decision.contact_program_hit())
+        ++program_rebuild_count;
+    apply_native_contact_plan_cache_decision(report,
+                                             decision,
+                                             rebuild_count,
+                                             side_rebuild_count,
+                                             program_rebuild_count);
     CHECK(decision.side_plan_hit());
     CHECK(!decision.contact_program_hit());
     CHECK(!report.native_contact_plan_cache_hit);
     CHECK(report.native_contact_plan_rebuild_count == 2);
+    CHECK(report.native_contact_side_plan_cache_hit);
+    CHECK(!report.native_contact_program_plan_cache_hit);
+    CHECK(report.native_contact_side_plan_rebuild_count == 1);
+    CHECK(report.native_contact_program_plan_rebuild_count == 2);
 
     decision = cache.update(topology_changed);
     if(!(decision.side_plan_hit() && decision.contact_program_hit()))
         ++rebuild_count;
-    apply_native_contact_plan_cache_decision(report, decision, rebuild_count);
+    if(!decision.side_plan_hit())
+        ++side_rebuild_count;
+    if(!decision.contact_program_hit())
+        ++program_rebuild_count;
+    apply_native_contact_plan_cache_decision(report,
+                                             decision,
+                                             rebuild_count,
+                                             side_rebuild_count,
+                                             program_rebuild_count);
     CHECK(report.native_contact_plan_cache_hit);
     CHECK(report.native_contact_plan_rebuild_count == 2);
+    CHECK(report.native_contact_side_plan_cache_hit);
+    CHECK(report.native_contact_program_plan_cache_hit);
 
     const auto report_path =
         std::filesystem::temp_directory_path()
@@ -215,6 +266,9 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     const Json json = Json::parse(ifs);
     const auto& contact = json.at("contact");
     CHECK(contact.at("native_contact_side_count").get<SizeT>() == 4);
+    CHECK(contact.at("native_contact_side_coverage_mode").get<std::string>()
+          == "active_set_temporary");
+    CHECK(contact.at("native_contact_active_side_vertex_count").get<SizeT>() == 4);
     CHECK(contact.at("native_contact_source_count").get<SizeT>() == 3);
     CHECK(contact.at("native_contact_program_count").get<SizeT>() == 7);
     CHECK(contact.at("native_contact_valid_program_map_count").get<SizeT>() == 4);
@@ -224,6 +278,10 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(contact.at("native_contact_drop_program_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>());
     CHECK(contact.at("native_contact_plan_rebuild_count").get<SizeT>() == 2);
+    CHECK(contact.at("native_contact_side_plan_cache_hit").get<bool>());
+    CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>());
+    CHECK(contact.at("native_contact_side_plan_rebuild_count").get<SizeT>() == 1);
+    CHECK(contact.at("native_contact_program_plan_rebuild_count").get<SizeT>() == 2);
 
     std::filesystem::remove(report_path);
 }

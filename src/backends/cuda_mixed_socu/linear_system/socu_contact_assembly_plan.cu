@@ -770,6 +770,7 @@ void resize_zero_side_plan(SocuVertexSidePlan& plan)
     plan.coverage.covered_vertex_count = 0;
     plan.coverage.complete_for_current_contacts = true;
     plan.last_stats.active_side_vertex_count = 0;
+    plan.last_stats.coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
     plan.last_stats.side_count = 0;
     plan.last_stats.lane_count = 0;
 }
@@ -1300,6 +1301,8 @@ void build_socu_contact_assembly_plan_m2_active_set_temporary(
         plan.side_plan.coverage.complete_for_current_contacts = true;
         plan.side_plan.last_stats.active_side_vertex_count =
             static_cast<SizeT>(side_count);
+        plan.side_plan.last_stats.coverage_mode =
+            SocuVertexSideCoverageMode::ActiveSetTemporary;
         plan.side_plan.last_stats.side_count = static_cast<SizeT>(side_count);
         plan.side_plan.last_stats.lane_count = plan.side_plan.lanes.size();
     }

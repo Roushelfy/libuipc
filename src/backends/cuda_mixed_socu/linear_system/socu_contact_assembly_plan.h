@@ -224,6 +224,8 @@ struct SocuContactPlanStats
     SizeT side_coverage_fill_count = 0;
     SizeT active_side_set_changed_count = 0;
     SizeT active_side_vertex_count = 0;
+    SocuVertexSideCoverageMode coverage_mode =
+        SocuVertexSideCoverageMode::Global;
     SizeT program_cache_hit_count = 0;
     SizeT program_rebuild_count = 0;
     SizeT side_count = 0;

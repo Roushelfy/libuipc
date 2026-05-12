@@ -148,7 +148,12 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
                                       bool hot_reduce_enabled,
                                       bool scalar_diag_compat_enabled,
                                       std::string_view hot_reduce_strategy,
-                                      SizeT plan_rebuild_count)
+                                      SizeT plan_rebuild_count,
+                                      SizeT side_plan_rebuild_count,
+                                      SizeT program_plan_rebuild_count,
+                                      SizeT side_coverage_refresh_count,
+                                      SizeT side_coverage_fill_count,
+                                      SizeT active_side_set_changed_count)
 {
     report.native_contact_plan_enabled = plan_enabled;
     report.native_contact_plan_executor_enabled = executor_enabled;
@@ -159,7 +164,24 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
         std::string{hot_reduce_strategy};
     report.native_contact_plan_cache_hit = false;
     report.native_contact_plan_rebuild_count = plan_rebuild_count;
+    report.native_contact_side_plan_cache_hit = false;
+    report.native_contact_side_plan_rebuild_count = side_plan_rebuild_count;
+    report.native_contact_program_plan_cache_hit = false;
+    report.native_contact_program_plan_rebuild_count =
+        program_plan_rebuild_count;
+    report.native_contact_side_coverage_mode = "off";
+    report.native_contact_side_coverage_cache_hit = false;
+    report.native_contact_side_coverage_refresh_count =
+        side_coverage_refresh_count;
+    report.native_contact_side_coverage_fill_count = side_coverage_fill_count;
+    report.native_contact_active_side_set_changed = false;
+    report.native_contact_active_side_set_changed_count =
+        active_side_set_changed_count;
+    report.native_contact_active_side_vertex_count = 0;
     report.native_contact_plan_build_ms = 0.0;
+    report.native_contact_side_plan_build_ms = 0.0;
+    report.native_contact_program_plan_build_ms = 0.0;
+    report.native_contact_side_coverage_refresh_ms = 0.0;
     report.native_contact_numeric_ms = 0.0;
     report.native_contact_hot_reduce_ms = 0.0;
     report.native_contact_side_count = 0;
@@ -1053,7 +1075,12 @@ bool SocuApproxSolver::install_ordering_report_impl(
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
         m_native_contact_hot_reduce_strategy,
-        m_native_contact_plan_rebuild_count);
+        m_native_contact_plan_rebuild_count,
+        m_native_contact_side_plan_rebuild_count,
+        m_native_contact_program_plan_rebuild_count,
+        m_native_contact_side_coverage_refresh_count,
+        m_native_contact_side_coverage_fill_count,
+        m_native_contact_active_side_set_changed_count);
 
     m_gate_report = std::move(next_gate);
     m_gate_report.passed = true;
@@ -1351,7 +1378,12 @@ void SocuApproxSolver::prepare_structured_chain(
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
         m_native_contact_hot_reduce_strategy,
-        m_native_contact_plan_rebuild_count);
+        m_native_contact_plan_rebuild_count,
+        m_native_contact_side_plan_rebuild_count,
+        m_native_contact_program_plan_rebuild_count,
+        m_native_contact_side_coverage_refresh_count,
+        m_native_contact_side_coverage_fill_count,
+        m_native_contact_active_side_set_changed_count);
 
     const cudaStream_t stream = system().stream();
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
@@ -1750,10 +1782,16 @@ void SocuApproxSolver::finalize_structured_chain(
                 decision.side_plan_hit() && decision.contact_program_hit();
             if(!aggregate_hit)
                 ++m_native_contact_plan_rebuild_count;
+            if(!decision.side_plan_hit())
+                ++m_native_contact_side_plan_rebuild_count;
+            if(!decision.contact_program_hit())
+                ++m_native_contact_program_plan_rebuild_count;
             apply_native_contact_plan_cache_decision(
                 m_report,
                 decision,
-                m_native_contact_plan_rebuild_count);
+                m_native_contact_plan_rebuild_count,
+                m_native_contact_side_plan_rebuild_count,
+                m_native_contact_program_plan_rebuild_count);
 
             const bool plan_requested =
                 m_native_contact_plan_enabled
@@ -1784,11 +1822,36 @@ void SocuApproxSolver::finalize_structured_chain(
                     const auto end = std::chrono::steady_clock::now();
                     if(built)
                     {
-                        m_report.native_contact_plan_build_ms =
+                        const double build_ms =
                             std::chrono::duration<double, std::milli>(
                                 end - begin)
                                 .count();
+                        m_report.native_contact_plan_build_ms = build_ms;
+                        if(!decision.side_plan_hit())
+                            m_report.native_contact_side_plan_build_ms =
+                                build_ms;
+                        if(!decision.contact_program_hit())
+                            m_report.native_contact_program_plan_build_ms =
+                                build_ms;
+                        if(decision.side_plan_hit()
+                           && !decision.contact_program_hit())
+                        {
+                            ++m_native_contact_side_coverage_refresh_count;
+                            ++m_native_contact_active_side_set_changed_count;
+                            m_report.native_contact_side_coverage_refresh_count =
+                                m_native_contact_side_coverage_refresh_count;
+                            m_report.native_contact_active_side_set_changed =
+                                true;
+                            m_report.native_contact_active_side_set_changed_count =
+                                m_native_contact_active_side_set_changed_count;
+                            m_report.native_contact_side_coverage_refresh_ms =
+                                build_ms;
+                        }
                     }
+                }
+                else
+                {
+                    m_report.native_contact_side_coverage_cache_hit = true;
                 }
 
                 if(m_native_contact_plan->side_plan.key == side_key

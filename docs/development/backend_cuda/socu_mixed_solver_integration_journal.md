@@ -2123,3 +2123,40 @@ Current M2 status:
   validation/reporting, explicit final-path integration coverage beyond
   compile/report plumbing, and symbolic parity against the legacy target
   classification oracle.
+
+## 2026-05-11 Redesign Branch M2 Split Report Slice
+
+Implemented:
+
+- Added split side/program cache fields to `SocuApproxSolveReport`:
+  per-solve cache-hit booleans and cumulative side/program rebuild counts.
+- Added M2 side coverage report fields:
+  coverage mode, coverage cache hit, refresh/fill counts, active-side-set
+  changed flag/count, and active side vertex count.
+- Added split build-time report fields for side-plan, program-plan, and
+  active-set coverage refresh timing. In M2 `active_set_temporary`, a
+  topology-only program rebuild still reruns the temporary side table, so the
+  report marks that work as a coverage refresh rather than a semantic side
+  rebuild.
+- Filled these fields from `SocuApproxSolver::finalize_structured_chain()`
+  using the split cache decision and the plan's side stats.
+- Report JSON defaults and stats mapping tests now cover the split fields.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `284` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `414` assertions in `20` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `5297` assertions in `40` test cases |
+
+Current M2 status:
+
+- Reports now expose the split cache/rebuild/coverage observability required by
+  M2, including explicit `active_set_temporary` coverage mode.
+- M2 is still not accepted. Remaining work: production dense-source debug
+  validation/reporting, explicit final-path integration coverage beyond
+  compile/report plumbing, and symbolic parity against the legacy target
+  classification oracle.

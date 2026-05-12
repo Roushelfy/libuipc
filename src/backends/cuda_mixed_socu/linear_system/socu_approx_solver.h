@@ -134,6 +134,11 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_cached_contact_hessian_frame = static_cast<SizeT>(-1);
     SocuContactPlanCacheState m_native_contact_plan_cache;
     SizeT       m_native_contact_plan_rebuild_count = 0;
+    SizeT       m_native_contact_side_plan_rebuild_count = 0;
+    SizeT       m_native_contact_program_plan_rebuild_count = 0;
+    SizeT       m_native_contact_side_coverage_refresh_count = 0;
+    SizeT       m_native_contact_side_coverage_fill_count = 0;
+    SizeT       m_native_contact_active_side_set_changed_count = 0;
     std::unique_ptr<SocuContactAssemblyPlan> m_native_contact_plan;
     std::unique_ptr<SocuContactAssemblyPlanM2Workspace> m_native_contact_plan_workspace;
     std::string m_ordering_orderer = "rcm";

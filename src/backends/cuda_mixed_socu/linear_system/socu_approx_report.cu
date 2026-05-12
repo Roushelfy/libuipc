@@ -15,6 +15,20 @@ namespace
 {
 namespace fs = std::filesystem;
 
+std::string_view coverage_mode_name(SocuVertexSideCoverageMode mode) noexcept
+{
+    switch(mode)
+    {
+        case SocuVertexSideCoverageMode::Global:
+            return "global";
+        case SocuVertexSideCoverageMode::DemandFilled:
+            return "demand_filled";
+        case SocuVertexSideCoverageMode::ActiveSetTemporary:
+            return "active_set_temporary";
+    }
+    return "unknown";
+}
+
 Json to_json(const SocuApproxSolveReport& report)
 {
     Json blocks = Json::array();
@@ -97,6 +111,28 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_plan_cache_hit},
                   {"native_contact_plan_rebuild_count",
                    report.native_contact_plan_rebuild_count},
+                  {"native_contact_side_plan_cache_hit",
+                   report.native_contact_side_plan_cache_hit},
+                  {"native_contact_side_plan_rebuild_count",
+                   report.native_contact_side_plan_rebuild_count},
+                  {"native_contact_program_plan_cache_hit",
+                   report.native_contact_program_plan_cache_hit},
+                  {"native_contact_program_plan_rebuild_count",
+                   report.native_contact_program_plan_rebuild_count},
+                  {"native_contact_side_coverage_mode",
+                   report.native_contact_side_coverage_mode},
+                  {"native_contact_side_coverage_cache_hit",
+                   report.native_contact_side_coverage_cache_hit},
+                  {"native_contact_side_coverage_refresh_count",
+                   report.native_contact_side_coverage_refresh_count},
+                  {"native_contact_side_coverage_fill_count",
+                   report.native_contact_side_coverage_fill_count},
+                  {"native_contact_active_side_set_changed",
+                   report.native_contact_active_side_set_changed},
+                  {"native_contact_active_side_set_changed_count",
+                   report.native_contact_active_side_set_changed_count},
+                  {"native_contact_active_side_vertex_count",
+                   report.native_contact_active_side_vertex_count},
                   {"native_contact_side_count",
                    report.native_contact_side_count},
                   {"native_contact_lane_count",
@@ -162,6 +198,12 @@ Json to_json(const SocuApproxSolveReport& report)
                   {"contact_assembly_time_ms", report.contact_assembly_time_ms},
                   {"native_contact_plan_build_ms",
                    report.native_contact_plan_build_ms},
+                  {"native_contact_side_plan_build_ms",
+                   report.native_contact_side_plan_build_ms},
+                  {"native_contact_program_plan_build_ms",
+                   report.native_contact_program_plan_build_ms},
+                  {"native_contact_side_coverage_refresh_ms",
+                   report.native_contact_side_coverage_refresh_ms},
                   {"native_contact_numeric_ms",
                    report.native_contact_numeric_ms},
                   {"native_contact_hot_reduce_ms",
@@ -267,11 +309,19 @@ Json to_json(const SocuApproxSolveReport& report)
 void apply_native_contact_plan_cache_decision(
     SocuApproxSolveReport&              report,
     const SocuContactPlanCacheDecision& decision,
-    SizeT                               plan_rebuild_count) noexcept
+    SizeT                               plan_rebuild_count,
+    SizeT                               side_plan_rebuild_count,
+    SizeT                               program_plan_rebuild_count) noexcept
 {
     report.native_contact_plan_cache_hit =
         decision.side_plan_hit() && decision.contact_program_hit();
     report.native_contact_plan_rebuild_count = plan_rebuild_count;
+    report.native_contact_side_plan_cache_hit = decision.side_plan_hit();
+    report.native_contact_side_plan_rebuild_count = side_plan_rebuild_count;
+    report.native_contact_program_plan_cache_hit =
+        decision.contact_program_hit();
+    report.native_contact_program_plan_rebuild_count =
+        program_plan_rebuild_count;
 }
 
 void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
@@ -280,6 +330,10 @@ void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
 {
     report.native_contact_side_count = side_stats.side_count;
     report.native_contact_lane_count = side_stats.lane_count;
+    report.native_contact_side_coverage_mode =
+        std::string{coverage_mode_name(side_stats.coverage_mode)};
+    report.native_contact_active_side_vertex_count =
+        side_stats.active_side_vertex_count;
     report.native_contact_source_count = program_stats.source_count;
     report.native_contact_program_count = program_stats.program_count;
     report.native_contact_source_to_program_count =
