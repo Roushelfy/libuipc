@@ -1498,6 +1498,12 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("record_native_contact_executor_scatter_time_ms")
           != std::string::npos);
+    CHECK(dytopo.find("native_contact_legacy_zero_extent_skip")
+          != std::string::npos);
+    CHECK(dytopo.find("native_contact_descriptor_cache_hit_exports_view")
+          != std::string::npos);
+    CHECK(dytopo.find("native_contact_empty_plan_replay")
+          != std::string::npos);
     CHECK(dytopo.find("native_contact_executor_duplicate_source")
           != std::string::npos);
     CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")

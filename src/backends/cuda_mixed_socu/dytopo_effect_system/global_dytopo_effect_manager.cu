@@ -652,6 +652,26 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
         return;
     }
 
+    auto assemble_non_contact_structured_reporters = [&]()
+    {
+        for(auto&& reporter : dytopo_effect_reporters.view())
+        {
+            if(has_flags(EnergyComponentFlags::Contact,
+                         reporter->component_flags()))
+                continue;
+            if(!reporter->supports_structured_hessian())
+            {
+                throw SimSystemException{fmt::format(
+                    "structured_dytopo_reporter_not_supported: reporter '{}' does not "
+                    "support direct StructuredAssemblySink Hessian writes",
+                    reporter->name())};
+            }
+
+            Timer timer{dytopo_assemble_timer_name(*reporter)};
+            reporter->assemble_structured_hessian(info);
+        }
+    };
+
     if(structured_info.native_contact_plan_executor_enabled())
     {
         auto* plan = structured_info.native_contact_assembly_plan();
@@ -660,6 +680,15 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             throw SimSystemException{
                 "socu_native_contact_executor_missing_plan: executor was "
                 "enabled without a prepared contact assembly plan"};
+        }
+
+        if(plan->program_plan.programs.size() == 0)
+        {
+            // native_contact_empty_plan_replay: an empty contact topology is a
+            // valid native no-op and must not fall back to legacy contact TUs.
+            structured_info.set_native_contact_replay_path("native_plan");
+            assemble_non_contact_structured_reporters();
+            return;
         }
 
         const auto plan_view = socu_contact_assembly_plan_view(*plan);
@@ -847,28 +876,25 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             std::chrono::duration<double, std::milli>(end - begin).count());
         structured_info.set_native_contact_replay_path("native_plan");
 
-        for(auto&& reporter : dytopo_effect_reporters.view())
-        {
-            if(has_flags(EnergyComponentFlags::Contact,
-                         reporter->component_flags()))
-                continue;
-            if(!reporter->supports_structured_hessian())
-            {
-                throw SimSystemException{fmt::format(
-                    "structured_dytopo_reporter_not_supported: reporter '{}' does not "
-                    "support direct StructuredAssemblySink Hessian writes",
-                    reporter->name())};
-            }
-
-            Timer timer{dytopo_assemble_timer_name(*reporter)};
-            reporter->assemble_structured_hessian(info);
-        }
+        assemble_non_contact_structured_reporters();
         return;
     }
 
     structured_info.set_native_contact_replay_path("legacy_structured");
     for(auto&& reporter : dytopo_effect_reporters.view())
     {
+        if(has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
+        {
+            GradientHessianExtentInfo extent_info;
+            extent_info.m_gradient_only = false;
+            reporter->report_gradient_hessian_extent(extent_info);
+            // native_contact_legacy_zero_extent_skip: native-only builds do not
+            // compile legacy contact assembly, but zero-contact reporters have
+            // no gradient/Hessian work to replay.
+            if(extent_info.m_gradient_count == 0 && extent_info.m_hessian_count == 0)
+                continue;
+        }
+
         if(!reporter->supports_structured_hessian())
         {
             throw SimSystemException{fmt::format(
@@ -947,7 +973,14 @@ void GlobalDyTopoEffectManager::Impl::ensure_structured_vertex_descriptors(
 
     if(structured_vertex_descriptor_key == key
        && structured_vertex_descriptors.size() == global_vertex_count)
+    {
+        // native_contact_descriptor_cache_hit_exports_view: plan building
+        // happens before structured contact assembly, so the current
+        // StructuredAssemblyInfo must receive the cached descriptor view here.
+        structured_info.set_native_vertex_descriptors(
+            structured_vertex_descriptors.view().as_const());
         return;
+    }
 
     if(global_vertex_count > structured_vertex_descriptors.capacity())
     {
@@ -978,6 +1011,8 @@ void GlobalDyTopoEffectManager::Impl::ensure_structured_vertex_descriptors(
                                            abd_body_is_fixed);
     structured_vertex_descriptor_key = key;
     structured_vertex_descriptor_epoch = epoch;
+    structured_info.set_native_vertex_descriptors(
+        structured_vertex_descriptors.view().as_const());
 }
 
 void GlobalDyTopoEffectManager::Impl::
