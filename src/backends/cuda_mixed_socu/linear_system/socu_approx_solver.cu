@@ -151,6 +151,11 @@ bool parse_native_contact_side_coverage_mode(
         out = SocuVertexSideCoverageMode::Global;
         return true;
     }
+    if(mode == "demand_filled")
+    {
+        out = SocuVertexSideCoverageMode::DemandFilled;
+        return true;
+    }
     if(mode == "active_set_temporary")
     {
         out = SocuVertexSideCoverageMode::ActiveSetTemporary;
@@ -420,8 +425,8 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         m_gate_report = make_failure(
             SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/"
-                        "native_contact_side_coverage_mode must be 'global' "
-                        "or 'active_set_temporary', got '{}'",
+                        "native_contact_side_coverage_mode must be 'global', "
+                        "'demand_filled', or 'active_set_temporary', got '{}'",
                         native_contact_side_coverage_mode));
         throw_gate_failure(m_gate_report);
     }
@@ -1873,6 +1878,8 @@ void SocuApproxSolver::finalize_structured_chain(
                         if(!decision.contact_program_hit())
                             m_report.native_contact_program_plan_build_ms =
                                 build_ms;
+                        const auto& side_stats =
+                            m_native_contact_plan->side_plan.last_stats;
                         if(decision.side_plan_hit()
                            && !decision.contact_program_hit()
                            && m_native_contact_side_coverage_mode
@@ -1886,6 +1893,19 @@ void SocuApproxSolver::finalize_structured_chain(
                                 true;
                             m_report.native_contact_active_side_set_changed_count =
                                 m_native_contact_active_side_set_changed_count;
+                            m_report.native_contact_side_coverage_refresh_ms =
+                                build_ms;
+                        }
+                        else if(decision.side_plan_hit()
+                                && !decision.contact_program_hit()
+                                && m_native_contact_side_coverage_mode
+                                       == SocuVertexSideCoverageMode::DemandFilled
+                                && side_stats.side_coverage_fill_count > 0)
+                        {
+                            m_native_contact_side_coverage_fill_count +=
+                                side_stats.side_coverage_fill_count;
+                            m_report.native_contact_side_coverage_fill_count =
+                                m_native_contact_side_coverage_fill_count;
                             m_report.native_contact_side_coverage_refresh_ms =
                                 build_ms;
                         }

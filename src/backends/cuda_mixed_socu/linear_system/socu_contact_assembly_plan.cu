@@ -38,8 +38,17 @@ MUDA_GENERIC SocuAssemblySideKind side_kind_from_native(
 
 MUDA_DEVICE SocuAssemblySideId find_side_id(
     muda::CBufferView<IndexT> sorted_side_vertices,
+    muda::CBufferView<SocuAssemblySideId> vertex_to_side_id,
+    bool                      use_vertex_to_side_id,
     IndexT                    vertex) noexcept
 {
+    if(use_vertex_to_side_id)
+    {
+        if(vertex < 0 || static_cast<SizeT>(vertex) >= vertex_to_side_id.size())
+            return SocuInvalidAssemblySideId;
+        return vertex_to_side_id.data()[vertex];
+    }
+
     SizeT first = 0;
     SizeT count = sorted_side_vertices.size();
     while(count > 0)
@@ -314,6 +323,39 @@ __global__ void materialize_sides_kernel(
     sides.data()[i] = side;
 }
 
+__global__ void mark_missing_side_vertices_kernel(
+    muda::CBufferView<IndexT> active_vertices,
+    muda::CBufferView<SocuAssemblySideId> vertex_to_side_id,
+    muda::BufferView<int> missing_flags)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= active_vertices.size())
+        return;
+
+    const IndexT vertex = active_vertices.data()[i];
+    const bool missing =
+        vertex >= 0 && static_cast<SizeT>(vertex) < vertex_to_side_id.size()
+        && vertex_to_side_id.data()[vertex] == SocuInvalidAssemblySideId;
+    missing_flags.data()[i] = missing ? 1 : 0;
+}
+
+__global__ void append_missing_side_vertices_kernel(
+    muda::CBufferView<IndexT> missing_vertices,
+    SocuAssemblySideId first_side_id,
+    muda::BufferView<IndexT> side_vertices,
+    muda::BufferView<SocuAssemblySideId> vertex_to_side_id)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= missing_vertices.size())
+        return;
+
+    const IndexT vertex = missing_vertices.data()[i];
+    const auto side_id = static_cast<SocuAssemblySideId>(first_side_id + i);
+    side_vertices.data()[static_cast<SizeT>(side_id)] = vertex;
+    if(vertex >= 0 && static_cast<SizeT>(vertex) < vertex_to_side_id.size())
+        vertex_to_side_id.data()[vertex] = side_id;
+}
+
 MUDA_DEVICE int append_diag_tasks_for_stencil(
     const SocuAssemblySideId* side_ids,
     int                       stencil_size,
@@ -347,6 +389,8 @@ template <typename VectorT, int StencilSize>
 __global__ void emit_simplex_programs_kernel(
     muda::CBufferView<VectorT> contacts,
     muda::CBufferView<IndexT> sorted_side_vertices,
+    muda::CBufferView<SocuAssemblySideId> vertex_to_side_id,
+    bool use_vertex_to_side_id,
     muda::CBufferView<SocuAssemblySideRecord> sides,
     StructuredContactOffbandPolicy offband_policy,
     std::uint32_t first_program,
@@ -378,7 +422,10 @@ __global__ void emit_simplex_programs_kernel(
     for(int local = 0; local < StencilSize; ++local)
     {
         side_ids[local] =
-            find_side_id(sorted_side_vertices, stencil(static_cast<Eigen::Index>(local)));
+            find_side_id(sorted_side_vertices,
+                         vertex_to_side_id,
+                         use_vertex_to_side_id,
+                         stencil(static_cast<Eigen::Index>(local)));
         program.side_ids[local] = side_ids[local];
     }
 
@@ -488,6 +535,8 @@ __global__ void emit_simplex_programs_kernel(
 __global__ void emit_ph_programs_kernel(
     muda::CBufferView<Vector2i> phs,
     muda::CBufferView<IndexT> sorted_side_vertices,
+    muda::CBufferView<SocuAssemblySideId> vertex_to_side_id,
+    bool use_vertex_to_side_id,
     muda::CBufferView<SocuAssemblySideRecord> sides,
     std::uint32_t first_program,
     std::uint32_t first_source_to_program,
@@ -510,7 +559,10 @@ __global__ void emit_ph_programs_kernel(
     program.stencil_size = 2;
 
     const auto vertex = phs.data()[i](0);
-    const auto side_id = find_side_id(sorted_side_vertices, vertex);
+    const auto side_id = find_side_id(sorted_side_vertices,
+                                      vertex_to_side_id,
+                                      use_vertex_to_side_id,
+                                      vertex);
     program.side_ids[0] = side_id;
 
     SocuContactProgramMapStatus status = SocuContactProgramMapStatus::Skipped;
@@ -775,6 +827,7 @@ void resize_zero_side_plan(SocuVertexSidePlan& plan,
     plan.sorted_side_vertices.resize(0);
     plan.sides.resize(0);
     plan.lanes.resize(0);
+    plan.vertex_to_side_id.resize(0);
     plan.coverage.mode = mode;
     plan.coverage.covered_vertex_count = 0;
     plan.coverage.complete_for_current_contacts = true;
@@ -796,6 +849,61 @@ void fill_side_plan_stats(SocuVertexSidePlan& plan,
     plan.last_stats.lane_count = plan.lanes.size();
     plan.last_stats.active_side_vertex_count = plan.sides.size();
     plan.last_stats.side_coverage_hit_count = coverage_hit ? SizeT{1} : SizeT{0};
+}
+
+void materialize_side_records_and_lanes(
+    SocuVertexSidePlan& plan,
+    SocuContactAssemblyPlanM2Workspace& workspace,
+    muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    cudaStream_t stream)
+{
+    const SizeT side_count = plan.sorted_side_vertices.size();
+    plan.sides.resize(side_count);
+    workspace.scalar_counts.resize(side_count);
+    workspace.scalar_offsets.resize(side_count);
+
+    if(side_count == 0)
+    {
+        plan.lanes.resize(0);
+        return;
+    }
+
+    launch_1d(side_count,
+              [&](unsigned int grid, int block)
+              {
+                  compute_side_lane_counts_kernel<<<grid,
+                                                    block,
+                                                    0,
+                                                    launch_stream(stream)>>>(
+                      plan.sorted_side_vertices.view(),
+                      vertex_descriptors,
+                      workspace.scalar_counts.view());
+              });
+    muda::DeviceScan().ExclusiveSum(workspace.scalar_counts.data(),
+                                    workspace.scalar_offsets.data(),
+                                    static_cast<int>(side_count));
+    write_last_scan_total_kernel<<<1, 1, 0, launch_stream(stream)>>>(
+        workspace.scalar_counts.view(),
+        workspace.scalar_offsets.view(),
+        workspace.scalar_total.view());
+    const int lane_count = copy_first_int(workspace.scalar_total);
+    plan.lanes.resize(static_cast<SizeT>(lane_count));
+    if(lane_count > 0)
+        muda::BufferLaunch(stream).fill<SocuAssemblyDofLane>(plan.lanes.view(), {});
+
+    launch_1d(side_count,
+              [&](unsigned int grid, int block)
+              {
+                  materialize_sides_kernel<<<grid,
+                                             block,
+                                             0,
+                                             launch_stream(stream)>>>(
+                      plan.sorted_side_vertices.view(),
+                      workspace.scalar_offsets.view(),
+                      vertex_descriptors,
+                      plan.sides.view(),
+                      plan.lanes.view());
+              });
 }
 
 SocuContactSourceHeader make_source_header(SocuContactSourceId source_id,
@@ -1023,6 +1131,13 @@ void build_socu_contact_assembly_plan_m2(
         && plan.side_plan.key == input.side_key
         && plan.side_plan.coverage.mode == SocuVertexSideCoverageMode::Global
         && plan.side_plan.coverage.complete_for_current_contacts;
+    const bool reuse_demand_side_plan =
+        requested_coverage_mode == SocuVertexSideCoverageMode::DemandFilled
+        && plan.side_plan.key == input.side_key
+        && plan.side_plan.coverage.mode == SocuVertexSideCoverageMode::DemandFilled
+        && plan.side_plan.vertex_to_side_id.size()
+               == input.vertex_descriptors.size()
+        && plan.side_plan.coverage.complete_for_current_contacts;
 
     plan.side_plan.key = input.side_key;
     plan.program_plan.key = input.program_key;
@@ -1166,99 +1281,20 @@ void build_socu_contact_assembly_plan_m2(
     workspace.scalar_total.resize(1);
     workspace.task_cursor.resize(1);
 
-    if(requested_coverage_mode == SocuVertexSideCoverageMode::Global)
+    auto collect_active_vertices = [&](muda::DeviceBuffer<IndexT>& active_vertices)
+        -> int
     {
-        if(reuse_global_side_plan)
+        if(ref_count == 0)
         {
-            fill_side_plan_stats(plan.side_plan,
-                                 SocuVertexSideCoverageMode::Global,
-                                 true);
+            active_vertices.resize(0);
+            return 0;
         }
-        else
-        {
-            const SizeT side_count = input.vertex_descriptors.size();
-            if(side_count == 0)
-            {
-                resize_zero_side_plan(plan.side_plan,
-                                      SocuVertexSideCoverageMode::Global);
-            }
-            else
-            {
-                plan.side_plan.sorted_side_vertices.resize(side_count);
-                plan.side_plan.sides.resize(side_count);
-                workspace.scalar_counts.resize(side_count);
-                workspace.scalar_offsets.resize(side_count);
 
-                launch_1d(side_count,
-                          [&](unsigned int grid, int block)
-                          {
-                              fill_global_side_vertices_kernel<<<grid,
-                                                                 block,
-                                                                 0,
-                                                                 launch_stream(input.stream)>>>(
-                                  plan.side_plan.sorted_side_vertices.view());
-                          });
-                launch_1d(side_count,
-                          [&](unsigned int grid, int block)
-                          {
-                              compute_side_lane_counts_kernel<<<grid,
-                                                                block,
-                                                                0,
-                                                                launch_stream(input.stream)>>>(
-                                  plan.side_plan.sorted_side_vertices.view(),
-                                  input.vertex_descriptors,
-                                  workspace.scalar_counts.view());
-                          });
-                muda::DeviceScan().ExclusiveSum(workspace.scalar_counts.data(),
-                                                workspace.scalar_offsets.data(),
-                                                static_cast<int>(side_count));
-                write_last_scan_total_kernel<<<1, 1, 0, launch_stream(input.stream)>>>(
-                    workspace.scalar_counts.view(),
-                    workspace.scalar_offsets.view(),
-                    workspace.scalar_total.view());
-                const int lane_count = copy_first_int(workspace.scalar_total);
-                plan.side_plan.lanes.resize(static_cast<SizeT>(lane_count));
-                if(lane_count > 0)
-                    muda::BufferLaunch(input.stream)
-                        .fill<SocuAssemblyDofLane>(plan.side_plan.lanes.view(), {});
-
-                launch_1d(side_count,
-                          [&](unsigned int grid, int block)
-                          {
-                              materialize_sides_kernel<<<grid,
-                                                         block,
-                                                         0,
-                                                         launch_stream(input.stream)>>>(
-                                  plan.side_plan.sorted_side_vertices.view(),
-                                  workspace.scalar_offsets.view(),
-                                  input.vertex_descriptors,
-                                  plan.side_plan.sides.view(),
-                                  plan.side_plan.lanes.view());
-                          });
-                fill_side_plan_stats(plan.side_plan,
-                                     SocuVertexSideCoverageMode::Global,
-                                     false);
-            }
-        }
-    }
-    else if(requested_coverage_mode == SocuVertexSideCoverageMode::DemandFilled)
-    {
-        throw std::invalid_argument{
-            "M2b demand_filled side coverage is not implemented; use global or "
-            "active_set_temporary"};
-    }
-    else if(ref_count == 0)
-    {
-        resize_zero_side_plan(plan.side_plan,
-                              SocuVertexSideCoverageMode::ActiveSetTemporary);
-    }
-    else
-    {
         workspace.vertex_refs.resize(ref_count);
         workspace.sorted_vertex_refs.resize(ref_count);
         workspace.unique_flags.resize(ref_count);
         workspace.unique_offsets.resize(ref_count);
-        plan.side_plan.sorted_side_vertices.resize(ref_count);
+        active_vertices.resize(ref_count);
 
         SizeT ref_offset = 0;
         auto collect_vec4 = [&](muda::CBufferView<Vector4i> contacts)
@@ -1371,64 +1407,174 @@ void build_socu_contact_assembly_plan_m2(
                           workspace.sorted_vertex_refs.view(),
                           workspace.unique_flags.view(),
                           workspace.unique_offsets.view(),
-                          plan.side_plan.sorted_side_vertices.view(),
+                          active_vertices.view(),
                           workspace.scalar_total.view());
                   });
 
-        const int side_count = copy_first_int(workspace.scalar_total);
-        plan.side_plan.sorted_side_vertices.resize(static_cast<SizeT>(side_count));
-        plan.side_plan.sides.resize(static_cast<SizeT>(side_count));
-        workspace.scalar_counts.resize(static_cast<SizeT>(side_count));
-        workspace.scalar_offsets.resize(static_cast<SizeT>(side_count));
+        const int active_count = copy_first_int(workspace.scalar_total);
+        active_vertices.resize(static_cast<SizeT>(active_count));
+        return active_count;
+    };
 
-        if(side_count == 0)
+    if(requested_coverage_mode == SocuVertexSideCoverageMode::Global)
+    {
+        if(reuse_global_side_plan)
         {
-            plan.side_plan.lanes.resize(0);
+            fill_side_plan_stats(plan.side_plan,
+                                 SocuVertexSideCoverageMode::Global,
+                                 true);
         }
         else
         {
-            launch_1d(static_cast<SizeT>(side_count),
-                      [&](unsigned int grid, int block)
-                      {
-                          compute_side_lane_counts_kernel<<<grid,
-                                                            block,
-                                                            0,
-                                                            launch_stream(input.stream)>>>(
-                              plan.side_plan.sorted_side_vertices.view(),
-                              input.vertex_descriptors,
-                              workspace.scalar_counts.view());
-                      });
-            muda::DeviceScan().ExclusiveSum(workspace.scalar_counts.data(),
-                                            workspace.scalar_offsets.data(),
-                                            side_count);
-            write_last_scan_total_kernel<<<1, 1, 0, launch_stream(input.stream)>>>(
-                workspace.scalar_counts.view(),
-                workspace.scalar_offsets.view(),
-                workspace.scalar_total.view());
-            const int lane_count = copy_first_int(workspace.scalar_total);
-            plan.side_plan.lanes.resize(static_cast<SizeT>(lane_count));
-            if(lane_count > 0)
-                muda::BufferLaunch(input.stream)
-                    .fill<SocuAssemblyDofLane>(plan.side_plan.lanes.view(), {});
+            const SizeT side_count = input.vertex_descriptors.size();
+            if(side_count == 0)
+            {
+                resize_zero_side_plan(plan.side_plan,
+                                      SocuVertexSideCoverageMode::Global);
+            }
+            else
+            {
+                plan.side_plan.sorted_side_vertices.resize(side_count);
 
-            launch_1d(static_cast<SizeT>(side_count),
-                      [&](unsigned int grid, int block)
-                      {
-                          materialize_sides_kernel<<<grid,
-                                                     block,
-                                                     0,
-                                                     launch_stream(input.stream)>>>(
-                              plan.side_plan.sorted_side_vertices.view(),
-                              workspace.scalar_offsets.view(),
-                              input.vertex_descriptors,
-                              plan.side_plan.sides.view(),
-                              plan.side_plan.lanes.view());
-                      });
+                launch_1d(side_count,
+                          [&](unsigned int grid, int block)
+                          {
+                              fill_global_side_vertices_kernel<<<grid,
+                                                                 block,
+                                                                 0,
+                                                                 launch_stream(input.stream)>>>(
+                                  plan.side_plan.sorted_side_vertices.view());
+                          });
+                plan.side_plan.vertex_to_side_id.resize(0);
+                materialize_side_records_and_lanes(plan.side_plan,
+                                                   workspace,
+                                                   input.vertex_descriptors,
+                                                   input.stream);
+                fill_side_plan_stats(plan.side_plan,
+                                     SocuVertexSideCoverageMode::Global,
+                                     false);
+            }
+        }
+    }
+    else if(requested_coverage_mode == SocuVertexSideCoverageMode::DemandFilled)
+    {
+        if(!reuse_demand_side_plan)
+        {
+            plan.side_plan.sorted_side_vertices.resize(0);
+            plan.side_plan.sides.resize(0);
+            plan.side_plan.lanes.resize(0);
+            plan.side_plan.vertex_to_side_id.resize(input.vertex_descriptors.size());
+            if(input.vertex_descriptors.size() != 0)
+            {
+                muda::BufferLaunch(input.stream)
+                    .fill<SocuAssemblySideId>(plan.side_plan.vertex_to_side_id.view(),
+                                              SocuInvalidAssemblySideId);
+            }
         }
 
-        fill_side_plan_stats(plan.side_plan,
-                             SocuVertexSideCoverageMode::ActiveSetTemporary,
-                             false);
+        const int active_count =
+            collect_active_vertices(workspace.active_side_vertices);
+        int missing_count = 0;
+        if(active_count > 0)
+        {
+            const auto active_size = static_cast<SizeT>(active_count);
+            workspace.unique_flags.resize(active_size);
+            workspace.unique_offsets.resize(active_size);
+            workspace.missing_side_vertices.resize(active_size);
+            launch_1d(active_size,
+                      [&](unsigned int grid, int block)
+                      {
+                          mark_missing_side_vertices_kernel<<<grid,
+                                                              block,
+                                                              0,
+                                                              launch_stream(input.stream)>>>(
+                              workspace.active_side_vertices.view(),
+                              plan.side_plan.vertex_to_side_id.view(),
+                              workspace.unique_flags.view());
+                      });
+            muda::DeviceScan().ExclusiveSum(workspace.unique_flags.data(),
+                                            workspace.unique_offsets.data(),
+                                            active_count);
+            muda::BufferLaunch(input.stream)
+                .fill<int>(workspace.scalar_total.view(), 0);
+            launch_1d(active_size,
+                      [&](unsigned int grid, int block)
+                      {
+                          compact_unique_vertices_kernel<<<grid,
+                                                           block,
+                                                           0,
+                                                           launch_stream(input.stream)>>>(
+                              workspace.active_side_vertices.view(),
+                              workspace.unique_flags.view(),
+                              workspace.unique_offsets.view(),
+                              workspace.missing_side_vertices.view(),
+                              workspace.scalar_total.view());
+                      });
+            missing_count = copy_first_int(workspace.scalar_total);
+            workspace.missing_side_vertices.resize(static_cast<SizeT>(missing_count));
+        }
+
+        if(missing_count > 0)
+        {
+            const auto first_side_id =
+                static_cast<SocuAssemblySideId>(
+                    plan.side_plan.sorted_side_vertices.size());
+            const SizeT new_side_count =
+                plan.side_plan.sorted_side_vertices.size()
+                + static_cast<SizeT>(missing_count);
+            plan.side_plan.sorted_side_vertices.resize(new_side_count);
+            launch_1d(static_cast<SizeT>(missing_count),
+                      [&](unsigned int grid, int block)
+                      {
+                          append_missing_side_vertices_kernel<<<grid,
+                                                               block,
+                                                               0,
+                                                               launch_stream(input.stream)>>>(
+                              workspace.missing_side_vertices.view(),
+                              first_side_id,
+                              plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.vertex_to_side_id.view());
+                      });
+            materialize_side_records_and_lanes(plan.side_plan,
+                                               workspace,
+                                               input.vertex_descriptors,
+                                               input.stream);
+        }
+
+        plan.side_plan.coverage.mode = SocuVertexSideCoverageMode::DemandFilled;
+        plan.side_plan.coverage.covered_vertex_count = plan.side_plan.sides.size();
+        plan.side_plan.coverage.complete_for_current_contacts = true;
+        plan.side_plan.last_stats.coverage_mode =
+            SocuVertexSideCoverageMode::DemandFilled;
+        plan.side_plan.last_stats.side_count = plan.side_plan.sides.size();
+        plan.side_plan.last_stats.lane_count = plan.side_plan.lanes.size();
+        plan.side_plan.last_stats.active_side_vertex_count =
+            static_cast<SizeT>(active_count);
+        plan.side_plan.last_stats.side_coverage_hit_count =
+            reuse_demand_side_plan && missing_count == 0 ? SizeT{1} : SizeT{0};
+        plan.side_plan.last_stats.side_coverage_fill_count =
+            reuse_demand_side_plan && missing_count > 0 ? SizeT{1} : SizeT{0};
+    }
+    else
+    {
+        const int side_count =
+            collect_active_vertices(plan.side_plan.sorted_side_vertices);
+        if(side_count == 0)
+        {
+            resize_zero_side_plan(plan.side_plan,
+                                  SocuVertexSideCoverageMode::ActiveSetTemporary);
+        }
+        else
+        {
+            plan.side_plan.vertex_to_side_id.resize(0);
+            materialize_side_records_and_lanes(plan.side_plan,
+                                               workspace,
+                                               input.vertex_descriptors,
+                                               input.stream);
+            fill_side_plan_stats(plan.side_plan,
+                                 SocuVertexSideCoverageMode::ActiveSetTemporary,
+                                 false);
+        }
     }
 
     SizeT total_program_count = 0;
@@ -1469,6 +1615,9 @@ void build_socu_contact_assembly_plan_m2(
             .fill<SocuContactMicroTask>(plan.program_plan.tasks.view(), {});
     muda::BufferLaunch(input.stream).fill<int>(workspace.task_cursor.view(), 0);
 
+    const bool use_vertex_to_side_id =
+        requested_coverage_mode == SocuVertexSideCoverageMode::DemandFilled;
+
     auto launch_simplex4 = [&](muda::CBufferView<Vector4i> contacts,
                                const M2SourceSpec& spec)
     {
@@ -1479,6 +1628,8 @@ void build_socu_contact_assembly_plan_m2(
                           <<<grid, block, 0, launch_stream(input.stream)>>>(
                               contacts,
                               plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.vertex_to_side_id.view(),
+                              use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
                               static_cast<std::uint32_t>(spec.first_program),
@@ -1502,6 +1653,8 @@ void build_socu_contact_assembly_plan_m2(
                           <<<grid, block, 0, launch_stream(input.stream)>>>(
                               contacts,
                               plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.vertex_to_side_id.view(),
+                              use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
                               static_cast<std::uint32_t>(spec.first_program),
@@ -1525,6 +1678,8 @@ void build_socu_contact_assembly_plan_m2(
                           <<<grid, block, 0, launch_stream(input.stream)>>>(
                               contacts,
                               plan.side_plan.sorted_side_vertices.view(),
+                              plan.side_plan.vertex_to_side_id.view(),
+                              use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
                               static_cast<std::uint32_t>(spec.first_program),
@@ -1550,6 +1705,8 @@ void build_socu_contact_assembly_plan_m2(
                                                 launch_stream(input.stream)>>>(
                           contacts,
                           plan.side_plan.sorted_side_vertices.view(),
+                          plan.side_plan.vertex_to_side_id.view(),
+                          use_vertex_to_side_id,
                           plan.side_plan.sides.view(),
                           static_cast<std::uint32_t>(spec.first_program),
                           static_cast<std::uint32_t>(spec.first_map),

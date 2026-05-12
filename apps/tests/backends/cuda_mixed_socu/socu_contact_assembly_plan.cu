@@ -1138,6 +1138,159 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_global_side_coverage",
     CHECK(plan.side_plan.last_stats.side_count == vertices_host.size());
 }
 
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_demand_filled_side_coverage",
+          "[cuda_mixed_socu][contract][socu_approx][m2][m2b]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    const auto vertices_host = fixture_vertices();
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{vertices_host};
+    muda::DeviceBuffer<Vector4i> pts_a{
+        std::vector<Vector4i>{Vector4i{0, 1, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> pts_b{
+        std::vector<Vector4i>{Vector4i{0, 5, 2, 0}}};
+    muda::DeviceBuffer<Vector4i> pts_c{
+        std::vector<Vector4i>{Vector4i{5, 2, 0, 0}}};
+    muda::DeviceBuffer<Vector4i> empty_pts{std::vector<Vector4i>{}};
+    muda::DeviceBuffer<Vector2i> empty_phs{std::vector<Vector2i>{}};
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    SocuContactAssemblyPlan plan;
+
+    auto input_a = make_input(vertices,
+                              pts_a,
+                              empty_phs,
+                              StructuredContactOffbandPolicy::Drop);
+    input_a.ph_source = {};
+    input_a.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_a);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> vertices_a;
+    std::vector<SocuAssemblySideId> lookup_a;
+    plan.side_plan.sorted_side_vertices.copy_to(vertices_a);
+    plan.side_plan.vertex_to_side_id.copy_to(lookup_a);
+    CHECK(vertices_a == std::vector<IndexT>{0, 1, 2});
+    REQUIRE(lookup_a.size() == vertices_host.size());
+    CHECK(lookup_a[0] == 0);
+    CHECK(lookup_a[1] == 1);
+    CHECK(lookup_a[2] == 2);
+    CHECK(lookup_a[5] == SocuInvalidAssemblySideId);
+    CHECK(plan.side_plan.coverage.mode
+          == SocuVertexSideCoverageMode::DemandFilled);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 0);
+    CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 0);
+    CHECK(plan.side_plan.last_stats.side_count == 3);
+    CHECK(plan.side_plan.last_stats.active_side_vertex_count == 3);
+
+    auto input_b = make_input(vertices,
+                              pts_b,
+                              empty_phs,
+                              StructuredContactOffbandPolicy::Drop);
+    input_b.ph_source = {};
+    input_b.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    input_b.program_key.contact_topology_epoch++;
+    input_b.program_key.contact_content_hash++;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_b);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> vertices_b;
+    std::vector<SocuAssemblySideId> lookup_b;
+    std::vector<SocuContactProgramHeader> programs_b;
+    std::vector<SocuContactSourceToProgram> maps_b;
+    plan.side_plan.sorted_side_vertices.copy_to(vertices_b);
+    plan.side_plan.vertex_to_side_id.copy_to(lookup_b);
+    plan.program_plan.programs.copy_to(programs_b);
+    plan.program_plan.source_to_program.copy_to(maps_b);
+    CHECK(vertices_b == std::vector<IndexT>{0, 1, 2, 5});
+    CHECK(lookup_b[0] == 0);
+    CHECK(lookup_b[1] == 1);
+    CHECK(lookup_b[2] == 2);
+    CHECK(lookup_b[5] == 3);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 0);
+    CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 1);
+    CHECK(plan.side_plan.last_stats.side_coverage_refresh_count == 0);
+    CHECK(plan.side_plan.last_stats.active_side_vertex_count == 3);
+    CHECK(plan.side_plan.last_stats.side_count == 4);
+    REQUIRE(programs_b.size() == 1);
+    REQUIRE(maps_b.size() == 1);
+    CHECK(programs_b[0].program_kind == SocuContactProgramKind::Drop);
+    CHECK(programs_b[0].side_ids[0] == 0);
+    CHECK(programs_b[0].side_ids[1] == 3);
+    CHECK(programs_b[0].side_ids[2] == 2);
+    CHECK(maps_b[0].status == SocuContactProgramMapStatus::Dropped);
+
+    auto input_c = make_input(vertices,
+                              pts_c,
+                              empty_phs,
+                              StructuredContactOffbandPolicy::Drop);
+    input_c.ph_source = {};
+    input_c.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    input_c.program_key.contact_topology_epoch += 2;
+    input_c.program_key.contact_content_hash += 2;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_c);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> vertices_c;
+    std::vector<SocuContactProgramHeader> programs_c;
+    plan.side_plan.sorted_side_vertices.copy_to(vertices_c);
+    plan.program_plan.programs.copy_to(programs_c);
+    CHECK(vertices_c == vertices_b);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 1);
+    CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 0);
+    CHECK(plan.side_plan.last_stats.side_count == 4);
+    REQUIRE(programs_c.size() == 1);
+    CHECK(programs_c[0].side_ids[0] == 3);
+    CHECK(programs_c[0].side_ids[1] == 2);
+    CHECK(programs_c[0].side_ids[2] == 0);
+
+    auto input_empty = make_input(vertices,
+                                  empty_pts,
+                                  empty_phs,
+                                  StructuredContactOffbandPolicy::Drop);
+    input_empty.pt_source = {};
+    input_empty.ph_source = {};
+    input_empty.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    input_empty.program_key.contact_topology_epoch += 3;
+    input_empty.program_key.contact_content_hash += 3;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_empty);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> vertices_empty;
+    plan.side_plan.sorted_side_vertices.copy_to(vertices_empty);
+    CHECK(vertices_empty == vertices_b);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 1);
+    CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 0);
+    CHECK(plan.side_plan.last_stats.active_side_vertex_count == 0);
+
+    auto input_reset = make_input(vertices,
+                                  pts_c,
+                                  empty_phs,
+                                  StructuredContactOffbandPolicy::Drop);
+    input_reset.ph_source = {};
+    input_reset.side_coverage_mode = SocuVertexSideCoverageMode::DemandFilled;
+    input_reset.side_key.native_descriptor_epoch++;
+    input_reset.program_key.side_key = input_reset.side_key;
+    input_reset.program_key.contact_topology_epoch += 4;
+    input_reset.program_key.contact_content_hash += 4;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input_reset);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> vertices_reset;
+    std::vector<SocuAssemblySideId> lookup_reset;
+    plan.side_plan.sorted_side_vertices.copy_to(vertices_reset);
+    plan.side_plan.vertex_to_side_id.copy_to(lookup_reset);
+    CHECK(vertices_reset == std::vector<IndexT>{0, 2, 5});
+    CHECK(lookup_reset[0] == 0);
+    CHECK(lookup_reset[2] == 1);
+    CHECK(lookup_reset[5] == 2);
+    CHECK(lookup_reset[1] == SocuInvalidAssemblySideId);
+    CHECK(plan.side_plan.last_stats.side_coverage_hit_count == 0);
+    CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 0);
+    CHECK(plan.side_plan.last_stats.side_count == 3);
+}
+
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_symbolic_cpu_oracle",
           "[cuda_mixed_socu][contract][socu_approx][m2]")
 {
@@ -1325,6 +1478,7 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(solver.find("info.build_socu_contact_assembly_plan_m2(")
           != std::string::npos);
     CHECK(solver.find("native_contact_side_coverage_mode") != std::string::npos);
+    CHECK(solver.find("\"demand_filled\"") != std::string::npos);
     CHECK(solver.find("apply_native_contact_plan_stats")
           != std::string::npos);
 

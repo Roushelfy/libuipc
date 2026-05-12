@@ -257,6 +257,7 @@ struct SocuVertexSidePlan
     muda::DeviceBuffer<SocuAssemblySideRecord> sides;
     muda::DeviceBuffer<SocuAssemblyDofLane> lanes;
     muda::DeviceBuffer<IndexT> sorted_side_vertices;
+    muda::DeviceBuffer<SocuAssemblySideId> vertex_to_side_id;
     SocuVertexSideCoverageStamp coverage;
     SocuContactPlanStats last_stats;
 };
@@ -367,6 +368,8 @@ struct SocuContactAssemblyPlanM2Workspace
 {
     muda::DeviceBuffer<IndexT> vertex_refs;
     muda::DeviceBuffer<IndexT> sorted_vertex_refs;
+    muda::DeviceBuffer<IndexT> active_side_vertices;
+    muda::DeviceBuffer<IndexT> missing_side_vertices;
     muda::DeviceBuffer<int> unique_flags;
     muda::DeviceBuffer<int> unique_offsets;
     muda::DeviceBuffer<int> scalar_counts;
