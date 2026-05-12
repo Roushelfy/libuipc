@@ -1398,7 +1398,7 @@ Deliverables:
   - `linear_system/socu_approx/native_contact_hot_reduce=0/1`
   - `linear_system/socu_approx/native_contact_hot_reduce_strategy=off|detect_only|recompute|cached_microblock`
   - `linear_system/socu_approx/native_contact_scalar_diag_compat=0/1`
-  - `linear_system/socu_approx/native_contact_side_coverage_mode=global|active_set_temporary`
+  - `linear_system/socu_approx/native_contact_side_coverage_mode=global|demand_filled|active_set_temporary`
 - Add separate timers for:
   - native descriptor rebuild
   - contact plan build
@@ -1786,27 +1786,34 @@ Current implementation status:
   `global` side coverage path.
 - The scene default
   `linear_system/socu_approx/native_contact_side_coverage_mode` is `"global"`.
+  `"demand_filled"` is now available as an opt-in persistent coverage mode.
   `"active_set_temporary"` remains available only as a debug/correctness
   bisection mode.
-- `demand_filled` remains a later memory/performance optimization. It is not
-  part of the accepted M2b surface because M2b's deliverable allowed either
-  `global` or `demand_filled` persistent side coverage.
 - The generic `build_socu_contact_assembly_plan_m2()` builder now preserves the
-  global side plan when the side key hits and only rebuilds contact programs on
-  topology/content/off-band changes.
+  persistent side plan when the side key hits and only rebuilds contact programs
+  on topology/content/off-band changes.
+- `demand_filled` keeps a persistent `vertex_to_side_id` lookup. The
+  side-vertex array is side-id ordered, not sorted, in this mode; program
+  emission must use the lookup table so appending new vertices cannot shift old
+  side ids.
 - The old `build_socu_contact_assembly_plan_m2_active_set_temporary()` entry
   remains as an explicit wrapper for debug tests and M2 correctness bisection.
 
 Deliverables:
 
-- Replace `active_set_temporary` for performance builds with `global` side
-  coverage, materializing every vertex descriptor for the current
+- Replace `active_set_temporary` for performance builds with `global` or
+  `demand_filled` side coverage.
+- `global` materializes every vertex descriptor for the current
   `SocuVertexSidePlanKey`.
-- Keep side ids stable for the lifetime of a side key in `global` mode.
+- `demand_filled` materializes only currently referenced vertices on a cold
+  side key, then appends previously unseen active vertices on side-key hits.
+- Keep side ids stable for the lifetime of a side key in both persistent modes.
   Contact program plans may be rebuilt on topology changes, but previously
   emitted side ids must not silently change underneath a still-valid plan view.
-- Defer device-side missing-vertex detection for `demand_filled` mode until a
-  later memory optimization milestone.
+- Use device-side missing-vertex detection for `demand_filled` mode:
+  active contact stencils are sorted/uniqued on device, missing vertices are
+  compacted through `vertex_to_side_id`, side records are appended, and the
+  lookup is updated.
 - Keep host work limited to key checks, buffer growth decisions, kernel
   launches, and scalar report copies.
 - Add report fields for side coverage mode, coverage hit/refresh/fill count,
@@ -1822,7 +1829,15 @@ Unit tests:
     programs;
   - side semantic cache hits and side coverage hits;
   - no active-side-set refresh is reported.
-- `demand_filled` mode is not required for M2b acceptance on this branch.
+- `demand_filled` mode:
+  - first topology on a side key builds only the active side set;
+  - topology changes over already covered vertices rebuild only contact
+    programs and report a side coverage hit;
+  - topology changes introducing new vertices append side records, report
+    coverage fill, and preserve existing side ids;
+  - empty contact sets do not clear the persistent side cache;
+  - side-key changes reset coverage state and rebuild from the current active
+    side set.
 - `active_set_temporary` mode:
   - topology changes that change the active vertex set report
     `active_side_set_changed`;
@@ -1843,18 +1858,18 @@ Acceptance:
   comparison. It blocks final topology-churn performance acceptance.
 - The report makes it impossible to confuse semantic side rebuild time,
   coverage fill/refresh time, and contact program rebuild time.
-- M2b final acceptance validation:
+- M2b persistent side coverage validation:
   - `git diff --check`: passed.
   - `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12`:
     passed.
   - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2b]"`:
-    passed, `60` assertions in `3` test cases.
+    passed, `114` assertions in `4` test cases.
   - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"`:
-    passed, `584` assertions in `11` test cases.
+    passed, `638` assertions in `12` test cases.
   - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"`:
-    passed, `718` assertions in `24` test cases.
+    passed, `772` assertions in `25` test cases.
   - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"`:
-    passed, `5601` assertions in `44` test cases.
+    passed, `5655` assertions in `45` test cases.
 
 ### M3: Compatibility Program Writer For Exact Writes
 

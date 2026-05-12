@@ -2327,3 +2327,37 @@ Decision:
 - Accept M2b with `global` persistent side coverage. Topology-churn performance
   work may now proceed to M3/M5 without active-set side rebuild cost being
   hidden in the M2 builder.
+
+## 2026-05-12 Redesign Branch Demand-Filled Side Coverage
+
+Implemented:
+
+- Added opt-in `demand_filled` side coverage mode for the M2 builder.
+- Added a persistent `vertex_to_side_id` lookup to the side plan. Program
+  emission uses this lookup in `demand_filled` mode so appending missing active
+  vertices does not change existing side ids.
+- On a cold side key, `demand_filled` builds only the current active side set.
+  On a side-key hit, it sorts/uniques the current contact vertices on device,
+  detects missing vertices through the lookup, appends only missing side records,
+  rematerializes side/lane records, and rebuilds contact programs.
+- Empty contact sets preserve the demand-filled side cache. Side-key changes
+  reset the lookup and rebuild coverage from the current active set.
+- The solver config parser now accepts
+  `linear_system/socu_approx/native_contact_side_coverage_mode="demand_filled"`.
+
+Tests updated:
+
+- Added `[m2b]` CUDA builder coverage for demand-filled cold build, incremental
+  fill, no-missing cache hit, empty contact preservation, and side-key reset.
+- Extended the source scan to require the solver-side `"demand_filled"` parser
+  path.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2b]"` | passed, `114` assertions in `4` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `638` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `772` assertions in `25` test cases |
