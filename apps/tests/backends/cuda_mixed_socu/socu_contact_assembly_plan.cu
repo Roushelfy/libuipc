@@ -1734,6 +1734,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
         read_text_file(root / "src/core/core/scene_default_config.cpp");
     CHECK(defaults.find("native_contact_side_coverage_mode") != std::string::npos);
     CHECK(defaults.find("std::string{\"global\"}") != std::string::npos);
+    CHECK(defaults.find("native_contact_hot_reduce_threshold")
+          != std::string::npos);
+    CHECK(defaults.find("IndexT{8}") != std::string::npos);
 
     const auto wrecking_ball =
         read_text_file(root / "python/examples/cuda_mixed_wrecking_ball_compare.py");
@@ -1743,5 +1746,11 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_SIDE_COVERAGE_MODE")
           != std::string::npos);
     CHECK(wrecking_ball.find("native_contact_plan_executor")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_HOT_REDUCE")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_HOT_REDUCE_STRATEGY")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_HOT_REDUCE_THRESHOLD")
           != std::string::npos);
 }

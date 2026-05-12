@@ -432,7 +432,9 @@ class GlobalLinearSystem : public SimSystem
             SocuContactAssemblyPlanM2Workspace& workspace,
             const SocuVertexSidePlanKey&        side_key,
             const SocuContactProgramPlanKey&    program_key,
-            SocuVertexSideCoverageMode          coverage_mode) const;
+            SocuVertexSideCoverageMode          coverage_mode,
+            bool                                build_hot_block_plan = false,
+            SizeT                               hot_block_threshold = 0) const;
         bool build_socu_contact_assembly_plan_m2_active_set_temporary(
             SocuContactAssemblyPlan&            plan,
             SocuContactAssemblyPlanM2Workspace& workspace,

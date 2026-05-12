@@ -66,6 +66,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("linear_system/socu_approx/native_contact_hot_reduce", IndexT{0});
     config.create("linear_system/socu_approx/native_contact_hot_reduce_strategy",
                   std::string{"off"});
+    config.create("linear_system/socu_approx/native_contact_hot_reduce_threshold",
+                  IndexT{8});
     config.create("linear_system/socu_approx/native_contact_scalar_diag_compat",
                   IndexT{0});
     config.create("linear_system/socu_approx/native_contact_side_coverage_mode",

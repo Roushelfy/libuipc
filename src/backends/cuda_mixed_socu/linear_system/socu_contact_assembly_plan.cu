@@ -15,6 +15,8 @@ namespace uipc::backend::cuda_mixed
 namespace
 {
 constexpr IndexT InvalidVertex = std::numeric_limits<IndexT>::max();
+constexpr std::uint64_t InvalidHotBlockKey =
+    std::numeric_limits<std::uint64_t>::max();
 
 cudaStream_t launch_stream(cudaStream_t stream) noexcept
 {
@@ -710,6 +712,132 @@ MUDA_DEVICE void count_task_kind(const SocuContactMicroTask& task,
     }
 }
 
+MUDA_DEVICE bool hot_block_task_eligible(
+    SocuAssemblyWriteKind write_kind) noexcept
+{
+    switch(write_kind)
+    {
+        case SocuAssemblyWriteKind::ExactFemFem:
+        case SocuAssemblyWriteKind::ExactAbdFem:
+        case SocuAssemblyWriteKind::ExactFemAbd:
+        case SocuAssemblyWriteKind::ExactAbdAbdSameBody:
+        case SocuAssemblyWriteKind::ExactAbdAbdCrossBody:
+        case SocuAssemblyWriteKind::DiagBlockFem:
+        case SocuAssemblyWriteKind::DiagBlockAbd:
+            return true;
+        default:
+            return false;
+    }
+}
+
+MUDA_GENERIC std::uint64_t make_hot_block_key(SocuAssemblyBand band,
+                                              std::uint32_t block) noexcept
+{
+    const auto band_value =
+        band == SocuAssemblyBand::FirstOffdiag ? std::uint64_t{1}
+                                               : std::uint64_t{0};
+    return (band_value << 32) | static_cast<std::uint64_t>(block);
+}
+
+MUDA_GENERIC SocuAssemblyBand hot_block_band_from_key(
+    std::uint64_t key) noexcept
+{
+    return ((key >> 32) & std::uint64_t{1}) != 0
+               ? SocuAssemblyBand::FirstOffdiag
+               : SocuAssemblyBand::Diag;
+}
+
+MUDA_GENERIC std::uint32_t hot_block_block_from_key(
+    std::uint64_t key) noexcept
+{
+    return static_cast<std::uint32_t>(key & std::uint64_t{0xffffffffu});
+}
+
+__global__ void fill_hot_block_keys_kernel(
+    muda::CBufferView<SocuContactMicroTask> tasks,
+    muda::BufferView<std::uint64_t> keys,
+    muda::BufferView<std::uint32_t> task_ids,
+    muda::BufferView<int> counts)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= tasks.size())
+        return;
+
+    const auto task = tasks.data()[i];
+    task_ids.data()[i] = static_cast<std::uint32_t>(i);
+    if(hot_block_task_eligible(task.write_kind))
+    {
+        keys.data()[i] = make_hot_block_key(task.band,
+                                            task.block_or_left_block);
+        atomicAdd(&counts.data()[0], 1);
+    }
+    else
+    {
+        keys.data()[i] = InvalidHotBlockKey;
+    }
+}
+
+__global__ void mark_hot_block_ranges_kernel(
+    muda::CBufferView<std::uint64_t> sorted_keys,
+    SizeT threshold,
+    muda::BufferView<int> range_flags)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= sorted_keys.size())
+        return;
+
+    const auto key = sorted_keys.data()[i];
+    if(key == InvalidHotBlockKey
+       || (i != 0 && sorted_keys.data()[i - 1] == key))
+    {
+        range_flags.data()[i] = 0;
+        return;
+    }
+
+    SizeT run_count = 1;
+    while(i + run_count < sorted_keys.size()
+          && sorted_keys.data()[i + run_count] == key)
+        ++run_count;
+
+    const SizeT effective_threshold = threshold == 0 ? SizeT{1} : threshold;
+    range_flags.data()[i] = run_count >= effective_threshold ? 1 : 0;
+}
+
+__global__ void compact_hot_block_ranges_kernel(
+    muda::CBufferView<std::uint64_t> sorted_keys,
+    muda::CBufferView<std::uint32_t> sorted_task_ids,
+    muda::CBufferView<int> range_flags,
+    muda::CBufferView<int> range_offsets,
+    muda::BufferView<SocuHotBlockRef> refs,
+    muda::BufferView<SocuHotBlockRange> ranges,
+    muda::BufferView<int> counts)
+{
+    const SizeT i = static_cast<SizeT>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= sorted_keys.size())
+        return;
+
+    const auto key = sorted_keys.data()[i];
+    refs.data()[i].task_id = sorted_task_ids.data()[i];
+    if(!range_flags.data()[i] || key == InvalidHotBlockKey)
+        return;
+
+    SizeT run_count = 1;
+    while(i + run_count < sorted_keys.size()
+          && sorted_keys.data()[i + run_count] == key)
+        ++run_count;
+
+    SocuHotBlockRange range;
+    range.band = hot_block_band_from_key(key);
+    range.block_or_left_block = hot_block_block_from_key(key);
+    range.first_ref = static_cast<std::uint32_t>(i);
+    range.ref_count = static_cast<std::uint32_t>(run_count);
+    ranges.data()[static_cast<SizeT>(range_offsets.data()[i])] = range;
+
+    const int count_index =
+        range.band == SocuAssemblyBand::Diag ? 1 : 2;
+    atomicAdd(&counts.data()[count_index], 1);
+}
+
 MUDA_DEVICE void count_program_map_status(
     const SocuContactSourceToProgram& map,
     SizeT                             program_count,
@@ -821,6 +949,19 @@ int copy_first_int(muda::DeviceBuffer<int>& buffer)
     return out;
 }
 
+void clear_hot_block_plan(SocuContactProgramPlan& program_plan,
+                          SizeT threshold,
+                          bool detect_only)
+{
+    program_plan.hot_blocks.refs.resize(0);
+    program_plan.hot_blocks.ranges.resize(0);
+    program_plan.hot_blocks.threshold = threshold;
+    program_plan.hot_blocks.eligible_task_count = 0;
+    program_plan.hot_blocks.detect_only = detect_only;
+    program_plan.last_stats.hot_diag_block_count = 0;
+    program_plan.last_stats.hot_offdiag_block_count = 0;
+}
+
 void resize_zero_side_plan(SocuVertexSidePlan& plan,
                            SocuVertexSideCoverageMode mode)
 {
@@ -904,6 +1045,99 @@ void materialize_side_records_and_lanes(
                       plan.sides.view(),
                       plan.lanes.view());
               });
+}
+
+void build_detect_only_hot_block_plan(
+    SocuContactProgramPlan&              program_plan,
+    SocuContactAssemblyPlanM2Workspace&  workspace,
+    SizeT                                threshold,
+    cudaStream_t                         stream)
+{
+    clear_hot_block_plan(program_plan, threshold, true);
+
+    const SizeT task_count = program_plan.tasks.size();
+    if(task_count == 0)
+        return;
+
+    workspace.hot_block_keys.resize(task_count);
+    workspace.hot_block_sorted_keys.resize(task_count);
+    workspace.hot_block_task_ids.resize(task_count);
+    workspace.hot_block_sorted_task_ids.resize(task_count);
+    workspace.hot_block_range_flags.resize(task_count);
+    workspace.hot_block_range_offsets.resize(task_count);
+    workspace.hot_block_counts.resize(3);
+    program_plan.hot_blocks.refs.resize(task_count);
+    program_plan.hot_blocks.ranges.resize(task_count);
+
+    muda::BufferLaunch(stream).fill<int>(workspace.hot_block_counts.view(), 0);
+    launch_1d(task_count,
+              [&](unsigned int grid, int block)
+              {
+                  fill_hot_block_keys_kernel<<<grid,
+                                               block,
+                                               0,
+                                               launch_stream(stream)>>>(
+                      program_plan.tasks.view(),
+                      workspace.hot_block_keys.view(),
+                      workspace.hot_block_task_ids.view(),
+                      workspace.hot_block_counts.view());
+              });
+
+    muda::DeviceRadixSort().SortPairs(workspace.hot_block_keys.data(),
+                                      workspace.hot_block_sorted_keys.data(),
+                                      workspace.hot_block_task_ids.data(),
+                                      workspace.hot_block_sorted_task_ids.data(),
+                                      static_cast<int>(task_count));
+
+    launch_1d(task_count,
+              [&](unsigned int grid, int block)
+              {
+                  mark_hot_block_ranges_kernel<<<grid,
+                                                 block,
+                                                 0,
+                                                 launch_stream(stream)>>>(
+                      workspace.hot_block_sorted_keys.view(),
+                      threshold,
+                      workspace.hot_block_range_flags.view());
+              });
+    muda::DeviceScan().ExclusiveSum(workspace.hot_block_range_flags.data(),
+                                    workspace.hot_block_range_offsets.data(),
+                                    static_cast<int>(task_count));
+    write_last_scan_total_kernel<<<1, 1, 0, launch_stream(stream)>>>(
+        workspace.hot_block_range_flags.view(),
+        workspace.hot_block_range_offsets.view(),
+        workspace.scalar_total.view());
+    const int range_count = copy_first_int(workspace.scalar_total);
+
+    launch_1d(task_count,
+              [&](unsigned int grid, int block)
+              {
+                  compact_hot_block_ranges_kernel<<<grid,
+                                                    block,
+                                                    0,
+                                                    launch_stream(stream)>>>(
+                      workspace.hot_block_sorted_keys.view(),
+                      workspace.hot_block_sorted_task_ids.view(),
+                      workspace.hot_block_range_flags.view(),
+                      workspace.hot_block_range_offsets.view(),
+                      program_plan.hot_blocks.refs.view(),
+                      program_plan.hot_blocks.ranges.view(),
+                      workspace.hot_block_counts.view());
+              });
+    cudaStreamSynchronize(launch_stream(stream));
+    program_plan.hot_blocks.ranges.resize(static_cast<SizeT>(range_count));
+
+    std::vector<int> counts;
+    workspace.hot_block_counts.copy_to(counts);
+    if(counts.size() >= 3)
+    {
+        program_plan.hot_blocks.eligible_task_count =
+            static_cast<SizeT>(counts[0]);
+        program_plan.last_stats.hot_diag_block_count =
+            static_cast<SizeT>(counts[1]);
+        program_plan.last_stats.hot_offdiag_block_count =
+            static_cast<SizeT>(counts[2]);
+    }
 }
 
 SocuContactSourceHeader make_source_header(SocuContactSourceId source_id,
@@ -1117,6 +1351,8 @@ SocuContactAssemblyPlanView socu_contact_assembly_plan_view(
                                        plan.program_plan.programs.view(),
                                        plan.program_plan.tasks.view(),
                                        plan.program_plan.buckets.view(),
+                                       plan.program_plan.hot_blocks.refs.view(),
+                                       plan.program_plan.hot_blocks.ranges.view(),
                                        plan.program_plan.source_to_program.view()};
 }
 
@@ -1750,6 +1986,9 @@ void build_socu_contact_assembly_plan_m2(
     {
         plan.program_plan.buckets.resize(0);
         plan.program_plan.last_stats.bucket_count = 0;
+        clear_hot_block_plan(plan.program_plan,
+                             input.hot_block_threshold,
+                             input.build_hot_block_plan);
         return;
     }
 
@@ -1839,6 +2078,16 @@ void build_socu_contact_assembly_plan_m2(
         stat(M2ProgramStatSlot::SkippedProgramMap);
     plan.program_plan.last_stats.mixed_rejected_program_map_count =
         stat(M2ProgramStatSlot::MixedRejectedProgramMap);
+
+    if(input.build_hot_block_plan)
+        build_detect_only_hot_block_plan(plan.program_plan,
+                                         workspace,
+                                         input.hot_block_threshold,
+                                         input.stream);
+    else
+        clear_hot_block_plan(plan.program_plan,
+                             input.hot_block_threshold,
+                             false);
 }
 
 void build_socu_contact_assembly_plan_m2_active_set_temporary(

@@ -953,7 +953,9 @@ bool GlobalLinearSystem::StructuredAssemblyInfo::build_socu_contact_assembly_pla
         SocuContactAssemblyPlanM2Workspace& workspace,
         const SocuVertexSidePlanKey&        side_key,
         const SocuContactProgramPlanKey&    program_key,
-        SocuVertexSideCoverageMode          coverage_mode) const
+        SocuVertexSideCoverageMode          coverage_mode,
+        bool                                build_hot_block_plan,
+        SizeT                               hot_block_threshold) const
 {
     if(!m_impl || !m_impl->global_dytopo_effect_manager)
         return false;
@@ -969,6 +971,8 @@ bool GlobalLinearSystem::StructuredAssemblyInfo::build_socu_contact_assembly_pla
             m_native_vertex_descriptors,
             m_contact_offband_policy,
             coverage_mode,
+            build_hot_block_plan,
+            hot_block_threshold,
             m_stream);
     return true;
 }

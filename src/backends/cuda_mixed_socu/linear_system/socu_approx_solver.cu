@@ -138,8 +138,7 @@ bool contact_hessian_cache_enabled(const std::string&             graph_source,
 
 bool native_contact_hot_reduce_strategy_valid(std::string_view strategy) noexcept
 {
-    return strategy == "off" || strategy == "detect_only"
-           || strategy == "recompute" || strategy == "cached_microblock";
+    return strategy == "off" || strategy == "detect_only";
 }
 
 bool parse_native_contact_side_coverage_mode(
@@ -406,6 +405,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     auto native_contact_hot_reduce_strategy_attr =
         config.find<std::string>(
             "linear_system/socu_approx/native_contact_hot_reduce_strategy");
+    auto native_contact_hot_reduce_threshold_attr =
+        config.find<IndexT>(
+            "linear_system/socu_approx/native_contact_hot_reduce_threshold");
     auto native_contact_scalar_diag_compat_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/native_contact_scalar_diag_compat");
@@ -454,14 +456,29 @@ void SocuApproxSolver::do_build(BuildInfo& info)
         m_gate_report = make_failure(
             SocuApproxGateReason::OrderingInvalid,
             fmt::format("linear_system/socu_approx/"
-                        "native_contact_hot_reduce_strategy must be 'off', "
-                        "'detect_only', 'recompute', or 'cached_microblock', "
+                        "native_contact_hot_reduce_strategy currently supports "
+                        "only 'off' or 'detect_only' before owner-reduce lands, "
                         "got '{}'",
                         m_native_contact_hot_reduce_strategy));
         throw_gate_failure(m_gate_report);
     }
     m_native_contact_hot_reduce_enabled =
         m_native_contact_hot_reduce_strategy != "off";
+    const IndexT native_contact_hot_reduce_threshold =
+        native_contact_hot_reduce_threshold_attr
+            ? native_contact_hot_reduce_threshold_attr->view()[0]
+            : IndexT{8};
+    if(native_contact_hot_reduce_threshold < 0)
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/"
+                        "native_contact_hot_reduce_threshold must be >= 0, got {}",
+                        native_contact_hot_reduce_threshold));
+        throw_gate_failure(m_gate_report);
+    }
+    m_native_contact_hot_reduce_threshold =
+        static_cast<SizeT>(native_contact_hot_reduce_threshold);
     auto debug_write_runtime_ordering_report_attr =
         config.find<IndexT>(
             "linear_system/socu_approx/debug_write_runtime_ordering_report");
@@ -1878,7 +1895,9 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                 *m_native_contact_plan_workspace,
                 side_key,
                 program_key,
-                m_native_contact_side_coverage_mode);
+                m_native_contact_side_coverage_mode,
+                m_native_contact_hot_reduce_enabled,
+                m_native_contact_hot_reduce_threshold);
         const auto end = std::chrono::steady_clock::now();
         if(built)
         {

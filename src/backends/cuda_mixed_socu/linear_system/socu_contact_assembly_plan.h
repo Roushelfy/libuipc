@@ -200,6 +200,28 @@ struct SocuContactProgramBucket
     std::uint32_t program_count = 0;
 };
 
+struct SocuHotBlockRef
+{
+    std::uint32_t task_id = 0;
+};
+
+struct SocuHotBlockRange
+{
+    SocuAssemblyBand band = SocuAssemblyBand::Diag;
+    std::uint32_t block_or_left_block = 0;
+    std::uint32_t first_ref = 0;
+    std::uint32_t ref_count = 0;
+};
+
+struct SocuHotBlockPlan
+{
+    muda::DeviceBuffer<SocuHotBlockRef> refs;
+    muda::DeviceBuffer<SocuHotBlockRange> ranges;
+    SizeT threshold = 0;
+    SizeT eligible_task_count = 0;
+    bool detect_only = false;
+};
+
 struct SocuVertexSideCoverageStamp
 {
     SocuVertexSideCoverageMode mode = SocuVertexSideCoverageMode::Global;
@@ -270,6 +292,7 @@ struct SocuContactProgramPlan
     muda::DeviceBuffer<SocuContactMicroTask> tasks;
     muda::DeviceBuffer<SocuContactProgramBucket> buckets;
     muda::DeviceBuffer<SocuContactSourceToProgram> source_to_program;
+    SocuHotBlockPlan hot_blocks;
     SocuContactPlanStats last_stats;
 };
 
@@ -297,6 +320,8 @@ struct SocuContactAssemblyPlanView
     muda::CBufferView<SocuContactProgramHeader> programs;
     muda::CBufferView<SocuContactMicroTask> tasks;
     muda::CBufferView<SocuContactProgramBucket> buckets;
+    muda::CBufferView<SocuHotBlockRef> hot_block_refs;
+    muda::CBufferView<SocuHotBlockRange> hot_block_ranges;
     muda::CBufferView<SocuContactSourceToProgram> source_to_program;
 
     MUDA_GENERIC bool valid() const noexcept
@@ -367,6 +392,8 @@ struct SocuContactAssemblyPlanM2BuildInput
         StructuredContactOffbandPolicy::Drop;
     SocuVertexSideCoverageMode side_coverage_mode =
         SocuVertexSideCoverageMode::ActiveSetTemporary;
+    bool build_hot_block_plan = false;
+    SizeT hot_block_threshold = 0;
     cudaStream_t stream = cudaStreamLegacy;
 };
 
@@ -385,6 +412,13 @@ struct SocuContactAssemblyPlanM2Workspace
     muda::DeviceBuffer<int> program_bucket_flags;
     muda::DeviceBuffer<int> program_bucket_offsets;
     muda::DeviceBuffer<int> program_stats;
+    muda::DeviceBuffer<std::uint64_t> hot_block_keys;
+    muda::DeviceBuffer<std::uint64_t> hot_block_sorted_keys;
+    muda::DeviceBuffer<std::uint32_t> hot_block_task_ids;
+    muda::DeviceBuffer<std::uint32_t> hot_block_sorted_task_ids;
+    muda::DeviceBuffer<int> hot_block_range_flags;
+    muda::DeviceBuffer<int> hot_block_range_offsets;
+    muda::DeviceBuffer<int> hot_block_counts;
 };
 
 SocuContactAssemblyPlanView socu_contact_assembly_plan_view(

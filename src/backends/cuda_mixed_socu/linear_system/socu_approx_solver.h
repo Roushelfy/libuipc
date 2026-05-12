@@ -142,6 +142,7 @@ class SocuApproxSolver : public LinearSolver
     SizeT       m_native_contact_side_coverage_refresh_count = 0;
     SizeT       m_native_contact_side_coverage_fill_count = 0;
     SizeT       m_native_contact_active_side_set_changed_count = 0;
+    SizeT       m_native_contact_hot_reduce_threshold = 8;
     std::unique_ptr<SocuContactAssemblyPlan> m_native_contact_plan;
     std::unique_ptr<SocuContactAssemblyPlanM2Workspace> m_native_contact_plan_workspace;
     SocuVertexSideCoverageMode m_native_contact_side_coverage_mode =

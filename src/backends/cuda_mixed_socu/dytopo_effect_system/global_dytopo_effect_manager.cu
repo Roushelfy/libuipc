@@ -1024,6 +1024,8 @@ void GlobalDyTopoEffectManager::Impl::
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
+        bool                            build_hot_block_plan,
+        SizeT                           hot_block_threshold,
         cudaStream_t                   stream)
 {
     SocuContactAssemblyPlanM2BuildInput input;
@@ -1032,6 +1034,8 @@ void GlobalDyTopoEffectManager::Impl::
     input.vertex_descriptors = vertex_descriptors;
     input.offband_policy = offband_policy;
     input.side_coverage_mode = coverage_mode;
+    input.build_hot_block_plan = build_hot_block_plan;
+    input.hot_block_threshold = hot_block_threshold;
     input.stream = stream;
 
     std::vector<SocuContactM2SourceInput> sources;
@@ -1349,6 +1353,8 @@ void GlobalDyTopoEffectManager::
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
+        bool                            build_hot_block_plan,
+        SizeT                           hot_block_threshold,
         cudaStream_t                   stream)
 {
     m_impl.build_socu_contact_assembly_plan_m2(
@@ -1359,6 +1365,8 @@ void GlobalDyTopoEffectManager::
         vertex_descriptors,
         offband_policy,
         coverage_mode,
+        build_hot_block_plan,
+        hot_block_threshold,
         stream);
 }
 

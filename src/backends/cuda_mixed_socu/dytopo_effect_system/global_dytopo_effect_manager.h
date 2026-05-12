@@ -175,6 +175,8 @@ class GlobalDyTopoEffectManager final : public SimSystem
             muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
             StructuredContactOffbandPolicy offband_policy,
             SocuVertexSideCoverageMode     coverage_mode,
+            bool                            build_hot_block_plan,
+            SizeT                           hot_block_threshold,
             cudaStream_t                   stream);
         SizeT contact_set_signature();
         SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
@@ -288,6 +290,8 @@ class GlobalDyTopoEffectManager final : public SimSystem
         muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
         StructuredContactOffbandPolicy offband_policy,
         SocuVertexSideCoverageMode     coverage_mode,
+        bool                            build_hot_block_plan,
+        SizeT                           hot_block_threshold,
         cudaStream_t                   stream);
     SizeT contact_set_signature();
     SocuContactTopologyStamp contact_topology_stamp(cudaStream_t stream);
