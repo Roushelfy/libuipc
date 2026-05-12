@@ -1938,6 +1938,41 @@ Detailed M3 test specifications:
 M3 cannot be accepted unless a device kernel exercises the production writer
 API. Calling helper functions from host tests is not enough.
 
+Current implementation status:
+
+- M3 compatibility writer correctness is implemented in
+  `socu-native-builder-redesign` as of 2026-05-12.
+- Added production-only `socu_contact_program_writer.h`. The writer consumes
+  `SocuContactAssemblyPlanView` and `SocuNativeMatrixView`, resolves
+  `(source_id, local_contact_id)` through the O(1) source map, and writes exact
+  FEM/FEM, ABD/FEM, and FEM/ABD tasks directly to native `D/E`.
+- ABD/ABD exact tasks are deliberately rejected until M4 implements and tests
+  same-body and cross-body projection semantics. This prevents the M3 writer
+  from silently accepting a half-implemented exact class.
+- Added `socu_contact_program_debug_compare.h` as a separate debug-only helper.
+  The production writer header does not include the debug helper, the
+  structured sink, legacy target headers, `old_to_chain`, or
+  `classify_dof_pair`.
+- Added `[m3]` CUDA tests that launch device kernels calling
+  `write_contact(source_id, local_contact_id, H)` on the production writer.
+  Coverage includes FEM/FEM same-block and first-offdiag parity with the legacy
+  structured sink, ABD/FEM projection parity, FEM/ABD reverse-orientation
+  parity, explicit diagonal mirror-flag behavior, invalid source/local ids,
+  skipped/drop/mixed/missing status counters, debug-compare isolation, and
+  compile-command/source scans.
+- M3 writer correctness/interface validation:
+  - `git diff --check`: passed.
+  - `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12`:
+    passed.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m3]"`:
+    passed, `6230` assertions in `6` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"`:
+    passed, `638` assertions in `12` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"`:
+    passed, `7002` assertions in `31` test cases.
+  - `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"`:
+    passed, `11885` assertions in `51` test cases.
+
 Acceptance:
 
 - No production writer path reads `old_to_chain` or calls

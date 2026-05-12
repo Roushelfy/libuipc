@@ -2361,3 +2361,44 @@ Validation:
 | `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2b]"` | passed, `114` assertions in `4` test cases |
 | `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `638` assertions in `12` test cases |
 | `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `772` assertions in `25` test cases |
+
+## 2026-05-12 Redesign Branch M3 Contact Program Writer
+
+Implemented:
+
+- Added production-only `SocuContactProgramWriter`.
+- The writer consumes the compact M2 plan view and native matrix view, resolves
+  contacts through `program_for(source_id, local_contact_id)`, and writes exact
+  FEM/FEM, ABD/FEM, and FEM/ABD tasks directly into native `D/E`.
+- Added a separate `SocuContactProgramDebugCompare` helper so debug comparison
+  remains outside the production writer header.
+- Kept ABD/ABD exact writes rejected until M4, where same-body and cross-body
+  projection policies can be tested as a complete exact-policy set.
+- Added counters for missing, skipped, dropped, mixed-rejected, contact-write,
+  exact-task-write, and unsupported-task cases.
+
+Tests updated:
+
+- Added `[m3]` CUDA writer tests whose kernels call the production
+  `write_contact(source_id, local_contact_id, H)` API.
+- Covered FEM/FEM same-block mirroring, FEM/FEM first-offdiag orientation,
+  ABD/FEM projection, FEM/ABD reverse orientation, no-mirror diagonal tasks,
+  invalid source/local ids, skipped/drop/mixed/missing map statuses, debug
+  compare isolation, and production-header source scans.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu --parallel 12` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m3]"` | passed, `6230` assertions in `6` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][m2]"` | passed, `638` assertions in `12` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `7002` assertions in `31` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `11885` assertions in `51` test cases |
+
+Decision:
+
+- M3 writer correctness and interface acceptance are complete. M4 should extend
+  the same writer to the full exact/diag/diag-lump policy set and add the
+  performance comparison table before making numeric-speed claims.
