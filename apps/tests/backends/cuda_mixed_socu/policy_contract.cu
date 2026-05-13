@@ -3,6 +3,7 @@
 #include <linear_system/socu_contact_assembly_plan.h>
 #include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/socu_approx_report.h>
+#include <linear_system/socu_approx_ordering.h>
 #include <linear_system/socu_approx_solver.h>
 #include <linear_system/socu_rcm_ordering.h>
 #include <mixed_precision/policy.h>
@@ -25,7 +26,9 @@
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+using uipc::IndexT;
 using uipc::SizeT;
+using uipc::span;
 
 static_assert(std::is_base_of_v<LinearSolver, SocuApproxSolver>);
 static_assert(UIPC_WITH_SOCU_NATIVE == 0 || UIPC_WITH_SOCU_NATIVE == 1);
@@ -72,8 +75,19 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
     CHECK(timing.at("native_contact_side_plan_build_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_program_plan_build_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_side_coverage_refresh_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_active_vertex_collect_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_missing_side_fill_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_program_emit_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_bucket_build_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_hot_block_build_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_numeric_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_hessian_triplet_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_direct_eval_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_direct_compare_ms").get<double>() == 0.0);
+    CHECK(timing.at("native_contact_direct_compare_max_abs_error").get<double>()
+          == 0.0);
+    CHECK(timing.at("native_contact_direct_compare_sum_abs_error").get<double>()
+          == 0.0);
     CHECK(timing.at("native_contact_executor_scatter_ms").get<double>() == 0.0);
     CHECK(timing.at("native_contact_hot_reduce_ms").get<double>() == 0.0);
 
@@ -96,6 +110,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
           == "off");
     CHECK(contact.at("native_contact_source_id_validation_status").get<std::string>()
           == "not_run");
+    CHECK(contact.at("native_contact_evaluator_path").get<std::string>()
+          == "triplet_compat");
     for(const char* field : {"native_contact_plan_rebuild_count",
                              "native_contact_side_plan_rebuild_count",
                              "native_contact_program_plan_rebuild_count",
@@ -122,11 +138,19 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
                              "native_contact_drop_program_count",
                              "native_contact_skipped_program_count",
                              "native_contact_mixed_rejected_program_count",
+                             "native_contact_side_id_invalid_program_count",
+                             "native_contact_side_not_writable_program_count",
+                             "native_contact_offband_dropped_program_count",
+                             "native_contact_mixed_rejected_reason_program_count",
+                             "native_contact_source_local_missing_program_count",
                              "native_contact_diag_block_task_count",
                              "native_contact_diag_scalar_task_count",
                              "native_contact_lump_scalar_task_count",
                              "native_contact_hot_diag_block_count",
-                             "native_contact_hot_offdiag_block_count"})
+                             "native_contact_hot_offdiag_block_count",
+                             "native_contact_direct_unsupported_program_count",
+                             "native_contact_direct_fallback_program_count",
+                             "native_contact_direct_compare_mismatch_count"})
     {
         CAPTURE(field);
         CHECK(contact.at(field).get<SizeT>() == SizeT{0});
@@ -147,6 +171,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     side_stats.lane_count = 21;
     side_stats.coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
     side_stats.active_side_vertex_count = 4;
+    side_stats.active_vertex_collect_ms = 0.25;
+    side_stats.missing_side_fill_ms = 0.50;
     program_stats.source_count = 3;
     program_stats.source_id_validation_status =
         SocuContactSourceIdValidationStatus::ValidDense;
@@ -166,11 +192,21 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     program_stats.drop_program_count = 2;
     program_stats.skipped_program_count = 1;
     program_stats.mixed_rejected_program_count = 0;
+    program_stats.side_id_invalid_program_count = 8;
+    program_stats.side_not_writable_program_count = 9;
+    program_stats.offband_dropped_program_count = 10;
+    program_stats.mixed_rejected_reason_program_count = 11;
+    program_stats.source_local_missing_program_count = 12;
     program_stats.diag_block_task_count = 3;
     program_stats.diag_scalar_task_count = 4;
     program_stats.lump_scalar_task_count = 5;
     program_stats.hot_diag_block_count = 6;
     program_stats.hot_offdiag_block_count = 7;
+    program_stats.active_vertex_collect_ms = 0.125;
+    program_stats.missing_side_fill_ms = 0.25;
+    program_stats.program_emit_ms = 1.0;
+    program_stats.bucket_build_ms = 2.0;
+    program_stats.hot_block_build_ms = 3.0;
     apply_native_contact_plan_stats(report, side_stats, program_stats);
 
     CHECK(report.native_contact_side_count == 4);
@@ -194,11 +230,21 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(report.native_contact_diag_lump_program_count == 1);
     CHECK(report.native_contact_drop_program_count == 2);
     CHECK(report.native_contact_skipped_program_count == 1);
+    CHECK(report.native_contact_side_id_invalid_program_count == 8);
+    CHECK(report.native_contact_side_not_writable_program_count == 9);
+    CHECK(report.native_contact_offband_dropped_program_count == 10);
+    CHECK(report.native_contact_mixed_rejected_reason_program_count == 11);
+    CHECK(report.native_contact_source_local_missing_program_count == 12);
     CHECK(report.native_contact_diag_block_task_count == 3);
     CHECK(report.native_contact_diag_scalar_task_count == 4);
     CHECK(report.native_contact_lump_scalar_task_count == 5);
     CHECK(report.native_contact_hot_diag_block_count == 6);
     CHECK(report.native_contact_hot_offdiag_block_count == 7);
+    CHECK(report.native_contact_active_vertex_collect_ms == Catch::Approx(0.375));
+    CHECK(report.native_contact_missing_side_fill_ms == Catch::Approx(0.75));
+    CHECK(report.native_contact_program_emit_ms == Catch::Approx(1.0));
+    CHECK(report.native_contact_bucket_build_ms == Catch::Approx(2.0));
+    CHECK(report.native_contact_hot_block_build_ms == Catch::Approx(3.0));
 
     SocuContactPlanCacheState cache;
     SocuAssemblyPlanKey key;
@@ -300,6 +346,18 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(contact.at("native_contact_bucket_count").get<SizeT>() == 5);
     CHECK(contact.at("native_contact_exact_program_count").get<SizeT>() == 2);
     CHECK(contact.at("native_contact_drop_program_count").get<SizeT>() == 2);
+    CHECK(contact.at("native_contact_side_id_invalid_program_count").get<SizeT>()
+          == 8);
+    CHECK(contact.at("native_contact_side_not_writable_program_count").get<SizeT>()
+          == 9);
+    CHECK(contact.at("native_contact_offband_dropped_program_count").get<SizeT>()
+          == 10);
+    CHECK(contact.at("native_contact_mixed_rejected_reason_program_count")
+              .get<SizeT>()
+          == 11);
+    CHECK(contact.at("native_contact_source_local_missing_program_count")
+              .get<SizeT>()
+          == 12);
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>());
     CHECK(!contact.at("native_contact_plan_cold_start").get<bool>());
     CHECK(!contact.at("native_contact_plan_rebuilt_this_solve").get<bool>());
@@ -308,6 +366,20 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(contact.at("native_contact_program_plan_cache_hit").get<bool>());
     CHECK(contact.at("native_contact_side_plan_rebuild_count").get<SizeT>() == 1);
     CHECK(contact.at("native_contact_program_plan_rebuild_count").get<SizeT>() == 2);
+    CHECK(json.at("timing")
+              .at("native_contact_active_vertex_collect_ms")
+              .get<double>()
+          == Catch::Approx(0.375));
+    CHECK(json.at("timing")
+              .at("native_contact_missing_side_fill_ms")
+              .get<double>()
+          == Catch::Approx(0.75));
+    CHECK(json.at("timing").at("native_contact_program_emit_ms").get<double>()
+          == Catch::Approx(1.0));
+    CHECK(json.at("timing").at("native_contact_bucket_build_ms").get<double>()
+          == Catch::Approx(2.0));
+    CHECK(json.at("timing").at("native_contact_hot_block_build_ms").get<double>()
+          == Catch::Approx(3.0));
 
     std::filesystem::remove(report_path);
 }
@@ -406,6 +478,100 @@ TEST_CASE("cuda_mixed_socu_mixed_graph_fem_source_id",
         CHECK(merged.atoms[merged_id].source_id == fem_graph.atoms[atom].source_id);
         CHECK(merged.atoms[merged_id].source_id != merged_id);
     }
+}
+
+TEST_CASE("cuda_mixed_socu_abd_ordering_keeps_body_side_contiguous",
+          "[cuda_mixed_socu][contract][socu_approx][m65]")
+{
+    namespace ordering = uipc::backend::cuda_mixed::socu_approx;
+
+    auto report = ordering::generate_abd_init_time_ordering_report(
+        2,
+        "rcm",
+        "64");
+    const auto* candidate = ordering::selected_candidate_json(report);
+    REQUIRE(candidate != nullptr);
+    const auto* ordering_json = ordering::ordering_json(*candidate);
+    REQUIRE(ordering_json != nullptr);
+
+    REQUIRE(ordering_json->at("atom_dof_count").size() == 2);
+    CHECK(ordering_json->at("atom_dof_count").at(0).get<SizeT>() == 12);
+    CHECK(ordering_json->at("atom_dof_count").at(1).get<SizeT>() == 12);
+
+    SizeT ordering_dof_count = 0;
+    std::string detail;
+    REQUIRE(ordering::parse_atom_dof_count(*ordering_json,
+                                           ordering_dof_count,
+                                           detail));
+    CHECK(ordering_dof_count == 24);
+
+    std::vector<SocuApproxBlockLayout> blocks;
+    REQUIRE(ordering::parse_block_layouts(*ordering_json, blocks, detail));
+
+    std::unique_ptr<StructuredChainProvider> provider;
+    SizeT padding_slot_count = 0;
+    REQUIRE(ordering::build_ordering_provider(*ordering_json,
+                                              64,
+                                              blocks,
+                                              provider,
+                                              padding_slot_count,
+                                              detail));
+
+    std::vector<IndexT> old_to_chain;
+    std::vector<IndexT> chain_to_old;
+    StructuredQualityReport quality;
+    REQUIRE(ordering::validate_dof_coverage(provider->dof_slots(),
+                                            ordering_dof_count,
+                                            blocks.size() * SizeT{64},
+                                            old_to_chain,
+                                            chain_to_old,
+                                            quality,
+                                            detail));
+
+    std::vector<IndexT> old_dof_to_atom(ordering_dof_count, -1);
+    SizeT old_dof = 0;
+    for(SizeT atom = 0; atom < ordering_json->at("atom_dof_count").size(); ++atom)
+    {
+        const SizeT dofs =
+            ordering_json->at("atom_dof_count").at(atom).get<SizeT>();
+        for(SizeT local = 0; local < dofs; ++local)
+            old_dof_to_atom[old_dof + local] = static_cast<IndexT>(atom);
+        old_dof += dofs;
+    }
+
+    const auto dofs = build_socu_native_dof_descriptors(
+        span<const IndexT>{old_to_chain.data(), old_to_chain.size()},
+        span<const IndexT>{old_dof_to_atom.data(), old_dof_to_atom.size()},
+        blocks.size(),
+        64,
+        1);
+    const std::vector<IndexT> vertex_to_body = {0, 1};
+    const std::vector<IndexT> body_is_fixed = {0, 0};
+    const SocuNativeVertexDescriptorBuildInput input{
+        .global_vertex_count = 2,
+        .horizon = blocks.size(),
+        .block_size = 64,
+        .epoch = 1,
+        .dofs = span<const SocuNativeDofDescriptor>{dofs.data(), dofs.size()},
+        .abd_vertex_offset = 0,
+        .abd_vertex_count = 2,
+        .abd_old_dof_offset = 0,
+        .abd_body_count = 2,
+        .abd_vertex_to_body =
+            span<const IndexT>{vertex_to_body.data(), vertex_to_body.size()},
+        .abd_body_is_fixed =
+            span<const IndexT>{body_is_fixed.data(), body_is_fixed.size()}};
+    const auto vertices = build_socu_native_vertex_descriptors(input);
+
+    REQUIRE(vertices.size() == 2);
+    CHECK(vertices[0].kind == SocuNativeDescriptorKind::Abd);
+    CHECK(vertices[0].dof_count == 12);
+    CHECK(vertices[0].active);
+    CHECK(vertices[0].writable());
+    CHECK(vertices[1].kind == SocuNativeDescriptorKind::Abd);
+    CHECK(vertices[1].dof_count == 12);
+    CHECK(vertices[1].active);
+    CHECK(vertices[1].writable());
 }
 
 TEST_CASE("cuda_mixed_socu_upper_lr_equal_vertex_no_mirror",
@@ -557,6 +723,16 @@ TEST_CASE("cuda_mixed_socu_contact_plan_key_invalidates_on_symbolic_inputs",
     changed.contact_content_hash++;
     CHECK(changed != base);
     CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.hot_block_strategy = SocuContactExecutionStrategy::DetectOnly;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
+
+    changed = base;
+    changed.hot_block_threshold = 64;
+    CHECK(changed != base);
+    CHECK(socu_contact_plan_key_hash(changed) != base_hash);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_plan_cache_split_layers",
@@ -604,7 +780,27 @@ TEST_CASE("cuda_mixed_socu_contact_plan_cache_split_layers",
     CHECK(decision.side_plan_hit());
     CHECK(!decision.contact_program_hit());
 
-    auto ordering_changed = scalar_diag_changed;
+    auto hot_strategy_changed = scalar_diag_changed;
+    hot_strategy_changed.hot_block_strategy =
+        SocuContactExecutionStrategy::DetectOnly;
+    decision = cache.update(hot_strategy_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto hot_threshold_changed = hot_strategy_changed;
+    hot_threshold_changed.hot_block_threshold = 7;
+    decision = cache.update(hot_threshold_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto hot_recompute_changed = hot_threshold_changed;
+    hot_recompute_changed.hot_block_strategy =
+        SocuContactExecutionStrategy::Recompute;
+    decision = cache.update(hot_recompute_changed);
+    CHECK(decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto ordering_changed = hot_recompute_changed;
     ordering_changed.ordering_epoch++;
     decision = cache.update(ordering_changed);
     CHECK(!decision.side_plan_hit());

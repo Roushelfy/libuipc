@@ -3,6 +3,7 @@
 #include <linear_system/socu_contact_program_writer.h>
 
 #include <cuda_runtime_api.h>
+#include <muda/buffer/buffer_view.h>
 #include <muda/ext/linear_system/triplet_matrix_view.h>
 
 #include <limits>
@@ -90,6 +91,13 @@ struct SocuDeterministicContactEvaluator
         }
         return H;
     }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
+        SizeT,
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        return (*this)(program);
+    }
 };
 
 template <typename StoreT>
@@ -134,8 +142,18 @@ struct SocuVertexHalfPlaneContactEvaluatorSourceView
 };
 
 template <typename StoreT>
+struct SocuContactEvaluatorSourceEntry
+{
+    SocuContactSourceId source_id = SocuInvalidContactSourceId;
+    SocuContactModelKind model = SocuContactModelKind::SimplexNormal;
+    SocuContactFamily family = SocuContactFamily::PT;
+    muda::CTripletMatrixView<StoreT, 3> hessians;
+};
+
+template <typename StoreT>
 struct SocuContactEvaluatorSourceTable
 {
+    muda::CBufferView<SocuContactEvaluatorSourceEntry<StoreT>> source_entries;
     SocuSimplexContactEvaluatorSourceView<StoreT> simplex_normal;
     SocuSimplexContactEvaluatorSourceView<StoreT> simplex_frictional;
     SocuVertexHalfPlaneContactEvaluatorSourceView<StoreT> vertex_half_plane_normal;
@@ -158,6 +176,25 @@ struct SocuContactEvaluatorSourceTable
             default:
                 return {};
         }
+    }
+
+    MUDA_GENERIC muda::CTripletMatrixView<StoreT, 3> hessians_for(
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        if(program.source_id != SocuInvalidContactSourceId
+           && static_cast<SizeT>(program.source_id) < source_entries.size())
+        {
+            const auto entry =
+                source_entries.data()[static_cast<SizeT>(program.source_id)];
+            if(entry.source_id == program.source_id
+               && entry.model == program.model
+               && entry.family == program.family)
+            {
+                return entry.hessians;
+            }
+            return {};
+        }
+        return hessians_for(program.model, program.family);
     }
 };
 
@@ -191,7 +228,7 @@ struct SocuContactTripletEvaluator
         SocuDeterministicContactHessian<StoreT> H;
         H.stencil_size = program.stencil_size;
 
-        const auto hessians = sources.hessians_for(program.model, program.family);
+        const auto hessians = sources.hessians_for(program);
         const SizeT half_size = socu_contact_half_hessian_size(program.family);
         if(hessians.triplet_count() == 0 || half_size == 0
            || program.local_contact_id < 0)
@@ -229,6 +266,13 @@ struct SocuContactTripletEvaluator
                                        triplet.value);
         }
         return H;
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
+        SizeT,
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        return (*this)(program);
     }
 
     MUDA_DEVICE IndexT local_vertex_for_global(
@@ -289,6 +333,23 @@ struct SocuContactTripletEvaluator
                          + h_col] = static_cast<StoreT>(block(col, row));
             }
         }
+    }
+};
+
+template <typename StoreT>
+struct SocuContactPrecomputedHessianEvaluator
+{
+    muda::CBufferView<SocuDeterministicContactHessian<StoreT>> hessians;
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
+        SizeT program_id,
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        if(program_id < hessians.size())
+            return hessians.data()[program_id];
+        SocuDeterministicContactHessian<StoreT> H;
+        H.stencil_size = program.stencil_size;
+        return H;
     }
 };
 
@@ -370,7 +431,7 @@ struct SocuContactBucketExecutor
         if(program.task_count == 0)
             return;
 
-        const auto H = evaluator(program);
+        const auto H = evaluator(program_id, program);
         const SocuContactProgramWriter<StoreT, SolveT> writer{plan, matrix, {}};
         for(std::uint16_t task_index = 0; task_index < program.task_count;
             ++task_index)
@@ -423,7 +484,7 @@ struct SocuContactBucketExecutor
             return SolveT{0};
         const auto program =
             plan.programs.data()[static_cast<SizeT>(task.program_id)];
-        const auto H = evaluator(program);
+        const auto H = evaluator(static_cast<SizeT>(task.program_id), program);
         const SocuContactProgramWriter<StoreT, SolveT> writer{plan, matrix, {}};
         return static_cast<SolveT>(
             writer.task_storage_cell_contribution(program,

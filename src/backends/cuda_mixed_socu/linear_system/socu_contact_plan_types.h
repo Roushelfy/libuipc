@@ -47,6 +47,31 @@ enum class SocuContactExecutionStrategy : std::uint8_t
     CachedMicroblock,
 };
 
+enum class SocuContactEvaluatorPath : std::uint8_t
+{
+    TripletCompat,
+    DirectNative,
+    DirectCompare,
+    Hybrid,
+};
+
+inline const char* socu_contact_evaluator_path_name(
+    SocuContactEvaluatorPath path) noexcept
+{
+    switch(path)
+    {
+        case SocuContactEvaluatorPath::TripletCompat:
+            return "triplet_compat";
+        case SocuContactEvaluatorPath::DirectNative:
+            return "direct";
+        case SocuContactEvaluatorPath::DirectCompare:
+            return "direct_compare";
+        case SocuContactEvaluatorPath::Hybrid:
+            return "hybrid";
+    }
+    return "triplet_compat";
+}
+
 enum class SocuVertexSideCoverageMode : std::uint8_t
 {
     Global,
@@ -119,6 +144,9 @@ struct SocuAssemblyPlanKey
     StructuredContactOffbandPolicy offband_policy =
         StructuredContactOffbandPolicy::Drop;
     bool scalar_diag_fallback_compatibility = false;
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter;
+    SizeT hot_block_threshold = 0;
 
     bool operator==(const SocuAssemblyPlanKey&) const noexcept = default;
 };
@@ -147,6 +175,9 @@ struct SocuContactProgramPlanKey
     StructuredContactOffbandPolicy offband_policy =
         StructuredContactOffbandPolicy::Drop;
     bool scalar_diag_fallback_compatibility = false;
+    SocuContactExecutionStrategy hot_block_strategy =
+        SocuContactExecutionStrategy::DirectScatter;
+    SizeT hot_block_threshold = 0;
 
     bool operator==(const SocuContactProgramPlanKey&) const noexcept = default;
 };
@@ -282,6 +313,10 @@ inline SizeT socu_contact_plan_key_hash(const SocuAssemblyPlanKey& key) noexcept
     socu_contact_mix_in_place(
         hash,
         key.scalar_diag_fallback_compatibility ? SizeT{1} : SizeT{0});
+    socu_contact_mix_in_place(
+        hash,
+        static_cast<SizeT>(static_cast<std::uint8_t>(key.hot_block_strategy)));
+    socu_contact_mix_in_place(hash, key.hot_block_threshold);
     return hash;
 }
 
@@ -305,7 +340,9 @@ inline SocuContactProgramPlanKey socu_contact_program_plan_key_from(
         key.contact_layout_hash,
         key.contact_content_hash,
         key.offband_policy,
-        key.scalar_diag_fallback_compatibility};
+        key.scalar_diag_fallback_compatibility,
+        key.hot_block_strategy,
+        key.hot_block_threshold};
 }
 
 inline SizeT socu_vertex_side_plan_key_hash(
@@ -334,6 +371,10 @@ inline SizeT socu_contact_program_plan_key_hash(
     socu_contact_mix_in_place(
         hash,
         key.scalar_diag_fallback_compatibility ? SizeT{1} : SizeT{0});
+    socu_contact_mix_in_place(
+        hash,
+        static_cast<SizeT>(static_cast<std::uint8_t>(key.hot_block_strategy)));
+    socu_contact_mix_in_place(hash, key.hot_block_threshold);
     return hash;
 }
 

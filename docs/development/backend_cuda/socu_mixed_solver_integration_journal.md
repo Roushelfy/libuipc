@@ -2718,3 +2718,161 @@ Decision:
   `off` or `detect_only` until a scene-level gate produces non-skipped native
   contact tasks and profiler evidence shows a real reduction in atomic
   contention on dense contact clusters.
+
+## 2026-05-12 Redesign Branch M6.5 Stabilization Start
+
+Implemented:
+
+- Added detailed native contact program skip/drop reason reporting:
+  `native_contact_side_id_invalid_program_count`,
+  `native_contact_side_not_writable_program_count`,
+  `native_contact_offband_dropped_program_count`,
+  `native_contact_mixed_rejected_reason_program_count`, and
+  `native_contact_source_local_missing_program_count`.
+- Added segmented symbolic-plan timing for demand-filled and global side
+  coverage: active vertex collect/sort, missing side fill, program emission,
+  bucket build, and hot-block build.
+- Changed the native replay evaluator source table from model/family keyed to
+  source-id indexed. The production replay path now accepts multiple non-empty
+  same-family reporters when source ids are dense; dense/duplicate/missing
+  source-id validation remains a hard builder contract.
+- Added `hot_block_strategy` and `hot_block_threshold` to the aggregate and
+  program plan keys so strategy/threshold changes report a program-plan miss
+  instead of an ambiguous aggregate hit followed by rebuild.
+- Marked the older integration-plan M8 target-table section as the legacy
+  per-half-block design; the active builder line is the redesign plan's
+  two-level side/program symbolic plan.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 16` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[m65]"` | passed, `23` assertions in `2` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[m1]"` | passed, `74` assertions in `8` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[m2b]"` | passed, `156` assertions in `4` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[m5]"` | passed, `22978` assertions in `11` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[contract]"` | passed, `62777` assertions in `73` test cases |
+| Wrecking Ball, `socu_rt50_topology_diag_lump`, native contact plan/executor, hot reduce `detect_only`, `demand_filled`, `--frames 20` | passed, `final_frame=20`, `wall_time_s=56.20415818699985`, `mean_frame_ms=2765.8852600026876`, `native_contact_replay_path=native_plan`; final report has `native_contact_task_count=0`, `native_contact_skipped_program_count=9408`, `native_contact_side_not_writable_program_count=9408`, `native_contact_side_id_invalid_program_count=0`, `native_contact_offband_dropped_program_count=0`, `native_contact_side_coverage_fill_count=33`, `native_contact_active_vertex_collect_ms=0.241603`, `native_contact_missing_side_fill_ms=0.129746`, `native_contact_program_emit_ms=0.165039`, `native_contact_bucket_build_ms=0.267413` |
+| Same Wrecking Ball setup with `native_contact_side_coverage_mode=global` | passed, `final_frame=20`, `wall_time_s=44.32800681499066`, `mean_frame_ms=2173.7651474992163`, `native_contact_replay_path=native_plan`; final report has `native_contact_task_count=0`, `native_contact_skipped_program_count=9468`, `native_contact_side_not_writable_program_count=9468`, `native_contact_side_id_invalid_program_count=0`, `native_contact_offband_dropped_program_count=0`, `native_contact_side_coverage_fill_count=0`, `native_contact_program_emit_ms=0.266054`, `native_contact_bucket_build_ms=0.985153` |
+
+Decision:
+
+- M6.5 unit/contract coverage is in place for report semantics, source-id
+  evaluator indexing, hot-reduce key invalidation, and skip reason counters.
+- The 20-frame Wrecking Ball scene gates still produce zero native contact
+  tasks. The direct root cause is now unambiguous in both side coverage modes:
+  every emitted contact program is skipped because all referenced side records
+  are not writable. This is a scene-wiring/root-cause result only; it is not a
+  native contact performance acceptance.
+
+## 2026-05-12 Redesign Branch M6.5 Zero-Task Resolution
+
+Root cause:
+
+- Wrecking Ball is `abd_only` in the generated SOCU ordering. Before this
+  fix, 574 ABD bodies were represented as 2296 independent 3-DoF
+  `abd_body_local` atoms.
+- The compact native contact builder represents one ABD surface vertex as one
+  projected 12-DoF side. Its descriptor contract requires the 12 old DoFs for
+  the body to be active and contiguous in the SOCU chain.
+- The old 4 by 3-DoF split made `socu_native_dof_range_active()` fail for ABD
+  vertex descriptors even though the individual 3-DoF atoms were ordered. The
+  scene therefore materialized side records but marked every contact program as
+  `side_not_writable`.
+
+Implemented:
+
+- Changed init-time ABD ordering to emit one 12-DoF symbolic atom per ABD body.
+  This matches the current compact side/writer contract.
+- Added a contract test,
+  `cuda_mixed_socu_abd_ordering_keeps_body_side_contiguous`, proving that the
+  generated ABD ordering builds writable 12-DoF native vertex descriptors.
+- Rebuilt and synced the Python venv backend before rerunning scene gates.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 16` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[m65]"` | passed, `42` assertions in `3` test cases |
+| `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_abd_ordering_keeps_body_side_contiguous"` | passed, `19` assertions in `1` test case |
+| Wrecking Ball, `socu_rt50_topology_diag_lump`, native contact plan/executor, hot reduce `detect_only`, `global`, `--frames 20` | passed, `final_frame=20`, `wall_time_s=85.84718096500728`, `mean_frame_ms=4249.698002301739`; ordering has `total_atoms=574`, first atom DoFs are `12`; final report has `native_contact_task_count=48652`, `native_contact_valid_program_map_count=14568`, `native_contact_skipped_program_count=0`, `native_contact_side_not_writable_program_count=0`, `native_contact_exact_program_count=648`, `native_contact_diag_lump_program_count=13920`, `native_contact_executor_scatter_ms=1.299072027206421` |
+| Same Wrecking Ball setup with `native_contact_side_coverage_mode=demand_filled` | passed, `final_frame=20`, `wall_time_s=66.13233626302099`, `mean_frame_ms=3264.7222990504815`; ordering has `total_atoms=574`, first atom DoFs are `12`; final report has `native_contact_task_count=39244`, `native_contact_valid_program_map_count=11432`, `native_contact_skipped_program_count=0`, `native_contact_side_not_writable_program_count=0`, `native_contact_exact_program_count=648`, `native_contact_diag_lump_program_count=10784`, `native_contact_side_coverage_fill_count=13`, `native_contact_executor_scatter_ms=1.4359359741210938` |
+
+Decision:
+
+- The M6.5 Wrecking Ball zero-task problem is fixed. The scene now reaches real
+  native contact programs and tasks in both global and demand-filled side
+  coverage modes.
+- These scene numbers are still not a final performance acceptance. They are
+  the first valid native-contact scene gate after fixing the symbolic ordering
+  contract. Performance work should now use these nonzero-task runs as the
+  baseline and continue to keep `native_contact_hessian_triplet_ms`,
+  `native_contact_executor_scatter_ms`, and rebuild/cache-hit timing separate.
+
+## 2026-05-12 Redesign Branch M6.6 Direct Native Evaluator
+
+Root cause addressed:
+
+- After M6.5, real scene tasks reached the native contact executor, but the
+  numeric path still generated reporter-layout half-Hessian triplets via
+  `reporter->assemble(hessian_info)` and then converted them back into
+  per-program deterministic Hessians.
+- That compatibility path made the native plan observable and correct, but it
+  kept the largest remaining contact assembly cost in the production replay.
+
+Implemented:
+
+- Added `linear_system/socu_approx/native_contact_evaluator` with
+  `triplet_compat`, `direct`, `direct_compare`, and `hybrid`.
+- Added a source-id indexed `SocuContactDirectEvaluator` for PH normal,
+  PH frictional, simplex normal PT/EE/PE/PP, and simplex frictional
+  PT/EE/PE/PP.
+- The production `direct` path evaluates dense local contact Hessians from
+  native scene/source views and scatters through the existing program
+  writer/executor without calling contact reporters' triplet assembly.
+- Added `direct_compare`: it intentionally generates compatibility triplets as
+  a reference, evaluates direct Hessians, compares dense local Hessians per
+  program, and reports mismatch/max/sum errors.
+- Added report fields for evaluator path, direct eval time, direct compare
+  time/errors, and direct fallback/unsupported counters. The Wrecking Ball
+  runner now maps `SOCU_NATIVE_CONTACT_EVALUATOR` to scene config.
+
+Validation:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 24` | passed |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `57941` assertions in `54` test cases |
+| Wrecking Ball, `socu_rt50_topology_diag_lump`, native contact plan/executor, `global`, `native_contact_evaluator=direct`, `--frames 20` | passed, `final_frame=20`, `native_contact_replay_path=native_plan`, `native_contact_evaluator_path=direct`, `native_contact_task_count=34275`, `native_contact_hessian_triplet_ms=0`, `native_contact_direct_eval_ms=1.6165`, `native_contact_executor_scatter_ms=0.8217`, direct fallback count `0`; direct production log contains no `Assemble Contact Hessian Triplets` timer |
+| Same Wrecking Ball setup with `native_contact_side_coverage_mode=demand_filled` | passed, `final_frame=20`, `native_contact_evaluator_path=direct`, `native_contact_task_count=48652`, `native_contact_hessian_triplet_ms=0`, `native_contact_direct_eval_ms=2.1328`, `native_contact_executor_scatter_ms=0.8907`, direct fallback count `0`; direct production log contains no `Assemble Contact Hessian Triplets` timer |
+| Wrecking Ball, `global`, `native_contact_evaluator=direct_compare`, `--frames 20` | passed, `final_frame=20`, `native_contact_task_count=48652`, `native_contact_direct_compare_mismatch_count=0`, `native_contact_direct_compare_max_abs_error=6.25e-13`, `native_contact_direct_compare_sum_abs_error=5.02e-10`, `native_contact_hessian_triplet_ms=4.4505`, `native_contact_direct_eval_ms=2.1853`, `native_contact_executor_scatter_ms=0.9231` |
+
+Decision:
+
+- The compatibility triplet generation dependency is removed from the
+  production native contact replay path when `native_contact_evaluator=direct`.
+- Reporter triplets remain only in the explicit `triplet_compat` fallback and
+  the diagnostic `direct_compare` mode.
+- Direct evaluator parity is validated on the full 20-frame Wrecking Ball
+  active family mix with zero mismatches. M6.7 can now focus on value-level
+  performance, such as removing the intermediate dense local Hessian buffer or
+  fusing evaluator/writer work.
+
+Closure before M7:
+
+| check | result |
+| --- | --- |
+| `git diff --check` | passed |
+| `cmake --build build --target uipc_test_backend_cuda_mixed_socu -j 24` | passed, no work to do |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract][socu_approx]"` | passed, `57941` assertions in `54` test cases |
+| `uipc_test_backend_cuda_mixed_socu "[cuda_mixed_socu][contract]"` | passed, `62824` assertions in `74` test cases |
+
+Default cutover state:
+
+- `native_contact_plan=0`;
+- `native_contact_plan_executor=0`;
+- `native_contact_evaluator="triplet_compat"`;
+- direct evaluator remains opt-in for native development/performance gates.

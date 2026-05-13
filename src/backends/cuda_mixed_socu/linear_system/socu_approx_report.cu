@@ -107,6 +107,8 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.contact_offband_diag_fallback_count},
                   {"contact_offband_lump_fallback_count",
                    report.contact_offband_lump_fallback_count},
+                  {"native_contact_evaluator_path",
+                   report.native_contact_evaluator_path},
                   {"native_contact_plan_cache_hit",
                    report.native_contact_plan_cache_hit},
                   {"native_contact_plan_cold_start",
@@ -177,6 +179,16 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_skipped_program_count},
                   {"native_contact_mixed_rejected_program_count",
                    report.native_contact_mixed_rejected_program_count},
+                  {"native_contact_side_id_invalid_program_count",
+                   report.native_contact_side_id_invalid_program_count},
+                  {"native_contact_side_not_writable_program_count",
+                   report.native_contact_side_not_writable_program_count},
+                  {"native_contact_offband_dropped_program_count",
+                   report.native_contact_offband_dropped_program_count},
+                  {"native_contact_mixed_rejected_reason_program_count",
+                   report.native_contact_mixed_rejected_reason_program_count},
+                  {"native_contact_source_local_missing_program_count",
+                   report.native_contact_source_local_missing_program_count},
                   {"native_contact_diag_block_task_count",
                    report.native_contact_diag_block_task_count},
                   {"native_contact_diag_scalar_task_count",
@@ -187,6 +199,12 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_hot_diag_block_count},
                   {"native_contact_hot_offdiag_block_count",
                    report.native_contact_hot_offdiag_block_count},
+                  {"native_contact_direct_unsupported_program_count",
+                   report.native_contact_direct_unsupported_program_count},
+                  {"native_contact_direct_fallback_program_count",
+                   report.native_contact_direct_fallback_program_count},
+                  {"native_contact_direct_compare_mismatch_count",
+                   report.native_contact_direct_compare_mismatch_count},
                   {"structured_diag_contact_abs_sum",
                    report.structured_diag_contact_abs_sum},
                   {"structured_first_offdiag_contact_abs_sum",
@@ -210,10 +228,28 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.native_contact_program_plan_build_ms},
                   {"native_contact_side_coverage_refresh_ms",
                    report.native_contact_side_coverage_refresh_ms},
+                  {"native_contact_active_vertex_collect_ms",
+                   report.native_contact_active_vertex_collect_ms},
+                  {"native_contact_missing_side_fill_ms",
+                   report.native_contact_missing_side_fill_ms},
+                  {"native_contact_program_emit_ms",
+                   report.native_contact_program_emit_ms},
+                  {"native_contact_bucket_build_ms",
+                   report.native_contact_bucket_build_ms},
+                  {"native_contact_hot_block_build_ms",
+                   report.native_contact_hot_block_build_ms},
                   {"native_contact_numeric_ms",
                    report.native_contact_numeric_ms},
                   {"native_contact_hessian_triplet_ms",
                    report.native_contact_hessian_triplet_ms},
+                  {"native_contact_direct_eval_ms",
+                   report.native_contact_direct_eval_ms},
+                  {"native_contact_direct_compare_ms",
+                   report.native_contact_direct_compare_ms},
+                  {"native_contact_direct_compare_max_abs_error",
+                   report.native_contact_direct_compare_max_abs_error},
+                  {"native_contact_direct_compare_sum_abs_error",
+                   report.native_contact_direct_compare_sum_abs_error},
                   {"native_contact_executor_scatter_ms",
                    report.native_contact_executor_scatter_ms},
                   {"native_contact_hot_reduce_ms",
@@ -384,6 +420,16 @@ void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
         program_stats.skipped_program_count;
     report.native_contact_mixed_rejected_program_count =
         program_stats.mixed_rejected_program_count;
+    report.native_contact_side_id_invalid_program_count =
+        program_stats.side_id_invalid_program_count;
+    report.native_contact_side_not_writable_program_count =
+        program_stats.side_not_writable_program_count;
+    report.native_contact_offband_dropped_program_count =
+        program_stats.offband_dropped_program_count;
+    report.native_contact_mixed_rejected_reason_program_count =
+        program_stats.mixed_rejected_reason_program_count;
+    report.native_contact_source_local_missing_program_count =
+        program_stats.source_local_missing_program_count;
     report.native_contact_diag_block_task_count =
         program_stats.diag_block_task_count;
     report.native_contact_diag_scalar_task_count =
@@ -394,6 +440,14 @@ void apply_native_contact_plan_stats(SocuApproxSolveReport&     report,
         program_stats.hot_diag_block_count;
     report.native_contact_hot_offdiag_block_count =
         program_stats.hot_offdiag_block_count;
+    report.native_contact_active_vertex_collect_ms =
+        side_stats.active_vertex_collect_ms
+        + program_stats.active_vertex_collect_ms;
+    report.native_contact_missing_side_fill_ms =
+        side_stats.missing_side_fill_ms + program_stats.missing_side_fill_ms;
+    report.native_contact_program_emit_ms = program_stats.program_emit_ms;
+    report.native_contact_bucket_build_ms = program_stats.bucket_build_ms;
+    report.native_contact_hot_block_build_ms = program_stats.hot_block_build_ms;
 }
 
 void write_solve_report(const SocuApproxSolveReport& report)

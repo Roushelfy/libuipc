@@ -21,6 +21,7 @@ using namespace uipc::backend::cuda_mixed;
 using uipc::IndexT;
 using uipc::SizeT;
 using uipc::Vector2i;
+using uipc::span;
 
 bool has_cuda_device()
 {
@@ -668,6 +669,135 @@ TEST_CASE("cuda_mixed_socu_contact_executor_triplet_source_views_smoke",
           == Catch::Approx(20.0).margin(1e-8));
     CHECK(static_cast<double>(snapshot.D[diag_index(1, 0, 0)])
           == Catch::Approx(100.0).margin(1e-8));
+}
+
+TEST_CASE("cuda_mixed_socu_contact_executor_source_id_indexed_triplets",
+          "[cuda_mixed_socu][contract][socu_approx][m65]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact executor tests");
+
+    using Store = ActivePolicy::StoreScalar;
+    using Solve = ActivePolicy::SolveScalar;
+
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{
+        executor_fixture_vertices()};
+    muda::DeviceBuffer<Vector2i> pp_contacts_a{
+        std::vector<Vector2i>{Vector2i{1, 2}}};
+    muda::DeviceBuffer<Vector2i> pp_contacts_b{
+        std::vector<Vector2i>{Vector2i{1, 2}}};
+
+    SocuVertexSidePlanKey side_key;
+    side_key.ordering_epoch = 2;
+    side_key.native_descriptor_epoch = 31;
+    side_key.fixed_mapping_epoch = 7;
+    side_key.vertex_projection_epoch = 11;
+    side_key.horizon = 4;
+    side_key.block_size = 16;
+
+    SocuContactProgramPlanKey program_key;
+    program_key.side_key = side_key;
+    program_key.contact_topology_epoch = 17;
+    program_key.contact_layout_hash = 19;
+    program_key.contact_content_hash = 23;
+    program_key.offband_policy = StructuredContactOffbandPolicy::Drop;
+
+    std::vector<SocuContactM2SourceInput> source_inputs(2);
+    source_inputs[0].source_id = 0;
+    source_inputs[0].reporter_id = 100;
+    source_inputs[0].model = SocuContactModelKind::SimplexNormal;
+    source_inputs[0].family = SocuContactFamily::PP;
+    source_inputs[0].stencil_size = 2;
+    source_inputs[0].stencil2 = pp_contacts_a.view();
+    source_inputs[1].source_id = 1;
+    source_inputs[1].reporter_id = 101;
+    source_inputs[1].model = SocuContactModelKind::SimplexNormal;
+    source_inputs[1].family = SocuContactFamily::PP;
+    source_inputs[1].stencil_size = 2;
+    source_inputs[1].stencil2 = pp_contacts_b.view();
+
+    SocuContactAssemblyPlanM2BuildInput input;
+    input.side_key = side_key;
+    input.program_key = program_key;
+    input.vertex_descriptors = vertices.view();
+    input.sources = span<const SocuContactM2SourceInput>{source_inputs};
+    input.offband_policy = StructuredContactOffbandPolicy::Drop;
+    input.side_coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
+
+    SocuContactAssemblyPlan plan;
+    SocuContactAssemblyPlanM2Workspace workspace;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+    REQUIRE(plan.program_plan.last_stats.source_id_validation_status
+            == SocuContactSourceIdValidationStatus::ValidDense);
+    REQUIRE(plan.program_plan.programs.size() == 2);
+    REQUIRE(plan.program_plan.last_stats.valid_program_map_count == 2);
+
+    muda::DeviceTripletMatrix<Store, 3> pp_hessians_a;
+    pp_hessians_a.resize(7, 7, 3);
+    const std::vector<int> rows{1, 1, 2};
+    const std::vector<int> cols{1, 2, 2};
+    const std::vector<Eigen::Matrix<Store, 3, 3>> blocks_a{
+        make_block3<Store>(Store{10}),
+        make_block3<Store>(Store{20}),
+        make_block3<Store>(Store{30})};
+    pp_hessians_a.row_indices().copy_from(rows.data());
+    pp_hessians_a.col_indices().copy_from(cols.data());
+    pp_hessians_a.values().copy_from(blocks_a.data());
+
+    muda::DeviceTripletMatrix<Store, 3> pp_hessians_b;
+    pp_hessians_b.resize(7, 7, 3);
+    const std::vector<Eigen::Matrix<Store, 3, 3>> blocks_b{
+        make_block3<Store>(Store{40}),
+        make_block3<Store>(Store{50}),
+        make_block3<Store>(Store{60})};
+    pp_hessians_b.row_indices().copy_from(rows.data());
+    pp_hessians_b.col_indices().copy_from(cols.data());
+    pp_hessians_b.values().copy_from(blocks_b.data());
+
+    std::vector<SocuContactEvaluatorSourceEntry<Store>> source_entries(2);
+    source_entries[0].source_id = 0;
+    source_entries[0].model = SocuContactModelKind::SimplexNormal;
+    source_entries[0].family = SocuContactFamily::PP;
+    source_entries[0].hessians = pp_hessians_a.view();
+    source_entries[1].source_id = 1;
+    source_entries[1].model = SocuContactModelKind::SimplexNormal;
+    source_entries[1].family = SocuContactFamily::PP;
+    source_entries[1].hessians = pp_hessians_b.view();
+    muda::DeviceBuffer<SocuContactEvaluatorSourceEntry<Store>>
+        source_entry_buffer{source_entries};
+
+    SocuContactEvaluatorSourceTable<Store> sources;
+    sources.source_entries = source_entry_buffer.view().as_const();
+
+    SocuNativeMatrixBuilder<Solve> matrix;
+    matrix.reserve(4, 16, 1);
+    matrix.clear();
+    launch_socu_contact_executor<Store, Solve>(
+        socu_contact_assembly_plan_view(plan),
+        matrix.view(),
+        SocuContactTripletEvaluator<Store>{socu_contact_assembly_plan_view(plan),
+                                           sources});
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    const auto snapshot = matrix.snapshot();
+    const auto& layout = snapshot.layout;
+    const auto diag_index = [&](SizeT block, SizeT row, SizeT col)
+    {
+        return (block * layout.block_size + row) * layout.block_size + col;
+    };
+    const auto first_offdiag_index = [&](SizeT left_block, SizeT row, SizeT col)
+    {
+        return (left_block * layout.block_size + row) * layout.block_size + col;
+    };
+
+    CHECK(static_cast<double>(snapshot.D[diag_index(0, 3, 3)])
+          == Catch::Approx(50.0).margin(1e-8));
+    CHECK(static_cast<double>(snapshot.E[first_offdiag_index(0, 0, 3)])
+          == Catch::Approx(70.0).margin(1e-8));
+    CHECK(static_cast<double>(snapshot.D[diag_index(1, 0, 0)])
+          == Catch::Approx(90.0).margin(1e-8));
 }
 
 TEST_CASE("cuda_mixed_socu_contact_executor_empty_buckets_are_noop",

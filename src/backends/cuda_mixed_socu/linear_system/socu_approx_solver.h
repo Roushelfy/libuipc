@@ -115,6 +115,8 @@ class SocuApproxSolver : public LinearSolver
     bool        m_native_contact_plan_executor_enabled = false;
     bool        m_native_contact_hot_reduce_enabled = false;
     bool        m_native_contact_scalar_diag_compat_enabled = false;
+    SocuContactEvaluatorPath m_native_contact_evaluator_path =
+        SocuContactEvaluatorPath::TripletCompat;
     bool        m_debug_write_runtime_ordering_report = false;
     bool        m_report_each_solve = false;
     bool        m_report_counters_enabled = false;

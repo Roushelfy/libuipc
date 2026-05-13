@@ -5,6 +5,7 @@
 #include <muda/cub/device/device_scan.h>
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -393,6 +394,17 @@ MUDA_DEVICE int append_diag_tasks_for_stencil(
     return task_count;
 }
 
+MUDA_GENERIC SocuContactProgramRejectReason skipped_reason(
+    bool saw_invalid_side,
+    bool saw_nonwritable_side) noexcept
+{
+    if(saw_invalid_side)
+        return SocuContactProgramRejectReason::SideIdInvalid;
+    if(saw_nonwritable_side)
+        return SocuContactProgramRejectReason::SideNotWritable;
+    return SocuContactProgramRejectReason::None;
+}
+
 template <typename VectorT, int StencilSize>
 __global__ void emit_simplex_programs_kernel(
     muda::CBufferView<VectorT> contacts,
@@ -435,6 +447,18 @@ __global__ void emit_simplex_programs_kernel(
                          use_vertex_to_side_id,
                          stencil(static_cast<Eigen::Index>(local)));
         program.side_ids[local] = side_ids[local];
+    }
+    bool saw_invalid_side = false;
+    bool saw_nonwritable_side = false;
+    for(int local = 0; local < StencilSize; ++local)
+    {
+        if(!side_id_valid(side_ids[local], sides))
+        {
+            saw_invalid_side = true;
+            continue;
+        }
+        if(!sides.data()[side_ids[local]].writable)
+            saw_nonwritable_side = true;
     }
 
     SocuContactMicroTask local_tasks[10];
@@ -481,6 +505,8 @@ __global__ void emit_simplex_programs_kernel(
     }
 
     SocuContactProgramMapStatus status = SocuContactProgramMapStatus::Valid;
+    SocuContactProgramRejectReason reject_reason =
+        SocuContactProgramRejectReason::None;
     int emit_task_count = exact_task_count;
     if(has_offband)
     {
@@ -488,6 +514,7 @@ __global__ void emit_simplex_programs_kernel(
         {
             program.program_kind = SocuContactProgramKind::Drop;
             status = SocuContactProgramMapStatus::Dropped;
+            reject_reason = SocuContactProgramRejectReason::OffbandDrop;
             emit_task_count = 0;
         }
         else if(offband_policy == StructuredContactOffbandPolicy::Diag)
@@ -519,6 +546,7 @@ __global__ void emit_simplex_programs_kernel(
     {
         program.program_kind = SocuContactProgramKind::Skipped;
         status = SocuContactProgramMapStatus::Skipped;
+        reject_reason = skipped_reason(saw_invalid_side, saw_nonwritable_side);
     }
 
     const SizeT program_id = first_program + i;
@@ -542,7 +570,7 @@ __global__ void emit_simplex_programs_kernel(
             ? static_cast<SocuContactProgramId>(program_id)
             : SocuInvalidContactProgramId;
     source_to_program.data()[first_source_to_program + i] =
-        SocuContactSourceToProgram{mapped_program, status, 0};
+        SocuContactSourceToProgram{mapped_program, status, reject_reason};
 }
 
 __global__ void emit_ph_programs_kernel(
@@ -579,6 +607,10 @@ __global__ void emit_ph_programs_kernel(
     program.side_ids[0] = side_id;
 
     SocuContactProgramMapStatus status = SocuContactProgramMapStatus::Skipped;
+    SocuContactProgramRejectReason reject_reason =
+        side_id_valid(side_id, sides)
+            ? SocuContactProgramRejectReason::SideNotWritable
+            : SocuContactProgramRejectReason::SideIdInvalid;
     if(side_id_valid(side_id, sides) && sides.data()[side_id].writable)
     {
         const SizeT program_id = first_program + i;
@@ -599,6 +631,7 @@ __global__ void emit_ph_programs_kernel(
         assign_program_id(task, static_cast<SocuContactProgramId>(program_id));
         tasks.data()[first_task] = task;
         status = SocuContactProgramMapStatus::Valid;
+        reject_reason = SocuContactProgramRejectReason::None;
     }
     else
     {
@@ -612,7 +645,7 @@ __global__ void emit_ph_programs_kernel(
             ? static_cast<SocuContactProgramId>(program_id)
             : SocuInvalidContactProgramId;
     source_to_program.data()[first_source_to_program + i] =
-        SocuContactSourceToProgram{mapped_program, status, 0};
+        SocuContactSourceToProgram{mapped_program, status, reject_reason};
 }
 
 enum class M2ProgramStatSlot : int
@@ -634,6 +667,11 @@ enum class M2ProgramStatSlot : int
     DroppedProgramMap,
     SkippedProgramMap,
     MixedRejectedProgramMap,
+    SideIdInvalidProgram,
+    SideNotWritableProgram,
+    OffbandDroppedProgram,
+    MixedRejectedReasonProgram,
+    SourceLocalMissingProgram,
     Count,
 };
 
@@ -723,6 +761,32 @@ MUDA_DEVICE void count_task_kind(const SocuContactMicroTask& task,
                               ? M2ProgramStatSlot::HotDiagBlock
                               : M2ProgramStatSlot::HotOffdiagBlock;
         atomicAdd(&counters.data()[stat_index(slot)], 1);
+    }
+}
+
+MUDA_DEVICE void count_reject_reason(SocuContactProgramRejectReason reason,
+                                     muda::BufferView<int> counters)
+{
+    switch(reason)
+    {
+        case SocuContactProgramRejectReason::SideIdInvalid:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::SideIdInvalidProgram)], 1);
+            break;
+        case SocuContactProgramRejectReason::SideNotWritable:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::SideNotWritableProgram)], 1);
+            break;
+        case SocuContactProgramRejectReason::OffbandDrop:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::OffbandDroppedProgram)], 1);
+            break;
+        case SocuContactProgramRejectReason::MixedRejected:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::MixedRejectedReasonProgram)], 1);
+            break;
+        case SocuContactProgramRejectReason::SourceLocalMissing:
+            atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::SourceLocalMissingProgram)], 1);
+            break;
+        case SocuContactProgramRejectReason::None:
+        default:
+            break;
     }
 }
 
@@ -908,6 +972,7 @@ MUDA_DEVICE void count_program_map_status(
                 atomicAdd(&counters.data()[stat_index(M2ProgramStatSlot::InvalidProgramMap)], 1);
             break;
     }
+    count_reject_reason(map.reject_reason, counters);
 }
 
 __global__ void mark_program_buckets_and_stats_kernel(
@@ -1404,6 +1469,18 @@ void build_socu_contact_assembly_plan_m2(
     SocuContactAssemblyPlanM2Workspace&        workspace,
     const SocuContactAssemblyPlanM2BuildInput& input)
 {
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed_ms = [](Clock::time_point begin,
+                               Clock::time_point end) -> double
+    {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+    double active_vertex_collect_ms = 0.0;
+    double missing_side_fill_ms = 0.0;
+    double program_emit_ms = 0.0;
+    double bucket_build_ms = 0.0;
+    double hot_block_build_ms = 0.0;
+
     const auto requested_coverage_mode = input.side_coverage_mode;
     const bool reuse_global_side_plan =
         requested_coverage_mode == SocuVertexSideCoverageMode::Global
@@ -1563,10 +1640,16 @@ void build_socu_contact_assembly_plan_m2(
     auto collect_active_vertices = [&](muda::DeviceBuffer<IndexT>& active_vertices)
         -> int
     {
+        const auto collect_begin = Clock::now();
+        const auto finish_collect = [&](int count) -> int
+        {
+            active_vertex_collect_ms += elapsed_ms(collect_begin, Clock::now());
+            return count;
+        };
         if(ref_count == 0)
         {
             active_vertices.resize(0);
-            return 0;
+            return finish_collect(0);
         }
 
         workspace.vertex_refs.resize(ref_count);
@@ -1692,7 +1775,7 @@ void build_socu_contact_assembly_plan_m2(
 
         const int active_count = copy_first_int(workspace.scalar_total);
         active_vertices.resize(static_cast<SizeT>(active_count));
-        return active_count;
+        return finish_collect(active_count);
     };
 
     if(requested_coverage_mode == SocuVertexSideCoverageMode::Global)
@@ -1753,6 +1836,7 @@ void build_socu_contact_assembly_plan_m2(
 
         const int active_count =
             collect_active_vertices(workspace.active_side_vertices);
+        const auto missing_begin = Clock::now();
         int missing_count = 0;
         if(active_count > 0)
         {
@@ -1819,6 +1903,7 @@ void build_socu_contact_assembly_plan_m2(
                                                input.vertex_descriptors,
                                                input.stream);
         }
+        missing_side_fill_ms += elapsed_ms(missing_begin, Clock::now());
 
         plan.side_plan.coverage.mode = SocuVertexSideCoverageMode::DemandFilled;
         plan.side_plan.coverage.covered_vertex_count = plan.side_plan.sides.size();
@@ -1857,6 +1942,7 @@ void build_socu_contact_assembly_plan_m2(
     }
 
     SizeT total_program_count = 0;
+    const auto program_emit_begin = Clock::now();
     SizeT max_task_count = 0;
     std::vector<SocuContactSourceHeader> source_headers;
     source_headers.reserve(source_specs.size());
@@ -2019,6 +2105,7 @@ void build_socu_contact_assembly_plan_m2(
 
     const int task_count = copy_first_int(workspace.task_cursor);
     plan.program_plan.tasks.resize(static_cast<SizeT>(task_count));
+    program_emit_ms += elapsed_ms(program_emit_begin, Clock::now());
     plan.program_plan.last_stats.source_count = plan.program_plan.sources.size();
     plan.program_plan.last_stats.program_count = total_program_count;
     plan.program_plan.last_stats.source_to_program_count =
@@ -2034,9 +2121,14 @@ void build_socu_contact_assembly_plan_m2(
                              input.build_hot_block_plan
                                  ? input.hot_block_strategy
                                  : SocuContactExecutionStrategy::DirectScatter);
+        plan.side_plan.last_stats.active_vertex_collect_ms =
+            active_vertex_collect_ms;
+        plan.side_plan.last_stats.missing_side_fill_ms = missing_side_fill_ms;
+        plan.program_plan.last_stats.program_emit_ms = program_emit_ms;
         return;
     }
 
+    const auto bucket_begin = Clock::now();
     workspace.program_bucket_flags.resize(total_program_count);
     workspace.program_bucket_offsets.resize(total_program_count);
     workspace.program_stats.resize(
@@ -2079,6 +2171,7 @@ void build_socu_contact_assembly_plan_m2(
               });
     cudaStreamSynchronize(launch_stream(input.stream));
     plan.program_plan.buckets.resize(static_cast<SizeT>(bucket_count));
+    bucket_build_ms += elapsed_ms(bucket_begin, Clock::now());
 
     std::vector<int> stats;
     workspace.program_stats.copy_to(stats);
@@ -2123,17 +2216,38 @@ void build_socu_contact_assembly_plan_m2(
         stat(M2ProgramStatSlot::SkippedProgramMap);
     plan.program_plan.last_stats.mixed_rejected_program_map_count =
         stat(M2ProgramStatSlot::MixedRejectedProgramMap);
+    plan.program_plan.last_stats.side_id_invalid_program_count =
+        stat(M2ProgramStatSlot::SideIdInvalidProgram);
+    plan.program_plan.last_stats.side_not_writable_program_count =
+        stat(M2ProgramStatSlot::SideNotWritableProgram);
+    plan.program_plan.last_stats.offband_dropped_program_count =
+        stat(M2ProgramStatSlot::OffbandDroppedProgram);
+    plan.program_plan.last_stats.mixed_rejected_reason_program_count =
+        stat(M2ProgramStatSlot::MixedRejectedReasonProgram);
+    plan.program_plan.last_stats.source_local_missing_program_count =
+        stat(M2ProgramStatSlot::SourceLocalMissingProgram);
 
     if(input.build_hot_block_plan)
+    {
+        const auto hot_begin = Clock::now();
         build_hot_block_plan(plan.program_plan,
                              workspace,
                              input.hot_block_threshold,
                              input.hot_block_strategy,
                              input.stream);
+        hot_block_build_ms += elapsed_ms(hot_begin, Clock::now());
+    }
     else
         clear_hot_block_plan(plan.program_plan,
                              input.hot_block_threshold,
                              SocuContactExecutionStrategy::DirectScatter);
+
+    plan.side_plan.last_stats.active_vertex_collect_ms =
+        active_vertex_collect_ms;
+    plan.side_plan.last_stats.missing_side_fill_ms = missing_side_fill_ms;
+    plan.program_plan.last_stats.program_emit_ms = program_emit_ms;
+    plan.program_plan.last_stats.bucket_build_ms = bucket_build_ms;
+    plan.program_plan.last_stats.hot_block_build_ms = hot_block_build_ms;
 }
 
 void build_socu_contact_assembly_plan_m2_active_set_temporary(

@@ -224,6 +224,9 @@ def configure_solver(config: Any, variant: str, workspace: Path) -> None:
     )
     if native_contact_side_coverage_mode:
         socu["native_contact_side_coverage_mode"] = native_contact_side_coverage_mode
+    native_contact_evaluator = os.environ.get("SOCU_NATIVE_CONTACT_EVALUATOR")
+    if native_contact_evaluator:
+        socu["native_contact_evaluator"] = native_contact_evaluator
     socu["native_contact_hot_reduce"] = (
         1 if os.environ.get("SOCU_NATIVE_CONTACT_HOT_REDUCE") == "1" else 0
     )

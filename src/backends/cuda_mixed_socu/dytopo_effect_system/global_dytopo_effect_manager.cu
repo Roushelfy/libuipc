@@ -3,10 +3,13 @@
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
 #include <dytopo_effect_system/dytopo_effect_receiver.h>
 #include <contact_system/contact_reporter.h>
+#include <contact_system/global_contact_manager.h>
 #include <contact_system/simplex_frictional_contact.h>
 #include <contact_system/simplex_normal_contact.h>
 #include <contact_system/vertex_half_plane_frictional_contact.h>
 #include <contact_system/vertex_half_plane_normal_contact.h>
+#include <implicit_geometry/half_plane.h>
+#include <implicit_geometry/half_plane_vertex_reporter.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution_manager.h>
 #include <affine_body/abd_linear_subsystem.h>
 #include <affine_body/affine_body_dynamics.h>
@@ -15,6 +18,7 @@
 #include <finite_element/finite_element_method.h>
 #include <finite_element/finite_element_vertex_reporter.h>
 #include <linear_system/socu_contact_assembly_plan.h>
+#include <linear_system/socu_contact_direct_evaluator.h>
 #include <linear_system/socu_contact_executor.h>
 #include <linear_system/socu_contact_topology_stamp.h>
 #include <uipc/common/timer.h>
@@ -115,6 +119,8 @@ struct NativeContactTimingEvents
     cudaEvent_t executor_done = nullptr;
     cudaEvent_t hot_reduce_start = nullptr;
     cudaEvent_t hot_reduce_done = nullptr;
+    cudaEvent_t compare_start = nullptr;
+    cudaEvent_t compare_done = nullptr;
 
     ~NativeContactTimingEvents() noexcept { destroy(); }
 
@@ -132,6 +138,10 @@ struct NativeContactTimingEvents
                                   "cudaEventCreate(hot_reduce_start)");
         check_native_contact_cuda(cudaEventCreate(&hot_reduce_done),
                                   "cudaEventCreate(hot_reduce_done)");
+        check_native_contact_cuda(cudaEventCreate(&compare_start),
+                                  "cudaEventCreate(compare_start)");
+        check_native_contact_cuda(cudaEventCreate(&compare_done),
+                                  "cudaEventCreate(compare_done)");
     }
 
     void destroy() noexcept
@@ -148,33 +158,20 @@ struct NativeContactTimingEvents
             cudaEventDestroy(hot_reduce_start);
         if(hot_reduce_done)
             cudaEventDestroy(hot_reduce_done);
+        if(compare_start)
+            cudaEventDestroy(compare_start);
+        if(compare_done)
+            cudaEventDestroy(compare_done);
         hessian_start = nullptr;
         hessian_done = nullptr;
         executor_start = nullptr;
         executor_done = nullptr;
         hot_reduce_start = nullptr;
         hot_reduce_done = nullptr;
+        compare_start = nullptr;
+        compare_done = nullptr;
     }
 };
-
-template <typename StoreT>
-void assign_native_contact_hessian_view(
-    muda::CTripletMatrixView<StoreT, 3>& target,
-    muda::CTripletMatrixView<StoreT, 3>  source,
-    std::string_view                     label)
-{
-    if(source.triplet_count() == 0)
-        return;
-    if(target.triplet_count() != 0)
-    {
-        throw SimSystemException{fmt::format(
-            "socu_native_contact_executor_duplicate_source: multiple "
-            "non-empty Hessian source views for {} are not supported by "
-            "the M5.5 single-source evaluator table",
-            label)};
-    }
-    target = source;
-}
 
 }  // namespace
 
@@ -203,6 +200,11 @@ void GlobalDyTopoEffectManager::do_build()
     m_impl.finite_element_method = find<FiniteElementMethod>();
     m_impl.affine_body_vertex_reporter = find<AffineBodyVertexReporter>();
     m_impl.finite_element_vertex_reporter = find<FiniteElementVertexReporter>();
+    m_impl.global_contact_manager = find<GlobalContactManager>();
+    m_impl.half_plane = find<HalfPlane>();
+    m_impl.half_plane_vertex_reporter = find<HalfPlaneVertexReporter>();
+    if(auto dt_attr = config.find<Float>("dt"))
+        m_impl.dt = dt_attr->view()[0];
 }
 
 void GlobalDyTopoEffectManager::Impl::init(WorldVisitor& world)
@@ -720,6 +722,503 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                             structured_info.stream()),
             "cudaEventRecord(hessian_start)");
 
+        const auto evaluator_path =
+            structured_info.native_contact_evaluator_path();
+
+        if(evaluator_path == SocuContactEvaluatorPath::DirectNative
+           || evaluator_path == SocuContactEvaluatorPath::Hybrid
+           || evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+        {
+            if(!global_contact_manager)
+            {
+                throw SimSystemException{
+                    "socu_native_contact_direct_missing_contact_manager: "
+                    "direct evaluator requires GlobalContactManager"};
+            }
+
+            std::vector<SocuContactDirectSourceEntry> direct_sources_host;
+            direct_sources_host.reserve(16);
+            SocuContactSourceId direct_source_id = 0;
+            bool uses_half_plane = false;
+            auto push_direct_source = [&](SocuContactModelKind model,
+                                          SocuContactFamily family,
+                                          auto view)
+            {
+                SocuContactDirectSourceEntry entry;
+                entry.source_id = direct_source_id++;
+                entry.model = model;
+                entry.family = family;
+                entry.contact_count =
+                    static_cast<std::uint32_t>(view.size());
+                if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
+                                            muda::CBufferView<Vector4i>>)
+                {
+                    entry.stencil_size = 4;
+                    entry.stencil4 = view;
+                }
+                else if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
+                                                 muda::CBufferView<Vector3i>>)
+                {
+                    entry.stencil_size = 3;
+                    entry.stencil3 = view;
+                }
+                else
+                {
+                    entry.stencil_size = 2;
+                    entry.stencil2 = view;
+                }
+                direct_sources_host.push_back(entry);
+            };
+
+            for(auto&& reporter : dytopo_effect_reporters.view())
+            {
+                if(!has_flags(EnergyComponentFlags::Contact,
+                              reporter->component_flags()))
+                    continue;
+
+                if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+                {
+                    push_direct_source(SocuContactModelKind::SimplexNormal,
+                                       SocuContactFamily::PT,
+                                       normal->PTs());
+                    push_direct_source(SocuContactModelKind::SimplexNormal,
+                                       SocuContactFamily::EE,
+                                       normal->EEs());
+                    push_direct_source(SocuContactModelKind::SimplexNormal,
+                                       SocuContactFamily::PE,
+                                       normal->PEs());
+                    push_direct_source(SocuContactModelKind::SimplexNormal,
+                                       SocuContactFamily::PP,
+                                       normal->PPs());
+                    continue;
+                }
+                if(auto* friction =
+                       dynamic_cast<SimplexFrictionalContact*>(reporter))
+                {
+                    push_direct_source(SocuContactModelKind::SimplexFrictional,
+                                       SocuContactFamily::PT,
+                                       friction->PTs());
+                    push_direct_source(SocuContactModelKind::SimplexFrictional,
+                                       SocuContactFamily::EE,
+                                       friction->EEs());
+                    push_direct_source(SocuContactModelKind::SimplexFrictional,
+                                       SocuContactFamily::PE,
+                                       friction->PEs());
+                    push_direct_source(SocuContactModelKind::SimplexFrictional,
+                                       SocuContactFamily::PP,
+                                       friction->PPs());
+                    continue;
+                }
+                if(auto* normal =
+                       dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+                {
+                    uses_half_plane = true;
+                    push_direct_source(
+                        SocuContactModelKind::VertexHalfPlaneNormal,
+                        SocuContactFamily::PH,
+                        normal->PHs());
+                    continue;
+                }
+                if(auto* friction = dynamic_cast<
+                       VertexHalfPlaneFrictionalContact*>(reporter))
+                {
+                    uses_half_plane = true;
+                    push_direct_source(
+                        SocuContactModelKind::VertexHalfPlaneFrictional,
+                        SocuContactFamily::PH,
+                        friction->PHs());
+                    continue;
+                }
+
+                throw SimSystemException{fmt::format(
+                    "socu_native_contact_direct_unsupported_reporter: reporter "
+                    "'{}' is a contact reporter but does not expose native "
+                    "direct evaluator source views",
+                    reporter->name())};
+            }
+
+            if(uses_half_plane && (!half_plane || !half_plane_vertex_reporter))
+            {
+                throw SimSystemException{
+                    "socu_native_contact_direct_missing_half_plane_views: "
+                    "PH direct evaluator requires HalfPlane and "
+                    "HalfPlaneVertexReporter"};
+            }
+
+            SocuContactDirectSceneView<StoreScalar> scene;
+            scene.contact_tabular =
+                global_contact_manager->contact_tabular()
+                    .cviewer()
+                    .name("socu_direct_contact_tabular");
+            scene.positions = global_vertex_manager->positions();
+            scene.prev_positions = global_vertex_manager->prev_positions();
+            scene.rest_positions = global_vertex_manager->rest_positions();
+            scene.thicknesses = global_vertex_manager->thicknesses();
+            scene.contact_element_ids =
+                global_vertex_manager->contact_element_ids();
+            scene.d_hats = global_vertex_manager->d_hats();
+            scene.dt = dt;
+            scene.eps_velocity = global_contact_manager->eps_velocity();
+            if(half_plane)
+            {
+                scene.half_plane_positions = half_plane->positions();
+                scene.half_plane_normals = half_plane->normals();
+            }
+            if(half_plane_vertex_reporter)
+            {
+                scene.half_plane_vertex_offset =
+                    half_plane_vertex_reporter->vertex_offset();
+            }
+
+            muda::DeviceBuffer<SocuContactDirectSourceEntry> direct_sources{
+                direct_sources_host};
+            SocuContactDirectSourceTable direct_source_table;
+            direct_source_table.source_entries =
+                direct_sources.view().as_const();
+            const SocuContactDirectEvaluator<StoreScalar> direct_evaluator{
+                plan_view,
+                scene,
+                direct_source_table};
+
+            muda::DeviceBuffer<SocuContactEvaluatorSourceEntry<StoreScalar>>
+                compare_evaluator_sources;
+            SocuContactEvaluatorSourceTable<StoreScalar> compare_sources;
+            double compare_triplet_ms = 0.0;
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            {
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.hessian_start,
+                                    structured_info.stream()),
+                    "cudaEventRecord(compare_triplet_start)");
+
+                auto vertex_count = global_vertex_manager->positions().size();
+                auto reporter_gradient_counts =
+                    reporter_gradient_offsets_counts.counts();
+                auto reporter_hessian_counts =
+                    reporter_hessian_offsets_counts.counts();
+                for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
+                {
+                    reporter_gradient_counts[i] = 0;
+                    reporter_hessian_counts[i] = 0;
+                    if(!has_flags(EnergyComponentFlags::Contact,
+                                  reporter->component_flags()))
+                        continue;
+
+                    GradientHessianExtentInfo extent_info;
+                    extent_info.m_gradient_only = false;
+                    reporter->report_gradient_hessian_extent(extent_info);
+                    reporter_gradient_counts[i] = extent_info.m_gradient_count;
+                    reporter_hessian_counts[i] = extent_info.m_hessian_count;
+                }
+                reporter_gradient_offsets_counts.scan();
+                reporter_hessian_offsets_counts.scan();
+
+                const auto total_gradient_count =
+                    reporter_gradient_offsets_counts.total_count();
+                const auto total_hessian_count =
+                    reporter_hessian_offsets_counts.total_count();
+                loose_resize_entries(collected_dytopo_effect_gradient,
+                                     total_gradient_count);
+                loose_resize_entries(collected_dytopo_effect_hessian,
+                                     total_hessian_count);
+                collected_dytopo_effect_gradient.reshape(vertex_count);
+                collected_dytopo_effect_hessian.reshape(vertex_count,
+                                                       vertex_count);
+
+                for(auto&& [i, reporter] : enumerate(dytopo_effect_reporters.view()))
+                {
+                    if(!has_flags(EnergyComponentFlags::Contact,
+                                  reporter->component_flags()))
+                        continue;
+
+                    const auto [g_offset, g_count] =
+                        reporter_gradient_offsets_counts[i];
+                    const auto [h_offset, h_count] =
+                        reporter_hessian_offsets_counts[i];
+
+                    GradientHessianInfo hessian_info;
+                    hessian_info.m_gradient_only = false;
+                    hessian_info.m_gradients =
+                        collected_dytopo_effect_gradient.view().subview(g_offset,
+                                                                        g_count);
+                    hessian_info.m_hessians =
+                        collected_dytopo_effect_hessian.view().subview(h_offset,
+                                                                       h_count);
+
+                    Timer timer{
+                        "Assemble Contact Hessian Triplets For SOCU Native Direct Compare"};
+                    reporter->assemble(hessian_info);
+                }
+
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.hessian_done,
+                                    structured_info.stream()),
+                    "cudaEventRecord(compare_triplet_done)");
+                check_native_contact_cuda(
+                    cudaEventSynchronize(timing_events.hessian_done),
+                    "native contact direct compare triplet synchronize");
+                float compare_triplet_ms_f = 0.0f;
+                check_native_contact_cuda(
+                    cudaEventElapsedTime(&compare_triplet_ms_f,
+                                         timing_events.hessian_start,
+                                         timing_events.hessian_done),
+                    "cudaEventElapsedTime(compare_triplet)");
+                compare_triplet_ms = static_cast<double>(compare_triplet_ms_f);
+
+                std::vector<SocuContactEvaluatorSourceEntry<StoreScalar>>
+                    evaluator_sources_host;
+                evaluator_sources_host.reserve(16);
+                SocuContactSourceId evaluator_source_id = 0;
+                auto push_evaluator_source =
+                    [&](SocuContactModelKind model,
+                        SocuContactFamily family,
+                        muda::CTripletMatrixView<StoreScalar, 3> hessians)
+                {
+                    SocuContactEvaluatorSourceEntry<StoreScalar> entry;
+                    entry.source_id = evaluator_source_id++;
+                    entry.model = model;
+                    entry.family = family;
+                    entry.hessians = hessians;
+                    evaluator_sources_host.push_back(entry);
+                };
+
+                for(auto&& reporter : dytopo_effect_reporters.view())
+                {
+                    if(!has_flags(EnergyComponentFlags::Contact,
+                                  reporter->component_flags()))
+                        continue;
+
+                    if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+                    {
+                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PT,
+                                              normal->PT_hessians());
+                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::EE,
+                                              normal->EE_hessians());
+                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PE,
+                                              normal->PE_hessians());
+                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PP,
+                                              normal->PP_hessians());
+                        continue;
+                    }
+                    if(auto* friction =
+                           dynamic_cast<SimplexFrictionalContact*>(reporter))
+                    {
+                        push_evaluator_source(
+                            SocuContactModelKind::SimplexFrictional,
+                            SocuContactFamily::PT,
+                            friction->PT_hessians());
+                        push_evaluator_source(
+                            SocuContactModelKind::SimplexFrictional,
+                            SocuContactFamily::EE,
+                            friction->EE_hessians());
+                        push_evaluator_source(
+                            SocuContactModelKind::SimplexFrictional,
+                            SocuContactFamily::PE,
+                            friction->PE_hessians());
+                        push_evaluator_source(
+                            SocuContactModelKind::SimplexFrictional,
+                            SocuContactFamily::PP,
+                            friction->PP_hessians());
+                        continue;
+                    }
+                    if(auto* normal =
+                           dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+                    {
+                        push_evaluator_source(
+                            SocuContactModelKind::VertexHalfPlaneNormal,
+                            SocuContactFamily::PH,
+                            normal->hessians());
+                        continue;
+                    }
+                    if(auto* friction = dynamic_cast<
+                           VertexHalfPlaneFrictionalContact*>(reporter))
+                    {
+                        push_evaluator_source(
+                            SocuContactModelKind::VertexHalfPlaneFrictional,
+                            SocuContactFamily::PH,
+                            friction->hessians());
+                        continue;
+                    }
+
+                    throw SimSystemException{fmt::format(
+                        "socu_native_contact_direct_compare_unsupported_reporter: "
+                        "reporter '{}' does not expose triplet reference views",
+                        reporter->name())};
+                }
+
+                compare_evaluator_sources.resize(evaluator_sources_host.size());
+                if(!evaluator_sources_host.empty())
+                    compare_evaluator_sources.view().copy_from(
+                        evaluator_sources_host.data());
+                compare_sources.source_entries =
+                    compare_evaluator_sources.view().as_const();
+            }
+
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.hessian_start,
+                                structured_info.stream()),
+                "cudaEventRecord(direct_eval_start)");
+            muda::DeviceBuffer<SocuDeterministicContactHessian<StoreScalar>>
+                direct_hessians;
+            direct_hessians.resize(plan_view.programs.size());
+            launch_socu_contact_direct_evaluate_programs<StoreScalar>(
+                plan_view,
+                direct_evaluator,
+                direct_hessians.view(),
+                structured_info.stream());
+            check_native_contact_cuda(cudaGetLastError(),
+                                      "native contact direct eval launch");
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.hessian_done,
+                                structured_info.stream()),
+                "cudaEventRecord(direct_eval_done)");
+
+            double direct_compare_ms = 0.0;
+            double direct_compare_max_abs_error = 0.0;
+            double direct_compare_sum_abs_error = 0.0;
+            SizeT  direct_compare_mismatch_count = 0;
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            {
+                muda::DeviceBuffer<SocuContactDirectCompareProgramStats>
+                    compare_stats;
+                compare_stats.resize(plan_view.programs.size());
+                const SocuContactTripletEvaluator<StoreScalar> reference_evaluator{
+                    plan_view,
+                    compare_sources};
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.compare_start,
+                                    structured_info.stream()),
+                    "cudaEventRecord(direct_compare_start)");
+                launch_socu_contact_compare_direct_triplet_programs<StoreScalar>(
+                    plan_view,
+                    direct_hessians.view().as_const(),
+                    reference_evaluator,
+                    compare_stats.view(),
+                    Float{1e-4},
+                    structured_info.stream());
+                check_native_contact_cuda(cudaGetLastError(),
+                                          "native contact direct compare launch");
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.compare_done,
+                                    structured_info.stream()),
+                    "cudaEventRecord(direct_compare_done)");
+                check_native_contact_cuda(
+                    cudaEventSynchronize(timing_events.compare_done),
+                    "native contact direct compare synchronize");
+
+                float direct_compare_ms_f = 0.0f;
+                check_native_contact_cuda(
+                    cudaEventElapsedTime(&direct_compare_ms_f,
+                                         timing_events.compare_start,
+                                         timing_events.compare_done),
+                    "cudaEventElapsedTime(direct_compare)");
+                direct_compare_ms = static_cast<double>(direct_compare_ms_f);
+
+                std::vector<SocuContactDirectCompareProgramStats>
+                    compare_stats_host;
+                compare_stats.copy_to(compare_stats_host);
+                for(const auto& stat : compare_stats_host)
+                {
+                    direct_compare_max_abs_error =
+                        std::max(direct_compare_max_abs_error,
+                                 static_cast<double>(stat.max_abs_error));
+                    direct_compare_sum_abs_error +=
+                        static_cast<double>(stat.sum_abs_error);
+                    direct_compare_mismatch_count +=
+                        static_cast<SizeT>(stat.mismatch_count);
+                }
+            }
+
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.executor_start,
+                                structured_info.stream()),
+                "cudaEventRecord(executor_start)");
+            const SocuContactPrecomputedHessianEvaluator<StoreScalar>
+                evaluator{direct_hessians.view().as_const()};
+            launch_socu_contact_executor_direct_scatter<
+                StoreScalar,
+                GlobalLinearSystem::SolveScalar>(
+                plan_view,
+                matrix,
+                evaluator,
+                {},
+                structured_info.stream());
+            check_native_contact_cuda(cudaGetLastError(),
+                                      "native contact direct scatter launch");
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.executor_done,
+                                structured_info.stream()),
+                "cudaEventRecord(executor_done)");
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.hot_reduce_start,
+                                structured_info.stream()),
+                "cudaEventRecord(hot_reduce_start)");
+            launch_socu_contact_executor_hot_reduce<
+                StoreScalar,
+                GlobalLinearSystem::SolveScalar>(
+                plan_view,
+                matrix,
+                evaluator,
+                {},
+                structured_info.stream());
+            check_native_contact_cuda(cudaGetLastError(),
+                                      "native contact hot reduce launch");
+            check_native_contact_cuda(
+                cudaEventRecord(timing_events.hot_reduce_done,
+                                structured_info.stream()),
+                "cudaEventRecord(hot_reduce_done)");
+            check_native_contact_cuda(
+                cudaEventSynchronize(timing_events.hot_reduce_done),
+                "native contact executor synchronize");
+
+            float direct_eval_ms = 0.0f;
+            float executor_ms = 0.0f;
+            float hot_reduce_ms = 0.0f;
+            check_native_contact_cuda(
+                cudaEventElapsedTime(&direct_eval_ms,
+                                     timing_events.hessian_start,
+                                     timing_events.hessian_done),
+                "cudaEventElapsedTime(direct_eval)");
+            check_native_contact_cuda(
+                cudaEventElapsedTime(&executor_ms,
+                                     timing_events.executor_start,
+                                     timing_events.executor_done),
+                "cudaEventElapsedTime(executor_scatter)");
+            check_native_contact_cuda(
+                cudaEventElapsedTime(&hot_reduce_ms,
+                                     timing_events.hot_reduce_start,
+                                     timing_events.hot_reduce_done),
+                "cudaEventElapsedTime(hot_reduce)");
+            const auto end = std::chrono::steady_clock::now();
+            structured_info.record_native_contact_direct_eval_time_ms(
+                static_cast<double>(direct_eval_ms));
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            {
+                structured_info.record_native_contact_hessian_triplet_time_ms(
+                    compare_triplet_ms);
+                structured_info.record_native_contact_direct_compare_time_ms(
+                    direct_compare_ms);
+                structured_info.record_native_contact_direct_compare_error(
+                    direct_compare_max_abs_error,
+                    direct_compare_sum_abs_error,
+                    direct_compare_mismatch_count);
+            }
+            structured_info.record_native_contact_executor_scatter_time_ms(
+                static_cast<double>(executor_ms));
+            structured_info.record_native_contact_hot_reduce_time_ms(
+                static_cast<double>(hot_reduce_ms));
+            structured_info.record_native_contact_numeric_time_ms(
+                std::chrono::duration<double, std::milli>(end - begin).count());
+            structured_info.set_native_contact_replay_path("native_plan");
+
+            assemble_non_contact_structured_reporters();
+            return;
+        }
+
         auto vertex_count = global_vertex_manager->positions().size();
         auto reporter_gradient_counts = reporter_gradient_offsets_counts.counts();
         auto reporter_hessian_counts  = reporter_hessian_offsets_counts.counts();
@@ -775,7 +1274,23 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                             structured_info.stream()),
             "cudaEventRecord(hessian_done)");
 
-        SocuContactEvaluatorSourceTable<StoreScalar> sources;
+        std::vector<SocuContactEvaluatorSourceEntry<StoreScalar>>
+            evaluator_sources_host;
+        evaluator_sources_host.reserve(16);
+        SocuContactSourceId evaluator_source_id = 0;
+        auto push_evaluator_source = [&](SocuContactModelKind model,
+                                         SocuContactFamily family,
+                                         muda::CTripletMatrixView<StoreScalar, 3>
+                                             hessians)
+        {
+            SocuContactEvaluatorSourceEntry<StoreScalar> entry;
+            entry.source_id = evaluator_source_id++;
+            entry.model = model;
+            entry.family = family;
+            entry.hessians = hessians;
+            evaluator_sources_host.push_back(entry);
+        };
+
         for(auto&& reporter : dytopo_effect_reporters.view())
         {
             if(!has_flags(EnergyComponentFlags::Contact,
@@ -784,59 +1299,57 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
             if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
             {
-                assign_native_contact_hessian_view(
-                    sources.simplex_normal.pt_hessians,
-                    normal->PT_hessians(),
-                    "simplex_normal/PT");
-                assign_native_contact_hessian_view(
-                    sources.simplex_normal.ee_hessians,
-                    normal->EE_hessians(),
-                    "simplex_normal/EE");
-                assign_native_contact_hessian_view(
-                    sources.simplex_normal.pe_hessians,
-                    normal->PE_hessians(),
-                    "simplex_normal/PE");
-                assign_native_contact_hessian_view(
-                    sources.simplex_normal.pp_hessians,
-                    normal->PP_hessians(),
-                    "simplex_normal/PP");
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexNormal,
+                    SocuContactFamily::PT,
+                    normal->PT_hessians());
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexNormal,
+                    SocuContactFamily::EE,
+                    normal->EE_hessians());
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexNormal,
+                    SocuContactFamily::PE,
+                    normal->PE_hessians());
+                push_evaluator_source(SocuContactModelKind::SimplexNormal,
+                                      SocuContactFamily::PP,
+                                      normal->PP_hessians());
                 continue;
             }
             if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
             {
-                assign_native_contact_hessian_view(
-                    sources.simplex_frictional.pt_hessians,
-                    friction->PT_hessians(),
-                    "simplex_frictional/PT");
-                assign_native_contact_hessian_view(
-                    sources.simplex_frictional.ee_hessians,
-                    friction->EE_hessians(),
-                    "simplex_frictional/EE");
-                assign_native_contact_hessian_view(
-                    sources.simplex_frictional.pe_hessians,
-                    friction->PE_hessians(),
-                    "simplex_frictional/PE");
-                assign_native_contact_hessian_view(
-                    sources.simplex_frictional.pp_hessians,
-                    friction->PP_hessians(),
-                    "simplex_frictional/PP");
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexFrictional,
+                    SocuContactFamily::PT,
+                    friction->PT_hessians());
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexFrictional,
+                    SocuContactFamily::EE,
+                    friction->EE_hessians());
+                push_evaluator_source(
+                    SocuContactModelKind::SimplexFrictional,
+                    SocuContactFamily::PE,
+                    friction->PE_hessians());
+                push_evaluator_source(SocuContactModelKind::SimplexFrictional,
+                                      SocuContactFamily::PP,
+                                      friction->PP_hessians());
                 continue;
             }
             if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
             {
-                assign_native_contact_hessian_view(
-                    sources.vertex_half_plane_normal.ph_hessians,
-                    normal->hessians(),
-                    "vertex_half_plane_normal/PH");
+                push_evaluator_source(
+                    SocuContactModelKind::VertexHalfPlaneNormal,
+                    SocuContactFamily::PH,
+                    normal->hessians());
                 continue;
             }
             if(auto* friction =
                    dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
             {
-                assign_native_contact_hessian_view(
-                    sources.vertex_half_plane_frictional.ph_hessians,
-                    friction->hessians(),
-                    "vertex_half_plane_frictional/PH");
+                push_evaluator_source(
+                    SocuContactModelKind::VertexHalfPlaneFrictional,
+                    SocuContactFamily::PH,
+                    friction->hessians());
                 continue;
             }
 
@@ -846,6 +1359,10 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 "executor Hessian source views",
                 reporter->name())};
         }
+        muda::DeviceBuffer<SocuContactEvaluatorSourceEntry<StoreScalar>>
+            evaluator_sources{evaluator_sources_host};
+        SocuContactEvaluatorSourceTable<StoreScalar> sources;
+        sources.source_entries = evaluator_sources.view().as_const();
 
         check_native_contact_cuda(
             cudaEventRecord(timing_events.executor_start,

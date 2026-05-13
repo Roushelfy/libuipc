@@ -270,6 +270,26 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_native_contact_hessian_triplet_time_ms;
         }
+        double native_contact_direct_eval_time_ms() const noexcept
+        {
+            return m_native_contact_direct_eval_time_ms;
+        }
+        double native_contact_direct_compare_time_ms() const noexcept
+        {
+            return m_native_contact_direct_compare_time_ms;
+        }
+        double native_contact_direct_compare_max_abs_error() const noexcept
+        {
+            return m_native_contact_direct_compare_max_abs_error;
+        }
+        double native_contact_direct_compare_sum_abs_error() const noexcept
+        {
+            return m_native_contact_direct_compare_sum_abs_error;
+        }
+        SizeT native_contact_direct_compare_mismatch_count() const noexcept
+        {
+            return m_native_contact_direct_compare_mismatch_count;
+        }
         double native_contact_executor_scatter_time_ms() const noexcept
         {
             return m_native_contact_executor_scatter_time_ms;
@@ -281,6 +301,10 @@ class GlobalLinearSystem : public SimSystem
         const std::string& native_contact_replay_path() const noexcept
         {
             return m_native_contact_replay_path;
+        }
+        SocuContactEvaluatorPath native_contact_evaluator_path() const noexcept
+        {
+            return m_native_contact_evaluator_path;
         }
         bool native_contact_plan_executor_enabled() const noexcept
         {
@@ -419,6 +443,7 @@ class GlobalLinearSystem : public SimSystem
             SocuContactAssemblyPlanM2Workspace* workspace,
             SocuVertexSideCoverageMode          coverage_mode,
             bool scalar_diag_compatibility,
+            SocuContactEvaluatorPath evaluator_path,
             bool enabled) noexcept
         {
             m_native_contact_plan = plan;
@@ -426,6 +451,7 @@ class GlobalLinearSystem : public SimSystem
             m_native_contact_side_coverage_mode = coverage_mode;
             m_native_contact_scalar_diag_compatibility =
                 scalar_diag_compatibility;
+            m_native_contact_evaluator_path = evaluator_path;
             m_native_contact_plan_executor_enabled =
                 enabled && plan != nullptr && workspace != nullptr;
         }
@@ -501,6 +527,26 @@ class GlobalLinearSystem : public SimSystem
             double elapsed_ms) noexcept
         {
             m_native_contact_hessian_triplet_time_ms += elapsed_ms;
+        }
+        void record_native_contact_direct_eval_time_ms(
+            double elapsed_ms) noexcept
+        {
+            m_native_contact_direct_eval_time_ms += elapsed_ms;
+        }
+        void record_native_contact_direct_compare_time_ms(
+            double elapsed_ms) noexcept
+        {
+            m_native_contact_direct_compare_time_ms += elapsed_ms;
+        }
+        void record_native_contact_direct_compare_error(
+            double max_abs_error,
+            double sum_abs_error,
+            SizeT mismatch_count) noexcept
+        {
+            if(max_abs_error > m_native_contact_direct_compare_max_abs_error)
+                m_native_contact_direct_compare_max_abs_error = max_abs_error;
+            m_native_contact_direct_compare_sum_abs_error += sum_abs_error;
+            m_native_contact_direct_compare_mismatch_count += mismatch_count;
         }
         void record_native_contact_executor_scatter_time_ms(
             double elapsed_ms) noexcept
@@ -585,10 +631,17 @@ class GlobalLinearSystem : public SimSystem
         double                     m_native_contact_numeric_time_ms = 0.0;
         double                     m_native_contact_hessian_triplet_time_ms =
             0.0;
+        double                     m_native_contact_direct_eval_time_ms = 0.0;
+        double                     m_native_contact_direct_compare_time_ms = 0.0;
+        double                     m_native_contact_direct_compare_max_abs_error = 0.0;
+        double                     m_native_contact_direct_compare_sum_abs_error = 0.0;
+        SizeT                      m_native_contact_direct_compare_mismatch_count = 0;
         double                     m_native_contact_executor_scatter_time_ms =
             0.0;
         double                     m_native_contact_hot_reduce_time_ms = 0.0;
         std::string                m_native_contact_replay_path = "off";
+        SocuContactEvaluatorPath   m_native_contact_evaluator_path =
+            SocuContactEvaluatorPath::TripletCompat;
         muda::CBufferView<SocuNativeVertexDescriptor> m_native_vertex_descriptors;
         IndexT                     m_descriptor_epoch = 0;
         cudaStream_t               m_stream = cudaStreamLegacy;

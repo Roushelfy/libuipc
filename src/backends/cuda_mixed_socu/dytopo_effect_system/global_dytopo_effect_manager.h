@@ -24,6 +24,9 @@ class AffineBodyDynamics;
 class FiniteElementMethod;
 class AffineBodyVertexReporter;
 class FiniteElementVertexReporter;
+class GlobalContactManager;
+class HalfPlane;
+class HalfPlaneVertexReporter;
 struct SocuContactAssemblyPlan;
 struct SocuContactAssemblyPlanM2Workspace;
 
@@ -222,6 +225,10 @@ class GlobalDyTopoEffectManager final : public SimSystem
         SimSystemSlot<FiniteElementMethod> finite_element_method;
         SimSystemSlot<AffineBodyVertexReporter> affine_body_vertex_reporter;
         SimSystemSlot<FiniteElementVertexReporter> finite_element_vertex_reporter;
+        SimSystemSlot<GlobalContactManager> global_contact_manager;
+        SimSystemSlot<HalfPlane> half_plane;
+        SimSystemSlot<HalfPlaneVertexReporter> half_plane_vertex_reporter;
+        Float dt = 0;
 
         Float reserve_ratio = 1.1;
 

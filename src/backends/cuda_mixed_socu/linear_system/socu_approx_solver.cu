@@ -142,6 +142,24 @@ bool native_contact_hot_reduce_strategy_valid(std::string_view strategy) noexcep
            || strategy == "recompute" || strategy == "cached_microblock";
 }
 
+bool native_contact_evaluator_path_valid(std::string_view path) noexcept
+{
+    return path == "triplet_compat" || path == "direct"
+           || path == "direct_compare" || path == "hybrid";
+}
+
+SocuContactEvaluatorPath native_contact_evaluator_path_from_string(
+    std::string_view path) noexcept
+{
+    if(path == "direct")
+        return SocuContactEvaluatorPath::DirectNative;
+    if(path == "direct_compare")
+        return SocuContactEvaluatorPath::DirectCompare;
+    if(path == "hybrid")
+        return SocuContactEvaluatorPath::Hybrid;
+    return SocuContactEvaluatorPath::TripletCompat;
+}
+
 SocuContactExecutionStrategy native_contact_hot_reduce_strategy_from_string(
     std::string_view strategy) noexcept
 {
@@ -181,6 +199,7 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
                                       bool executor_enabled,
                                       bool hot_reduce_enabled,
                                       bool scalar_diag_compat_enabled,
+                                      SocuContactEvaluatorPath evaluator_path,
                                       std::string_view hot_reduce_strategy,
                                       SizeT plan_rebuild_count,
                                       SizeT side_plan_rebuild_count,
@@ -194,6 +213,8 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_hot_reduce_enabled = hot_reduce_enabled;
     report.native_contact_scalar_diag_compat_enabled =
         scalar_diag_compat_enabled;
+    report.native_contact_evaluator_path =
+        socu_contact_evaluator_path_name(evaluator_path);
     report.native_contact_hot_reduce_strategy =
         std::string{hot_reduce_strategy};
     report.native_contact_plan_cache_hit = false;
@@ -218,8 +239,17 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_side_plan_build_ms = 0.0;
     report.native_contact_program_plan_build_ms = 0.0;
     report.native_contact_side_coverage_refresh_ms = 0.0;
+    report.native_contact_active_vertex_collect_ms = 0.0;
+    report.native_contact_missing_side_fill_ms = 0.0;
+    report.native_contact_program_emit_ms = 0.0;
+    report.native_contact_bucket_build_ms = 0.0;
+    report.native_contact_hot_block_build_ms = 0.0;
     report.native_contact_numeric_ms = 0.0;
     report.native_contact_hessian_triplet_ms = 0.0;
+    report.native_contact_direct_eval_ms = 0.0;
+    report.native_contact_direct_compare_ms = 0.0;
+    report.native_contact_direct_compare_max_abs_error = 0.0;
+    report.native_contact_direct_compare_sum_abs_error = 0.0;
     report.native_contact_executor_scatter_ms = 0.0;
     report.native_contact_hot_reduce_ms = 0.0;
     report.native_contact_probe_path = "off";
@@ -244,11 +274,19 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
     report.native_contact_drop_program_count = 0;
     report.native_contact_skipped_program_count = 0;
     report.native_contact_mixed_rejected_program_count = 0;
+    report.native_contact_side_id_invalid_program_count = 0;
+    report.native_contact_side_not_writable_program_count = 0;
+    report.native_contact_offband_dropped_program_count = 0;
+    report.native_contact_mixed_rejected_reason_program_count = 0;
+    report.native_contact_source_local_missing_program_count = 0;
     report.native_contact_diag_block_task_count = 0;
     report.native_contact_diag_scalar_task_count = 0;
     report.native_contact_lump_scalar_task_count = 0;
     report.native_contact_hot_diag_block_count = 0;
     report.native_contact_hot_offdiag_block_count = 0;
+    report.native_contact_direct_unsupported_program_count = 0;
+    report.native_contact_direct_fallback_program_count = 0;
+    report.native_contact_direct_compare_mismatch_count = 0;
 }
 
 socu_approx::rcm::AtomGraph graph_from_json(const Json& json,
@@ -427,6 +465,9 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     auto native_contact_side_coverage_mode_attr =
         config.find<std::string>(
             "linear_system/socu_approx/native_contact_side_coverage_mode");
+    auto native_contact_evaluator_attr =
+        config.find<std::string>(
+            "linear_system/socu_approx/native_contact_evaluator");
     m_native_contact_plan_enabled =
         native_contact_plan_attr && native_contact_plan_attr->view()[0] != 0;
     m_native_contact_plan_executor_enabled =
@@ -435,6 +476,22 @@ void SocuApproxSolver::do_build(BuildInfo& info)
     m_native_contact_scalar_diag_compat_enabled =
         native_contact_scalar_diag_compat_attr
         && native_contact_scalar_diag_compat_attr->view()[0] != 0;
+    const std::string native_contact_evaluator =
+        native_contact_evaluator_attr ? native_contact_evaluator_attr->view()[0]
+                                      : std::string{"triplet_compat"};
+    if(!native_contact_evaluator_path_valid(native_contact_evaluator))
+    {
+        m_gate_report = make_failure(
+            SocuApproxGateReason::OrderingInvalid,
+            fmt::format("linear_system/socu_approx/"
+                        "native_contact_evaluator must be one of "
+                        "'triplet_compat', 'direct', 'direct_compare', or "
+                        "'hybrid', got '{}'",
+                        native_contact_evaluator));
+        throw_gate_failure(m_gate_report);
+    }
+    m_native_contact_evaluator_path =
+        native_contact_evaluator_path_from_string(native_contact_evaluator);
     const std::string native_contact_side_coverage_mode =
         native_contact_side_coverage_mode_attr
             ? native_contact_side_coverage_mode_attr->view()[0]
@@ -1153,6 +1210,7 @@ bool SocuApproxSolver::install_ordering_report_impl(
         m_native_contact_plan_executor_enabled,
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
+        m_native_contact_evaluator_path,
         m_native_contact_hot_reduce_strategy,
         m_native_contact_plan_rebuild_count,
         m_native_contact_side_plan_rebuild_count,
@@ -1458,6 +1516,7 @@ void SocuApproxSolver::prepare_structured_chain(
         m_native_contact_plan_executor_enabled,
         m_native_contact_hot_reduce_enabled,
         m_native_contact_scalar_diag_compat_enabled,
+        m_native_contact_evaluator_path,
         m_native_contact_hot_reduce_strategy,
         m_native_contact_plan_rebuild_count,
         m_native_contact_side_plan_rebuild_count,
@@ -1843,6 +1902,7 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                                               nullptr,
                                               m_native_contact_side_coverage_mode,
                                               m_native_contact_scalar_diag_compat_enabled,
+                                              m_native_contact_evaluator_path,
                                               false);
         return;
     }
@@ -1854,6 +1914,7 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                                               nullptr,
                                               m_native_contact_side_coverage_mode,
                                               m_native_contact_scalar_diag_compat_enabled,
+                                              m_native_contact_evaluator_path,
                                               false);
         return;
     }
@@ -1864,12 +1925,20 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                                               nullptr,
                                               m_native_contact_side_coverage_mode,
                                               m_native_contact_scalar_diag_compat_enabled,
+                                              m_native_contact_evaluator_path,
                                               false);
         return;
     }
 
-    const auto key = info.socu_contact_assembly_plan_key(
+    const auto requested_hot_strategy =
+        m_native_contact_hot_reduce_enabled
+            ? native_contact_hot_reduce_strategy_from_string(
+                  m_native_contact_hot_reduce_strategy)
+            : SocuContactExecutionStrategy::DirectScatter;
+    auto key = info.socu_contact_assembly_plan_key(
         m_native_contact_scalar_diag_compat_enabled);
+    key.hot_block_strategy = requested_hot_strategy;
+    key.hot_block_threshold = m_native_contact_hot_reduce_threshold;
     const auto side_key = socu_vertex_side_plan_key_from(key);
     const auto program_key = socu_contact_program_plan_key_from(key);
     const auto decision = m_native_contact_plan_cache.update(key);
@@ -1894,11 +1963,6 @@ void SocuApproxSolver::prepare_structured_contact_plan(
         m_native_contact_plan_workspace =
             std::make_unique<SocuContactAssemblyPlanM2Workspace>();
 
-    const auto requested_hot_strategy =
-        m_native_contact_hot_reduce_enabled
-            ? native_contact_hot_reduce_strategy_from_string(
-                  m_native_contact_hot_reduce_strategy)
-            : SocuContactExecutionStrategy::DirectScatter;
     const bool plan_valid =
         m_native_contact_plan->side_plan.key == side_key
         && m_native_contact_plan->side_plan.coverage.mode
@@ -1995,6 +2059,7 @@ void SocuApproxSolver::prepare_structured_contact_plan(
         m_native_contact_plan_workspace.get(),
         m_native_contact_side_coverage_mode,
         m_native_contact_scalar_diag_compat_enabled,
+        m_native_contact_evaluator_path,
         m_native_contact_plan_executor_enabled && ready);
 #endif
 }
@@ -2015,11 +2080,23 @@ void SocuApproxSolver::finalize_structured_chain(
         info.native_contact_numeric_time_ms();
     m_report.native_contact_hessian_triplet_ms =
         info.native_contact_hessian_triplet_time_ms();
+    m_report.native_contact_direct_eval_ms =
+        info.native_contact_direct_eval_time_ms();
+    m_report.native_contact_direct_compare_ms =
+        info.native_contact_direct_compare_time_ms();
+    m_report.native_contact_direct_compare_max_abs_error =
+        info.native_contact_direct_compare_max_abs_error();
+    m_report.native_contact_direct_compare_sum_abs_error =
+        info.native_contact_direct_compare_sum_abs_error();
+    m_report.native_contact_direct_compare_mismatch_count =
+        info.native_contact_direct_compare_mismatch_count();
     m_report.native_contact_executor_scatter_ms =
         info.native_contact_executor_scatter_time_ms();
     m_report.native_contact_hot_reduce_ms =
         info.native_contact_hot_reduce_time_ms();
     m_report.native_contact_replay_path = info.native_contact_replay_path();
+    m_report.native_contact_evaluator_path =
+        socu_contact_evaluator_path_name(info.native_contact_evaluator_path());
 
     if(info.report_counters_enabled())
     {

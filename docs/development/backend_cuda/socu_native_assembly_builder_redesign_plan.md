@@ -2220,9 +2220,10 @@ Deliverables:
   - `native_contact_replay_path = "off"`: no contact replay ran.
 - Preserve `native_contact_probe_path` through the same solve report even when
   `prepare_structured_chain()` resets per-solve native contact statistics.
-- Reject ambiguous M5.5 source-table states: multiple non-empty reporters for
-  the same model/family must fail loudly until the evaluator table is made
-  source-id indexed.
+- M5.5 originally rejected ambiguous source-table states where multiple
+  non-empty reporters shared the same model/family. M6.5 replaces this with a
+  source-id indexed evaluator table; same-family multi-reporter replay is now a
+  required contract test.
 
 Implementation status on `socu-native-builder-redesign`:
 
@@ -2248,17 +2249,15 @@ Implementation status on `socu-native-builder-redesign`:
     executor replay branch.
 - Added source-scan and report JSON tests for the M5.5 hook/path contract.
 
-M5.5 limitations:
+M5.5 limitations before the M6.5 stabilization slice:
 
 - The `native_plan` replay branch is intentionally not yet a final performance
   claim. It feeds the executor from the existing non-structured reporter
   half-Hessian triplet layout, so the measured numeric time includes this
   compatibility triplet generation step and may recompute contact gradients.
-- The M5.5 evaluator source table is keyed by model/family, not by
-  `source_id`. It rejects multiple non-empty same-family reporter sources
-  instead of silently assembling the wrong Hessians. A source-id indexed
-  evaluator table is required before claiming production coverage for multiple
-  reporters of the same family.
+- The original M5.5 evaluator source table was keyed by model/family. M6.5
+  changes production replay to source-id indexed lookup while preserving the
+  dense invariant `source_id == sources[source_id].source_id`.
 - Existing `full_hessian_cached` replay remains
   `native_contact_replay_path = "legacy_structured"` unless a later milestone
   adds a native replay plan.
@@ -2444,6 +2443,460 @@ Implementation status on `socu-native-builder-redesign`:
   not for enabling owner-reduce by default. A later scene gate must first make
   real Wrecking Ball native contact tasks non-skipped, then rerun the 20-frame
   hot-block counter/performance acceptance.
+
+### M6.5: Scene Native-Task Stabilization
+
+M6.5 is a stabilization slice between M6 and M7. Its goal is not to make
+owner-reduce a default strategy. The goal is to make scene reports trustworthy
+enough to explain why Wrecking Ball produces zero native contact tasks, and to
+remove source-table ambiguity before production coverage expands.
+
+Deliverables:
+
+- ABD ordering/native-side contract:
+  - ABD bodies are represented as one 12-DoF symbolic ordering atom when the
+    SOCU native contact builder is in use;
+  - this keeps every ABD surface side as one contiguous lane span, matching the
+    compact writer/executor contract;
+  - the old 4 by 3-DoF ABD body-local atom split is incompatible with the
+    current contact side abstraction unless the writer is redesigned to emit
+    per-sub-block ABD side tasks.
+- Program skip/drop diagnostics:
+  - `native_contact_side_id_invalid_program_count`;
+  - `native_contact_side_not_writable_program_count`;
+  - `native_contact_offband_dropped_program_count`;
+  - `native_contact_mixed_rejected_reason_program_count`;
+  - `native_contact_source_local_missing_program_count`.
+- Source-id indexed replay evaluator:
+  - `SocuContactProgramHeader::source_id` selects the corresponding evaluator
+    source entry;
+  - production replay accepts multiple non-empty reporters with the same
+    model/family when their source ids are dense;
+  - duplicate, missing, out-of-range, or non-dense source ids still fail at
+    symbolic-plan build time.
+- Hot-reduce key/report semantics:
+  - `SocuAssemblyPlanKey` and `SocuContactProgramPlanKey` include
+    `hot_block_strategy` and `hot_block_threshold`;
+  - changing `off -> detect_only -> recompute` or changing the threshold is a
+    program-plan cache miss, not a hidden aggregate hit followed by a rebuild.
+- Demand-filled segmented timing:
+  - `native_contact_active_vertex_collect_ms`;
+  - `native_contact_missing_side_fill_ms`;
+  - `native_contact_program_emit_ms`;
+  - `native_contact_bucket_build_ms`;
+  - `native_contact_hot_block_build_ms`.
+
+Acceptance:
+
+- Contract tests cover:
+  - ABD init-time ordering keeps 12-DoF body sides contiguous and therefore
+    writable in native vertex descriptors;
+  - source-id dense, duplicate, missing, out-of-range, and non-dense cases;
+  - same-family multi-reporter source-id indexed replay;
+  - hot-reduce strategy/threshold cache invalidation;
+  - skip/drop reason counters;
+  - global and demand-filled report/timing defaults.
+- Wrecking Ball `socu_rt50_topology_diag_lump` must be rerun for at least 20
+  frames in native-only builds for both `global` and `demand_filled` side
+  coverage. The report must include task count, valid/skipped/dropped map
+  counts, skip reason breakdown, active vertex count, missing count, side fill
+  count, and program rebuild count.
+- If `native_contact_task_count` is still zero, the M6.5 scene result is only
+  "root cause identified"; it is not a native contact performance acceptance.
+- `native_contact_hessian_triplet_ms` and
+  `native_contact_executor_scatter_ms` remain separate. The current reporter
+  triplet path is not the final direct native evaluator.
+- Resolution from the Wrecking Ball investigation:
+  - the zero-task root cause was the old ABD ordering split: 574 ABD bodies were
+    emitted as 2296 independent 3-DoF atoms, so the native descriptor builder
+    could not prove that any ABD vertex's 12 DoFs were contiguous in one side;
+  - after switching ABD ordering to one 12-DoF atom per body, Wrecking Ball
+    `socu_rt50_topology_diag_lump` produces real native contact tasks in both
+    side coverage modes;
+  - `global`, 20 frames: final report `native_contact_task_count=48652`,
+    `native_contact_valid_program_map_count=14568`,
+    `native_contact_side_not_writable_program_count=0`;
+  - `demand_filled`, 20 frames: final report
+    `native_contact_task_count=39244`,
+    `native_contact_valid_program_map_count=11432`,
+    `native_contact_side_not_writable_program_count=0`.
+
+### M6.6: Direct Native Contact Evaluator
+
+M6.6 removes the largest remaining compatibility cost in the native replay
+path. After M6.5, Wrecking Ball can produce real native contact tasks, but the
+numeric path still asks each legacy contact reporter to assemble reporter-layout
+half-Hessian triplets, then lets the SOCU executor read those triplets and
+scatter them into `D/E`. That is useful for bring-up and debugging, but it is
+not the final performance design.
+
+The M6.6 target is:
+
+- production native replay computes the contact Hessian directly from native
+  contact source views and the current scene fields;
+- `reporter->assemble(hessian_info)` is not called on the production
+  `direct` evaluator path;
+- reporter-layout half-Hessian triplets remain available only for
+  `triplet_compat` fallback and `direct_compare` diagnostics;
+- `native_contact_hessian_triplet_ms` is zero or absent in `direct` mode, while
+  `native_contact_direct_eval_ms` and `native_contact_executor_scatter_ms` are
+  reported separately;
+- owner-reduce and cached replay remain secondary. The first goal is a correct,
+  directly evaluated, direct-scatter native contact path.
+
+#### M6.6 Design
+
+Evaluator modes:
+
+```cpp
+enum class SocuContactEvaluatorPath : std::uint8_t
+{
+    TripletCompat,  // current compatibility path
+    DirectNative,   // production target
+    DirectCompare,  // run both paths and compare, diagnostic only
+    Hybrid          // temporary rollout: direct for supported sources, triplet otherwise
+};
+```
+
+Configuration:
+
+- scene config key:
+  `linear_system/socu_approx/native_contact_evaluator`;
+- accepted values: `triplet_compat`, `direct`, `direct_compare`, `hybrid`;
+- default remains `triplet_compat` until all supported source families pass
+  parity and Wrecking Ball gates;
+- after M6.6 acceptance, native-only development/performance runs should use
+  `direct`;
+- env/runner overrides are convenience only and must map back to the scene
+  config key.
+
+The symbolic contact program does not change. `SocuContactProgramHeader`
+continues to name `source_id`, `local_contact_id`, model, family, side ids, and
+program kind. M6.6 changes only the evaluator used by the executor to obtain
+the local deterministic Hessian for that program.
+
+Lightweight source/view types:
+
+```cpp
+template <class StoreT>
+struct SocuContactDirectSceneView
+{
+    muda::CBuffer2DView<ContactCoeff> contact_tabular;
+    muda::CBufferView<Vector3> positions;
+    muda::CBufferView<Vector3> prev_positions;
+    muda::CBufferView<Vector3> rest_positions;
+    muda::CBufferView<Float> thicknesses;
+    muda::CBufferView<IndexT> contact_element_ids;
+    muda::CBufferView<Float> d_hats;
+    Float d_hat;
+    Float dt;
+    Float eps_velocity;
+
+    muda::CBufferView<Vector3> half_plane_positions;
+    muda::CBufferView<Vector3> half_plane_normals;
+    IndexT half_plane_vertex_offset;
+};
+
+struct SocuContactDirectSourceEntry
+{
+    SocuContactSourceId source_id;
+    SocuContactModelKind model;
+    SocuContactFamily family;
+    std::uint32_t contact_count;
+
+    muda::CBufferView<Vector4i> stencil4;
+    muda::CBufferView<Vector3i> stencil3;
+    muda::CBufferView<Vector2i> stencil2;
+};
+
+template <class StoreT>
+struct SocuContactDirectEvaluator
+{
+    SocuContactAssemblyPlanView plan;
+    SocuContactDirectSceneView<StoreT> scene;
+    muda::CBufferView<SocuContactDirectSourceEntry> sources;
+
+    UIPC_GENERIC SocuDeterministicContactHessian<StoreT>
+    operator()(const SocuContactProgramHeader& program) const;
+};
+```
+
+Interface rules:
+
+- `source_id == sources[source_id].source_id` remains a hard invariant;
+- duplicate, missing, or non-dense source ids are rejected before replay;
+- direct source entries are built from the same ordered source list used by the
+  symbolic plan builder;
+- direct evaluation uses tagged source entries and compile-time helper
+  functions, not device virtual dispatch;
+- unsupported direct source/family combinations are illegal in `direct` mode
+  and may fall back only in explicit `hybrid` mode;
+- the direct evaluator initially returns the same
+  `SocuDeterministicContactHessian<StoreT>` as the triplet evaluator so the
+  existing writer, task list, bucket plan, direct scatter, and hot-block
+  machinery can be reused.
+
+Code organization:
+
+- keep POD/view declarations in a thin header, for example
+  `socu_contact_direct_evaluator_types.h`;
+- place model math in small native evaluator implementation files, split by
+  model/family when compile memory requires it:
+  - `socu_contact_direct_evaluator_simplex_normal.cu`;
+  - `socu_contact_direct_evaluator_simplex_friction.cu`;
+  - `socu_contact_direct_evaluator_vertex_half_plane_normal.cu`;
+  - `socu_contact_direct_evaluator_vertex_half_plane_friction.cu`;
+- extract shared device helpers from legacy reporter kernels into `.inl` or
+  narrow headers only when both the reporter path and direct evaluator need the
+  exact same math;
+- do not include heavy direct evaluator implementation headers from
+  `global_linear_system.h`, `socu_approx_solver.h`, or other broad headers.
+
+Math/parity rules:
+
+- direct normal simplex PT/EE/PE/PP must use the same distance flag,
+  `kappa * dt * dt`, thickness, `d_hat`, and `make_spd` behavior as the
+  existing reporter implementation;
+- direct simplex frictional PT/EE/PE/PP must use the same contact coefficient,
+  friction coefficient, mollifier/closest-point logic, `eps_velocity * dt`,
+  current positions, previous positions, rest positions, and `make_spd`
+  behavior as the existing reporter implementation;
+- direct vertex-half-plane normal/frictional PH must use the same half-plane
+  vertex offset, plane position/normal views, contact coefficients, and SPD
+  behavior as the existing reporter implementation;
+- if the current reporter helper computes gradient and Hessian together, M6.6
+  may compute and discard the gradient for parity first. A Hessian-only
+  specialization is a later optimization after correctness gates are green.
+
+Report fields:
+
+- `native_contact_evaluator_path`;
+- `native_contact_direct_eval_ms`;
+- `native_contact_hessian_triplet_ms`;
+- `native_contact_direct_compare_ms`;
+- `native_contact_direct_compare_mismatch_count`;
+- `native_contact_direct_compare_max_abs_error`;
+- `native_contact_direct_compare_sum_abs_error`;
+- `native_contact_direct_unsupported_program_count`;
+- `native_contact_direct_fallback_program_count` for `hybrid` only.
+
+`native_contact_hessian_triplet_ms` must not silently include direct evaluator
+time. In `direct` mode it must be `0` or absent. In `direct_compare` mode,
+triplet generation time and direct evaluation time must be reported separately.
+
+#### M6.6 Milestones
+
+M6.6a: evaluator mode plumbing.
+
+- Add evaluator path config parsing and report fields.
+- Keep existing behavior under `triplet_compat`.
+- Add a source-scan/contract test proving `direct` mode is the only production
+  path allowed to skip `reporter->assemble(hessian_info)`.
+- Add report tests for default mode and explicit mode selection.
+- Acceptance: no numeric behavior change in `triplet_compat`; reports clearly
+  show which evaluator path ran.
+
+M6.6b: direct evaluator shell and deterministic harness.
+
+- Add direct evaluator source/view types and a deterministic test evaluator
+  that does not use contact-model math yet.
+- Reuse the existing executor and scatter path with direct evaluator output.
+- Compare deterministic direct evaluator output against deterministic triplet
+  evaluator output for scalar, diagonal, diagonal-lump, offdiag, drop, and
+  offband tasks.
+- Acceptance: executor can consume a non-triplet evaluator without changing
+  task, bucket, or writer semantics.
+
+M6.6c: vertex-half-plane direct evaluator.
+
+- Implement PH normal direct Hessian evaluation.
+- Implement PH frictional direct Hessian evaluation.
+- Build source entries from `VertexHalfPlaneNormalContact` and
+  `VertexHalfPlaneFrictionalContact` base info, including half-plane
+  position/normal views and `half_plane_vertex_offset`.
+- Add per-contact parity tests against reporter-generated PH triplets.
+- Acceptance: PH direct evaluator and compatibility triplet evaluator produce
+  the same dense local Hessian within tolerance.
+
+M6.6d: simplex normal direct evaluator.
+
+- Implement PT, EE, PE, and PP simplex normal direct Hessian evaluation.
+- Extract or share the exact barrier Hessian and SPD helper sequence used by
+  `ipc_simplex_normal_contact.cu`.
+- Add per-family fixtures with non-trivial thickness, `d_hat`, contact ids, and
+  distance flags.
+- Acceptance: direct PT/EE/PE/PP normal Hessians match compatibility triplets
+  within tolerance and preserve the same skipped/error behavior.
+
+M6.6e: simplex frictional direct evaluator.
+
+- Implement PT, EE, PE, and PP simplex frictional direct Hessian evaluation.
+- Cover previous/rest position inputs, contact coefficient lookup, friction
+  coefficient, mollifier logic, and `eps_velocity * dt`.
+- Add parity tests for low relative velocity, high relative velocity, and
+  degenerate-but-valid contact geometry.
+- Acceptance: direct PT/EE/PE/PP frictional Hessians match compatibility
+  triplets within tolerance.
+
+M6.6f: scene direct mode.
+
+- Route native scene replay through `SocuContactDirectEvaluator` when
+  `native_contact_evaluator=direct`.
+- Do not allocate reporter-layout collected contact Hessian triplets in direct
+  mode.
+- Do not call contact reporters' `assemble(hessian_info)` in direct mode.
+- Keep `triplet_compat` available for fallback and `direct_compare` available
+  for diagnostics.
+- Acceptance: Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build,
+  at least 20 frames, both `global` and `demand_filled` side coverage:
+  - `native_contact_replay_path=native_plan`;
+  - `native_contact_evaluator_path=direct`;
+  - `native_contact_task_count > 0`;
+  - `native_contact_hessian_triplet_ms == 0` or absent;
+  - `native_contact_direct_eval_ms` and
+    `native_contact_executor_scatter_ms` are both reported;
+  - no direct-mode fallback programs.
+
+M6.6g: direct compare hardening and cleanup.
+
+- Implement `direct_compare` for small scenes and contract fixtures.
+- Run triplet compatibility and direct evaluator side by side, compare the
+  dense local Hessian or final `D/E` contribution, and report mismatch
+  counters/errors.
+- Add a source-scan test that production `direct` mode cannot call
+  `reporter->assemble(hessian_info)` or depend on
+  `SocuContactTripletEvaluator`.
+- Add compile/build-matrix checks that direct evaluator implementation files are
+  not included through broad public headers.
+- Acceptance: direct compare is available for diagnostics, disabled by
+  default, and too expensive to appear accidentally in production reports.
+
+M6.7 is intentionally left for later value-level optimization. It may remove
+the intermediate dense local Hessian object, stream direct evaluator block
+values directly into task writers, or fuse selected direct evaluator families
+with hot-block owner-reduce. Those optimizations must not start until M6.6
+direct-mode correctness and scene gates are complete.
+
+#### M6.6 Test Matrix
+
+Contract tests:
+
+- evaluator mode parsing and default report fields;
+- source-id dense, duplicate, missing, and non-dense source tables for direct
+  entries;
+- unsupported family rejection in `direct` mode;
+- explicit fallback accounting in `hybrid` mode;
+- deterministic direct evaluator parity for all program kinds;
+- PH normal/frictional direct-vs-triplet parity;
+- simplex normal PT/EE/PE/PP direct-vs-triplet parity;
+- simplex frictional PT/EE/PE/PP direct-vs-triplet parity;
+- `direct_compare` mismatch counter/report behavior;
+- source scan: production `direct` branch does not call
+  `reporter->assemble(hessian_info)`.
+
+Scene gates:
+
+- Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build, at least 20
+  frames, `global` side coverage, direct evaluator;
+- Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build, at least 20
+  frames, `demand_filled` side coverage, direct evaluator;
+- the same two scene gates in `direct_compare` mode may run for fewer frames or
+  reduced frame/contact count if full compare is too expensive, but they must
+  still exercise every active model/family present in the scene;
+- report must include task count, source/family counts, evaluator path,
+  direct eval time, triplet time, scatter time, fallback count, and compare
+  mismatch counters when compare is enabled.
+
+Performance acceptance:
+
+- On cache-hit Wrecking Ball frames, compare:
+  - `triplet_compat`: `native_contact_hessian_triplet_ms +
+    native_contact_executor_scatter_ms`;
+  - `direct`: `native_contact_direct_eval_ms +
+    native_contact_executor_scatter_ms`.
+- Direct mode must be faster than triplet compatibility on the same scene,
+  same frame range, same side coverage, and same solver config before it can
+  become the native development/performance default.
+- Direct mode must not change Newton convergence, final frame count, or contact
+  task count except for intentional unsupported-source rejection in early
+  milestone builds.
+- Any performance result before all active scene families use direct evaluation
+  is a hybrid/bring-up result, not final native contact performance evidence.
+
+#### M6.6 Implementation and Acceptance Notes
+
+M6.6 is implemented as a production `direct` evaluator path plus diagnostic
+`direct_compare` path.
+
+Implemented behavior:
+
+- `linear_system/socu_approx/native_contact_evaluator` accepts
+  `triplet_compat`, `direct`, `direct_compare`, and `hybrid`;
+- `direct` builds a source-id indexed direct source table and evaluates local
+  dense contact Hessians from native contact views, then reuses the existing
+  program writer/executor;
+- `direct` does not call `reporter->assemble(hessian_info)` and reports
+  `native_contact_hessian_triplet_ms=0`;
+- `direct_compare` intentionally generates reporter triplets as a reference,
+  evaluates direct Hessians, compares per-program dense local Hessians, and
+  reports mismatch/max/sum error fields;
+- reporter triplet generation remains available only for `triplet_compat` and
+  `direct_compare`.
+
+Validated scene gates:
+
+- Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build, 20 frames,
+  `global`, `native_contact_evaluator=direct`:
+  - `native_contact_replay_path=native_plan`;
+  - `native_contact_evaluator_path=direct`;
+  - `native_contact_task_count=34275`;
+  - `native_contact_hessian_triplet_ms=0`;
+  - `native_contact_direct_eval_ms=1.6165`;
+  - `native_contact_executor_scatter_ms=0.8217`;
+  - direct fallback count `0`.
+- Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build, 20 frames,
+  `demand_filled`, `native_contact_evaluator=direct`:
+  - `native_contact_replay_path=native_plan`;
+  - `native_contact_evaluator_path=direct`;
+  - `native_contact_task_count=48652`;
+  - `native_contact_hessian_triplet_ms=0`;
+  - `native_contact_direct_eval_ms=2.1328`;
+  - `native_contact_executor_scatter_ms=0.8907`;
+  - direct fallback count `0`.
+- Wrecking Ball `socu_rt50_topology_diag_lump`, native-only build, 20 frames,
+  `global`, `native_contact_evaluator=direct_compare`:
+  - `native_contact_task_count=48652`;
+  - `native_contact_direct_compare_mismatch_count=0`;
+  - `native_contact_direct_compare_max_abs_error=6.25e-13`;
+  - `native_contact_direct_compare_sum_abs_error=5.02e-10`;
+  - `native_contact_hessian_triplet_ms=4.4505`;
+  - `native_contact_direct_eval_ms=2.1853`.
+
+Current performance interpretation:
+
+- direct-mode production replay has removed the compatibility triplet
+  generation dependency;
+- direct dense precompute plus executor scatter is cheaper than the
+  compatibility triplet reference on the final Wrecking Ball solve captured by
+  `direct_compare`;
+- M6.7 may remove the intermediate dense local Hessian buffer or fuse selected
+  evaluator/writer work, but that is now an optimization rather than a
+  correctness dependency.
+
+Known risks:
+
+- Direct evaluator math can drift from reporter math. Mitigation: extract
+  narrow shared device helpers and require per-family direct-vs-triplet tests.
+- Direct evaluator headers can increase CUDA compile memory. Mitigation:
+  isolate implementation in `.cu` files and keep broad headers POD-only.
+- PH sources need half-plane views that are not currently part of the compact
+  triplet source entry. Mitigation: add explicit direct scene/source views and
+  test PH before simplex.
+- `make_spd` placement differs by model/family. Mitigation: parity tests must
+  compare after the exact same SPD policy, not only before projection.
+- `direct_compare` can double work and allocate compatibility triplets.
+  Mitigation: diagnostic-only config, explicit report path, and no accidental
+  production default.
 
 ### M7: Runtime Reorder And Cached Replay Integration
 

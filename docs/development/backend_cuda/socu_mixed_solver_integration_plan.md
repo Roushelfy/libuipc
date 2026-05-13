@@ -1574,7 +1574,15 @@ Fallback:
 - Keep unsupported constraint families routed through structured fallback until
   covered by tests.
 
-#### Milestone 8: Native Contact Build V1
+#### Milestone 8: Legacy Per-Half-Block Native Contact Build V1
+
+Status note: this M8 section describes the earlier per-half-block contact target
+table design. It is retained as historical context for the original SOCU mixed
+solver integration plan. The active native contact builder work has moved to
+`socu_native_assembly_builder_redesign_plan.md`, whose main line is the
+two-level side/program symbolic plan with source-id indexed evaluator replay.
+Do not treat the target-table rebuild rules below as the current production
+builder architecture.
 
 Goal: replace contact structured sink hot path with SOCU-native contact build.
 M8 owns the native-contact version of the contact-enabled topology/`diag_lump`
@@ -1590,9 +1598,11 @@ M8 design requirements:
 - Contact kernels should compute the same local IPC Hessian/RHS quantities as
   today, but the write side should consume `NativeContactStencilTarget` records
   instead of `StructuredContactAssemblySink`.
-- A contact target table is valid only for the current ordering epoch and active
-  contact-set signature. If either changes, rebuild before the next matrix
-  assembly.
+- In this legacy design, a contact target table is valid only for the current
+  ordering epoch and active contact-set signature. The redesign branch instead
+  splits vertex side/lane state from contact program state and keys final
+  assembly on the topology stamp, source ids, policy, hot-reduce strategy, and
+  side coverage mode.
 - Exact in-band writes must preserve the full projected SPD stencil. Partial
   off-band writes are not allowed because they can destroy the SPD behavior that
   motivated `diag_lump`.

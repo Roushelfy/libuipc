@@ -1053,6 +1053,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(stats.dropped_program_map_count == 1);
     CHECK(stats.skipped_program_map_count == 1);
     CHECK(stats.mixed_rejected_program_map_count == 0);
+    CHECK(stats.offband_dropped_program_count == 1);
+    CHECK(stats.side_not_writable_program_count >= 1);
+    CHECK(stats.side_id_invalid_program_count == 0);
     CHECK(stats.bucket_count == 3);
     CHECK(stats.exact_program_count == 1);
     CHECK(stats.drop_program_count == 1);
@@ -1060,6 +1063,40 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",
     CHECK(stats.diag_program_count == 0);
     CHECK(stats.diag_lump_program_count == 0);
     CHECK(stats.task_count == programs[0].task_count);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_skip_reason_counters",
+          "[cuda_mixed_socu][contract][socu_approx][m65]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_plan({Vector4i{0, 5, 2, 0},
+                            Vector4i{-1, -1, -1, -1},
+                            Vector4i{3, 3, 3, 3}},
+                           {},
+                           StructuredContactOffbandPolicy::Drop,
+                           workspace);
+
+    std::vector<SocuContactSourceToProgram> maps;
+    plan.program_plan.source_to_program.copy_to(maps);
+    REQUIRE(maps.size() == 3);
+    CHECK(maps[0].status == SocuContactProgramMapStatus::Dropped);
+    CHECK(maps[0].reject_reason == SocuContactProgramRejectReason::OffbandDrop);
+    CHECK(maps[1].status == SocuContactProgramMapStatus::Skipped);
+    CHECK(maps[1].reject_reason == SocuContactProgramRejectReason::SideIdInvalid);
+    CHECK(maps[2].status == SocuContactProgramMapStatus::Skipped);
+    CHECK(maps[2].reject_reason
+          == SocuContactProgramRejectReason::SideNotWritable);
+
+    const auto& stats = plan.program_plan.last_stats;
+    CHECK(stats.dropped_program_map_count == 1);
+    CHECK(stats.skipped_program_map_count == 2);
+    CHECK(stats.offband_dropped_program_count == 1);
+    CHECK(stats.side_id_invalid_program_count == 1);
+    CHECK(stats.side_not_writable_program_count == 1);
+    CHECK(stats.source_local_missing_program_count == 0);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_global_side_coverage",
@@ -1203,6 +1240,8 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_demand_filled_side_coverage",
     CHECK(plan.side_plan.last_stats.side_coverage_fill_count == 0);
     CHECK(plan.side_plan.last_stats.side_count == 3);
     CHECK(plan.side_plan.last_stats.active_side_vertex_count == 3);
+    CHECK(plan.side_plan.last_stats.active_vertex_collect_ms >= 0.0);
+    CHECK(plan.program_plan.last_stats.program_emit_ms >= 0.0);
 
     auto input_b = make_input(vertices,
                               pts_b,
@@ -1233,6 +1272,8 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_demand_filled_side_coverage",
     CHECK(plan.side_plan.last_stats.side_coverage_refresh_count == 0);
     CHECK(plan.side_plan.last_stats.active_side_vertex_count == 3);
     CHECK(plan.side_plan.last_stats.side_count == 4);
+    CHECK(plan.side_plan.last_stats.missing_side_fill_ms >= 0.0);
+    CHECK(plan.program_plan.last_stats.bucket_build_ms >= 0.0);
     REQUIRE(programs_b.size() == 1);
     REQUIRE(maps_b.size() == 1);
     CHECK(programs_b[0].program_kind == SocuContactProgramKind::Drop);
@@ -1652,6 +1693,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(solver.find("prepare_structured_contact_plan")
           != std::string::npos);
     CHECK(solver.find("native_contact_side_coverage_mode") != std::string::npos);
+    CHECK(solver.find("native_contact_evaluator") != std::string::npos);
+    CHECK(solver.find("\"triplet_compat\"") != std::string::npos);
+    CHECK(solver.find("\"direct\"") != std::string::npos);
     CHECK(solver.find("\"demand_filled\"") != std::string::npos);
     CHECK(solver.find("apply_native_contact_plan_stats")
           != std::string::npos);
@@ -1668,8 +1712,22 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("record_native_contact_hessian_triplet_time_ms")
           != std::string::npos);
+    CHECK(dytopo.find("record_native_contact_direct_eval_time_ms")
+          != std::string::npos);
     CHECK(dytopo.find("record_native_contact_executor_scatter_time_ms")
           != std::string::npos);
+    CHECK(dytopo.find("SocuContactDirectEvaluator<StoreScalar>")
+          != std::string::npos);
+    CHECK(dytopo.find("launch_socu_contact_direct_evaluate_programs")
+          != std::string::npos);
+    CHECK(dytopo.find("launch_socu_contact_compare_direct_triplet_programs")
+          != std::string::npos);
+    CHECK(dytopo.find("SocuContactPrecomputedHessianEvaluator<StoreScalar>")
+          != std::string::npos);
+    CHECK(dytopo.find("record_native_contact_direct_compare_error")
+          != std::string::npos);
+    CHECK(dytopo.find("direct_compare_not_implemented")
+          == std::string::npos);
     CHECK(dytopo.find("native_contact_legacy_zero_extent_skip")
           != std::string::npos);
     CHECK(dytopo.find("native_contact_descriptor_cache_hit_exports_view")
@@ -1678,10 +1736,26 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("socu_contact_assembly_plan_empty(*plan)")
           != std::string::npos);
-    CHECK(dytopo.find("native_contact_executor_duplicate_source")
+    CHECK(dytopo.find("SocuContactEvaluatorSourceEntry<StoreScalar>")
+          != std::string::npos);
+    CHECK(dytopo.find("sources.source_entries = evaluator_sources.view().as_const()")
           != std::string::npos);
     CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")
           != std::string::npos);
+    const auto direct_branch_marker =
+        dytopo.find("SocuContactEvaluatorPath::DirectNative");
+    const auto triplet_compat_marker =
+        dytopo.find("reporter->assemble(hessian_info)");
+    const auto direct_compare_guard =
+        dytopo.find("if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)");
+    const auto direct_compare_triplet_timer = dytopo.find(
+        "Assemble Contact Hessian Triplets For SOCU Native Direct Compare");
+    REQUIRE(direct_branch_marker != std::string::npos);
+    REQUIRE(triplet_compat_marker != std::string::npos);
+    REQUIRE(direct_compare_guard != std::string::npos);
+    REQUIRE(direct_compare_triplet_timer != std::string::npos);
+    CHECK(direct_branch_marker < triplet_compat_marker);
+    CHECK(direct_compare_guard < direct_compare_triplet_timer);
     CHECK(count_occurrences(dytopo,
                             "structured_info.set_native_vertex_descriptors(")
           >= 2);
@@ -1734,6 +1808,9 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
         read_text_file(root / "src/core/core/scene_default_config.cpp");
     CHECK(defaults.find("native_contact_side_coverage_mode") != std::string::npos);
     CHECK(defaults.find("std::string{\"global\"}") != std::string::npos);
+    CHECK(defaults.find("native_contact_evaluator") != std::string::npos);
+    CHECK(defaults.find("std::string{\"triplet_compat\"}")
+          != std::string::npos);
     CHECK(defaults.find("native_contact_hot_reduce_threshold")
           != std::string::npos);
     CHECK(defaults.find("IndexT{8}") != std::string::npos);
@@ -1744,6 +1821,10 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_PLAN_EXECUTOR")
           != std::string::npos);
     CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_SIDE_COVERAGE_MODE")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_EVALUATOR")
+          != std::string::npos);
+    CHECK(wrecking_ball.find("native_contact_evaluator")
           != std::string::npos);
     CHECK(wrecking_ball.find("native_contact_plan_executor")
           != std::string::npos);

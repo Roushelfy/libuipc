@@ -89,23 +89,16 @@ ordering::AtomGraph make_abd_body_local_atom_graph(SizeT body_count)
     graph.name = "cuda_mixed_abd_init_time";
     for(SizeT body = 0; body < body_count; ++body)
     {
-        for(SizeT local_atom = 0; local_atom < 4; ++local_atom)
-            ordering::add_atom(graph, 3, "abd_body_local", body * 4 + local_atom);
-    }
-
-    for(SizeT body = 0; body < body_count; ++body)
-    {
-        const SizeT base = body * 4;
-        for(SizeT i = 0; i < 4; ++i)
-        {
-            for(SizeT j = i + 1; j < 4; ++j)
-                ordering::add_edge(graph, base + i, base + j, 4.0, "abd_body");
-        }
+        // The SOCU native contact side/program builder treats one ABD surface
+        // vertex as a single projected 12-DoF side. Keep those 12 DoFs
+        // contiguous in the symbolic ordering so descriptor.active matches
+        // the writer/executor lane-span contract.
+        ordering::add_atom(graph, 12, "abd_body", body);
     }
 
     for(SizeT body = 1; body < body_count; ++body)
         ordering::add_edge(
-            graph, (body - 1) * 4, body * 4, 1.0, "abd_body_sequence");
+            graph, body - 1, body, 1.0, "abd_body_sequence");
 
     return graph;
 }

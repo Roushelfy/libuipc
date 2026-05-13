@@ -134,6 +134,16 @@ enum class SocuContactProgramMapStatus : std::uint16_t
     MixedRejected = 4,
 };
 
+enum class SocuContactProgramRejectReason : std::uint16_t
+{
+    None = 0,
+    SideIdInvalid = 1,
+    SideNotWritable = 2,
+    OffbandDrop = 3,
+    MixedRejected = 4,
+    SourceLocalMissing = 5,
+};
+
 struct SocuContactSourceHeader
 {
     SocuContactSourceId source_id = SocuInvalidContactSourceId;
@@ -154,7 +164,8 @@ struct SocuContactSourceToProgram
 {
     SocuContactProgramId program_id = SocuInvalidContactProgramId;
     SocuContactProgramMapStatus status = SocuContactProgramMapStatus::Missing;
-    std::uint16_t reserved = 0;
+    SocuContactProgramRejectReason reject_reason =
+        SocuContactProgramRejectReason::SourceLocalMissing;
 };
 
 struct SocuContactProgramHeader
@@ -260,6 +271,11 @@ struct SocuContactPlanStats
     SizeT dropped_program_map_count = 0;
     SizeT skipped_program_map_count = 0;
     SizeT mixed_rejected_program_map_count = 0;
+    SizeT side_id_invalid_program_count = 0;
+    SizeT side_not_writable_program_count = 0;
+    SizeT offband_dropped_program_count = 0;
+    SizeT mixed_rejected_reason_program_count = 0;
+    SizeT source_local_missing_program_count = 0;
     SizeT task_count = 0;
     SizeT bucket_count = 0;
     SizeT exact_program_count = 0;
@@ -275,6 +291,11 @@ struct SocuContactPlanStats
     SizeT hot_offdiag_block_count = 0;
     SizeT cache_hit_count = 0;
     SizeT rebuild_count = 0;
+    double active_vertex_collect_ms = 0.0;
+    double missing_side_fill_ms = 0.0;
+    double program_emit_ms = 0.0;
+    double bucket_build_ms = 0.0;
+    double hot_block_build_ms = 0.0;
 };
 
 struct SocuVertexSidePlan
