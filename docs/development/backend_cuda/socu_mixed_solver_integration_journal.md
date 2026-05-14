@@ -1,5 +1,11 @@
 # SOCU Mixed Solver Notes
 
+Current SOCU native contact status, runnable gates, and peak-performance
+roadmap live in
+[`socu_native_contact/index.md`](socu_native_contact/index.md). This journal is
+historical: keep chronological decisions and observed validation results here,
+but put current handoff instructions in the SOCU native contact docs.
+
 The staged implementation journal has been retired. The supported behavior is
 now documented in
 [`socu_mixed_solver_integration_plan.md`](socu_mixed_solver_integration_plan.md).

@@ -9,6 +9,7 @@
 #include <muda/buffer/device_buffer.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1862,7 +1863,11 @@ TEST_CASE("cuda_mixed_socu_contact_program_writer_source_isolation",
     CHECK(debug_compare.find("SocuContactProgramDebugCompare")
           != std::string::npos);
 
-    const auto compile_commands_path = root / "build/compile_commands.json";
+    const char* build_dir_env = std::getenv("SOCU_NATIVE_CONTACT_BUILD_DIR");
+    const auto compile_commands_path =
+        build_dir_env != nullptr
+            ? std::filesystem::path{build_dir_env} / "compile_commands.json"
+            : root / "build/compile_commands.json";
     REQUIRE(std::filesystem::exists(compile_commands_path));
     const auto compile_commands = read_text_file(compile_commands_path);
     CHECK(compile_commands.find("socu_contact_program_writer.cu")

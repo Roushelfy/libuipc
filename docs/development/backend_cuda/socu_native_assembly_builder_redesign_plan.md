@@ -1,5 +1,10 @@
 # SOCU Native Assembly Builder Redesign Plan
 
+Current agent-facing status, gates, and roadmap live in
+[`socu_native_contact/index.md`](socu_native_contact/index.md). This long plan
+keeps detailed design history and milestone acceptance notes; do not treat it as
+the only current handoff surface.
+
 This document describes a large-scale redesign of the `cuda_mixed_socu`
 structured matrix builder. It is intentionally separate from
 `socu_mixed_solver_integration_plan.md`: the integration plan records the

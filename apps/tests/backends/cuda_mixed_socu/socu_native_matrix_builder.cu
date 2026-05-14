@@ -53,6 +53,27 @@ struct StreamGuard
     }
 };
 
+void require_host_uploads_ready()
+{
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+void require_device_idle()
+{
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+// These fixtures use non-blocking streams, while muda host copies may use the
+// default stream. Keep host uploads and later device reads explicitly ordered.
+template <typename T>
+void upload_host_vector(muda::DeviceBuffer<T>& buffer,
+                        const std::vector<T>&  host)
+{
+    buffer.resize(host.size());
+    if(!host.empty())
+        buffer.view().copy_from(host.data());
+}
+
 template <typename Scalar>
 __global__ void write_storage_fixture(SocuNativeMatrixView<Scalar> view)
 {
@@ -403,8 +424,12 @@ void run_native_diag3x3_dense_block_fixture(
         Epoch);
 
     StreamGuard stream;
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    require_device_idle();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> native_diag;
     muda::DeviceBuffer<Solve> compare_diag;
     muda::DeviceBuffer<Solve> legacy_diag;
@@ -441,6 +466,7 @@ void run_native_diag3x3_dense_block_fixture(
                             counters.size() * sizeof(uipc::IndexT),
                             stream.stream)
             == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
 
     muda::DeviceBuffer<Solve> empty_offdiag;
     StructuredDeviceAssemblySink<Store, Solve> fast_sink{
@@ -488,6 +514,7 @@ void run_native_diag3x3_dense_block_fixture(
     native_diag.copy_to(native_diag_host);
     compare_diag.copy_to(compare_diag_host);
     legacy_diag.copy_to(legacy_diag_host);
+    require_device_idle();
 
     REQUIRE(status_host.size() == 1);
     CHECK(status_host[0] == expected_status);
@@ -542,8 +569,12 @@ void run_native_pair3x3_dense_block_fixture(
         Epoch);
 
     StreamGuard stream;
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    require_device_idle();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> native_diag;
     muda::DeviceBuffer<Solve> native_offdiag;
     muda::DeviceBuffer<Solve> compare_diag;
@@ -601,6 +632,7 @@ void run_native_pair3x3_dense_block_fixture(
                             counters.size() * sizeof(uipc::IndexT),
                             stream.stream)
             == cudaSuccess);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
 
     StructuredDeviceAssemblySink<Store, Solve> fast_sink{
         native_diag.view(),
@@ -653,6 +685,7 @@ void run_native_pair3x3_dense_block_fixture(
     compare_offdiag.copy_to(compare_offdiag_host);
     legacy_diag.copy_to(legacy_diag_host);
     legacy_offdiag.copy_to(legacy_offdiag_host);
+    require_device_idle();
 
     REQUIRE(status_host.size() == 1);
     CHECK(status_host[0] == expected_status);
@@ -787,6 +820,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
     }
 
     StreamGuard stream;
+    require_device_idle();
     SocuNativeMatrixBuilder<Scalar> builder;
     builder.reserve(7, 4, 1);
     builder.clear(stream.stream);
@@ -796,6 +830,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_device_writes",
     metadata[1] = SocuNativeBlockMeta{4, 3, 3, 1, 42};
     metadata[2] = SocuNativeBlockMeta{8, 2, 2, 2};
     builder.set_block_metadata(metadata, stream.stream);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
 
     write_storage_fixture<<<1, 1, 0, stream.stream>>>(builder.view());
     REQUIRE(cudaGetLastError() == cudaSuccess);
@@ -896,14 +931,19 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_provider_matches_structured_sink",
     REQUIRE(dofs[7].active);
 
     StreamGuard stream;
+    require_device_idle();
     SocuNativeMatrixBuilder<Solve> builder;
     builder.reserve(Horizon, BlockSize, Nrhs);
     builder.clear(stream.stream);
 
     const auto& layout = builder.layout();
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
-    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices_device{vertices};
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    upload_host_vector(vertices_device, vertices);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> structured_diag;
     muda::DeviceBuffer<Solve> structured_first_offdiag;
     structured_diag.resize(layout.diag_element_count);
@@ -941,6 +981,7 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_provider_matches_structured_sink",
     std::vector<Solve> structured_first_offdiag_host;
     structured_diag.copy_to(structured_diag_host);
     structured_first_offdiag.copy_to(structured_first_offdiag_host);
+    require_device_idle();
 
     REQUIRE(snapshot.D.size() == structured_diag_host.size());
     REQUIRE(snapshot.E.size() == structured_first_offdiag_host.size());
@@ -1010,8 +1051,12 @@ TEST_CASE("cuda_mixed_socu_native_chain_base_sink_matches_structured_sink",
         Epoch);
 
     StreamGuard stream;
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    require_device_idle();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> primary_diag;
     muda::DeviceBuffer<Solve> primary_offdiag;
     muda::DeviceBuffer<Solve> compare_diag;
@@ -1075,6 +1120,7 @@ TEST_CASE("cuda_mixed_socu_native_chain_base_sink_matches_structured_sink",
     primary_offdiag.copy_to(primary_offdiag_host);
     compare_diag.copy_to(compare_diag_host);
     compare_offdiag.copy_to(compare_offdiag_host);
+    require_device_idle();
 
     REQUIRE(primary_diag_host.size() == compare_diag_host.size());
     REQUIRE(primary_offdiag_host.size() == compare_offdiag_host.size());
@@ -1220,8 +1266,12 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
         Epoch);
 
     StreamGuard stream;
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    require_device_idle();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> native_diag;
     muda::DeviceBuffer<Solve> compare_diag;
     muda::DeviceBuffer<Solve> legacy_diag;
@@ -1305,6 +1355,7 @@ TEST_CASE("cuda_mixed_socu_native_abd_block_fast_path_matches_structured_sink",
     compare_diag.copy_to(compare_diag_host);
     legacy_diag.copy_to(legacy_diag_host);
     counters.copy_to(counters_host);
+    require_device_idle();
 
     REQUIRE(status_host.size() == 1);
     REQUIRE(status_host[0] == 1);
@@ -1365,8 +1416,12 @@ TEST_CASE("cuda_mixed_socu_native_abd_adjacent_block_fast_path_matches_structure
         Epoch);
 
     StreamGuard stream;
-    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device{old_to_chain};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device{dofs};
+    require_device_idle();
+    muda::DeviceBuffer<uipc::IndexT> old_to_chain_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dofs_device;
+    upload_host_vector(old_to_chain_device, old_to_chain);
+    upload_host_vector(dofs_device, dofs);
+    require_host_uploads_ready();
     muda::DeviceBuffer<Solve> native_diag;
     muda::DeviceBuffer<Solve> native_offdiag;
     muda::DeviceBuffer<Solve> compare_diag;
@@ -1476,6 +1531,7 @@ TEST_CASE("cuda_mixed_socu_native_abd_adjacent_block_fast_path_matches_structure
     compare_offdiag.copy_to(compare_offdiag_host);
     legacy_diag.copy_to(legacy_diag_host);
     legacy_offdiag.copy_to(legacy_offdiag_host);
+    require_device_idle();
 
     REQUIRE(status_host.size() == 1);
     REQUIRE(status_host[0] == 1);
@@ -1563,12 +1619,16 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_workspace_matches_legacy_init",
                                     Store{5.5},
                                     Store{-6.25}};
     StreamGuard stream;
+    require_device_idle();
     muda::DeviceDenseVector<Store> b;
     b.resize(b_host.size());
     b.buffer_view().copy_from(b_host.data());
 
-    muda::DeviceBuffer<uipc::IndexT> chain_to_old_device{chain_to_old};
-    muda::DeviceBuffer<SocuNativeDofDescriptor> dof_device{dofs};
+    muda::DeviceBuffer<uipc::IndexT> chain_to_old_device;
+    muda::DeviceBuffer<SocuNativeDofDescriptor> dof_device;
+    upload_host_vector(chain_to_old_device, chain_to_old);
+    upload_host_vector(dof_device, dofs);
+    require_host_uploads_ready();
 
     muda::DeviceBuffer<Solve> legacy_diag;
     muda::DeviceBuffer<Solve> legacy_offdiag;
@@ -1633,6 +1693,7 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_workspace_matches_legacy_init",
     std::vector<double>       diff_sums_host;
     mismatch_count.copy_to(mismatch_host);
     diff_sums.copy_to(diff_sums_host);
+    require_device_idle();
     REQUIRE(mismatch_host.size() == 1);
     REQUIRE(diff_sums_host.size() == 3);
     CHECK(mismatch_host[0] == 0);
@@ -1644,6 +1705,7 @@ TEST_CASE("cuda_mixed_socu_native_diag_rhs_workspace_matches_legacy_init",
     std::vector<Solve> native_rhs_original_host;
     legacy_rhs_original.copy_to(legacy_rhs_original_host);
     native_rhs_original.copy_to(native_rhs_original_host);
+    require_device_idle();
     REQUIRE(legacy_rhs_original_host.size() == native_rhs_original_host.size());
     for(std::size_t i = 0; i < legacy_rhs_original_host.size(); ++i)
     {
@@ -1669,6 +1731,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_bounds_and_clear_contract",
     }
 
     StreamGuard stream;
+    require_device_idle();
     SocuNativeMatrixBuilder<Scalar> builder;
     builder.reserve(2, 4, 1);
     builder.clear(stream.stream);
@@ -1677,6 +1740,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_bounds_and_clear_contract",
     metadata[0] = SocuNativeBlockMeta{0, 4, 4, 0, 7};
     metadata[1] = SocuNativeBlockMeta{4, 2, 2, 2, 7};
     builder.set_block_metadata(metadata, stream.stream);
+    REQUIRE(cudaStreamSynchronize(stream.stream) == cudaSuccess);
 
     write_out_of_bounds_fixture<<<1, 1, 0, stream.stream>>>(builder.view());
     REQUIRE(cudaGetLastError() == cudaSuccess);
@@ -1717,6 +1781,7 @@ TEST_CASE("cuda_mixed_socu_native_matrix_builder_solver_contract",
     }
 
     StreamGuard stream;
+    require_device_idle();
     SocuNativeMatrixBuilder<Scalar> builder;
     builder.reserve(7, 12, 1);
     builder.clear(stream.stream);

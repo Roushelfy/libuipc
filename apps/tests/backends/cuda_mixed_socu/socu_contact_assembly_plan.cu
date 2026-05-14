@@ -1743,19 +1743,42 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")
           != std::string::npos);
     const auto direct_branch_marker =
-        dytopo.find("SocuContactEvaluatorPath::DirectNative");
-    const auto triplet_compat_marker =
-        dytopo.find("reporter->assemble(hessian_info)");
+        dytopo.find("if(evaluator_path == SocuContactEvaluatorPath::DirectNative");
+    const auto direct_branch_end = dytopo.find(
+        "assemble_non_contact_structured_reporters();\n            return;",
+        direct_branch_marker);
+    const auto triplet_compat_marker = dytopo.find(
+        "Assemble Contact Hessian Triplets For SOCU Native Plan");
     const auto direct_compare_guard =
         dytopo.find("if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)");
     const auto direct_compare_triplet_timer = dytopo.find(
         "Assemble Contact Hessian Triplets For SOCU Native Direct Compare");
     REQUIRE(direct_branch_marker != std::string::npos);
+    REQUIRE(direct_branch_end != std::string::npos);
     REQUIRE(triplet_compat_marker != std::string::npos);
     REQUIRE(direct_compare_guard != std::string::npos);
     REQUIRE(direct_compare_triplet_timer != std::string::npos);
-    CHECK(direct_branch_marker < triplet_compat_marker);
+    CHECK(direct_branch_end < triplet_compat_marker);
     CHECK(direct_compare_guard < direct_compare_triplet_timer);
+    CHECK(count_occurrences(dytopo, "reporter->assemble(hessian_info)") == 2);
+    const auto direct_branch = dytopo.substr(
+        direct_branch_marker, direct_branch_end - direct_branch_marker);
+    CHECK(count_occurrences(direct_branch,
+                            "reporter->assemble(hessian_info)")
+          == 1);
+    const auto direct_branch_triplet_assemble =
+        direct_branch.find("reporter->assemble(hessian_info)");
+    const auto direct_eval_launch =
+        direct_branch.find("launch_socu_contact_direct_evaluate_programs");
+    REQUIRE(direct_branch_triplet_assemble != std::string::npos);
+    REQUIRE(direct_eval_launch != std::string::npos);
+    CHECK(direct_branch.find(
+              "if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)")
+          < direct_branch_triplet_assemble);
+    CHECK(direct_branch.find(
+              "Assemble Contact Hessian Triplets For SOCU Native Direct Compare")
+          < direct_branch_triplet_assemble);
+    CHECK(direct_branch_triplet_assemble < direct_eval_launch);
     CHECK(count_occurrences(dytopo,
                             "structured_info.set_native_vertex_descriptors(")
           >= 2);
@@ -1833,5 +1856,80 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
     CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_HOT_REDUCE_STRATEGY")
           != std::string::npos);
     CHECK(wrecking_ball.find("SOCU_NATIVE_CONTACT_HOT_REDUCE_THRESHOLD")
+          != std::string::npos);
+
+    const auto docs_root =
+        root / "docs/development/backend_cuda/socu_native_contact";
+    const auto handoff = read_text_file(docs_root / "index.md");
+    const auto architecture = read_text_file(docs_root / "architecture.md");
+    const auto build_and_run = read_text_file(docs_root / "build_and_run.md");
+    const auto conventions = read_text_file(docs_root / "conventions.md");
+    const auto roadmap = read_text_file(docs_root / "roadmap.md");
+    const auto testing = read_text_file(docs_root / "testing.md");
+    const auto benchmark =
+        read_text_file(docs_root / "benchmark_protocol.md");
+    CHECK(handoff.find("Current phase: **M6.7 docs and gates hardening**")
+          != std::string::npos);
+    CHECK(handoff.find("Builder-generated ABD side lanes")
+          != std::string::npos);
+    CHECK(handoff.find("PT/EE/PE/PP/PH unit fixtures")
+          != std::string::npos);
+    CHECK(architecture.find("Peak Performance Target")
+          != std::string::npos);
+    CHECK(architecture.find("fused direct eval+scatter")
+          != std::string::npos);
+    CHECK(architecture.find("component = q < 3 ? q : (q - 3) / 3")
+          != std::string::npos);
+    CHECK(architecture.find("hybrid` is reserved for an explicit fallback policy")
+          != std::string::npos);
+    CHECK(build_and_run.find("cmake -S . -B ${BUILD_DIR}")
+          != std::string::npos);
+    CHECK(build_and_run.find("uv run --no-project python")
+          != std::string::npos);
+    CHECK(build_and_run.find("uv run --project python python")
+          != std::string::npos);
+    CHECK(conventions.find("Direct production replay must not call")
+          != std::string::npos);
+    CHECK(conventions.find("known header-heavy risks")
+          != std::string::npos);
+    CHECK(conventions.find("Builder-generated ABD side lanes must match")
+          != std::string::npos);
+    CHECK(conventions.find("native_contact_scalar_diag_compat=1")
+          != std::string::npos);
+    CHECK(conventions.find("fixed_mapping_epoch")
+          != std::string::npos);
+    CHECK(roadmap.find("M9: Peak Performance Shape")
+          != std::string::npos);
+    CHECK(roadmap.find("Contract-closure blockers")
+          != std::string::npos);
+    CHECK(roadmap.find("Direct evaluator per-family parity")
+          != std::string::npos);
+    CHECK(roadmap.find("Source catalog consistency")
+          != std::string::npos);
+    CHECK(roadmap.find("Planned Gates") != std::string::npos);
+    CHECK(testing.find("Invariant Matrix") != std::string::npos);
+    CHECK(testing.find("Builder-generated ABD lanes match legacy projection")
+          != std::string::npos);
+    CHECK(testing.find("Hybrid fallback is explicit and counted")
+          != std::string::npos);
+    CHECK(benchmark.find("native_contact_direct_eval_ms")
+          != std::string::npos);
+    CHECK(benchmark.find("at least three runs") != std::string::npos);
+    CHECK(benchmark.find("native_contact_direct_fallback_program_count == 0")
+          != std::string::npos);
+
+    const auto analyzer =
+        read_text_file(root / "scripts/analyze_socu_native_contact_reports.py");
+    const auto gate_runner =
+        read_text_file(root / "scripts/run_socu_native_contact_gates.py");
+    CHECK(analyzer.find("--require-native-plan") != std::string::npos);
+    CHECK(analyzer.find("--require-no-triplets") != std::string::npos);
+    CHECK(analyzer.find("--require-direct-compare-zero")
+          != std::string::npos);
+    CHECK(analyzer.find("--require-no-direct-fallbacks")
+          != std::string::npos);
+    CHECK(gate_runner.find("--mode") != std::string::npos);
+    CHECK(gate_runner.find("source-scan") != std::string::npos);
+    CHECK(gate_runner.find("SOCU_NATIVE_CONTACT_EVALUATOR")
           != std::string::npos);
 }

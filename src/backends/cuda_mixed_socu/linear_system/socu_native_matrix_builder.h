@@ -450,20 +450,10 @@ class SocuNativeMatrixBuilder
     void set_block_metadata(const std::vector<SocuNativeBlockMeta>& metadata,
                             cudaStream_t stream = nullptr)
     {
+        (void)stream;
         if(metadata.size() != m_layout.block_count)
             throw std::invalid_argument("SOCU native block metadata size mismatch");
-        if(!metadata.empty())
-        {
-            const auto bytes = metadata.size() * sizeof(SocuNativeBlockMeta);
-            const cudaError_t error = cudaMemcpyAsync(
-                m_blocks.data(),
-                metadata.data(),
-                bytes,
-                cudaMemcpyHostToDevice,
-                stream);
-            if(error != cudaSuccess)
-                throw std::runtime_error(cudaGetErrorString(error));
-        }
+        m_blocks.copy_from(metadata);
     }
 
     Snapshot snapshot(cudaStream_t stream = nullptr) const
