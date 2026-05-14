@@ -31,7 +31,7 @@ Build and runtime setup lives in [build_and_run.md](build_and_run.md).
 | Hybrid fallback is explicit and counted | `cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources` checks unsupported source flags and fallback replacement; solver reports copy unsupported/fallback counters | Source scan requires the hybrid fallback triplet guard and replacement launcher | Report analyzer checks direct fallback counters |
 | Cache-key producers cover mapping/projection changes | `cuda_mixed_socu_contact_plan_key_producer_epochs_follow_descriptor_epoch` checks descriptor-epoch ownership for fixed mapping and ABD projection fields | Source scan keeps cache-key producer ownership documented | Cache-churn reports distinguish side and program rebuilds |
 | Direct evaluator parity covers each family | `cuda_mixed_socu_contact_direct_evaluator_per_family_triplet_parity` builds real native programs and compares PT/EE/PE/PP/PH direct Hessians against a triplet oracle | Source scan keeps direct evaluator wiring out of legacy triplet production | `direct_compare` scene remains a broad smoke, not a unit oracle |
-| Source catalog order is shared | Plan/direct/triplet/topology consumers route through `collect_socu_contact_source_catalog` | Source scan rejects the old per-consumer source id counters | Wrecking Ball source counts remain secondary smoke |
+| Source catalog order is shared | `cuda_mixed_socu_contact_executor_source_id_indexed_triplets` and direct per-family parity use shuffled builder source inputs while triplet/direct tables remain source-id indexed | Source scan rejects the old per-consumer source id counters and requires `collect_socu_contact_source_catalog` | Wrecking Ball source counts remain secondary smoke |
 
 ## Required Fast Gates
 

@@ -60,6 +60,9 @@ Local validation snapshot, 2026-05-14:
 - Reports now expose probe, replay, and final native contact cache states, and
   split side/program build timing without copying aggregate build time into both
   fields.
+- Source-order mutation contracts now shuffle builder source inputs while
+  keeping direct/triplet source tables indexed by `source_id`, proving consumers
+  do not depend on local vector order.
 - Wrecking Ball 20-frame scene gates passed for `direct` and `direct_compare`.
   A 3-run partial-rebuild median showed `direct` contact assembly at
   `10.2849 ms` and `triplet_compat` at `13.1288 ms`; this is useful evidence,

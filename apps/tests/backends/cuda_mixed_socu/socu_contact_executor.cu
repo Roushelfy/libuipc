@@ -1307,18 +1307,18 @@ TEST_CASE("cuda_mixed_socu_contact_executor_source_id_indexed_triplets",
     program_key.offband_policy = StructuredContactOffbandPolicy::Drop;
 
     std::vector<SocuContactM2SourceInput> source_inputs(2);
-    source_inputs[0].source_id = 0;
-    source_inputs[0].reporter_id = 100;
+    source_inputs[0].source_id = 1;
+    source_inputs[0].reporter_id = 101;
     source_inputs[0].model = SocuContactModelKind::SimplexNormal;
     source_inputs[0].family = SocuContactFamily::PP;
     source_inputs[0].stencil_size = 2;
-    source_inputs[0].stencil2 = pp_contacts_a.view();
-    source_inputs[1].source_id = 1;
-    source_inputs[1].reporter_id = 101;
+    source_inputs[0].stencil2 = pp_contacts_b.view();
+    source_inputs[1].source_id = 0;
+    source_inputs[1].reporter_id = 100;
     source_inputs[1].model = SocuContactModelKind::SimplexNormal;
     source_inputs[1].family = SocuContactFamily::PP;
     source_inputs[1].stencil_size = 2;
-    source_inputs[1].stencil2 = pp_contacts_b.view();
+    source_inputs[1].stencil2 = pp_contacts_a.view();
 
     SocuContactAssemblyPlanM2BuildInput input;
     input.side_key = side_key;
@@ -1336,6 +1336,19 @@ TEST_CASE("cuda_mixed_socu_contact_executor_source_id_indexed_triplets",
             == SocuContactSourceIdValidationStatus::ValidDense);
     REQUIRE(plan.program_plan.programs.size() == 2);
     REQUIRE(plan.program_plan.last_stats.valid_program_map_count == 2);
+
+    std::vector<SocuContactSourceHeader> plan_sources;
+    std::vector<SocuContactProgramHeader> plan_programs;
+    plan.program_plan.sources.copy_to(plan_sources);
+    plan.program_plan.programs.copy_to(plan_programs);
+    REQUIRE(plan_sources.size() == 2);
+    REQUIRE(plan_programs.size() == 2);
+    CHECK(plan_sources[0].source_id == 0);
+    CHECK(plan_sources[0].reporter_id == 100);
+    CHECK(plan_sources[1].source_id == 1);
+    CHECK(plan_sources[1].reporter_id == 101);
+    CHECK(plan_programs[0].source_id == 0);
+    CHECK(plan_programs[1].source_id == 1);
 
     muda::DeviceTripletMatrix<Store, 3> pp_hessians_a;
     pp_hessians_a.resize(7, 7, 3);
@@ -1622,6 +1635,9 @@ TEST_CASE("cuda_mixed_socu_contact_direct_evaluator_per_family_triplet_parity",
     configure_source(FrictionPE, {}, pe_contacts.view(), {});
     configure_source(FrictionPP, {}, {}, pp_contacts.view());
     configure_source(FrictionPH, {}, {}, ph_contacts.view());
+    std::rotate(source_inputs.begin(),
+                source_inputs.begin() + 5,
+                source_inputs.end());
 
     SocuVertexSidePlanKey side_key;
     side_key.ordering_epoch = 3;
