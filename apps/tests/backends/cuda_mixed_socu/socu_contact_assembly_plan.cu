@@ -2000,7 +2000,7 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(handoff.find("Builder-generated ABD side lanes")
           != std::string::npos);
-    CHECK(handoff.find("PT/EE/PE/PP/PH unit fixtures")
+    CHECK(handoff.find("PT/EE/PE/PP/PH direct Hessians")
           != std::string::npos);
     CHECK(architecture.find("Peak Performance Target")
           != std::string::npos);
@@ -2028,11 +2028,13 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(roadmap.find("M9: Peak Performance Shape")
           != std::string::npos);
-    CHECK(roadmap.find("Contract-closure blockers")
+    CHECK(roadmap.find("Closed M6.7 contract items")
           != std::string::npos);
     CHECK(roadmap.find("Direct evaluator per-family parity")
           != std::string::npos);
-    CHECK(roadmap.find("Source catalog consistency")
+    CHECK(roadmap.find("Shared source catalog")
+          != std::string::npos);
+    CHECK(roadmap.find("Cache-key producer epochs")
           != std::string::npos);
     CHECK(roadmap.find("Planned Gates") != std::string::npos);
     CHECK(testing.find("Invariant Matrix") != std::string::npos);

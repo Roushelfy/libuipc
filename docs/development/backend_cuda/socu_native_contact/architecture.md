@@ -86,7 +86,10 @@ The side plan caches stable native mapping facts:
 - native descriptor and ordering epochs.
 
 The side plan changes when ordering, descriptors, fixed mapping, or projection
-data changes. It should not rebuild merely because Hessian values changed.
+data changes. The current producer uses descriptor epoch as the owner for fixed
+mapping and ABD projection epochs because those values are materialized in the
+structured native vertex descriptor table. It should not rebuild merely because
+Hessian values changed.
 
 ABD side lanes have a non-negotiable projection contract. For an ABD local lane
 `q` in `[0, 12)`, the side plan must store:

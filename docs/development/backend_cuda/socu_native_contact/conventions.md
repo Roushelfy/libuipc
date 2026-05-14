@@ -53,10 +53,13 @@ program is dropped or rejected by the selected offband policy.
 ## Cache Key Producer Rules
 
 `fixed_mapping_epoch` and `vertex_projection_epoch` must be real producer
-signals. If descriptor epoch intentionally covers fixed mapping and ABD
-projection changes, that ownership must be documented and tested. Otherwise the
-producer must populate these epochs so mapping or `x_bar` changes invalidate both
-side and program plans.
+signals. The current producer intentionally uses `descriptor_epoch` as the owner
+for both fields because structured native vertex descriptors contain FEM fixed
+flags, ABD fixed flags, ABD vertex-to-body mapping, and ABD projection weights.
+If any of that state becomes mutable without rebuilding descriptors, the
+mutating system must bump `descriptor_epoch` or introduce finer nonzero mapping
+and projection epochs so mapping or `x_bar` changes invalidate both side and
+program plans.
 
 ## Source Ordering Rules
 

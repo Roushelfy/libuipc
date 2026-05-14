@@ -48,14 +48,11 @@ Non-negotiable rules:
 - [x] Introduce the host contact source catalog helper and route plan input,
   topology stamp, direct sources, direct-compare references, and `triplet_compat`
   references through the same source order.
+- [x] Close the cache-key producer epoch contract by making
+  `fixed_mapping_epoch` and `vertex_projection_epoch` follow descriptor epoch,
+  which currently owns fixed mapping and ABD projection state.
 - [x] Capture a fresh 3-run Wrecking Ball direct/triplet_compat median table,
   and a 20-frame direct_compare correctness gate.
-
-Contract-closure blockers:
-
-| Blocker | Why It Blocks Cutover | Required Gate |
-| --- | --- | --- |
-| Cache-key producer epochs | Mapping and ABD projection changes must not reuse stale plans | Producer contract documents whether descriptor epoch covers mapping/projection; otherwise nonzero epoch changes rebuild both layers |
 
 Closed M6.7 contract items:
 
@@ -65,6 +62,7 @@ Closed M6.7 contract items:
 | Scalar diagonal compatibility behavior | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility"` proves `native_contact_scalar_diag_compat` changes emitted tasks to `DiagScalarFem` and `DiagScalarAbd` |
 | Hybrid fallback accounting | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources"` proves unsupported direct source detection and fallback Hessian replacement |
 | Shared source catalog | Source-scan gate requires `collect_socu_contact_source_catalog` and rejects the old per-consumer source id counters |
+| Cache-key producer epochs | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_plan_key_producer_epochs_follow_descriptor_epoch"` proves runtime key fields for fixed mapping and vertex projection follow descriptor epoch and invalidate both cache layers |
 | Direct evaluator per-family parity | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_per_family_triplet_parity"` builds real native programs and compares PT/EE/PE/PP/PH direct Hessians against a triplet oracle |
 
 Acceptance gates:

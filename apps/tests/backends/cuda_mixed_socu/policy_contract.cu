@@ -735,6 +735,62 @@ TEST_CASE("cuda_mixed_socu_contact_plan_key_invalidates_on_symbolic_inputs",
     CHECK(socu_contact_plan_key_hash(changed) != base_hash);
 }
 
+TEST_CASE("cuda_mixed_socu_contact_plan_key_producer_epochs_follow_descriptor_epoch",
+          "[cuda_mixed_socu][contract][socu_approx][m67]")
+{
+    SocuContactTopologyStamp stamp;
+    stamp.epoch = 101;
+    stamp.layout_hash = 202;
+    stamp.content_hash = 303;
+
+    const auto key = socu_contact_assembly_plan_key_from_runtime_state(
+        IndexT{17},
+        stamp,
+        SizeT{64},
+        SizeT{12},
+        StructuredContactOffbandPolicy::DiagLump,
+        true);
+    CHECK(key.ordering_epoch == 17);
+    CHECK(key.native_descriptor_epoch == 17);
+    CHECK(key.contact_topology_epoch == stamp.epoch);
+    CHECK(key.contact_layout_hash == stamp.layout_hash);
+    CHECK(key.contact_content_hash == stamp.content_hash);
+    CHECK(key.fixed_mapping_epoch == 17);
+    CHECK(key.vertex_projection_epoch == 17);
+    CHECK(key.horizon == 64);
+    CHECK(key.block_size == 12);
+    CHECK(key.offband_policy == StructuredContactOffbandPolicy::DiagLump);
+    CHECK(key.scalar_diag_fallback_compatibility);
+
+    const auto side_key = socu_vertex_side_plan_key_from(key);
+    CHECK(side_key.fixed_mapping_epoch == key.fixed_mapping_epoch);
+    CHECK(side_key.vertex_projection_epoch == key.vertex_projection_epoch);
+
+    SocuContactPlanCacheState cache;
+    auto decision = cache.update(key);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    auto projection_changed = key;
+    projection_changed.vertex_projection_epoch++;
+    decision = cache.update(projection_changed);
+    CHECK(!decision.side_plan_hit());
+    CHECK(!decision.contact_program_hit());
+
+    const auto unset_epoch_key =
+        socu_contact_assembly_plan_key_from_runtime_state(
+            IndexT{-1},
+            stamp,
+            SizeT{64},
+            SizeT{12},
+            StructuredContactOffbandPolicy::DiagLump,
+            true);
+    CHECK(unset_epoch_key.ordering_epoch == 0);
+    CHECK(unset_epoch_key.native_descriptor_epoch == 0);
+    CHECK(unset_epoch_key.fixed_mapping_epoch == 0);
+    CHECK(unset_epoch_key.vertex_projection_epoch == 0);
+}
+
 TEST_CASE("cuda_mixed_socu_contact_plan_cache_split_layers",
           "[cuda_mixed_socu][contract][socu_approx][m1]")
 {

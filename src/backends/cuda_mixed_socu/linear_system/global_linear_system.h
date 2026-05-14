@@ -211,19 +211,13 @@ class GlobalLinearSystem : public SimSystem
         SocuAssemblyPlanKey socu_contact_assembly_plan_key(
             bool scalar_diag_fallback_compatibility) const noexcept
         {
-            const auto stamp = m_contact_topology_stamp;
-            return SocuAssemblyPlanKey{
-                static_cast<SizeT>(std::max<IndexT>(m_descriptor_epoch, 0)),
-                static_cast<SizeT>(std::max<IndexT>(m_descriptor_epoch, 0)),
-                stamp.epoch,
-                stamp.layout_hash,
-                stamp.content_hash,
-                0,
-                0,
+            return socu_contact_assembly_plan_key_from_runtime_state(
+                m_descriptor_epoch,
+                m_contact_topology_stamp,
                 m_shape.horizon,
                 m_shape.block_size,
                 m_contact_offband_policy,
-                scalar_diag_fallback_compatibility};
+                scalar_diag_fallback_compatibility);
         }
         SocuVertexSidePlanKey socu_contact_side_plan_key(
             bool scalar_diag_fallback_compatibility) const noexcept

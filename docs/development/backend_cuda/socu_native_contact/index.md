@@ -27,8 +27,6 @@ Open blockers before M8 cutover:
   baseline artifact and cold/cache-hit/topology-churn split. A fresh
   direct-vs-triplet_compat partial-rebuild median exists, but it is not a
   cutover benchmark.
-- `fixed_mapping_epoch` and `vertex_projection_epoch` producer ownership must be
-  documented and tested.
 
 Local validation snapshot, 2026-05-14:
 
@@ -56,6 +54,9 @@ Local validation snapshot, 2026-05-14:
   shared host source catalog helper.
 - Direct evaluator per-family parity now has a CUDA contract fixture covering
   PT/EE/PE/PP/PH direct Hessians against a triplet oracle.
+- Cache-key producer epochs now have a contract proving
+  `fixed_mapping_epoch` and `vertex_projection_epoch` follow descriptor epoch,
+  which currently owns fixed mapping and ABD projection changes.
 - Wrecking Ball 20-frame scene gates passed for `direct` and `direct_compare`.
   A 3-run partial-rebuild median showed `direct` contact assembly at
   `10.2849 ms` and `triplet_compat` at `13.1288 ms`; this is useful evidence,

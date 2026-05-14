@@ -235,6 +235,29 @@ struct SocuContactPlanCacheDecision
     }
 };
 
+inline SocuAssemblyPlanKey socu_contact_assembly_plan_key_from_runtime_state(
+    IndexT                          descriptor_epoch,
+    const SocuContactTopologyStamp& stamp,
+    SizeT                           horizon,
+    SizeT                           block_size,
+    StructuredContactOffbandPolicy  offband_policy,
+    bool scalar_diag_fallback_compatibility) noexcept
+{
+    const SizeT descriptor_key_epoch =
+        descriptor_epoch > 0 ? static_cast<SizeT>(descriptor_epoch) : SizeT{0};
+    return SocuAssemblyPlanKey{descriptor_key_epoch,
+                               descriptor_key_epoch,
+                               stamp.epoch,
+                               stamp.layout_hash,
+                               stamp.content_hash,
+                               descriptor_key_epoch,
+                               descriptor_key_epoch,
+                               horizon,
+                               block_size,
+                               offband_policy,
+                               scalar_diag_fallback_compatibility};
+}
+
 inline SizeT socu_contact_source_family_value(SocuContactSourceFamily family) noexcept
 {
     return static_cast<SizeT>(static_cast<std::uint8_t>(family));
