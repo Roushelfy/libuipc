@@ -92,6 +92,15 @@ Acceptance gates:
   churn.
 - Cache-hit Wrecking Ball reports show native replay without symbolic rebuild.
 
+Validation evidence, 2026-05-14:
+
+- 1-frame direct Wrecking Ball scene gate produced
+  `cache_hit | native_plan | direct` with zero triplets and zero direct
+  fallbacks.
+- 20-frame direct Wrecking Ball scene gate passed; the final single report was
+  `program_rebuild | native_plan | direct`, which is expected for topology churn
+  and not a cache-hot timing claim.
+
 ### M8: Cutover Decision (Future)
 
 - [ ] Isolate heavy direct evaluator and executor implementation from broad

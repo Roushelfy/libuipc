@@ -67,6 +67,10 @@ Local validation snapshot, 2026-05-14:
   A 3-run partial-rebuild median showed `direct` contact assembly at
   `10.2849 ms` and `triplet_compat` at `13.1288 ms`; this is useful evidence,
   not a cache-hot/default-cutover claim.
+- M7 replay-observability scene checks passed: a 1-frame direct Wrecking Ball
+  run produced `cache_hit | native_plan | direct` with zero triplets/fallbacks,
+  and a fresh 20-frame direct run passed with a final `program_rebuild` sample
+  caused by topology churn.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 
