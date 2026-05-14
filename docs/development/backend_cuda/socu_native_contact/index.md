@@ -24,10 +24,12 @@ Open blockers before M8 cutover:
 - The M6.7 unsupported-direct-program guard uses a host readback before scatter;
   M8 must remove it from the peak direct path or record measured acceptance.
 - Performance gates do not yet have the required repeated median table,
-  baseline artifact, and cold/cache-hit/topology-churn split.
+  baseline artifact and cold/cache-hit/topology-churn split. A fresh
+  direct-vs-triplet_compat partial-rebuild median exists, but it is not a
+  cutover benchmark.
 - `fixed_mapping_epoch` and `vertex_projection_epoch` producer ownership must be
   documented and tested.
-- Direct evaluator parity still needs PT/EE/PE/PP/PH unit fixtures.
+
 Local validation snapshot, 2026-05-14:
 
 - Configure and build passed with vcpkg at `/home/zhaofeng/work/vcpkg`, CUDA
@@ -52,6 +54,12 @@ Local validation snapshot, 2026-05-14:
 - Contact source enumeration now routes plan input, topology stamp, direct
   sources, direct-compare references, and `triplet_compat` references through a
   shared host source catalog helper.
+- Direct evaluator per-family parity now has a CUDA contract fixture covering
+  PT/EE/PE/PP/PH direct Hessians against a triplet oracle.
+- Wrecking Ball 20-frame scene gates passed for `direct` and `direct_compare`.
+  A 3-run partial-rebuild median showed `direct` contact assembly at
+  `10.2849 ms` and `triplet_compat` at `13.1288 ms`; this is useful evidence,
+  not a cache-hot/default-cutover claim.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 
@@ -101,12 +109,12 @@ uv run --no-project python scripts/run_socu_native_contact_gates.py \
   --require-no-direct-fallbacks
 ```
 
-Scene gates are intentionally opt-in because they run the Wrecking Ball example:
-set `PYTHONPATH` and `LD_LIBRARY_PATH` as shown in
-[build_and_run.md](build_and_run.md) before running them.
+Scene gates are intentionally opt-in because they run the Wrecking Ball example.
+The gate runner reads the configured Python from CMake and injects build package
+paths as described in [build_and_run.md](build_and_run.md).
 
 ```bash
-uv run --project python python scripts/run_socu_native_contact_gates.py \
+uv run --no-project python scripts/run_socu_native_contact_gates.py \
   --build build/socu_native_contact \
   --mode scene \
   --scene-evaluator direct \

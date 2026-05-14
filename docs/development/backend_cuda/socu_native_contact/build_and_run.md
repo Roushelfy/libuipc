@@ -181,17 +181,15 @@ uv run --no-project python scripts/run_socu_native_contact_gates.py \
 ## Python Scene Gates
 
 Scene gates need Python package dependencies and the freshly built pyuipc module.
-Use the `python/` uv project for dependencies, then point `PYTHONPATH` and
-`LD_LIBRARY_PATH` at the build output.
+Configure CMake with
+`-DUIPC_PYTHON_EXECUTABLE_PATH=$PWD/python/.venv/bin/python`. The gate runner
+then reads that Python path from `${BUILD_DIR}/CMakeCache.txt` and prepends the
+build package paths automatically.
 
 ```bash
-BUILD_DIR=$PWD/build/socu_native_contact
-CONFIG=RelWithDebInfo
-MODULE_DIR=${BUILD_DIR}/${CONFIG}/bin
+BUILD_DIR=build/socu_native_contact
 
-LD_LIBRARY_PATH=${MODULE_DIR}:${LD_LIBRARY_PATH} \
-PYTHONPATH=${BUILD_DIR}/python/src:${PYTHONPATH} \
-uv run --project python python scripts/run_socu_native_contact_gates.py \
+uv run --no-project python scripts/run_socu_native_contact_gates.py \
   --build ${BUILD_DIR} \
   --mode scene \
   --scene-evaluator direct \
@@ -199,8 +197,9 @@ uv run --project python python scripts/run_socu_native_contact_gates.py \
   --output output/examples/socu_native_contact_direct
 ```
 
-If the backend libraries are under `${BUILD_DIR}/bin` instead of a config
-subdirectory, set `MODULE_DIR=${BUILD_DIR}/bin`.
+Use `--python python/.venv/bin/python` to override the CMake cache value. The
+runner injects `${BUILD_DIR}/python/src`, `${BUILD_DIR}/python/src/uipc/_native`,
+and known build `bin` directories into the child process environment.
 
 Direct example invocation without the gate runner:
 
@@ -226,7 +225,7 @@ uv run --project python python python/examples/cuda_mixed_wrecking_ball_compare.
 ## Command Policy
 
 - Use `uv run --no-project python ...` for standard-library scripts in
-  `scripts/`.
+  `scripts/`, including the gate runner.
 - Run `uv sync --project python --extra dev` before pybind builds or Python
   scene gates, and pass `-DUIPC_PYTHON_EXECUTABLE_PATH=$PWD/python/.venv/bin/python`
   to CMake.

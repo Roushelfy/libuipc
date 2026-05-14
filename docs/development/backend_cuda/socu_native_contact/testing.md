@@ -29,7 +29,7 @@ Build and runtime setup lives in [build_and_run.md](build_and_run.md).
 | Scalar diag compatibility changes builder output | `cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility` checks `DiagScalarFem` and `DiagScalarAbd` task emission | Source scan keeps the scalar diag convention documented | Report gate checks scalar diag counts when the mode is benchmarked |
 | Hybrid fallback is explicit and counted | `cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources` checks unsupported source flags and fallback replacement; solver reports copy unsupported/fallback counters | Source scan requires the hybrid fallback triplet guard and replacement launcher | Report analyzer checks direct fallback counters |
 | Cache-key producers cover mapping/projection changes | Planned producer fixture checks nonzero epoch ownership or descriptor-epoch coverage | Source scan keeps cache-key producer blocker in roadmap | Cache-churn reports distinguish side and program rebuilds |
-| Direct evaluator parity covers each family | Planned PT/EE/PE/PP/PH fixtures compare direct vs triplet or CPU oracle | Source scan keeps direct parity blocker in roadmap | `direct_compare` scene remains a broad smoke, not a unit oracle |
+| Direct evaluator parity covers each family | `cuda_mixed_socu_contact_direct_evaluator_per_family_triplet_parity` builds real native programs and compares PT/EE/PE/PP/PH direct Hessians against a triplet oracle | Source scan keeps direct evaluator wiring out of legacy triplet production | `direct_compare` scene remains a broad smoke, not a unit oracle |
 | Source catalog order is shared | Plan/direct/triplet/topology consumers route through `collect_socu_contact_source_catalog` | Source scan rejects the old per-consumer source id counters | Wrecking Ball source counts remain secondary smoke |
 
 ## Required Fast Gates
@@ -70,13 +70,13 @@ Scene gates are not part of the fast default because they require a working
 CUDA runtime, Wrecking Ball assets, and enough time for 20-frame runs.
 
 ```bash
-uv run --project python python scripts/run_socu_native_contact_gates.py \
+uv run --no-project python scripts/run_socu_native_contact_gates.py \
   --build build/socu_native_contact \
   --mode scene \
   --scene-evaluator direct \
   --output output/examples/socu_native_contact_direct
 
-uv run --project python python scripts/run_socu_native_contact_gates.py \
+uv run --no-project python scripts/run_socu_native_contact_gates.py \
   --build build/socu_native_contact \
   --mode scene \
   --scene-evaluator direct_compare \

@@ -50,6 +50,54 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
     return env
 
 
+def cmake_cache_value(build: Path, key: str) -> str | None:
+    cache = build / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    prefix = f"{key}:"
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(prefix):
+            _, value = line.split("=", 1)
+            return value.strip()
+    return None
+
+
+def configured_python(args: argparse.Namespace) -> str:
+    if args.python is not None:
+        return str(args.python.resolve())
+    cache_python = cmake_cache_value(args.build, "UIPC_PYTHON_EXECUTABLE_PATH")
+    if cache_python:
+        return cache_python
+    return sys.executable
+
+
+def prepend_env_path(env: dict[str, str], key: str, path: Path) -> None:
+    value = str(path.resolve())
+    current = env.get(key)
+    env[key] = value if not current else f"{value}{os.pathsep}{current}"
+
+
+def add_build_python_paths(env: dict[str, str], build: Path) -> None:
+    build = build.resolve()
+    python_src = build / "python" / "src"
+    native_dir = python_src / "uipc" / "_native"
+    if python_src.exists():
+        prepend_env_path(env, "PYTHONPATH", python_src)
+    if native_dir.exists():
+        prepend_env_path(env, "LD_LIBRARY_PATH", native_dir)
+
+    config = cmake_cache_value(build, "CMAKE_BUILD_TYPE") or "RelWithDebInfo"
+    for candidate in (
+        build / config / "bin",
+        build / "bin",
+        build / "RelWithDebInfo" / "bin",
+        build / "Release" / "bin",
+        build / "Debug" / "bin",
+    ):
+        if candidate.exists():
+            prepend_env_path(env, "LD_LIBRARY_PATH", candidate)
+
+
 def run_contract(args: argparse.Namespace) -> None:
     binary = find_test_binary(args.build, args.test_binary)
     run([str(binary), "[cuda_mixed_socu][contract]"], env=build_env(args))
@@ -71,7 +119,7 @@ def run_report(args: argparse.Namespace) -> None:
     if args.reports is None:
         raise ValueError("--reports is required for --mode report and --mode all")
     cmd = [
-        sys.executable,
+        configured_python(args),
         str(ROOT / "scripts/analyze_socu_native_contact_reports.py"),
         str(args.reports),
         "--require-native-plan",
@@ -95,7 +143,8 @@ def run_scene(args: argparse.Namespace) -> None:
     output = args.output
     if output is None:
         raise ValueError("--output is required for --mode scene")
-    env = os.environ.copy()
+    env = build_env(args)
+    add_build_python_paths(env, args.build)
     env.update(
         {
             "SOCU_NATIVE_CONTACT_PLAN": "1",
@@ -105,9 +154,10 @@ def run_scene(args: argparse.Namespace) -> None:
             "SOCU_REPORT_COUNTERS": "1",
         }
     )
+    python = configured_python(args)
     run(
         [
-            sys.executable,
+            python,
             str(ROOT / "python/examples/cuda_mixed_wrecking_ball_compare.py"),
             "--variant",
             args.scene_variant,
@@ -122,7 +172,7 @@ def run_scene(args: argparse.Namespace) -> None:
     )
 
     report_cmd = [
-        sys.executable,
+        python,
         str(ROOT / "scripts/analyze_socu_native_contact_reports.py"),
         str(output),
         "--require-native-plan",
@@ -149,6 +199,14 @@ def main(argv: list[str] | None = None) -> int:
         default="all",
     )
     parser.add_argument("--build", type=Path, default=Path("build"))
+    parser.add_argument(
+        "--python",
+        type=Path,
+        help=(
+            "Python executable for report and scene gates; defaults to "
+            "UIPC_PYTHON_EXECUTABLE_PATH from CMakeCache.txt."
+        ),
+    )
     parser.add_argument("--test-binary", type=Path)
     parser.add_argument("--reports", type=Path)
     parser.add_argument(

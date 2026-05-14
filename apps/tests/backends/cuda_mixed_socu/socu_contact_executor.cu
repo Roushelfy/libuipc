@@ -6,9 +6,11 @@
 #include <cuda_runtime.h>
 #include <Eigen/Core>
 #include <muda/buffer/device_buffer.h>
+#include <muda/buffer/device_buffer_2d.h>
 #include <muda/ext/linear_system/device_triplet_matrix.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -20,9 +22,13 @@
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+using uipc::Float;
 using uipc::IndexT;
 using uipc::SizeT;
 using uipc::Vector2i;
+using uipc::Vector3;
+using uipc::Vector3i;
+using uipc::Vector4i;
 using uipc::span;
 
 bool has_cuda_device()
@@ -312,6 +318,602 @@ std::string read_text_file(const std::filesystem::path& path)
     std::ostringstream oss;
     oss << ifs.rdbuf();
     return oss.str();
+}
+
+template <typename StoreT>
+struct SocuContactDirectStencilOrderReferenceEvaluator
+{
+    using Alu = ActivePolicy::AluScalar;
+    using Vec3A = Eigen::Matrix<Alu, 3, 1>;
+    using Vec6A = Eigen::Matrix<Alu, 6, 1>;
+    using Vec9A = Eigen::Matrix<Alu, 9, 1>;
+    using Vec12A = Eigen::Matrix<Alu, 12, 1>;
+    using Mat3A = Eigen::Matrix<Alu, 3, 3>;
+    using Mat6A = Eigen::Matrix<Alu, 6, 6>;
+    using Mat9A = Eigen::Matrix<Alu, 9, 9>;
+    using Mat12A = Eigen::Matrix<Alu, 12, 12>;
+
+    SocuContactDirectSceneView<StoreT> scene;
+    SocuContactDirectSourceTable sources;
+
+    MUDA_DEVICE bool supports_program(
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        const auto source = sources.source_for(program);
+        return source.source_id != SocuInvalidContactSourceId
+               && source.stencil_size == program.stencil_size
+               && program.local_contact_id >= 0
+               && static_cast<SizeT>(program.local_contact_id)
+                      < static_cast<SizeT>(source.contact_count);
+    }
+
+    template <typename MatT>
+    MUDA_DEVICE void copy_dense_contact_order(
+        SocuDeterministicContactHessian<StoreT>& H,
+        const MatT& dense,
+        SizeT stencil_size) const noexcept
+    {
+        for(SizeT local_row = 0; local_row < stencil_size; ++local_row)
+        {
+            for(SizeT local_col = 0; local_col < stencil_size; ++local_col)
+            {
+                for(SizeT r = 0; r < 3; ++r)
+                {
+                    for(SizeT c = 0; c < 3; ++c)
+                    {
+                        const SizeT h_row = local_row * 3 + r;
+                        const SizeT h_col = local_col * 3 + c;
+                        const SizeT dense_row = local_row * 3 + r;
+                        const SizeT dense_col = local_col * 3 + c;
+                        H.values[h_row
+                                 * SocuDeterministicContactHessian<
+                                       StoreT>::MaxDofCount
+                                 + h_col] =
+                            safe_cast<StoreT>(dense(dense_row, dense_col));
+                    }
+                }
+            }
+        }
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
+        SizeT,
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        SocuDeterministicContactHessian<StoreT> H;
+        H.stencil_size = program.stencil_size;
+
+        const auto source = sources.source_for(program);
+        if(source.source_id == SocuInvalidContactSourceId
+           || program.local_contact_id < 0
+           || static_cast<SizeT>(program.local_contact_id)
+                  >= static_cast<SizeT>(source.contact_count))
+            return H;
+
+        switch(program.model)
+        {
+            case SocuContactModelKind::SimplexNormal:
+                return evaluate_simplex_normal(program, source, H);
+            case SocuContactModelKind::SimplexFrictional:
+                return evaluate_simplex_frictional(program, source, H);
+            case SocuContactModelKind::VertexHalfPlaneNormal:
+                return evaluate_vertex_half_plane_normal(program, source, H);
+            case SocuContactModelKind::VertexHalfPlaneFrictional:
+                return evaluate_vertex_half_plane_frictional(program, source, H);
+        }
+        return H;
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        return (*this)(SizeT{0}, program);
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT> evaluate_simplex_normal(
+        const SocuContactProgramHeader& program,
+        const SocuContactDirectSourceEntry& source,
+        SocuDeterministicContactHessian<StoreT> H) const noexcept
+    {
+        using namespace sym::codim_ipc_simplex_contact;
+
+        const SizeT contact_id = static_cast<SizeT>(program.local_contact_id);
+        switch(program.family)
+        {
+            case SocuContactFamily::PT:
+            {
+                const auto PT = source.stencil4.data()[contact_id];
+                Vector4i cids = {scene.contact_element_ids.data()[PT[0]],
+                                 scene.contact_element_ids.data()[PT[1]],
+                                 scene.contact_element_ids.data()[PT[2]],
+                                 scene.contact_element_ids.data()[PT[3]]};
+                const Alu kt2 =
+                    safe_cast<Alu>(PT_kappa(scene.contact_tabular, cids)
+                                   * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(PT_thickness(
+                    scene.thicknesses.data()[PT[0]],
+                    scene.thicknesses.data()[PT[1]],
+                    scene.thicknesses.data()[PT[2]],
+                    scene.thicknesses.data()[PT[3]]));
+                const Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                    scene.d_hats.data()[PT[0]],
+                    scene.d_hats.data()[PT[1]],
+                    scene.d_hats.data()[PT[2]],
+                    scene.d_hats.data()[PT[3]]));
+                const Vector4i flag = distance::point_triangle_distance_flag(
+                    scene.positions.data()[PT[0]],
+                    scene.positions.data()[PT[1]],
+                    scene.positions.data()[PT[2]],
+                    scene.positions.data()[PT[3]]);
+                Vec12A G;
+                Mat12A dense;
+                PT_barrier_gradient_hessian(
+                    G,
+                    dense,
+                    flag,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    scene.positions.data()[PT[0]].template cast<Alu>(),
+                    scene.positions.data()[PT[1]].template cast<Alu>(),
+                    scene.positions.data()[PT[2]].template cast<Alu>(),
+                    scene.positions.data()[PT[3]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 4);
+                return H;
+            }
+            case SocuContactFamily::EE:
+            {
+                const auto EE = source.stencil4.data()[contact_id];
+                Vector4i cids = {scene.contact_element_ids.data()[EE[0]],
+                                 scene.contact_element_ids.data()[EE[1]],
+                                 scene.contact_element_ids.data()[EE[2]],
+                                 scene.contact_element_ids.data()[EE[3]]};
+                const Alu kt2 =
+                    safe_cast<Alu>(EE_kappa(scene.contact_tabular, cids)
+                                   * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(EE_thickness(
+                    scene.thicknesses.data()[EE[0]],
+                    scene.thicknesses.data()[EE[1]],
+                    scene.thicknesses.data()[EE[2]],
+                    scene.thicknesses.data()[EE[3]]));
+                const Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                    scene.d_hats.data()[EE[0]],
+                    scene.d_hats.data()[EE[1]],
+                    scene.d_hats.data()[EE[2]],
+                    scene.d_hats.data()[EE[3]]));
+                const Vector4i flag = distance::edge_edge_distance_flag(
+                    scene.positions.data()[EE[0]],
+                    scene.positions.data()[EE[1]],
+                    scene.positions.data()[EE[2]],
+                    scene.positions.data()[EE[3]]);
+                Vec12A G;
+                Mat12A dense;
+                mollified_EE_barrier_gradient_hessian(
+                    G,
+                    dense,
+                    flag,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    scene.rest_positions.data()[EE[0]].template cast<Alu>(),
+                    scene.rest_positions.data()[EE[1]].template cast<Alu>(),
+                    scene.rest_positions.data()[EE[2]].template cast<Alu>(),
+                    scene.rest_positions.data()[EE[3]].template cast<Alu>(),
+                    scene.positions.data()[EE[0]].template cast<Alu>(),
+                    scene.positions.data()[EE[1]].template cast<Alu>(),
+                    scene.positions.data()[EE[2]].template cast<Alu>(),
+                    scene.positions.data()[EE[3]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 4);
+                return H;
+            }
+            case SocuContactFamily::PE:
+            {
+                const auto PE = source.stencil3.data()[contact_id];
+                Vector3i cids = {scene.contact_element_ids.data()[PE[0]],
+                                 scene.contact_element_ids.data()[PE[1]],
+                                 scene.contact_element_ids.data()[PE[2]]};
+                const Alu kt2 =
+                    safe_cast<Alu>(PE_kappa(scene.contact_tabular, cids)
+                                   * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(PE_thickness(
+                    scene.thicknesses.data()[PE[0]],
+                    scene.thicknesses.data()[PE[1]],
+                    scene.thicknesses.data()[PE[2]]));
+                const Alu d_hat = safe_cast<Alu>(PE_d_hat(
+                    scene.d_hats.data()[PE[0]],
+                    scene.d_hats.data()[PE[1]],
+                    scene.d_hats.data()[PE[2]]));
+                const Vector3i flag = distance::point_edge_distance_flag(
+                    scene.positions.data()[PE[0]],
+                    scene.positions.data()[PE[1]],
+                    scene.positions.data()[PE[2]]);
+                Vec9A G;
+                Mat9A dense;
+                PE_barrier_gradient_hessian(
+                    G,
+                    dense,
+                    flag,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    scene.positions.data()[PE[0]].template cast<Alu>(),
+                    scene.positions.data()[PE[1]].template cast<Alu>(),
+                    scene.positions.data()[PE[2]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 3);
+                return H;
+            }
+            case SocuContactFamily::PP:
+            {
+                const auto PP = source.stencil2.data()[contact_id];
+                Vector2i cids = {scene.contact_element_ids.data()[PP[0]],
+                                 scene.contact_element_ids.data()[PP[1]]};
+                const Alu kt2 =
+                    safe_cast<Alu>(PP_kappa(scene.contact_tabular, cids)
+                                   * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(
+                    PP_thickness(scene.thicknesses.data()[PP[0]],
+                                 scene.thicknesses.data()[PP[1]]));
+                const Alu d_hat = safe_cast<Alu>(
+                    PP_d_hat(scene.d_hats.data()[PP[0]],
+                             scene.d_hats.data()[PP[1]]));
+                const Vector2i flag = distance::point_point_distance_flag(
+                    scene.positions.data()[PP[0]],
+                    scene.positions.data()[PP[1]]);
+                Vec6A G;
+                Mat6A dense;
+                PP_barrier_gradient_hessian(
+                    G,
+                    dense,
+                    flag,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    scene.positions.data()[PP[0]].template cast<Alu>(),
+                    scene.positions.data()[PP[1]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 2);
+                return H;
+            }
+            case SocuContactFamily::PH:
+                return H;
+        }
+        return H;
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT>
+    evaluate_simplex_frictional(
+        const SocuContactProgramHeader& program,
+        const SocuContactDirectSourceEntry& source,
+        SocuDeterministicContactHessian<StoreT> H) const noexcept
+    {
+        using namespace sym::codim_ipc_contact;
+
+        const SizeT contact_id = static_cast<SizeT>(program.local_contact_id);
+        const Alu epsvdt = safe_cast<Alu>(scene.eps_velocity * scene.dt);
+        switch(program.family)
+        {
+            case SocuContactFamily::PT:
+            {
+                const auto PT = source.stencil4.data()[contact_id];
+                Vector4i cids = {scene.contact_element_ids.data()[PT[0]],
+                                 scene.contact_element_ids.data()[PT[1]],
+                                 scene.contact_element_ids.data()[PT[2]],
+                                 scene.contact_element_ids.data()[PT[3]]};
+                const auto coeff = PT_contact_coeff(scene.contact_tabular, cids);
+                const Alu kt2 = safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(PT_thickness(
+                    scene.thicknesses.data()[PT[0]],
+                    scene.thicknesses.data()[PT[1]],
+                    scene.thicknesses.data()[PT[2]],
+                    scene.thicknesses.data()[PT[3]]));
+                const Alu d_hat = safe_cast<Alu>(PT_d_hat(
+                    scene.d_hats.data()[PT[0]],
+                    scene.d_hats.data()[PT[1]],
+                    scene.d_hats.data()[PT[2]],
+                    scene.d_hats.data()[PT[3]]));
+                Vec12A G;
+                Mat12A dense;
+                PT_friction_gradient_hessian(
+                    G,
+                    dense,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    safe_cast<Alu>(coeff.mu),
+                    epsvdt,
+                    scene.prev_positions.data()[PT[0]].template cast<Alu>(),
+                    scene.prev_positions.data()[PT[1]].template cast<Alu>(),
+                    scene.prev_positions.data()[PT[2]].template cast<Alu>(),
+                    scene.prev_positions.data()[PT[3]].template cast<Alu>(),
+                    scene.positions.data()[PT[0]].template cast<Alu>(),
+                    scene.positions.data()[PT[1]].template cast<Alu>(),
+                    scene.positions.data()[PT[2]].template cast<Alu>(),
+                    scene.positions.data()[PT[3]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 4);
+                return H;
+            }
+            case SocuContactFamily::EE:
+            {
+                const auto EE = source.stencil4.data()[contact_id];
+                Vector4i cids = {scene.contact_element_ids.data()[EE[0]],
+                                 scene.contact_element_ids.data()[EE[1]],
+                                 scene.contact_element_ids.data()[EE[2]],
+                                 scene.contact_element_ids.data()[EE[3]]};
+                const auto coeff = EE_contact_coeff(scene.contact_tabular, cids);
+                const Alu kt2 = safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(EE_thickness(
+                    scene.thicknesses.data()[EE[0]],
+                    scene.thicknesses.data()[EE[1]],
+                    scene.thicknesses.data()[EE[2]],
+                    scene.thicknesses.data()[EE[3]]));
+                const Alu d_hat = safe_cast<Alu>(EE_d_hat(
+                    scene.d_hats.data()[EE[0]],
+                    scene.d_hats.data()[EE[1]],
+                    scene.d_hats.data()[EE[2]],
+                    scene.d_hats.data()[EE[3]]));
+                const Vec3A rest0 =
+                    scene.rest_positions.data()[EE[0]].template cast<Alu>();
+                const Vec3A rest1 =
+                    scene.rest_positions.data()[EE[1]].template cast<Alu>();
+                const Vec3A rest2 =
+                    scene.rest_positions.data()[EE[2]].template cast<Alu>();
+                const Vec3A rest3 =
+                    scene.rest_positions.data()[EE[3]].template cast<Alu>();
+                Alu eps_x;
+                distance::edge_edge_mollifier_threshold(
+                    rest0, rest1, rest2, rest3, static_cast<Alu>(1e-3), eps_x);
+                const Vec3A prev0 =
+                    scene.prev_positions.data()[EE[0]].template cast<Alu>();
+                const Vec3A prev1 =
+                    scene.prev_positions.data()[EE[1]].template cast<Alu>();
+                const Vec3A prev2 =
+                    scene.prev_positions.data()[EE[2]].template cast<Alu>();
+                const Vec3A prev3 =
+                    scene.prev_positions.data()[EE[3]].template cast<Alu>();
+                Vec12A G;
+                Mat12A dense;
+                if(distance::need_mollify(prev0, prev1, prev2, prev3, eps_x))
+                {
+                    G.setZero();
+                    dense.setZero();
+                }
+                else
+                {
+                    EE_friction_gradient_hessian(
+                        G,
+                        dense,
+                        kt2,
+                        d_hat,
+                        thickness,
+                        safe_cast<Alu>(coeff.mu),
+                        epsvdt,
+                        prev0,
+                        prev1,
+                        prev2,
+                        prev3,
+                        scene.positions.data()[EE[0]].template cast<Alu>(),
+                        scene.positions.data()[EE[1]].template cast<Alu>(),
+                        scene.positions.data()[EE[2]].template cast<Alu>(),
+                        scene.positions.data()[EE[3]].template cast<Alu>());
+                    make_spd(dense);
+                }
+                copy_dense_contact_order(H, dense, 4);
+                return H;
+            }
+            case SocuContactFamily::PE:
+            {
+                const auto PE = source.stencil3.data()[contact_id];
+                Vector3i cids = {scene.contact_element_ids.data()[PE[0]],
+                                 scene.contact_element_ids.data()[PE[1]],
+                                 scene.contact_element_ids.data()[PE[2]]};
+                const auto coeff = PE_contact_coeff(scene.contact_tabular, cids);
+                const Alu kt2 = safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(PE_thickness(
+                    scene.thicknesses.data()[PE[0]],
+                    scene.thicknesses.data()[PE[1]],
+                    scene.thicknesses.data()[PE[2]]));
+                const Alu d_hat = safe_cast<Alu>(PE_d_hat(
+                    scene.d_hats.data()[PE[0]],
+                    scene.d_hats.data()[PE[1]],
+                    scene.d_hats.data()[PE[2]]));
+                Vec9A G;
+                Mat9A dense;
+                PE_friction_gradient_hessian(
+                    G,
+                    dense,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    safe_cast<Alu>(coeff.mu),
+                    epsvdt,
+                    scene.prev_positions.data()[PE[0]].template cast<Alu>(),
+                    scene.prev_positions.data()[PE[1]].template cast<Alu>(),
+                    scene.prev_positions.data()[PE[2]].template cast<Alu>(),
+                    scene.positions.data()[PE[0]].template cast<Alu>(),
+                    scene.positions.data()[PE[1]].template cast<Alu>(),
+                    scene.positions.data()[PE[2]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 3);
+                return H;
+            }
+            case SocuContactFamily::PP:
+            {
+                const auto PP = source.stencil2.data()[contact_id];
+                Vector2i cids = {scene.contact_element_ids.data()[PP[0]],
+                                 scene.contact_element_ids.data()[PP[1]]};
+                const auto coeff = PP_contact_coeff(scene.contact_tabular, cids);
+                const Alu kt2 = safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt);
+                const Alu thickness = safe_cast<Alu>(
+                    PP_thickness(scene.thicknesses.data()[PP[0]],
+                                 scene.thicknesses.data()[PP[1]]));
+                const Alu d_hat = safe_cast<Alu>(
+                    PP_d_hat(scene.d_hats.data()[PP[0]],
+                             scene.d_hats.data()[PP[1]]));
+                Vec6A G;
+                Mat6A dense;
+                PP_friction_gradient_hessian(
+                    G,
+                    dense,
+                    kt2,
+                    d_hat,
+                    thickness,
+                    safe_cast<Alu>(coeff.mu),
+                    epsvdt,
+                    scene.prev_positions.data()[PP[0]].template cast<Alu>(),
+                    scene.prev_positions.data()[PP[1]].template cast<Alu>(),
+                    scene.positions.data()[PP[0]].template cast<Alu>(),
+                    scene.positions.data()[PP[1]].template cast<Alu>());
+                make_spd(dense);
+                copy_dense_contact_order(H, dense, 2);
+                return H;
+            }
+            case SocuContactFamily::PH:
+                return H;
+        }
+        return H;
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT>
+    evaluate_vertex_half_plane_normal(
+        const SocuContactProgramHeader& program,
+        const SocuContactDirectSourceEntry& source,
+        SocuDeterministicContactHessian<StoreT> H) const noexcept
+    {
+        if(program.family != SocuContactFamily::PH)
+            return H;
+        using namespace sym::ipc_vertex_half_contact;
+
+        const auto PH =
+            source.stencil2.data()[static_cast<SizeT>(program.local_contact_id)];
+        const IndexT vI = PH(0);
+        const IndexT HI = PH(1);
+        const ContactCoeff coeff =
+            scene.contact_tabular(scene.contact_element_ids.data()[vI],
+                                  scene.contact_element_ids.data()[HI
+                                      + scene.half_plane_vertex_offset]);
+        Vec3A G;
+        Mat3A dense;
+        PH_barrier_gradient_hessian(
+            G,
+            dense,
+            safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt),
+            safe_cast<Alu>(scene.d_hats.data()[vI]),
+            safe_cast<Alu>(scene.thicknesses.data()[vI]),
+            scene.positions.data()[vI].template cast<Alu>(),
+            scene.half_plane_positions.data()[HI].template cast<Alu>(),
+            scene.half_plane_normals.data()[HI].template cast<Alu>());
+        copy_dense_contact_order(H, dense, 1);
+        return H;
+    }
+
+    MUDA_DEVICE SocuDeterministicContactHessian<StoreT>
+    evaluate_vertex_half_plane_frictional(
+        const SocuContactProgramHeader& program,
+        const SocuContactDirectSourceEntry& source,
+        SocuDeterministicContactHessian<StoreT> H) const noexcept
+    {
+        if(program.family != SocuContactFamily::PH)
+            return H;
+        using namespace sym::ipc_vertex_half_contact;
+
+        const auto PH =
+            source.stencil2.data()[static_cast<SizeT>(program.local_contact_id)];
+        const IndexT vI = PH(0);
+        const IndexT HI = PH(1);
+        const ContactCoeff coeff =
+            scene.contact_tabular(scene.contact_element_ids.data()[vI],
+                                  scene.contact_element_ids.data()[HI
+                                      + scene.half_plane_vertex_offset]);
+        Vec3A G;
+        Mat3A dense;
+        PH_friction_gradient_hessian(
+            G,
+            dense,
+            safe_cast<Alu>(coeff.kappa * scene.dt * scene.dt),
+            safe_cast<Alu>(scene.d_hats.data()[vI]),
+            safe_cast<Alu>(scene.thicknesses.data()[vI]),
+            safe_cast<Alu>(coeff.mu),
+            safe_cast<Alu>(scene.eps_velocity * scene.dt),
+            scene.prev_positions.data()[vI].template cast<Alu>(),
+            scene.positions.data()[vI].template cast<Alu>(),
+            scene.half_plane_positions.data()[HI].template cast<Alu>(),
+            scene.half_plane_normals.data()[HI].template cast<Alu>());
+        make_spd(dense);
+        copy_dense_contact_order(H, dense, 1);
+        return H;
+    }
+};
+
+template <typename Store>
+Eigen::Matrix<Store, 3, 3> hessian_block(
+    const SocuDeterministicContactHessian<Store>& H,
+    SizeT local_row,
+    SizeT local_col)
+{
+    Eigen::Matrix<Store, 3, 3> block;
+    for(SizeT row = 0; row < 3; ++row)
+    {
+        for(SizeT col = 0; col < 3; ++col)
+        {
+            block(row, col) =
+                H(static_cast<IndexT>(local_row * 3 + row),
+                  static_cast<IndexT>(local_col * 3 + col));
+        }
+    }
+    return block;
+}
+
+template <typename Store, typename Stencil>
+void populate_reference_triplets(
+    muda::DeviceTripletMatrix<Store, 3>& matrix,
+    SizeT vertex_count,
+    const Stencil& stencil,
+    SizeT stencil_size,
+    const SocuDeterministicContactHessian<Store>& H)
+{
+    const SizeT half_size = stencil_size * (stencil_size + 1) / 2;
+    matrix.resize(vertex_count, vertex_count, half_size);
+
+    std::vector<int> rows;
+    std::vector<int> cols;
+    std::vector<Eigen::Matrix<Store, 3, 3>> blocks;
+    rows.reserve(half_size);
+    cols.reserve(half_size);
+    blocks.reserve(half_size);
+
+    for(SizeT local_row = 0; local_row < stencil_size; ++local_row)
+    {
+        for(SizeT local_col = local_row; local_col < stencil_size; ++local_col)
+        {
+            rows.push_back(static_cast<int>(stencil(static_cast<Eigen::Index>(
+                local_row))));
+            cols.push_back(static_cast<int>(stencil(static_cast<Eigen::Index>(
+                local_col))));
+            blocks.push_back(hessian_block(H, local_row, local_col));
+        }
+    }
+
+    matrix.row_indices().copy_from(rows.data());
+    matrix.col_indices().copy_from(cols.data());
+    matrix.values().copy_from(blocks.data());
+}
+
+template <typename Store>
+double hessian_abs_sum(const SocuDeterministicContactHessian<Store>& H,
+                       SizeT dof_count)
+{
+    double sum = 0.0;
+    for(SizeT row = 0; row < dof_count; ++row)
+    {
+        for(SizeT col = 0; col < dof_count; ++col)
+            sum += std::abs(static_cast<double>(
+                H(static_cast<IndexT>(row), static_cast<IndexT>(col))));
+    }
+    return sum;
 }
 }  // namespace
 
@@ -893,6 +1495,389 @@ TEST_CASE("cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources",
     REQUIRE(fallback_host.size() == 1);
     CHECK(fallback_host[0].stencil_size == programs[0].stencil_size);
     CHECK(static_cast<double>(fallback_host[0](0, 0)) != 0.0);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_direct_evaluator_per_family_triplet_parity",
+          "[cuda_mixed_socu][contract][socu_approx][m67]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact direct evaluator tests");
+
+    using Store = ActivePolicy::StoreScalar;
+
+    constexpr SizeT SourceCount = 10;
+    enum SourceIndex : SizeT
+    {
+        NormalPT = 0,
+        NormalEE,
+        NormalPE,
+        NormalPP,
+        NormalPH,
+        FrictionPT,
+        FrictionEE,
+        FrictionPE,
+        FrictionPP,
+        FrictionPH,
+    };
+
+    const std::array<const char*, SourceCount> source_names{
+        "normal/PT",
+        "normal/EE",
+        "normal/PE",
+        "normal/PP",
+        "normal/PH",
+        "friction/PT",
+        "friction/EE",
+        "friction/PE",
+        "friction/PP",
+        "friction/PH",
+    };
+    const std::array<SocuContactModelKind, SourceCount> models{
+        SocuContactModelKind::SimplexNormal,
+        SocuContactModelKind::SimplexNormal,
+        SocuContactModelKind::SimplexNormal,
+        SocuContactModelKind::SimplexNormal,
+        SocuContactModelKind::VertexHalfPlaneNormal,
+        SocuContactModelKind::SimplexFrictional,
+        SocuContactModelKind::SimplexFrictional,
+        SocuContactModelKind::SimplexFrictional,
+        SocuContactModelKind::SimplexFrictional,
+        SocuContactModelKind::VertexHalfPlaneFrictional,
+    };
+    const std::array<SocuContactFamily, SourceCount> families{
+        SocuContactFamily::PT,
+        SocuContactFamily::EE,
+        SocuContactFamily::PE,
+        SocuContactFamily::PP,
+        SocuContactFamily::PH,
+        SocuContactFamily::PT,
+        SocuContactFamily::EE,
+        SocuContactFamily::PE,
+        SocuContactFamily::PP,
+        SocuContactFamily::PH,
+    };
+    const std::array<std::uint16_t, SourceCount> stencil_sizes{
+        4, 4, 3, 2, 2, 4, 4, 3, 2, 2,
+    };
+
+    constexpr SizeT VertexCount = 8;
+    std::vector<SocuNativeVertexDescriptor> vertices(VertexCount);
+    for(SizeT i = 0; i < VertexCount; ++i)
+    {
+        vertices[i] = make_vertex(SocuNativeDescriptorKind::Fem,
+                                  false,
+                                  static_cast<IndexT>(i * 3),
+                                  3,
+                                  0,
+                                  i * 3);
+    }
+    muda::DeviceBuffer<SocuNativeVertexDescriptor> vertex_buffer{vertices};
+
+    const std::vector<Vector4i> pt_host{Vector4i{0, 1, 2, 3}};
+    const std::vector<Vector4i> ee_host{Vector4i{0, 1, 2, 3}};
+    const std::vector<Vector3i> pe_host{Vector3i{4, 5, 6}};
+    const std::vector<Vector2i> pp_host{Vector2i{6, 7}};
+    const std::vector<Vector2i> ph_host{Vector2i{0, 0}};
+    muda::DeviceBuffer<Vector4i> pt_contacts{pt_host};
+    muda::DeviceBuffer<Vector4i> ee_contacts{ee_host};
+    muda::DeviceBuffer<Vector3i> pe_contacts{pe_host};
+    muda::DeviceBuffer<Vector2i> pp_contacts{pp_host};
+    muda::DeviceBuffer<Vector2i> ph_contacts{ph_host};
+
+    std::vector<SocuContactM2SourceInput> source_inputs(SourceCount);
+    std::vector<SocuContactDirectSourceEntry> direct_entries(SourceCount);
+    const auto configure_source =
+        [&](SourceIndex index,
+            muda::CBufferView<Vector4i> stencil4,
+            muda::CBufferView<Vector3i> stencil3,
+            muda::CBufferView<Vector2i> stencil2)
+    {
+        auto& source = source_inputs[static_cast<SizeT>(index)];
+        source.source_id = static_cast<SocuContactSourceId>(index);
+        source.reporter_id = static_cast<std::uint32_t>(500 + index);
+        source.model = models[static_cast<SizeT>(index)];
+        source.family = families[static_cast<SizeT>(index)];
+        source.stencil_size = stencil_sizes[static_cast<SizeT>(index)];
+        source.stencil4 = stencil4;
+        source.stencil3 = stencil3;
+        source.stencil2 = stencil2;
+
+        auto& direct = direct_entries[static_cast<SizeT>(index)];
+        direct.source_id = source.source_id;
+        direct.model = source.model;
+        direct.family = source.family;
+        direct.stencil_size = source.stencil_size;
+        direct.contact_count = 1;
+        direct.stencil4 = stencil4;
+        direct.stencil3 = stencil3;
+        direct.stencil2 = stencil2;
+    };
+    configure_source(NormalPT, pt_contacts.view(), {}, {});
+    configure_source(NormalEE, ee_contacts.view(), {}, {});
+    configure_source(NormalPE, {}, pe_contacts.view(), {});
+    configure_source(NormalPP, {}, {}, pp_contacts.view());
+    configure_source(NormalPH, {}, {}, ph_contacts.view());
+    configure_source(FrictionPT, pt_contacts.view(), {}, {});
+    configure_source(FrictionEE, ee_contacts.view(), {}, {});
+    configure_source(FrictionPE, {}, pe_contacts.view(), {});
+    configure_source(FrictionPP, {}, {}, pp_contacts.view());
+    configure_source(FrictionPH, {}, {}, ph_contacts.view());
+
+    SocuVertexSidePlanKey side_key;
+    side_key.ordering_epoch = 3;
+    side_key.native_descriptor_epoch = 31;
+    side_key.fixed_mapping_epoch = 7;
+    side_key.vertex_projection_epoch = 11;
+    side_key.horizon = 1;
+    side_key.block_size = 32;
+
+    SocuContactProgramPlanKey program_key;
+    program_key.side_key = side_key;
+    program_key.contact_topology_epoch = 19;
+    program_key.contact_layout_hash = 23;
+    program_key.contact_content_hash = 29;
+    program_key.offband_policy = StructuredContactOffbandPolicy::Drop;
+
+    SocuContactAssemblyPlanM2BuildInput input;
+    input.side_key = side_key;
+    input.program_key = program_key;
+    input.vertex_descriptors = vertex_buffer.view();
+    input.sources = span<const SocuContactM2SourceInput>{source_inputs};
+    input.offband_policy = StructuredContactOffbandPolicy::Drop;
+    input.side_coverage_mode = SocuVertexSideCoverageMode::ActiveSetTemporary;
+
+    SocuContactAssemblyPlan plan;
+    SocuContactAssemblyPlanM2Workspace workspace;
+    build_socu_contact_assembly_plan_m2(plan, workspace, input);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+    REQUIRE(plan.program_plan.last_stats.source_id_validation_status
+            == SocuContactSourceIdValidationStatus::ValidDense);
+    REQUIRE(plan.program_plan.programs.size() == SourceCount);
+
+    std::vector<SocuContactProgramHeader> programs;
+    plan.program_plan.programs.copy_to(programs);
+    REQUIRE(programs.size() == SourceCount);
+    for(SizeT i = 0; i < SourceCount; ++i)
+    {
+        CAPTURE(source_names[i]);
+        CHECK(programs[i].source_id == static_cast<SocuContactSourceId>(i));
+        CHECK(programs[i].local_contact_id == 0);
+        CHECK(programs[i].model == models[i]);
+        CHECK(programs[i].family == families[i]);
+        CHECK(programs[i].stencil_size == stencil_sizes[i]);
+        CHECK(programs[i].program_kind == SocuContactProgramKind::Exact);
+    }
+
+    const std::vector<Vector3> positions_host{
+        Vector3{0.08, 0.12, 0.28},
+        Vector3{1.20, 0.05, 0.15},
+        Vector3{0.15, 1.10, 0.25},
+        Vector3{0.05, 0.20, 1.25},
+        Vector3{-0.30, 0.40, 0.10},
+        Vector3{1.10, 0.40, 0.00},
+        Vector3{-0.20, 1.20, 0.30},
+        Vector3{0.70, -0.80, 0.45},
+    };
+    std::vector<Vector3> prev_positions_host = positions_host;
+    std::vector<Vector3> rest_positions_host = positions_host;
+    for(SizeT i = 0; i < prev_positions_host.size(); ++i)
+    {
+        prev_positions_host[i](0) -= Float{0.01} * static_cast<Float>(i + 1);
+        prev_positions_host[i](1) += Float{0.006} * static_cast<Float>(i + 1);
+        rest_positions_host[i](2) += Float{0.002} * static_cast<Float>(i);
+    }
+    muda::DeviceBuffer<Vector3> positions{positions_host};
+    muda::DeviceBuffer<Vector3> prev_positions{prev_positions_host};
+    muda::DeviceBuffer<Vector3> rest_positions{rest_positions_host};
+    muda::DeviceBuffer<Float> thicknesses{std::vector<Float>(VertexCount, 0.01)};
+    muda::DeviceBuffer<Float> d_hats{std::vector<Float>(VertexCount, 10.0)};
+    muda::DeviceBuffer<IndexT> contact_element_ids{
+        std::vector<IndexT>(VertexCount + 1, 0)};
+
+    muda::DeviceBuffer2D<ContactCoeff> contact_tabular{muda::Extent2D{1, 1}};
+    contact_tabular.copy_from(std::vector<ContactCoeff>{ContactCoeff{3.0, 0.45}});
+
+    muda::DeviceBuffer<Vector3> half_plane_positions{
+        std::vector<Vector3>{Vector3{0.0, 0.0, -0.20}}};
+    muda::DeviceBuffer<Vector3> half_plane_normals{
+        std::vector<Vector3>{Vector3{0.0, 0.0, 1.0}}};
+
+    SocuContactDirectSceneView<Store> scene;
+    scene.contact_tabular = contact_tabular.cviewer();
+    scene.positions = positions.view().as_const();
+    scene.prev_positions = prev_positions.view().as_const();
+    scene.rest_positions = rest_positions.view().as_const();
+    scene.thicknesses = thicknesses.view().as_const();
+    scene.contact_element_ids = contact_element_ids.view().as_const();
+    scene.d_hats = d_hats.view().as_const();
+    scene.dt = 0.1;
+    scene.eps_velocity = 0.02;
+    scene.half_plane_positions = half_plane_positions.view().as_const();
+    scene.half_plane_normals = half_plane_normals.view().as_const();
+    scene.half_plane_vertex_offset = static_cast<IndexT>(VertexCount);
+
+    muda::DeviceBuffer<SocuContactDirectSourceEntry> direct_source_buffer{
+        direct_entries};
+    SocuContactDirectSourceTable direct_source_table;
+    direct_source_table.source_entries = direct_source_buffer.view().as_const();
+
+    const auto plan_view = socu_contact_assembly_plan_view(plan);
+    SocuContactDirectEvaluator<Store> direct_evaluator{
+        plan_view,
+        scene,
+        direct_source_table};
+    SocuContactDirectStencilOrderReferenceEvaluator<Store> reference_evaluator{
+        scene,
+        direct_source_table};
+
+    muda::DeviceBuffer<SocuDeterministicContactHessian<Store>> direct_hessians;
+    muda::DeviceBuffer<SocuDeterministicContactHessian<Store>> reference_hessians;
+    muda::DeviceBuffer<IndexT> direct_unsupported_flags;
+    muda::DeviceBuffer<IndexT> reference_unsupported_flags;
+    direct_hessians.resize(SourceCount);
+    reference_hessians.resize(SourceCount);
+    direct_unsupported_flags.resize(SourceCount);
+    reference_unsupported_flags.resize(SourceCount);
+
+    launch_socu_contact_direct_evaluate_programs<Store>(
+        plan_view,
+        direct_evaluator,
+        direct_hessians.view(),
+        direct_unsupported_flags.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    launch_socu_contact_direct_evaluate_programs<Store>(
+        plan_view,
+        reference_evaluator,
+        reference_hessians.view(),
+        reference_unsupported_flags.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> direct_flags;
+    std::vector<IndexT> reference_flags;
+    direct_unsupported_flags.copy_to(direct_flags);
+    reference_unsupported_flags.copy_to(reference_flags);
+    REQUIRE(direct_flags.size() == SourceCount);
+    REQUIRE(reference_flags.size() == SourceCount);
+    for(SizeT i = 0; i < SourceCount; ++i)
+    {
+        CAPTURE(source_names[i]);
+        CHECK(direct_flags[i] == 0);
+        CHECK(reference_flags[i] == 0);
+    }
+
+    std::vector<SocuDeterministicContactHessian<Store>> reference_host;
+    reference_hessians.copy_to(reference_host);
+    REQUIRE(reference_host.size() == SourceCount);
+    for(SizeT i = 0; i < SourceCount; ++i)
+    {
+        CAPTURE(source_names[i]);
+        const SizeT meaningful_stencil =
+            families[i] == SocuContactFamily::PH ? SizeT{1}
+                                                 : static_cast<SizeT>(
+                                                       stencil_sizes[i]);
+        CHECK(hessian_abs_sum(reference_host[i], meaningful_stencil * 3)
+              > 0.0);
+    }
+
+    std::array<muda::DeviceTripletMatrix<Store, 3>, SourceCount> triplet_matrices;
+    populate_reference_triplets(
+        triplet_matrices[NormalPT],
+        VertexCount,
+        pt_host[0],
+        4,
+        reference_host[NormalPT]);
+    populate_reference_triplets(
+        triplet_matrices[NormalEE],
+        VertexCount,
+        ee_host[0],
+        4,
+        reference_host[NormalEE]);
+    populate_reference_triplets(
+        triplet_matrices[NormalPE],
+        VertexCount,
+        pe_host[0],
+        3,
+        reference_host[NormalPE]);
+    populate_reference_triplets(
+        triplet_matrices[NormalPP],
+        VertexCount,
+        pp_host[0],
+        2,
+        reference_host[NormalPP]);
+    populate_reference_triplets(
+        triplet_matrices[NormalPH],
+        VertexCount,
+        ph_host[0],
+        1,
+        reference_host[NormalPH]);
+    populate_reference_triplets(
+        triplet_matrices[FrictionPT],
+        VertexCount,
+        pt_host[0],
+        4,
+        reference_host[FrictionPT]);
+    populate_reference_triplets(
+        triplet_matrices[FrictionEE],
+        VertexCount,
+        ee_host[0],
+        4,
+        reference_host[FrictionEE]);
+    populate_reference_triplets(
+        triplet_matrices[FrictionPE],
+        VertexCount,
+        pe_host[0],
+        3,
+        reference_host[FrictionPE]);
+    populate_reference_triplets(
+        triplet_matrices[FrictionPP],
+        VertexCount,
+        pp_host[0],
+        2,
+        reference_host[FrictionPP]);
+    populate_reference_triplets(
+        triplet_matrices[FrictionPH],
+        VertexCount,
+        ph_host[0],
+        1,
+        reference_host[FrictionPH]);
+
+    std::vector<SocuContactEvaluatorSourceEntry<Store>> triplet_entries(SourceCount);
+    for(SizeT i = 0; i < SourceCount; ++i)
+    {
+        triplet_entries[i].source_id = static_cast<SocuContactSourceId>(i);
+        triplet_entries[i].model = models[i];
+        triplet_entries[i].family = families[i];
+        triplet_entries[i].hessians = triplet_matrices[i].view();
+    }
+    muda::DeviceBuffer<SocuContactEvaluatorSourceEntry<Store>>
+        triplet_source_buffer{triplet_entries};
+    SocuContactEvaluatorSourceTable<Store> triplet_source_table;
+    triplet_source_table.source_entries = triplet_source_buffer.view().as_const();
+
+    muda::DeviceBuffer<SocuContactDirectCompareProgramStats> compare_stats;
+    compare_stats.resize(SourceCount);
+    launch_socu_contact_compare_direct_triplet_programs<Store>(
+        plan_view,
+        direct_hessians.view().as_const(),
+        SocuContactTripletEvaluator<Store>{plan_view, triplet_source_table},
+        compare_stats.view(),
+        Float{1e-6});
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactDirectCompareProgramStats> stats_host;
+    compare_stats.copy_to(stats_host);
+    REQUIRE(stats_host.size() == SourceCount);
+    for(SizeT i = 0; i < SourceCount; ++i)
+    {
+        CAPTURE(source_names[i]);
+        CHECK(stats_host[i].compared_entry_count
+              == static_cast<IndexT>(stencil_sizes[i] * 3 * stencil_sizes[i] * 3));
+        CHECK(stats_host[i].mismatch_count == 0);
+        CHECK(static_cast<double>(stats_host[i].max_abs_error)
+              == Catch::Approx(0.0).margin(1e-6));
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_contact_executor_source_isolation",
