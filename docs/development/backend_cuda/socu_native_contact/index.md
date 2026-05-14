@@ -23,8 +23,6 @@ Open blockers before M8 cutover:
 - Direct production source-scan isolation needs stronger structural checks.
 - The M6.7 unsupported-direct-program guard uses a host readback before scatter;
   M8 must remove it from the peak direct path or record measured acceptance.
-- Contact source enumeration is repeated in builder, topology stamp, direct
-  sources, and triplet compatibility sources.
 - Performance gates do not yet have the required repeated median table,
   baseline artifact, and cold/cache-hit/topology-churn split.
 - `fixed_mapping_epoch` and `vertex_projection_epoch` producer ownership must be
@@ -51,6 +49,9 @@ Local validation snapshot, 2026-05-14:
   emits per-program unsupported flags, `direct`/`direct_compare` reject them,
   and `hybrid` replaces unsupported program Hessians through a counted triplet
   fallback path.
+- Contact source enumeration now routes plan input, topology stamp, direct
+  sources, direct-compare references, and `triplet_compat` references through a
+  shared host source catalog helper.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 

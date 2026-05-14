@@ -30,7 +30,7 @@ Build and runtime setup lives in [build_and_run.md](build_and_run.md).
 | Hybrid fallback is explicit and counted | `cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources` checks unsupported source flags and fallback replacement; solver reports copy unsupported/fallback counters | Source scan requires the hybrid fallback triplet guard and replacement launcher | Report analyzer checks direct fallback counters |
 | Cache-key producers cover mapping/projection changes | Planned producer fixture checks nonzero epoch ownership or descriptor-epoch coverage | Source scan keeps cache-key producer blocker in roadmap | Cache-churn reports distinguish side and program rebuilds |
 | Direct evaluator parity covers each family | Planned PT/EE/PE/PP/PH fixtures compare direct vs triplet or CPU oracle | Source scan keeps direct parity blocker in roadmap | `direct_compare` scene remains a broad smoke, not a unit oracle |
-| Source catalog order is shared | Planned source catalog fixture compares builder/direct/triplet/topology order | Source scan keeps source catalog blocker in roadmap | Wrecking Ball source counts remain secondary smoke |
+| Source catalog order is shared | Plan/direct/triplet/topology consumers route through `collect_socu_contact_source_catalog` | Source scan rejects the old per-consumer source id counters | Wrecking Ball source counts remain secondary smoke |
 
 ## Required Fast Gates
 

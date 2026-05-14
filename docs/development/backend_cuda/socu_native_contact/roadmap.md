@@ -45,6 +45,9 @@ Non-negotiable rules:
   fixture that emits `DiagScalarFem` and `DiagScalarAbd`.
 - [x] Close the hybrid fallback accounting contract with unsupported direct
   source flags, direct-mode rejection, and counted per-program triplet fallback.
+- [x] Introduce the host contact source catalog helper and route plan input,
+  topology stamp, direct sources, direct-compare references, and `triplet_compat`
+  references through the same source order.
 - [ ] Capture a fresh 3-run Wrecking Ball direct/direct_compare/triplet table.
 
 Contract-closure blockers:
@@ -53,7 +56,6 @@ Contract-closure blockers:
 | --- | --- | --- |
 | Cache-key producer epochs | Mapping and ABD projection changes must not reuse stale plans | Producer contract documents whether descriptor epoch covers mapping/projection; otherwise nonzero epoch changes rebuild both layers |
 | Direct evaluator per-family parity | Scene gates do not isolate PT/EE/PE/PP/PH formula bugs | Unit fixtures compare direct vs triplet/CPU oracle for PT, EE, PE, PP, and PH |
-| Shared source catalog | Repeated source ordering can drift across builder/direct/triplet/topology | Source catalog contract proves all consumers share one enumeration order |
 
 Closed M6.7 contract items:
 
@@ -62,6 +64,7 @@ Closed M6.7 contract items:
 | Builder-generated ABD projection lanes | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` checks builder output lanes for `component = q < 3 ? q : (q - 3) / 3` and `weight = q < 3 ? 1 : x_bar((q - 3) % 3)` |
 | Scalar diagonal compatibility behavior | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility"` proves `native_contact_scalar_diag_compat` changes emitted tasks to `DiagScalarFem` and `DiagScalarAbd` |
 | Hybrid fallback accounting | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources"` proves unsupported direct source detection and fallback Hessian replacement |
+| Shared source catalog | Source-scan gate requires `collect_socu_contact_source_catalog` and rejects the old per-consumer source id counters |
 
 Acceptance gates:
 
@@ -74,11 +77,8 @@ Acceptance gates:
 - Report analyzer rejects direct production reports with nonzero direct
   unsupported or fallback counters unless the roadmap accepts that mode.
 
-### M7: Source Enumeration And Replay Observability (Next)
+### M7: Replay Observability (Next)
 
-- [ ] Introduce one host-side contact source enumeration helper.
-- [ ] Route builder inputs, topology stamps, direct sources, and triplet
-  compatibility sources through the same ordering contract.
 - [ ] Make probe, replay, and final cache states observable in reports.
 - [ ] Split timing so side-plan and program-plan rebuild costs are not
   double-counted by aggregate build timing.

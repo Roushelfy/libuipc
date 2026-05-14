@@ -1840,6 +1840,18 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("sources.source_entries = evaluator_sources.view().as_const()")
           != std::string::npos);
+    CHECK(dytopo.find("collect_socu_contact_source_catalog")
+          != std::string::npos);
+    CHECK(dytopo.find("make_m2_source_input") != std::string::npos);
+    CHECK(dytopo.find("make_direct_source_entry") != std::string::npos);
+    CHECK(dytopo.find("make_evaluator_source_entry") != std::string::npos);
+    CHECK(dytopo.find("auto push_direct_source") == std::string::npos);
+    CHECK(dytopo.find("auto push_evaluator_source") == std::string::npos);
+    CHECK(dytopo.find("auto push_source") == std::string::npos);
+    CHECK(dytopo.find("SocuContactSourceId direct_source_id")
+          == std::string::npos);
+    CHECK(dytopo.find("SocuContactSourceId evaluator_source_id")
+          == std::string::npos);
     CHECK(dytopo.find("set_native_contact_replay_path(\"native_plan\")")
           != std::string::npos);
     const auto direct_branch_marker =

@@ -30,6 +30,7 @@
 #include <fmt/format.h>
 #include <muda/buffer/buffer_launch.h>
 #include <chrono>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -98,6 +99,283 @@ void mix_contact_vector_view(SizeT& signature,
         for(Eigen::Index i = 0; i < item.size(); ++i)
             mix_contact_signature(signature, static_cast<SizeT>(item(i)));
     }
+}
+
+using SocuContactCatalogHessianView =
+    muda::CTripletMatrixView<GlobalDyTopoEffectManager::StoreScalar, 3>;
+
+struct SocuContactSourceCatalogEntry
+{
+    bool                known = true;
+    SocuContactSourceId source_id = SocuInvalidContactSourceId;
+    std::uint32_t       reporter_id = 0;
+    std::string         reporter_name;
+    SocuContactModelKind model = SocuContactModelKind::SimplexNormal;
+    SocuContactFamily    family = SocuContactFamily::PT;
+    SocuContactSourceFamily topology_family =
+        SocuContactSourceFamily::SimplexNormalPT;
+    std::uint16_t stencil_size = 0;
+    std::uint32_t contact_count = 0;
+    SizeT         unknown_hessian_count = 0;
+
+    muda::CBufferView<Vector4i> stencil4;
+    muda::CBufferView<Vector3i> stencil3;
+    muda::CBufferView<Vector2i> stencil2;
+    SocuContactCatalogHessianView hessians;
+};
+
+struct SocuContactSourceCatalog
+{
+    std::vector<SocuContactSourceCatalogEntry> entries;
+    SizeT reporter_count = 0;
+};
+
+template <typename StencilView>
+void push_contact_source_catalog_entry(
+    SocuContactSourceCatalog& catalog,
+    std::uint32_t reporter_id,
+    std::string reporter_name,
+    SocuContactModelKind model,
+    SocuContactFamily family,
+    SocuContactSourceFamily topology_family,
+    StencilView stencil,
+    SocuContactCatalogHessianView hessians)
+{
+    SocuContactSourceCatalogEntry entry;
+    entry.known = true;
+    entry.source_id = static_cast<SocuContactSourceId>(catalog.entries.size());
+    entry.reporter_id = reporter_id;
+    entry.reporter_name = std::move(reporter_name);
+    entry.model = model;
+    entry.family = family;
+    entry.topology_family = topology_family;
+    entry.contact_count = static_cast<std::uint32_t>(stencil.size());
+    entry.hessians = hessians;
+    if constexpr(std::is_same_v<std::decay_t<StencilView>,
+                                muda::CBufferView<Vector4i>>)
+    {
+        entry.stencil_size = 4;
+        entry.stencil4 = stencil;
+    }
+    else if constexpr(std::is_same_v<std::decay_t<StencilView>,
+                                     muda::CBufferView<Vector3i>>)
+    {
+        entry.stencil_size = 3;
+        entry.stencil3 = stencil;
+    }
+    else
+    {
+        entry.stencil_size = 2;
+        entry.stencil2 = stencil;
+    }
+    catalog.entries.push_back(entry);
+}
+
+void push_unknown_contact_source_catalog_entry(
+    SocuContactSourceCatalog& catalog,
+    std::uint32_t reporter_id,
+    std::string reporter_name,
+    SizeT hessian_count)
+{
+    SocuContactSourceCatalogEntry entry;
+    entry.known = false;
+    entry.source_id = static_cast<SocuContactSourceId>(catalog.entries.size());
+    entry.reporter_id = reporter_id;
+    entry.reporter_name = std::move(reporter_name);
+    entry.unknown_hessian_count = hessian_count;
+    catalog.entries.push_back(entry);
+}
+
+template <typename ReporterRange, typename UnknownHessianCount>
+SocuContactSourceCatalog collect_socu_contact_source_catalog(
+    ReporterRange reporters,
+    UnknownHessianCount unknown_hessian_count)
+{
+    SocuContactSourceCatalog catalog;
+    catalog.entries.reserve(16);
+
+    for(auto&& reporter : reporters)
+    {
+        const auto reporter_id =
+            static_cast<std::uint32_t>(catalog.reporter_count++);
+        const auto reporter_name_view = reporter->name();
+        const std::string reporter_name{reporter_name_view.data(),
+                                        reporter_name_view.size()};
+
+        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+        {
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PT,
+                                              SocuContactSourceFamily::SimplexNormalPT,
+                                              normal->PTs(),
+                                              normal->PT_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::EE,
+                                              SocuContactSourceFamily::SimplexNormalEE,
+                                              normal->EEs(),
+                                              normal->EE_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PE,
+                                              SocuContactSourceFamily::SimplexNormalPE,
+                                              normal->PEs(),
+                                              normal->PE_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexNormal,
+                                              SocuContactFamily::PP,
+                                              SocuContactSourceFamily::SimplexNormalPP,
+                                              normal->PPs(),
+                                              normal->PP_hessians());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
+        {
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexFrictional,
+                                              SocuContactFamily::PT,
+                                              SocuContactSourceFamily::SimplexFrictionPT,
+                                              friction->PTs(),
+                                              friction->PT_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexFrictional,
+                                              SocuContactFamily::EE,
+                                              SocuContactSourceFamily::SimplexFrictionEE,
+                                              friction->EEs(),
+                                              friction->EE_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexFrictional,
+                                              SocuContactFamily::PE,
+                                              SocuContactSourceFamily::SimplexFrictionPE,
+                                              friction->PEs(),
+                                              friction->PE_hessians());
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::SimplexFrictional,
+                                              SocuContactFamily::PP,
+                                              SocuContactSourceFamily::SimplexFrictionPP,
+                                              friction->PPs(),
+                                              friction->PP_hessians());
+            continue;
+        }
+        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
+        {
+            push_contact_source_catalog_entry(catalog,
+                                              reporter_id,
+                                              reporter_name,
+                                              SocuContactModelKind::VertexHalfPlaneNormal,
+                                              SocuContactFamily::PH,
+                                              SocuContactSourceFamily::HalfPlaneNormalPH,
+                                              normal->PHs(),
+                                              normal->hessians());
+            continue;
+        }
+        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
+        {
+            push_contact_source_catalog_entry(
+                catalog,
+                reporter_id,
+                reporter_name,
+                SocuContactModelKind::VertexHalfPlaneFrictional,
+                SocuContactFamily::PH,
+                SocuContactSourceFamily::HalfPlaneFrictionPH,
+                friction->PHs(),
+                friction->hessians());
+            continue;
+        }
+
+        push_unknown_contact_source_catalog_entry(catalog,
+                                                  reporter_id,
+                                                  reporter_name,
+                                                  unknown_hessian_count(reporter));
+    }
+    return catalog;
+}
+
+void require_known_contact_source_catalog(const SocuContactSourceCatalog& catalog,
+                                          const char* error_code,
+                                          const char* capability)
+{
+    for(const auto& entry : catalog.entries)
+    {
+        if(entry.known)
+            continue;
+        throw SimSystemException{fmt::format(
+            "{}: reporter '{}' is a contact reporter but does not expose {}",
+            error_code,
+            entry.reporter_name,
+            capability)};
+    }
+}
+
+template <typename Visitor>
+void visit_contact_source_stencil(const SocuContactSourceCatalogEntry& entry,
+                                  Visitor&& visitor)
+{
+    if(entry.stencil_size == 4)
+        visitor(entry.stencil4);
+    else if(entry.stencil_size == 3)
+        visitor(entry.stencil3);
+    else
+        visitor(entry.stencil2);
+}
+
+SocuContactM2SourceInput make_m2_source_input(
+    const SocuContactSourceCatalogEntry& entry)
+{
+    SocuContactM2SourceInput source;
+    source.source_id = entry.source_id;
+    source.reporter_id = entry.reporter_id;
+    source.model = entry.model;
+    source.family = entry.family;
+    source.stencil_size = entry.stencil_size;
+    source.stencil4 = entry.stencil4;
+    source.stencil3 = entry.stencil3;
+    source.stencil2 = entry.stencil2;
+    return source;
+}
+
+SocuContactDirectSourceEntry make_direct_source_entry(
+    const SocuContactSourceCatalogEntry& entry)
+{
+    SocuContactDirectSourceEntry out;
+    out.source_id = entry.source_id;
+    out.model = entry.model;
+    out.family = entry.family;
+    out.stencil_size = entry.stencil_size;
+    out.contact_count = entry.contact_count;
+    out.stencil4 = entry.stencil4;
+    out.stencil3 = entry.stencil3;
+    out.stencil2 = entry.stencil2;
+    return out;
+}
+
+template <typename StoreScalar>
+SocuContactEvaluatorSourceEntry<StoreScalar> make_evaluator_source_entry(
+    const SocuContactSourceCatalogEntry& entry)
+{
+    SocuContactEvaluatorSourceEntry<StoreScalar> out;
+    out.source_id = entry.source_id;
+    out.model = entry.model;
+    out.family = entry.family;
+    out.hessians = entry.hessians;
+    return out;
 }
 
 void check_native_contact_cuda(cudaError_t error, std::string_view operation)
@@ -724,6 +1002,27 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
 
         const auto evaluator_path =
             structured_info.native_contact_evaluator_path();
+        auto collect_contact_source_catalog_for_replay = [&]()
+        {
+            std::vector<DyTopoEffectReporter*> contact_reporters;
+            contact_reporters.reserve(dytopo_effect_reporters.view().size());
+            for(auto&& reporter : dytopo_effect_reporters.view())
+            {
+                if(has_flags(EnergyComponentFlags::Contact,
+                             reporter->component_flags()))
+                    contact_reporters.push_back(reporter);
+            }
+
+            return collect_socu_contact_source_catalog(
+                contact_reporters,
+                [&](DyTopoEffectReporter* reporter) -> SizeT
+                {
+                    GradientHessianExtentInfo extent_info;
+                    extent_info.m_gradient_only = false;
+                    reporter->report_gradient_hessian_extent(extent_info);
+                    return extent_info.m_hessian_count;
+                });
+        };
 
         if(evaluator_path == SocuContactEvaluatorPath::DirectNative
            || evaluator_path == SocuContactEvaluatorPath::Hybrid
@@ -736,105 +1035,23 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                     "direct evaluator requires GlobalContactManager"};
             }
 
+            const auto contact_source_catalog =
+                collect_contact_source_catalog_for_replay();
+            require_known_contact_source_catalog(
+                contact_source_catalog,
+                "socu_native_contact_direct_unsupported_reporter",
+                "native direct evaluator source views");
+
             std::vector<SocuContactDirectSourceEntry> direct_sources_host;
-            direct_sources_host.reserve(16);
-            SocuContactSourceId direct_source_id = 0;
+            direct_sources_host.reserve(contact_source_catalog.entries.size());
             bool uses_half_plane = false;
-            auto push_direct_source = [&](SocuContactModelKind model,
-                                          SocuContactFamily family,
-                                          auto view)
+            for(const auto& source : contact_source_catalog.entries)
             {
-                SocuContactDirectSourceEntry entry;
-                entry.source_id = direct_source_id++;
-                entry.model = model;
-                entry.family = family;
-                entry.contact_count =
-                    static_cast<std::uint32_t>(view.size());
-                if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
-                                            muda::CBufferView<Vector4i>>)
-                {
-                    entry.stencil_size = 4;
-                    entry.stencil4 = view;
-                }
-                else if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
-                                                 muda::CBufferView<Vector3i>>)
-                {
-                    entry.stencil_size = 3;
-                    entry.stencil3 = view;
-                }
-                else
-                {
-                    entry.stencil_size = 2;
-                    entry.stencil2 = view;
-                }
-                direct_sources_host.push_back(entry);
-            };
-
-            for(auto&& reporter : dytopo_effect_reporters.view())
-            {
-                if(!has_flags(EnergyComponentFlags::Contact,
-                              reporter->component_flags()))
-                    continue;
-
-                if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
-                {
-                    push_direct_source(SocuContactModelKind::SimplexNormal,
-                                       SocuContactFamily::PT,
-                                       normal->PTs());
-                    push_direct_source(SocuContactModelKind::SimplexNormal,
-                                       SocuContactFamily::EE,
-                                       normal->EEs());
-                    push_direct_source(SocuContactModelKind::SimplexNormal,
-                                       SocuContactFamily::PE,
-                                       normal->PEs());
-                    push_direct_source(SocuContactModelKind::SimplexNormal,
-                                       SocuContactFamily::PP,
-                                       normal->PPs());
-                    continue;
-                }
-                if(auto* friction =
-                       dynamic_cast<SimplexFrictionalContact*>(reporter))
-                {
-                    push_direct_source(SocuContactModelKind::SimplexFrictional,
-                                       SocuContactFamily::PT,
-                                       friction->PTs());
-                    push_direct_source(SocuContactModelKind::SimplexFrictional,
-                                       SocuContactFamily::EE,
-                                       friction->EEs());
-                    push_direct_source(SocuContactModelKind::SimplexFrictional,
-                                       SocuContactFamily::PE,
-                                       friction->PEs());
-                    push_direct_source(SocuContactModelKind::SimplexFrictional,
-                                       SocuContactFamily::PP,
-                                       friction->PPs());
-                    continue;
-                }
-                if(auto* normal =
-                       dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-                {
+                if(source.model == SocuContactModelKind::VertexHalfPlaneNormal
+                   || source.model
+                          == SocuContactModelKind::VertexHalfPlaneFrictional)
                     uses_half_plane = true;
-                    push_direct_source(
-                        SocuContactModelKind::VertexHalfPlaneNormal,
-                        SocuContactFamily::PH,
-                        normal->PHs());
-                    continue;
-                }
-                if(auto* friction = dynamic_cast<
-                       VertexHalfPlaneFrictionalContact*>(reporter))
-                {
-                    uses_half_plane = true;
-                    push_direct_source(
-                        SocuContactModelKind::VertexHalfPlaneFrictional,
-                        SocuContactFamily::PH,
-                        friction->PHs());
-                    continue;
-                }
-
-                throw SimSystemException{fmt::format(
-                    "socu_native_contact_direct_unsupported_reporter: reporter "
-                    "'{}' is a contact reporter but does not expose native "
-                    "direct evaluator source views",
-                    reporter->name())};
+                direct_sources_host.push_back(make_direct_source_entry(source));
             }
 
             if(uses_half_plane && (!half_plane || !half_plane_vertex_reporter))
@@ -969,90 +1186,17 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                                          timing_events.hessian_done),
                     elapsed_operation);
 
+                const auto triplet_source_catalog =
+                    collect_contact_source_catalog_for_replay();
+                require_known_contact_source_catalog(triplet_source_catalog,
+                                                     unsupported_operation,
+                                                     "triplet reference views");
                 std::vector<SocuContactEvaluatorSourceEntry<StoreScalar>>
                     evaluator_sources_host;
-                evaluator_sources_host.reserve(16);
-                SocuContactSourceId evaluator_source_id = 0;
-                auto push_evaluator_source =
-                    [&](SocuContactModelKind model,
-                        SocuContactFamily family,
-                        muda::CTripletMatrixView<StoreScalar, 3> hessians)
-                {
-                    SocuContactEvaluatorSourceEntry<StoreScalar> entry;
-                    entry.source_id = evaluator_source_id++;
-                    entry.model = model;
-                    entry.family = family;
-                    entry.hessians = hessians;
-                    evaluator_sources_host.push_back(entry);
-                };
-
-                for(auto&& reporter : dytopo_effect_reporters.view())
-                {
-                    if(!has_flags(EnergyComponentFlags::Contact,
-                                  reporter->component_flags()))
-                        continue;
-
-                    if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
-                    {
-                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
-                                              SocuContactFamily::PT,
-                                              normal->PT_hessians());
-                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
-                                              SocuContactFamily::EE,
-                                              normal->EE_hessians());
-                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
-                                              SocuContactFamily::PE,
-                                              normal->PE_hessians());
-                        push_evaluator_source(SocuContactModelKind::SimplexNormal,
-                                              SocuContactFamily::PP,
-                                              normal->PP_hessians());
-                        continue;
-                    }
-                    if(auto* friction =
-                           dynamic_cast<SimplexFrictionalContact*>(reporter))
-                    {
-                        push_evaluator_source(
-                            SocuContactModelKind::SimplexFrictional,
-                            SocuContactFamily::PT,
-                            friction->PT_hessians());
-                        push_evaluator_source(
-                            SocuContactModelKind::SimplexFrictional,
-                            SocuContactFamily::EE,
-                            friction->EE_hessians());
-                        push_evaluator_source(
-                            SocuContactModelKind::SimplexFrictional,
-                            SocuContactFamily::PE,
-                            friction->PE_hessians());
-                        push_evaluator_source(
-                            SocuContactModelKind::SimplexFrictional,
-                            SocuContactFamily::PP,
-                            friction->PP_hessians());
-                        continue;
-                    }
-                    if(auto* normal =
-                           dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-                    {
-                        push_evaluator_source(
-                            SocuContactModelKind::VertexHalfPlaneNormal,
-                            SocuContactFamily::PH,
-                            normal->hessians());
-                        continue;
-                    }
-                    if(auto* friction = dynamic_cast<
-                           VertexHalfPlaneFrictionalContact*>(reporter))
-                    {
-                        push_evaluator_source(
-                            SocuContactModelKind::VertexHalfPlaneFrictional,
-                            SocuContactFamily::PH,
-                            friction->hessians());
-                        continue;
-                    }
-
-                    throw SimSystemException{fmt::format(
-                        "{}: reporter '{}' does not expose triplet reference views",
-                        unsupported_operation,
-                        reporter->name())};
-                }
+                evaluator_sources_host.reserve(triplet_source_catalog.entries.size());
+                for(const auto& source : triplet_source_catalog.entries)
+                    evaluator_sources_host.push_back(
+                        make_evaluator_source_entry<StoreScalar>(source));
 
                 compare_evaluator_sources.resize(evaluator_sources_host.size());
                 if(!evaluator_sources_host.empty())
@@ -1368,91 +1512,18 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                             structured_info.stream()),
             "cudaEventRecord(hessian_done)");
 
+        const auto triplet_source_catalog =
+            collect_contact_source_catalog_for_replay();
+        require_known_contact_source_catalog(
+            triplet_source_catalog,
+            "socu_native_contact_executor_unsupported_reporter",
+            "native executor Hessian source views");
         std::vector<SocuContactEvaluatorSourceEntry<StoreScalar>>
             evaluator_sources_host;
-        evaluator_sources_host.reserve(16);
-        SocuContactSourceId evaluator_source_id = 0;
-        auto push_evaluator_source = [&](SocuContactModelKind model,
-                                         SocuContactFamily family,
-                                         muda::CTripletMatrixView<StoreScalar, 3>
-                                             hessians)
-        {
-            SocuContactEvaluatorSourceEntry<StoreScalar> entry;
-            entry.source_id = evaluator_source_id++;
-            entry.model = model;
-            entry.family = family;
-            entry.hessians = hessians;
-            evaluator_sources_host.push_back(entry);
-        };
-
-        for(auto&& reporter : dytopo_effect_reporters.view())
-        {
-            if(!has_flags(EnergyComponentFlags::Contact,
-                          reporter->component_flags()))
-                continue;
-
-            if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
-            {
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexNormal,
-                    SocuContactFamily::PT,
-                    normal->PT_hessians());
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexNormal,
-                    SocuContactFamily::EE,
-                    normal->EE_hessians());
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexNormal,
-                    SocuContactFamily::PE,
-                    normal->PE_hessians());
-                push_evaluator_source(SocuContactModelKind::SimplexNormal,
-                                      SocuContactFamily::PP,
-                                      normal->PP_hessians());
-                continue;
-            }
-            if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
-            {
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexFrictional,
-                    SocuContactFamily::PT,
-                    friction->PT_hessians());
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexFrictional,
-                    SocuContactFamily::EE,
-                    friction->EE_hessians());
-                push_evaluator_source(
-                    SocuContactModelKind::SimplexFrictional,
-                    SocuContactFamily::PE,
-                    friction->PE_hessians());
-                push_evaluator_source(SocuContactModelKind::SimplexFrictional,
-                                      SocuContactFamily::PP,
-                                      friction->PP_hessians());
-                continue;
-            }
-            if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-            {
-                push_evaluator_source(
-                    SocuContactModelKind::VertexHalfPlaneNormal,
-                    SocuContactFamily::PH,
-                    normal->hessians());
-                continue;
-            }
-            if(auto* friction =
-                   dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
-            {
-                push_evaluator_source(
-                    SocuContactModelKind::VertexHalfPlaneFrictional,
-                    SocuContactFamily::PH,
-                    friction->hessians());
-                continue;
-            }
-
-            throw SimSystemException{fmt::format(
-                "socu_native_contact_executor_unsupported_reporter: reporter "
-                "'{}' is a contact reporter but does not expose native "
-                "executor Hessian source views",
-                reporter->name())};
-        }
+        evaluator_sources_host.reserve(triplet_source_catalog.entries.size());
+        for(const auto& source : triplet_source_catalog.entries)
+            evaluator_sources_host.push_back(
+                make_evaluator_source_entry<StoreScalar>(source));
         muda::DeviceBuffer<SocuContactEvaluatorSourceEntry<StoreScalar>>
             evaluator_sources{evaluator_sources_host};
         SocuContactEvaluatorSourceTable<StoreScalar> sources;
@@ -1697,111 +1768,30 @@ void GlobalDyTopoEffectManager::Impl::
     input.hot_block_threshold = hot_block_threshold;
     input.stream = stream;
 
-    std::vector<SocuContactM2SourceInput> sources;
-    sources.reserve(16);
-    SizeT reporter_id = 0;
-    SizeT source_id = 0;
-
-    auto push_source = [&](std::uint32_t reporter,
-                           SocuContactModelKind model,
-                           SocuContactFamily family,
-                           auto view)
-    {
-        SocuContactM2SourceInput source;
-        source.source_id = static_cast<SocuContactSourceId>(source_id++);
-        source.reporter_id = reporter;
-        source.model = model;
-        source.family = family;
-        if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
-                                    muda::CBufferView<Vector4i>>)
-        {
-            source.stencil_size = 4;
-            source.stencil4 = view;
-        }
-        else if constexpr(std::is_same_v<std::decay_t<decltype(view)>,
-                                         muda::CBufferView<Vector3i>>)
-        {
-            source.stencil_size = 3;
-            source.stencil3 = view;
-        }
-        else
-        {
-            source.stencil_size = 2;
-            source.stencil2 = view;
-        }
-        sources.push_back(source);
-    };
-
+    std::vector<DyTopoEffectReporter*> contact_reporters;
+    contact_reporters.reserve(dytopo_effect_reporters.view().size());
     for(auto&& reporter : dytopo_effect_reporters.view())
     {
-        if(!has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
-            continue;
-
-        const auto current_reporter_id =
-            static_cast<std::uint32_t>(reporter_id++);
-
-        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
-        {
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexNormal,
-                        SocuContactFamily::PT,
-                        normal->PTs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexNormal,
-                        SocuContactFamily::EE,
-                        normal->EEs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexNormal,
-                        SocuContactFamily::PE,
-                        normal->PEs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexNormal,
-                        SocuContactFamily::PP,
-                        normal->PPs());
-            continue;
-        }
-        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
-        {
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexFrictional,
-                        SocuContactFamily::PT,
-                        friction->PTs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexFrictional,
-                        SocuContactFamily::EE,
-                        friction->EEs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexFrictional,
-                        SocuContactFamily::PE,
-                        friction->PEs());
-            push_source(current_reporter_id,
-                        SocuContactModelKind::SimplexFrictional,
-                        SocuContactFamily::PP,
-                        friction->PPs());
-            continue;
-        }
-        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-        {
-            push_source(current_reporter_id,
-                        SocuContactModelKind::VertexHalfPlaneNormal,
-                        SocuContactFamily::PH,
-                        normal->PHs());
-            continue;
-        }
-        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
-        {
-            push_source(current_reporter_id,
-                        SocuContactModelKind::VertexHalfPlaneFrictional,
-                        SocuContactFamily::PH,
-                        friction->PHs());
-            continue;
-        }
-
-        throw SimSystemException{fmt::format(
-            "socu_native_contact_plan_unsupported_reporter: reporter '{}' is "
-            "a contact reporter but does not expose an M2 native contact source",
-            reporter->name())};
+        if(has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
+            contact_reporters.push_back(reporter);
     }
+    const auto contact_source_catalog = collect_socu_contact_source_catalog(
+        contact_reporters,
+        [&](DyTopoEffectReporter* reporter) -> SizeT
+        {
+            GradientHessianExtentInfo extent_info;
+            extent_info.m_gradient_only = false;
+            reporter->report_gradient_hessian_extent(extent_info);
+            return extent_info.m_hessian_count;
+        });
+    require_known_contact_source_catalog(
+        contact_source_catalog,
+        "socu_native_contact_plan_unsupported_reporter",
+        "an M2 native contact source");
+    std::vector<SocuContactM2SourceInput> sources;
+    sources.reserve(contact_source_catalog.entries.size());
+    for(const auto& source : contact_source_catalog.entries)
+        sources.push_back(make_m2_source_input(source));
 
     input.sources = span<const SocuContactM2SourceInput>{sources};
     ::uipc::backend::cuda_mixed::build_socu_contact_assembly_plan_m2(
@@ -1866,84 +1856,80 @@ SocuContactTopologyStamp GlobalDyTopoEffectManager::Impl::contact_topology_stamp
     SocuContactTopologyStamp stamp = socu_contact_topology_make_stamp_seed();
     socu_contact_topology_hash_reset(contact_topology_hash_workspace, stream);
 
-    SizeT reporter_id = 0;
-    SizeT source_id = 0;
+    std::vector<DyTopoEffectReporter*> contact_reporters;
+    contact_reporters.reserve(dytopo_effect_reporters.view().size());
     for(auto&& reporter : dytopo_effect_reporters.view())
     {
-        if(!has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
-            continue;
-
-        const SizeT current_reporter_id = reporter_id++;
-
-        auto register_view = [&](SocuContactSourceFamily family, auto view, SizeT& count)
+        if(has_flags(EnergyComponentFlags::Contact, reporter->component_flags()))
+            contact_reporters.push_back(reporter);
+    }
+    const auto contact_source_catalog = collect_socu_contact_source_catalog(
+        contact_reporters,
+        [&](DyTopoEffectReporter* reporter) -> SizeT
         {
-            count += view.size();
-            socu_contact_topology_mix_view(stamp,
-                                           contact_topology_hash_workspace,
-                                           stream,
-                                           current_reporter_id,
-                                           source_id++,
-                                           family,
-                                           view);
-        };
-
-        if(auto* normal = dynamic_cast<SimplexNormalContact*>(reporter))
+            GradientHessianExtentInfo extent_info;
+            extent_info.m_gradient_only = false;
+            reporter->report_gradient_hessian_extent(extent_info);
+            return extent_info.m_hessian_count;
+        });
+    auto count_for = [&](SocuContactSourceFamily family) -> SizeT&
+    {
+        switch(family)
         {
-            register_view(SocuContactSourceFamily::SimplexNormalPT,
-                          normal->PTs(),
-                          stamp.counts.simplex_normal_pt);
-            register_view(SocuContactSourceFamily::SimplexNormalEE,
-                          normal->EEs(),
-                          stamp.counts.simplex_normal_ee);
-            register_view(SocuContactSourceFamily::SimplexNormalPE,
-                          normal->PEs(),
-                          stamp.counts.simplex_normal_pe);
-            register_view(SocuContactSourceFamily::SimplexNormalPP,
-                          normal->PPs(),
-                          stamp.counts.simplex_normal_pp);
-            continue;
+            case SocuContactSourceFamily::SimplexNormalPT:
+                return stamp.counts.simplex_normal_pt;
+            case SocuContactSourceFamily::SimplexNormalEE:
+                return stamp.counts.simplex_normal_ee;
+            case SocuContactSourceFamily::SimplexNormalPE:
+                return stamp.counts.simplex_normal_pe;
+            case SocuContactSourceFamily::SimplexNormalPP:
+                return stamp.counts.simplex_normal_pp;
+            case SocuContactSourceFamily::SimplexFrictionPT:
+                return stamp.counts.simplex_friction_pt;
+            case SocuContactSourceFamily::SimplexFrictionEE:
+                return stamp.counts.simplex_friction_ee;
+            case SocuContactSourceFamily::SimplexFrictionPE:
+                return stamp.counts.simplex_friction_pe;
+            case SocuContactSourceFamily::SimplexFrictionPP:
+                return stamp.counts.simplex_friction_pp;
+            case SocuContactSourceFamily::HalfPlaneNormalPH:
+                return stamp.counts.half_plane_normal_ph;
+            case SocuContactSourceFamily::HalfPlaneFrictionPH:
+                return stamp.counts.half_plane_friction_ph;
         }
-        if(auto* friction = dynamic_cast<SimplexFrictionalContact*>(reporter))
+        return stamp.counts.simplex_normal_pt;
+    };
+
+    for(const auto& source : contact_source_catalog.entries)
+    {
+        if(!source.known)
         {
-            register_view(SocuContactSourceFamily::SimplexFrictionPT,
-                          friction->PTs(),
-                          stamp.counts.simplex_friction_pt);
-            register_view(SocuContactSourceFamily::SimplexFrictionEE,
-                          friction->EEs(),
-                          stamp.counts.simplex_friction_ee);
-            register_view(SocuContactSourceFamily::SimplexFrictionPE,
-                          friction->PEs(),
-                          stamp.counts.simplex_friction_pe);
-            register_view(SocuContactSourceFamily::SimplexFrictionPP,
-                          friction->PPs(),
-                          stamp.counts.simplex_friction_pp);
-            continue;
-        }
-        if(auto* normal = dynamic_cast<VertexHalfPlaneNormalContact*>(reporter))
-        {
-            register_view(SocuContactSourceFamily::HalfPlaneNormalPH,
-                          normal->PHs(),
-                          stamp.counts.half_plane_normal_ph);
-            continue;
-        }
-        if(auto* friction = dynamic_cast<VertexHalfPlaneFrictionalContact*>(reporter))
-        {
-            register_view(SocuContactSourceFamily::HalfPlaneFrictionPH,
-                          friction->PHs(),
-                          stamp.counts.half_plane_friction_ph);
+            socu_contact_topology_mix_unknown_source(
+                stamp,
+                source.reporter_id,
+                static_cast<SizeT>(source.source_id),
+                source.unknown_hessian_count);
             continue;
         }
 
-        GradientHessianExtentInfo extent_info;
-        extent_info.m_gradient_only = false;
-        reporter->report_gradient_hessian_extent(extent_info);
-        socu_contact_topology_mix_unknown_source(stamp,
-                                                 current_reporter_id,
-                                                 source_id++,
-                                                 extent_info.m_hessian_count);
+        auto& count = count_for(source.topology_family);
+        count += source.contact_count;
+        visit_contact_source_stencil(source,
+                                     [&](auto view)
+                                     {
+                                         socu_contact_topology_mix_view(
+                                             stamp,
+                                             contact_topology_hash_workspace,
+                                             stream,
+                                             source.reporter_id,
+                                             static_cast<SizeT>(source.source_id),
+                                             source.topology_family,
+                                             view);
+                                     });
     }
 
-    socu_contact_topology_finalize_metadata(stamp, reporter_id);
+    socu_contact_topology_finalize_metadata(stamp,
+                                            contact_source_catalog.reporter_count);
 
     if(stamp.source_count != 0)
     {

@@ -69,8 +69,10 @@ The ordering must be identical for:
 - triplet compatibility evaluator entries;
 - direct compare reference entries.
 
-Until there is one shared source enumeration helper, source-scan and contract
-tests must guard each repeated enumeration site.
+The shared host helper `collect_socu_contact_source_catalog` is the source of
+truth for current plan input, topology stamp, direct source, direct-compare
+reference, and `triplet_compat` reference ordering. Source-scan tests must
+reject new per-consumer source id counters.
 
 ## Header And Build Rules
 
