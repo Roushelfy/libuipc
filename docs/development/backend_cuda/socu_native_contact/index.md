@@ -21,12 +21,12 @@ Open blockers before M8 cutover:
 
 - Direct evaluator and executor implementation is still header-heavy.
 - Direct production source-scan isolation needs stronger structural checks.
+- The M6.7 unsupported-direct-program guard uses a host readback before scatter;
+  M8 must remove it from the peak direct path or record measured acceptance.
 - Contact source enumeration is repeated in builder, topology stamp, direct
   sources, and triplet compatibility sources.
 - Performance gates do not yet have the required repeated median table,
   baseline artifact, and cold/cache-hit/topology-churn split.
-- `hybrid` must be implemented as explicit counted fallback instead of an
-  uncounted alias for `direct`.
 - `fixed_mapping_epoch` and `vertex_projection_epoch` producer ownership must be
   documented and tested.
 - Direct evaluator parity still needs PT/EE/PE/PP/PH unit fixtures.
@@ -47,6 +47,10 @@ Local validation snapshot, 2026-05-14:
 - `native_contact_scalar_diag_compat` now has a builder contract proving that
   `Diag` fallback emits `DiagScalarFem` and `DiagScalarAbd`, not only key/report
   fields.
+- `hybrid` now has a low-level unsupported-source contract: direct evaluation
+  emits per-program unsupported flags, `direct`/`direct_compare` reject them,
+  and `hybrid` replaces unsupported program Hessians through a counted triplet
+  fallback path.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 

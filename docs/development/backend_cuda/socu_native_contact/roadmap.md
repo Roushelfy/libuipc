@@ -43,13 +43,14 @@ Non-negotiable rules:
   lane fixture using nontrivial `ABDJacobi::x_bar()` weights.
 - [x] Close the scalar diag compatibility behavior contract with a real builder
   fixture that emits `DiagScalarFem` and `DiagScalarAbd`.
+- [x] Close the hybrid fallback accounting contract with unsupported direct
+  source flags, direct-mode rejection, and counted per-program triplet fallback.
 - [ ] Capture a fresh 3-run Wrecking Ball direct/direct_compare/triplet table.
 
 Contract-closure blockers:
 
 | Blocker | Why It Blocks Cutover | Required Gate |
 | --- | --- | --- |
-| Hybrid fallback accounting | `hybrid` must not be an uncounted alias for `direct` | Unsupported direct fixture increments unsupported/fallback counters in `hybrid`; `direct` rejects or reports an error |
 | Cache-key producer epochs | Mapping and ABD projection changes must not reuse stale plans | Producer contract documents whether descriptor epoch covers mapping/projection; otherwise nonzero epoch changes rebuild both layers |
 | Direct evaluator per-family parity | Scene gates do not isolate PT/EE/PE/PP/PH formula bugs | Unit fixtures compare direct vs triplet/CPU oracle for PT, EE, PE, PP, and PH |
 | Shared source catalog | Repeated source ordering can drift across builder/direct/triplet/topology | Source catalog contract proves all consumers share one enumeration order |
@@ -60,12 +61,14 @@ Closed M6.7 contract items:
 | --- | --- |
 | Builder-generated ABD projection lanes | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` checks builder output lanes for `component = q < 3 ? q : (q - 3) / 3` and `weight = q < 3 ? 1 : x_bar((q - 3) % 3)` |
 | Scalar diagonal compatibility behavior | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility"` proves `native_contact_scalar_diag_compat` changes emitted tasks to `DiagScalarFem` and `DiagScalarAbd` |
+| Hybrid fallback accounting | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources"` proves unsupported direct source detection and fallback Hessian replacement |
 
 Acceptance gates:
 
 - Contract binary passes `[cuda_mixed_socu][contract]`.
 - Source-scan tests prove direct production replay is isolated from reporter
-  triplet assembly except in diagnostic `direct_compare`.
+  triplet assembly except in diagnostic `direct_compare` and counted `hybrid`
+  fallback.
 - Report analyzer rejects direct production reports that still spend time in
   `native_contact_hessian_triplet_ms`.
 - Report analyzer rejects direct production reports with nonzero direct
@@ -92,6 +95,8 @@ Acceptance gates:
 
 - [ ] Isolate heavy direct evaluator and executor implementation from broad
   headers or record measured compile-resource acceptance.
+- [ ] Remove the M6.7 unsupported-program host readback from the production
+  direct path, or record measured acceptance if it remains as a safety guard.
 - [ ] Add native-only build graph checks for `compile_commands.json`,
   `build.ninja`, or dry-run Ninja output.
 - [ ] Prove direct native replay is faster than `triplet_compat` and the frozen
@@ -135,6 +140,7 @@ Acceptance gates:
 | Report direct strict | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct --require-no-triplets --require-no-direct-fallbacks --format markdown` | Native direct reports have no unsupported or fallback programs |
 | ABD projection builder contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` | Real builder output ABD lanes match legacy projection components and weights |
 | Scalar diag builder contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility"` | Real builder output emits `DiagScalarFem` and `DiagScalarAbd` when compat is enabled |
+| Hybrid fallback direct contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources"` | Unsupported direct sources are flagged and can be replaced by fallback Hessians |
 
 ## Planned Gates
 
@@ -143,7 +149,6 @@ Acceptance gates:
 | Scene direct | `uv run --project python python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode scene --scene-evaluator direct --output <run-dir>` | Requires local CUDA build, Python env vars, and Wrecking Ball assets |
 | Scene direct compare | `uv run --project python python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode scene --scene-evaluator direct_compare --output <run-dir>` | Requires local CUDA build, Python env vars, and Wrecking Ball assets |
 | Build graph isolation | `uv run --no-project python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode build-graph` | Build graph scanner not implemented yet |
-| Hybrid fallback counter contract | Future Catch test in `[cuda_mixed_socu][contract]` | Needs unsupported direct source fixture |
 | Direct per-family parity | Future Catch tests or CUDA fixtures | Needs PT/EE/PE/PP/PH direct-vs-oracle fixtures |
 | Source catalog consistency | Future Catch/source-scan test | Needs shared source catalog helper |
 | Fused direct eval+scatter | Future benchmark command | Fused kernels are not implemented |

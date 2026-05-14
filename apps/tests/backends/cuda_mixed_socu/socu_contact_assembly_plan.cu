@@ -1816,11 +1816,15 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(dytopo.find("launch_socu_contact_direct_evaluate_programs")
           != std::string::npos);
+    CHECK(dytopo.find("launch_socu_contact_replace_direct_unsupported_programs")
+          != std::string::npos);
     CHECK(dytopo.find("launch_socu_contact_compare_direct_triplet_programs")
           != std::string::npos);
     CHECK(dytopo.find("SocuContactPrecomputedHessianEvaluator<StoreScalar>")
           != std::string::npos);
     CHECK(dytopo.find("record_native_contact_direct_compare_error")
+          != std::string::npos);
+    CHECK(dytopo.find("record_native_contact_direct_support_counts")
           != std::string::npos);
     CHECK(dytopo.find("direct_compare_not_implemented")
           == std::string::npos);
@@ -1849,11 +1853,14 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
         dytopo.find("if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)");
     const auto direct_compare_triplet_timer = dytopo.find(
         "Assemble Contact Hessian Triplets For SOCU Native Direct Compare");
+    const auto hybrid_fallback_timer = dytopo.find(
+        "Assemble Contact Hessian Triplets For SOCU Native Hybrid Fallback");
     REQUIRE(direct_branch_marker != std::string::npos);
     REQUIRE(direct_branch_end != std::string::npos);
     REQUIRE(triplet_compat_marker != std::string::npos);
     REQUIRE(direct_compare_guard != std::string::npos);
     REQUIRE(direct_compare_triplet_timer != std::string::npos);
+    REQUIRE(hybrid_fallback_timer != std::string::npos);
     CHECK(direct_branch_end < triplet_compat_marker);
     CHECK(direct_compare_guard < direct_compare_triplet_timer);
     CHECK(count_occurrences(dytopo, "reporter->assemble(hessian_info)") == 2);
@@ -1864,17 +1871,30 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           == 1);
     const auto direct_branch_triplet_assemble =
         direct_branch.find("reporter->assemble(hessian_info)");
+    const auto hybrid_fallback_guard =
+        direct_branch.find("if(evaluator_path == SocuContactEvaluatorPath::Hybrid");
+    const auto direct_compare_reference_call = direct_branch.find(
+        "compare_triplet_ms = assemble_triplet_reference_sources");
+    const auto hybrid_fallback_reference_call = direct_branch.find(
+        "compare_triplet_ms += assemble_triplet_reference_sources");
+    const auto hybrid_fallback_launch = direct_branch.find(
+        "launch_socu_contact_replace_direct_unsupported_programs");
     const auto direct_eval_launch =
         direct_branch.find("launch_socu_contact_direct_evaluate_programs");
     REQUIRE(direct_branch_triplet_assemble != std::string::npos);
+    REQUIRE(hybrid_fallback_guard != std::string::npos);
+    REQUIRE(direct_compare_reference_call != std::string::npos);
+    REQUIRE(hybrid_fallback_reference_call != std::string::npos);
+    REQUIRE(hybrid_fallback_launch != std::string::npos);
     REQUIRE(direct_eval_launch != std::string::npos);
     CHECK(direct_branch.find(
               "if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)")
-          < direct_branch_triplet_assemble);
-    CHECK(direct_branch.find(
-              "Assemble Contact Hessian Triplets For SOCU Native Direct Compare")
-          < direct_branch_triplet_assemble);
-    CHECK(direct_branch_triplet_assemble < direct_eval_launch);
+          < direct_compare_reference_call);
+    CHECK(direct_branch_triplet_assemble < direct_compare_reference_call);
+    CHECK(direct_compare_reference_call < direct_eval_launch);
+    CHECK(direct_eval_launch < hybrid_fallback_guard);
+    CHECK(hybrid_fallback_guard < hybrid_fallback_reference_call);
+    CHECK(hybrid_fallback_reference_call < hybrid_fallback_launch);
     CHECK(count_occurrences(dytopo,
                             "structured_info.set_native_vertex_descriptors(")
           >= 2);

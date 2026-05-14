@@ -884,12 +884,18 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 compare_evaluator_sources;
             SocuContactEvaluatorSourceTable<StoreScalar> compare_sources;
             double compare_triplet_ms = 0.0;
-            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            auto assemble_triplet_reference_sources =
+                [&](const char* timer_name,
+                    const char* start_operation,
+                    const char* done_operation,
+                    const char* sync_operation,
+                    const char* elapsed_operation,
+                    const char* unsupported_operation) -> double
             {
                 check_native_contact_cuda(
                     cudaEventRecord(timing_events.hessian_start,
                                     structured_info.stream()),
-                    "cudaEventRecord(compare_triplet_start)");
+                    start_operation);
 
                 auto vertex_count = global_vertex_manager->positions().size();
                 auto reporter_gradient_counts =
@@ -945,25 +951,23 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                         collected_dytopo_effect_hessian.view().subview(h_offset,
                                                                        h_count);
 
-                    Timer timer{
-                        "Assemble Contact Hessian Triplets For SOCU Native Direct Compare"};
+                    Timer timer{timer_name};
                     reporter->assemble(hessian_info);
                 }
 
                 check_native_contact_cuda(
                     cudaEventRecord(timing_events.hessian_done,
                                     structured_info.stream()),
-                    "cudaEventRecord(compare_triplet_done)");
+                    done_operation);
                 check_native_contact_cuda(
                     cudaEventSynchronize(timing_events.hessian_done),
-                    "native contact direct compare triplet synchronize");
-                float compare_triplet_ms_f = 0.0f;
+                    sync_operation);
+                float triplet_ms_f = 0.0f;
                 check_native_contact_cuda(
-                    cudaEventElapsedTime(&compare_triplet_ms_f,
+                    cudaEventElapsedTime(&triplet_ms_f,
                                          timing_events.hessian_start,
                                          timing_events.hessian_done),
-                    "cudaEventElapsedTime(compare_triplet)");
-                compare_triplet_ms = static_cast<double>(compare_triplet_ms_f);
+                    elapsed_operation);
 
                 std::vector<SocuContactEvaluatorSourceEntry<StoreScalar>>
                     evaluator_sources_host;
@@ -1045,8 +1049,8 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                     }
 
                     throw SimSystemException{fmt::format(
-                        "socu_native_contact_direct_compare_unsupported_reporter: "
-                        "reporter '{}' does not expose triplet reference views",
+                        "{}: reporter '{}' does not expose triplet reference views",
+                        unsupported_operation,
                         reporter->name())};
                 }
 
@@ -1056,6 +1060,19 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                         evaluator_sources_host.data());
                 compare_sources.source_entries =
                     compare_evaluator_sources.view().as_const();
+
+                return static_cast<double>(triplet_ms_f);
+            };
+
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            {
+                compare_triplet_ms = assemble_triplet_reference_sources(
+                    "Assemble Contact Hessian Triplets For SOCU Native Direct Compare",
+                    "cudaEventRecord(compare_triplet_start)",
+                    "cudaEventRecord(compare_triplet_done)",
+                    "native contact direct compare triplet synchronize",
+                    "cudaEventElapsedTime(compare_triplet)",
+                    "socu_native_contact_direct_compare_unsupported_reporter");
             }
 
             check_native_contact_cuda(
@@ -1064,11 +1081,14 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 "cudaEventRecord(direct_eval_start)");
             muda::DeviceBuffer<SocuDeterministicContactHessian<StoreScalar>>
                 direct_hessians;
+            muda::DeviceBuffer<IndexT> direct_unsupported_program_flags;
             direct_hessians.resize(plan_view.programs.size());
+            direct_unsupported_program_flags.resize(plan_view.programs.size());
             launch_socu_contact_direct_evaluate_programs<StoreScalar>(
                 plan_view,
                 direct_evaluator,
                 direct_hessians.view(),
+                direct_unsupported_program_flags.view(),
                 structured_info.stream());
             check_native_contact_cuda(cudaGetLastError(),
                                       "native contact direct eval launch");
@@ -1076,6 +1096,41 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 cudaEventRecord(timing_events.hessian_done,
                                 structured_info.stream()),
                 "cudaEventRecord(direct_eval_done)");
+            check_native_contact_cuda(
+                cudaEventSynchronize(timing_events.hessian_done),
+                "native contact direct eval synchronize");
+
+            float direct_eval_ms = 0.0f;
+            check_native_contact_cuda(
+                cudaEventElapsedTime(&direct_eval_ms,
+                                     timing_events.hessian_start,
+                                     timing_events.hessian_done),
+                "cudaEventElapsedTime(direct_eval)");
+
+            SizeT direct_unsupported_program_count = 0;
+            std::vector<IndexT> direct_unsupported_program_flags_host;
+            direct_unsupported_program_flags.copy_to(
+                direct_unsupported_program_flags_host);
+            for(const auto flag : direct_unsupported_program_flags_host)
+            {
+                if(flag != IndexT{0})
+                    ++direct_unsupported_program_count;
+            }
+
+            if(direct_unsupported_program_count != 0
+               && evaluator_path != SocuContactEvaluatorPath::Hybrid)
+            {
+                structured_info.record_native_contact_direct_support_counts(
+                    direct_unsupported_program_count,
+                    SizeT{0});
+                throw SimSystemException{fmt::format(
+                    "socu_native_contact_direct_unsupported_program: direct "
+                    "evaluator could not evaluate {} of {} native contact "
+                    "programs; use native_contact_evaluator=hybrid for "
+                    "triplet fallback",
+                    direct_unsupported_program_count,
+                    plan_view.programs.size())};
+            }
 
             double direct_compare_ms = 0.0;
             double direct_compare_max_abs_error = 0.0;
@@ -1133,6 +1188,44 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 }
             }
 
+            SizeT direct_fallback_program_count = 0;
+            if(evaluator_path == SocuContactEvaluatorPath::Hybrid
+               && direct_unsupported_program_count != 0)
+            {
+                compare_triplet_ms += assemble_triplet_reference_sources(
+                    "Assemble Contact Hessian Triplets For SOCU Native Hybrid Fallback",
+                    "cudaEventRecord(hybrid_triplet_start)",
+                    "cudaEventRecord(hybrid_triplet_done)",
+                    "native contact hybrid triplet synchronize",
+                    "cudaEventElapsedTime(hybrid_triplet)",
+                    "socu_native_contact_hybrid_unsupported_reporter");
+
+                const SocuContactTripletEvaluator<StoreScalar> reference_evaluator{
+                    plan_view,
+                    compare_sources};
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.compare_start,
+                                    structured_info.stream()),
+                    "cudaEventRecord(hybrid_fallback_start)");
+                launch_socu_contact_replace_direct_unsupported_programs<
+                    StoreScalar>(
+                    plan_view,
+                    direct_hessians.view(),
+                    direct_unsupported_program_flags.view().as_const(),
+                    reference_evaluator,
+                    structured_info.stream());
+                check_native_contact_cuda(cudaGetLastError(),
+                                          "native contact hybrid fallback launch");
+                check_native_contact_cuda(
+                    cudaEventRecord(timing_events.compare_done,
+                                    structured_info.stream()),
+                    "cudaEventRecord(hybrid_fallback_done)");
+                check_native_contact_cuda(
+                    cudaEventSynchronize(timing_events.compare_done),
+                    "native contact hybrid fallback synchronize");
+                direct_fallback_program_count = direct_unsupported_program_count;
+            }
+
             check_native_contact_cuda(
                 cudaEventRecord(timing_events.executor_start,
                                 structured_info.stream()),
@@ -1175,14 +1268,8 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                 cudaEventSynchronize(timing_events.hot_reduce_done),
                 "native contact executor synchronize");
 
-            float direct_eval_ms = 0.0f;
             float executor_ms = 0.0f;
             float hot_reduce_ms = 0.0f;
-            check_native_contact_cuda(
-                cudaEventElapsedTime(&direct_eval_ms,
-                                     timing_events.hessian_start,
-                                     timing_events.hessian_done),
-                "cudaEventElapsedTime(direct_eval)");
             check_native_contact_cuda(
                 cudaEventElapsedTime(&executor_ms,
                                      timing_events.executor_start,
@@ -1196,10 +1283,14 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
             const auto end = std::chrono::steady_clock::now();
             structured_info.record_native_contact_direct_eval_time_ms(
                 static_cast<double>(direct_eval_ms));
-            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare
+               || direct_fallback_program_count != 0)
             {
                 structured_info.record_native_contact_hessian_triplet_time_ms(
                     compare_triplet_ms);
+            }
+            if(evaluator_path == SocuContactEvaluatorPath::DirectCompare)
+            {
                 structured_info.record_native_contact_direct_compare_time_ms(
                     direct_compare_ms);
                 structured_info.record_native_contact_direct_compare_error(
@@ -1207,6 +1298,9 @@ void GlobalDyTopoEffectManager::Impl::assemble_structured_hessian(
                     direct_compare_sum_abs_error,
                     direct_compare_mismatch_count);
             }
+            structured_info.record_native_contact_direct_support_counts(
+                direct_unsupported_program_count,
+                direct_fallback_program_count);
             structured_info.record_native_contact_executor_scatter_time_ms(
                 static_cast<double>(executor_ms));
             structured_info.record_native_contact_hot_reduce_time_ms(

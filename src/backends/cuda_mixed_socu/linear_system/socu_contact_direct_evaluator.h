@@ -92,6 +92,17 @@ struct SocuContactDirectEvaluator
     SocuContactDirectSceneView<StoreT> scene;
     SocuContactDirectSourceTable sources;
 
+    MUDA_DEVICE bool supports_program(
+        const SocuContactProgramHeader& program) const noexcept
+    {
+        const auto source = sources.source_for(program);
+        return source.source_id != SocuInvalidContactSourceId
+               && source.stencil_size == program.stencil_size
+               && program.local_contact_id >= 0
+               && static_cast<SizeT>(program.local_contact_id)
+                      < static_cast<SizeT>(source.contact_count);
+    }
+
     MUDA_DEVICE SocuDeterministicContactHessian<StoreT> operator()(
         SizeT,
         const SocuContactProgramHeader& program) const noexcept
@@ -653,7 +664,8 @@ template <typename StoreT, typename EvaluatorT>
 __global__ void socu_contact_direct_evaluate_programs_kernel(
     SocuContactAssemblyPlanView plan,
     EvaluatorT evaluator,
-    muda::BufferView<SocuDeterministicContactHessian<StoreT>> hessians)
+    muda::BufferView<SocuDeterministicContactHessian<StoreT>> hessians,
+    muda::BufferView<IndexT> unsupported_program_flags)
 {
     const SizeT program_id =
         static_cast<SizeT>(blockIdx.x) * static_cast<SizeT>(blockDim.x)
@@ -661,6 +673,11 @@ __global__ void socu_contact_direct_evaluate_programs_kernel(
     if(program_id >= plan.programs.size() || program_id >= hessians.size())
         return;
     const auto program = plan.programs.data()[program_id];
+    const bool supported = evaluator.supports_program(program);
+    if(unsupported_program_flags.data() != nullptr
+       && program_id < unsupported_program_flags.size())
+        unsupported_program_flags.data()[program_id] =
+            supported ? IndexT{0} : IndexT{1};
     hessians.data()[program_id] = evaluator(program_id, program);
 }
 
@@ -669,6 +686,7 @@ void launch_socu_contact_direct_evaluate_programs(
     SocuContactAssemblyPlanView plan,
     EvaluatorT evaluator,
     muda::BufferView<SocuDeterministicContactHessian<StoreT>> hessians,
+    muda::BufferView<IndexT> unsupported_program_flags = {},
     cudaStream_t stream = cudaStreamLegacy)
 {
     if(plan.programs.size() == 0 || hessians.size() == 0)
@@ -684,7 +702,61 @@ void launch_socu_contact_direct_evaluate_programs(
         <<<grid_dim, block_dim, 0, socu_contact_executor_stream(stream)>>>(
             plan,
             evaluator,
-            hessians);
+            hessians,
+            unsupported_program_flags);
+}
+
+template <typename StoreT, typename ReferenceEvaluatorT>
+__global__ void socu_contact_replace_direct_unsupported_programs_kernel(
+    SocuContactAssemblyPlanView plan,
+    muda::BufferView<SocuDeterministicContactHessian<StoreT>> hessians,
+    muda::CBufferView<IndexT> unsupported_program_flags,
+    ReferenceEvaluatorT reference_evaluator)
+{
+    const SizeT program_id =
+        static_cast<SizeT>(blockIdx.x) * static_cast<SizeT>(blockDim.x)
+        + static_cast<SizeT>(threadIdx.x);
+    if(program_id >= plan.programs.size() || program_id >= hessians.size()
+       || program_id >= unsupported_program_flags.size())
+        return;
+    if(unsupported_program_flags.data()[program_id] == IndexT{0})
+        return;
+
+    const auto program = plan.programs.data()[program_id];
+    hessians.data()[program_id] = reference_evaluator(program_id, program);
+}
+
+template <typename StoreT, typename ReferenceEvaluatorT>
+void launch_socu_contact_replace_direct_unsupported_programs(
+    SocuContactAssemblyPlanView plan,
+    muda::BufferView<SocuDeterministicContactHessian<StoreT>> hessians,
+    muda::CBufferView<IndexT> unsupported_program_flags,
+    ReferenceEvaluatorT reference_evaluator,
+    cudaStream_t stream = cudaStreamLegacy)
+{
+    if(plan.programs.size() == 0 || hessians.size() == 0
+       || unsupported_program_flags.size() == 0)
+        return;
+
+    constexpr unsigned int block_dim = 128;
+    const SizeT count =
+        plan.programs.size() < hessians.size()
+            ? (plan.programs.size() < unsupported_program_flags.size()
+                   ? plan.programs.size()
+                   : unsupported_program_flags.size())
+            : (hessians.size() < unsupported_program_flags.size()
+                   ? hessians.size()
+                   : unsupported_program_flags.size());
+    const unsigned int grid_dim =
+        static_cast<unsigned int>((count + block_dim - 1) / block_dim);
+    socu_contact_replace_direct_unsupported_programs_kernel<
+        StoreT,
+        ReferenceEvaluatorT>
+        <<<grid_dim, block_dim, 0, socu_contact_executor_stream(stream)>>>(
+            plan,
+            hessians,
+            unsupported_program_flags,
+            reference_evaluator);
 }
 
 template <typename StoreT, typename ReferenceEvaluatorT>

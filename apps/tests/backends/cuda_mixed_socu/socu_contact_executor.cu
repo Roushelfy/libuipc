@@ -1,4 +1,5 @@
 #include <app/app.h>
+#include <linear_system/socu_contact_direct_evaluator.h>
 #include <linear_system/socu_contact_executor.h>
 #include <mixed_precision/policy.h>
 
@@ -828,6 +829,70 @@ TEST_CASE("cuda_mixed_socu_contact_executor_empty_buckets_are_noop",
     CHECK(counter_value(result.executor_counters,
                         SocuContactExecutorCounterSlot::ProgramVisit)
           == 0);
+}
+
+TEST_CASE("cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources",
+          "[cuda_mixed_socu][contract][socu_approx][m67]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact direct evaluator tests");
+
+    using Store = ActivePolicy::StoreScalar;
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_executor_plan({Vector2i{1, 2}},
+                                    {},
+                                    {},
+                                    StructuredContactOffbandPolicy::Drop,
+                                    workspace);
+    const auto plan_view = socu_contact_assembly_plan_view(plan);
+    REQUIRE(plan_view.programs.size() == 1);
+
+    SocuContactDirectSourceTable direct_sources;
+    SocuContactDirectEvaluator<Store> direct_evaluator{
+        plan_view,
+        SocuContactDirectSceneView<Store>{},
+        direct_sources};
+
+    muda::DeviceBuffer<SocuDeterministicContactHessian<Store>> hessians;
+    muda::DeviceBuffer<IndexT> unsupported_flags;
+    hessians.resize(plan_view.programs.size());
+    unsupported_flags.resize(plan_view.programs.size());
+
+    launch_socu_contact_direct_evaluate_programs<Store>(
+        plan_view,
+        direct_evaluator,
+        hessians.view(),
+        unsupported_flags.view());
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<IndexT> flags;
+    std::vector<SocuDeterministicContactHessian<Store>> direct_host;
+    unsupported_flags.copy_to(flags);
+    hessians.copy_to(direct_host);
+    REQUIRE(flags.size() == 1);
+    REQUIRE(direct_host.size() == 1);
+    CHECK(flags[0] == IndexT{1});
+    CHECK(static_cast<double>(direct_host[0](0, 0))
+          == Catch::Approx(0.0).margin(0.0));
+
+    launch_socu_contact_replace_direct_unsupported_programs<Store>(
+        plan_view,
+        hessians.view(),
+        unsupported_flags.view().as_const(),
+        SocuDeterministicContactEvaluator<Store>{});
+    REQUIRE(cudaGetLastError() == cudaSuccess);
+    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+
+    std::vector<SocuContactProgramHeader> programs;
+    std::vector<SocuDeterministicContactHessian<Store>> fallback_host;
+    plan.program_plan.programs.copy_to(programs);
+    hessians.copy_to(fallback_host);
+    REQUIRE(programs.size() == 1);
+    REQUIRE(fallback_host.size() == 1);
+    CHECK(fallback_host[0].stencil_size == programs[0].stencil_size);
+    CHECK(static_cast<double>(fallback_host[0](0, 0)) != 0.0);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_executor_source_isolation",

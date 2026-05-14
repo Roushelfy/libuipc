@@ -2090,6 +2090,10 @@ void SocuApproxSolver::finalize_structured_chain(
         info.native_contact_direct_compare_sum_abs_error();
     m_report.native_contact_direct_compare_mismatch_count =
         info.native_contact_direct_compare_mismatch_count();
+    m_report.native_contact_direct_unsupported_program_count =
+        info.native_contact_direct_unsupported_program_count();
+    m_report.native_contact_direct_fallback_program_count =
+        info.native_contact_direct_fallback_program_count();
     m_report.native_contact_executor_scatter_ms =
         info.native_contact_executor_scatter_time_ms();
     m_report.native_contact_hot_reduce_ms =

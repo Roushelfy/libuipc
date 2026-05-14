@@ -290,6 +290,14 @@ class GlobalLinearSystem : public SimSystem
         {
             return m_native_contact_direct_compare_mismatch_count;
         }
+        SizeT native_contact_direct_unsupported_program_count() const noexcept
+        {
+            return m_native_contact_direct_unsupported_program_count;
+        }
+        SizeT native_contact_direct_fallback_program_count() const noexcept
+        {
+            return m_native_contact_direct_fallback_program_count;
+        }
         double native_contact_executor_scatter_time_ms() const noexcept
         {
             return m_native_contact_executor_scatter_time_ms;
@@ -557,6 +565,15 @@ class GlobalLinearSystem : public SimSystem
         {
             m_native_contact_hot_reduce_time_ms += elapsed_ms;
         }
+        void record_native_contact_direct_support_counts(
+            SizeT unsupported_program_count,
+            SizeT fallback_program_count) noexcept
+        {
+            m_native_contact_direct_unsupported_program_count +=
+                unsupported_program_count;
+            m_native_contact_direct_fallback_program_count +=
+                fallback_program_count;
+        }
         void set_native_contact_replay_path(std::string path)
         {
             m_native_contact_replay_path = std::move(path);
@@ -636,6 +653,8 @@ class GlobalLinearSystem : public SimSystem
         double                     m_native_contact_direct_compare_max_abs_error = 0.0;
         double                     m_native_contact_direct_compare_sum_abs_error = 0.0;
         SizeT                      m_native_contact_direct_compare_mismatch_count = 0;
+        SizeT                      m_native_contact_direct_unsupported_program_count = 0;
+        SizeT                      m_native_contact_direct_fallback_program_count = 0;
         double                     m_native_contact_executor_scatter_time_ms =
             0.0;
         double                     m_native_contact_hot_reduce_time_ms = 0.0;

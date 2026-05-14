@@ -128,9 +128,10 @@ not a production performance path.
 
 `hybrid` is reserved for an explicit fallback policy: direct-capable programs
 use direct evaluation, unsupported programs fall back to a counted compatibility
-path, and reports update unsupported/fallback counters. Until that behavior is
-implemented and tested, `hybrid` must not be treated as a performance-equivalent
-alias for `direct`.
+path, and reports update unsupported/fallback counters. The current M6.7
+contract covers unsupported direct source detection plus per-program replacement
+with a triplet reference Hessian; `hybrid` is still a compatibility mode, not a
+performance-equivalent alias for `direct`.
 
 ## Executor
 

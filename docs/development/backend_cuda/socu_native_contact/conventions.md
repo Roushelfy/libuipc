@@ -7,7 +7,8 @@ or benchmark scripts.
 
 1. Direct production replay must not call `reporter->assemble(hessian_info)`.
    Reporter triplet assembly is allowed only in `triplet_compat` and
-   `direct_compare`.
+   diagnostic/compatibility modes such as `direct_compare` and counted `hybrid`
+   fallback.
 2. Native contact executor hot paths must not include or call
    `structured_contact_assembly_sink.h`, legacy target-table builders,
    `old_to_chain`, or `classify_dof_pair`.
