@@ -1592,6 +1592,8 @@ void GlobalDyTopoEffectManager::Impl::
     input.side_key = side_key;
     input.program_key = program_key;
     input.vertex_descriptors = vertex_descriptors;
+    if(affine_body_dynamics)
+        input.abd_vertex_to_J = affine_body_dynamics->Js();
     input.offband_policy = offband_policy;
     input.side_coverage_mode = coverage_mode;
     input.build_hot_block_plan = build_hot_block_plan;

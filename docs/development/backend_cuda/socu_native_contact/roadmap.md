@@ -39,18 +39,25 @@ Non-negotiable rules:
   vcpkg, explicit CUDA compiler, and uv Python venv.
 - [x] Run the source-scan gate on the local build artifact.
 - [x] Make the full contract gate green on the local build artifact.
+- [x] Close the builder-generated ABD projection contract with a real builder
+  lane fixture using nontrivial `ABDJacobi::x_bar()` weights.
 - [ ] Capture a fresh 3-run Wrecking Ball direct/direct_compare/triplet table.
 
 Contract-closure blockers:
 
 | Blocker | Why It Blocks Cutover | Required Gate |
 | --- | --- | --- |
-| Builder-generated ABD projection lanes | ABD lanes must encode legacy `J^T H J`; hand-written writer plans do not prove builder output | Builder contract checks `component = q < 3 ? q : (q - 3) / 3` and `weight = q < 3 ? 1 : x_bar((q - 3) % 3)` |
 | Scalar diagonal compatibility behavior | `native_contact_scalar_diag_compat` must change emitted tasks, not only key/report fields | Builder contract proves `DiagScalarFem` and `DiagScalarAbd` are emitted when the flag is enabled |
 | Hybrid fallback accounting | `hybrid` must not be an uncounted alias for `direct` | Unsupported direct fixture increments unsupported/fallback counters in `hybrid`; `direct` rejects or reports an error |
 | Cache-key producer epochs | Mapping and ABD projection changes must not reuse stale plans | Producer contract documents whether descriptor epoch covers mapping/projection; otherwise nonzero epoch changes rebuild both layers |
 | Direct evaluator per-family parity | Scene gates do not isolate PT/EE/PE/PP/PH formula bugs | Unit fixtures compare direct vs triplet/CPU oracle for PT, EE, PE, PP, and PH |
 | Shared source catalog | Repeated source ordering can drift across builder/direct/triplet/topology | Source catalog contract proves all consumers share one enumeration order |
+
+Closed M6.7 contract items:
+
+| Item | Gate |
+| --- | --- |
+| Builder-generated ABD projection lanes | `uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` checks builder output lanes for `component = q < 3 ? q : (q - 3) / 3` and `weight = q < 3 ? 1 : x_bar((q - 3) % 3)` |
 
 Acceptance gates:
 
@@ -124,6 +131,7 @@ Acceptance gates:
 | Report direct | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct --require-no-triplets --format markdown` | Native direct reports have no triplet timing |
 | Report compare | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct_compare --require-direct-compare-zero --format markdown` | Direct compare mismatch count is zero |
 | Report direct strict | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct --require-no-triplets --require-no-direct-fallbacks --format markdown` | Native direct reports have no unsupported or fallback programs |
+| ABD projection builder contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` | Real builder output ABD lanes match legacy projection components and weights |
 
 ## Planned Gates
 
@@ -132,7 +140,6 @@ Acceptance gates:
 | Scene direct | `uv run --project python python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode scene --scene-evaluator direct --output <run-dir>` | Requires local CUDA build, Python env vars, and Wrecking Ball assets |
 | Scene direct compare | `uv run --project python python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode scene --scene-evaluator direct_compare --output <run-dir>` | Requires local CUDA build, Python env vars, and Wrecking Ball assets |
 | Build graph isolation | `uv run --no-project python scripts/run_socu_native_contact_gates.py --build build/socu_native_contact --mode build-graph` | Build graph scanner not implemented yet |
-| ABD projection builder contract | Future Catch test in `[cuda_mixed_socu][contract]` | Needs builder fixture that exposes generated ABD lanes |
 | Scalar diag builder contract | Future Catch test in `[cuda_mixed_socu][contract]` | Needs builder fixture that forces diag fallback with scalar compatibility enabled |
 | Hybrid fallback counter contract | Future Catch test in `[cuda_mixed_socu][contract]` | Needs unsupported direct source fixture |
 | Direct per-family parity | Future Catch tests or CUDA fixtures | Needs PT/EE/PE/PP/PH direct-vs-oracle fixtures |

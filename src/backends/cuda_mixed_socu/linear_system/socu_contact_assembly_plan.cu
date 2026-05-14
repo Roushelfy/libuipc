@@ -39,6 +39,18 @@ MUDA_GENERIC SocuAssemblySideKind side_kind_from_native(
     }
 }
 
+MUDA_GENERIC std::uint8_t abd_projection_component(IndexT dof) noexcept
+{
+    return static_cast<std::uint8_t>(dof < 3 ? dof : (dof - 3) / 3);
+}
+
+MUDA_GENERIC Float abd_projection_weight(const ABDJacobi& J, IndexT dof) noexcept
+{
+    if(dof < 3)
+        return Float{1};
+    return static_cast<Float>(J.x_bar()((dof - 3) % 3));
+}
+
 MUDA_DEVICE SocuAssemblySideId find_side_id(
     muda::CBufferView<IndexT> sorted_side_vertices,
     muda::CBufferView<SocuAssemblySideId> vertex_to_side_id,
@@ -288,6 +300,7 @@ __global__ void materialize_sides_kernel(
     muda::CBufferView<IndexT> sorted_vertices,
     muda::CBufferView<int> lane_offsets,
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    muda::CBufferView<ABDJacobi> abd_vertex_to_J,
     muda::BufferView<SocuAssemblySideRecord> sides,
     muda::BufferView<SocuAssemblyDofLane> lanes)
 {
@@ -315,6 +328,14 @@ __global__ void materialize_sides_kernel(
                               ? static_cast<std::uint16_t>(descriptor.dof_count)
                               : std::uint16_t{0};
 
+        ABDJacobi abd_J;
+        const bool has_abd_J =
+            descriptor.kind == SocuNativeDescriptorKind::Abd
+            && descriptor.abd_j_index >= 0
+            && static_cast<SizeT>(descriptor.abd_j_index) < abd_vertex_to_J.size();
+        if(has_abd_J)
+            abd_J = abd_vertex_to_J.data()[descriptor.abd_j_index];
+
         for(IndexT lane = 0; lane < descriptor.dof_count; ++lane)
         {
             const SizeT out = static_cast<SizeT>(side.first_lane + lane);
@@ -324,8 +345,17 @@ __global__ void materialize_sides_kernel(
             dof_lane.block = static_cast<std::uint32_t>(descriptor.block);
             dof_lane.lane = static_cast<std::uint16_t>(descriptor.lane
                                                        + static_cast<SizeT>(lane));
-            dof_lane.component = static_cast<std::uint8_t>(lane);
-            dof_lane.weight = Float{1};
+            if(descriptor.kind == SocuNativeDescriptorKind::Abd)
+            {
+                dof_lane.component = abd_projection_component(lane);
+                dof_lane.weight =
+                    has_abd_J ? abd_projection_weight(abd_J, lane) : Float{0};
+            }
+            else
+            {
+                dof_lane.component = static_cast<std::uint8_t>(lane);
+                dof_lane.weight = Float{1};
+            }
             lanes.data()[out] = dof_lane;
         }
     }
@@ -1097,6 +1127,7 @@ void materialize_side_records_and_lanes(
     SocuVertexSidePlan& plan,
     SocuContactAssemblyPlanM2Workspace& workspace,
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors,
+    muda::CBufferView<ABDJacobi> abd_vertex_to_J,
     cudaStream_t stream)
 {
     const SizeT side_count = plan.sorted_side_vertices.size();
@@ -1143,6 +1174,7 @@ void materialize_side_records_and_lanes(
                       plan.sorted_side_vertices.view(),
                       workspace.scalar_offsets.view(),
                       vertex_descriptors,
+                      abd_vertex_to_J,
                       plan.sides.view(),
                       plan.lanes.view());
               });
@@ -1811,6 +1843,7 @@ void build_socu_contact_assembly_plan_m2(
                 materialize_side_records_and_lanes(plan.side_plan,
                                                    workspace,
                                                    input.vertex_descriptors,
+                                                   input.abd_vertex_to_J,
                                                    input.stream);
                 fill_side_plan_stats(plan.side_plan,
                                      SocuVertexSideCoverageMode::Global,
@@ -1901,6 +1934,7 @@ void build_socu_contact_assembly_plan_m2(
             materialize_side_records_and_lanes(plan.side_plan,
                                                workspace,
                                                input.vertex_descriptors,
+                                               input.abd_vertex_to_J,
                                                input.stream);
         }
         missing_side_fill_ms += elapsed_ms(missing_begin, Clock::now());
@@ -1934,6 +1968,7 @@ void build_socu_contact_assembly_plan_m2(
             materialize_side_records_and_lanes(plan.side_plan,
                                                workspace,
                                                input.vertex_descriptors,
+                                               input.abd_vertex_to_J,
                                                input.stream);
             fill_side_plan_stats(plan.side_plan,
                                  SocuVertexSideCoverageMode::ActiveSetTemporary,

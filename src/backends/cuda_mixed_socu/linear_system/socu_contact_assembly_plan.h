@@ -1,5 +1,6 @@
 #pragma once
 
+#include <affine_body/abd_jacobi_matrix.h>
 #include <linear_system/socu_contact_plan_types.h>
 #include <linear_system/socu_native_descriptors.h>
 #include <uipc/common/span.h>
@@ -389,6 +390,7 @@ struct SocuContactAssemblyPlanM2BuildInput
     SocuVertexSidePlanKey side_key;
     SocuContactProgramPlanKey program_key;
     muda::CBufferView<SocuNativeVertexDescriptor> vertex_descriptors;
+    muda::CBufferView<ABDJacobi> abd_vertex_to_J;
     span<const SocuContactM2SourceInput> sources;
 
     muda::CBufferView<Vector4i> pt_contacts;

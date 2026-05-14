@@ -25,8 +25,6 @@ Open blockers before M8 cutover:
   sources, and triplet compatibility sources.
 - Performance gates do not yet have the required repeated median table,
   baseline artifact, and cold/cache-hit/topology-churn split.
-- Builder-generated ABD side lanes must be proven to match legacy projection
-  weights and components.
 - `native_contact_scalar_diag_compat` must be proven to change builder task
   emission, not only key/report fields.
 - `hybrid` must be implemented as explicit counted fallback instead of an
@@ -45,6 +43,9 @@ Local validation snapshot, 2026-05-14:
 - `external/socu-native-cuda` is initialized at gitlink
   `45292fdb942b2424c26d4db327019b765754accf`; CMake reports socu_native
   integration enabled.
+- Builder-generated ABD side lanes now have a contract fixture that checks
+  legacy projection components and `ABDJacobi::x_bar()` weights from real
+  builder output.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 

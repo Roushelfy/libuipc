@@ -18,8 +18,10 @@
 namespace
 {
 using namespace uipc::backend::cuda_mixed;
+using uipc::Float;
 using uipc::IndexT;
 using uipc::SizeT;
+using uipc::Vector3;
 using uipc::Vector2i;
 using uipc::Vector3i;
 using uipc::Vector4i;
@@ -93,11 +95,37 @@ std::vector<SocuNativeVertexDescriptor> fixture_vertices()
     return vertices;
 }
 
+Vector3 fixture_abd_x_bar()
+{
+    return Vector3{Float{2}, Float{-1}, Float{0.5}};
+}
+
+std::vector<ABDJacobi> fixture_abd_jacobians()
+{
+    std::vector<ABDJacobi> jacobians(7);
+    jacobians[5] = ABDJacobi{fixture_abd_x_bar()};
+    jacobians[6] = ABDJacobi{Vector3{Float{-0.25}, Float{1.5}, Float{3}}};
+    return jacobians;
+}
+
+std::uint8_t expected_abd_component(IndexT lane) noexcept
+{
+    return static_cast<std::uint8_t>(lane < 3 ? lane : (lane - 3) / 3);
+}
+
+Float expected_abd_weight(const Vector3& x_bar, IndexT lane) noexcept
+{
+    if(lane < 3)
+        return Float{1};
+    return static_cast<Float>(x_bar((lane - 3) % 3));
+}
+
 SocuContactAssemblyPlanM2BuildInput make_input(
     const muda::DeviceBuffer<SocuNativeVertexDescriptor>& vertices,
     const muda::DeviceBuffer<Vector4i>& pts,
     const muda::DeviceBuffer<Vector2i>& phs,
-    StructuredContactOffbandPolicy policy)
+    StructuredContactOffbandPolicy policy,
+    const muda::DeviceBuffer<ABDJacobi>* jacobians = nullptr)
 {
     SocuVertexSidePlanKey side_key;
     side_key.ordering_epoch = 1;
@@ -118,6 +146,8 @@ SocuContactAssemblyPlanM2BuildInput make_input(
     input.side_key = side_key;
     input.program_key = program_key;
     input.vertex_descriptors = vertices.view();
+    if(jacobians != nullptr)
+        input.abd_vertex_to_J = jacobians->view();
     input.pt_contacts = pts.view();
     input.ph_contacts = phs.view();
     input.pt_source = SocuContactM2SourceInput{0, 10, SocuContactModelKind::SimplexNormal};
@@ -134,6 +164,7 @@ SocuContactAssemblyPlan build_plan(
     SocuContactAssemblyPlanM2Workspace& workspace)
 {
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
+    muda::DeviceBuffer<ABDJacobi> jacobians{fixture_abd_jacobians()};
     muda::DeviceBuffer<Vector4i> pts{pts_host};
     muda::DeviceBuffer<Vector2i> phs{phs_host};
 
@@ -141,7 +172,7 @@ SocuContactAssemblyPlan build_plan(
     build_socu_contact_assembly_plan_m2_active_set_temporary(
         plan,
         workspace,
-        make_input(vertices, pts, phs, policy));
+        make_input(vertices, pts, phs, policy, &jacobians));
     REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
     return plan;
 }
@@ -594,8 +625,16 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_side_table_active_set",
     CHECK(abd.writable);
     CHECK(abd.abd_body == 0);
     CHECK(abd.lane_count == 12);
-    CHECK(lanes[abd.first_lane + 11].block == 2);
-    CHECK(lanes[abd.first_lane + 11].lane == 11);
+    const auto x_bar = fixture_abd_x_bar();
+    for(IndexT lane = 0; lane < abd.lane_count; ++lane)
+    {
+        CAPTURE(lane);
+        const auto& dof_lane = lanes[abd.first_lane + static_cast<SizeT>(lane)];
+        CHECK(dof_lane.block == 2);
+        CHECK(dof_lane.lane == lane);
+        CHECK(dof_lane.component == expected_abd_component(lane));
+        CHECK(dof_lane.weight == expected_abd_weight(x_bar, lane));
+    }
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_program_map_pt_ph",
