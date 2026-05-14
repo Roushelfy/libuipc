@@ -1595,6 +1595,8 @@ void GlobalDyTopoEffectManager::Impl::
     if(affine_body_dynamics)
         input.abd_vertex_to_J = affine_body_dynamics->Js();
     input.offband_policy = offband_policy;
+    input.scalar_diag_fallback_compatibility =
+        program_key.scalar_diag_fallback_compatibility;
     input.side_coverage_mode = coverage_mode;
     input.build_hot_block_plan = build_hot_block_plan;
     input.hot_block_strategy = hot_block_strategy;

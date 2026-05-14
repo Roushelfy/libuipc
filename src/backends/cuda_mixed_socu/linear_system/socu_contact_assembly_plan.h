@@ -419,6 +419,7 @@ struct SocuContactAssemblyPlanM2BuildInput
 
     StructuredContactOffbandPolicy offband_policy =
         StructuredContactOffbandPolicy::Drop;
+    bool scalar_diag_fallback_compatibility = false;
     SocuVertexSideCoverageMode side_coverage_mode =
         SocuVertexSideCoverageMode::ActiveSetTemporary;
     bool build_hot_block_plan = false;

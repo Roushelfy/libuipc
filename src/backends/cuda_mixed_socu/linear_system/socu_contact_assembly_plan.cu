@@ -160,6 +160,14 @@ MUDA_DEVICE SocuAssemblyWriteKind diag_block_write_kind(
                : SocuAssemblyWriteKind::DiagBlockFem;
 }
 
+MUDA_DEVICE SocuAssemblyWriteKind diag_scalar_write_kind(
+    const SocuAssemblySideRecord& side) noexcept
+{
+    return side.kind == SocuAssemblySideKind::Abd
+               ? SocuAssemblyWriteKind::DiagScalarAbd
+               : SocuAssemblyWriteKind::DiagScalarFem;
+}
+
 MUDA_DEVICE SocuAssemblyWriteKind lump_write_kind(
     const SocuAssemblySideRecord& side) noexcept
 {
@@ -400,6 +408,7 @@ MUDA_DEVICE int append_diag_tasks_for_stencil(
     int                       stencil_size,
     muda::CBufferView<SocuAssemblySideRecord> sides,
     bool                      lump,
+    bool                      scalar_diag_compatibility,
     SocuContactMicroTask* local_tasks) noexcept
 {
     int task_count = 0;
@@ -417,7 +426,9 @@ MUDA_DEVICE int append_diag_tasks_for_stencil(
                                               static_cast<std::uint8_t>(local),
                                               SocuAssemblyBand::Diag,
                                               lump ? lump_write_kind(side)
-                                                   : diag_block_write_kind(side),
+                                                   : (scalar_diag_compatibility
+                                                          ? diag_scalar_write_kind(side)
+                                                          : diag_block_write_kind(side)),
                                               static_cast<std::uint32_t>(side.block),
                                               0);
     }
@@ -443,6 +454,7 @@ __global__ void emit_simplex_programs_kernel(
     bool use_vertex_to_side_id,
     muda::CBufferView<SocuAssemblySideRecord> sides,
     StructuredContactOffbandPolicy offband_policy,
+    bool scalar_diag_compatibility,
     std::uint32_t first_program,
     std::uint32_t first_source_to_program,
     SocuContactSourceId source_id,
@@ -555,6 +567,7 @@ __global__ void emit_simplex_programs_kernel(
                 StencilSize,
                 sides,
                 false,
+                scalar_diag_compatibility,
                 local_tasks);
         }
         else
@@ -565,6 +578,7 @@ __global__ void emit_simplex_programs_kernel(
                 StencilSize,
                 sides,
                 true,
+                scalar_diag_compatibility,
                 local_tasks);
         }
     }
@@ -2017,6 +2031,9 @@ void build_socu_contact_assembly_plan_m2(
 
     const bool use_vertex_to_side_id =
         requested_coverage_mode == SocuVertexSideCoverageMode::DemandFilled;
+    const bool scalar_diag_compatibility =
+        input.scalar_diag_fallback_compatibility
+        || input.program_key.scalar_diag_fallback_compatibility;
 
     auto launch_simplex4 = [&](muda::CBufferView<Vector4i> contacts,
                                const M2SourceSpec& spec)
@@ -2032,6 +2049,7 @@ void build_socu_contact_assembly_plan_m2(
                               use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
+                              scalar_diag_compatibility,
                               static_cast<std::uint32_t>(spec.first_program),
                               static_cast<std::uint32_t>(spec.first_map),
                               spec.source.source_id,
@@ -2057,6 +2075,7 @@ void build_socu_contact_assembly_plan_m2(
                               use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
+                              scalar_diag_compatibility,
                               static_cast<std::uint32_t>(spec.first_program),
                               static_cast<std::uint32_t>(spec.first_map),
                               spec.source.source_id,
@@ -2082,6 +2101,7 @@ void build_socu_contact_assembly_plan_m2(
                               use_vertex_to_side_id,
                               plan.side_plan.sides.view(),
                               input.offband_policy,
+                              scalar_diag_compatibility,
                               static_cast<std::uint32_t>(spec.first_program),
                               static_cast<std::uint32_t>(spec.first_map),
                               spec.source.source_id,

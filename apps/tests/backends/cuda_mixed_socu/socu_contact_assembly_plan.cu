@@ -125,6 +125,7 @@ SocuContactAssemblyPlanM2BuildInput make_input(
     const muda::DeviceBuffer<Vector4i>& pts,
     const muda::DeviceBuffer<Vector2i>& phs,
     StructuredContactOffbandPolicy policy,
+    bool scalar_diag_compatibility = false,
     const muda::DeviceBuffer<ABDJacobi>* jacobians = nullptr)
 {
     SocuVertexSidePlanKey side_key;
@@ -141,6 +142,7 @@ SocuContactAssemblyPlanM2BuildInput make_input(
     program_key.contact_layout_hash = 13;
     program_key.contact_content_hash = 17;
     program_key.offband_policy = policy;
+    program_key.scalar_diag_fallback_compatibility = scalar_diag_compatibility;
 
     SocuContactAssemblyPlanM2BuildInput input;
     input.side_key = side_key;
@@ -154,6 +156,7 @@ SocuContactAssemblyPlanM2BuildInput make_input(
     input.ph_source =
         SocuContactM2SourceInput{1, 11, SocuContactModelKind::VertexHalfPlaneNormal};
     input.offband_policy = policy;
+    input.scalar_diag_fallback_compatibility = scalar_diag_compatibility;
     return input;
 }
 
@@ -161,7 +164,8 @@ SocuContactAssemblyPlan build_plan(
     const std::vector<Vector4i>& pts_host,
     const std::vector<Vector2i>& phs_host,
     StructuredContactOffbandPolicy policy,
-    SocuContactAssemblyPlanM2Workspace& workspace)
+    SocuContactAssemblyPlanM2Workspace& workspace,
+    bool scalar_diag_compatibility = false)
 {
     muda::DeviceBuffer<SocuNativeVertexDescriptor> vertices{fixture_vertices()};
     muda::DeviceBuffer<ABDJacobi> jacobians{fixture_abd_jacobians()};
@@ -172,7 +176,7 @@ SocuContactAssemblyPlan build_plan(
     build_socu_contact_assembly_plan_m2_active_set_temporary(
         plan,
         workspace,
-        make_input(vertices, pts, phs, policy, &jacobians));
+        make_input(vertices, pts, phs, policy, scalar_diag_compatibility, &jacobians));
     REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
     return plan;
 }
@@ -1030,6 +1034,59 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_offband_policy",
         CHECK(tasks[programs[0].first_task].write_kind
               == SocuAssemblyWriteKind::LumpScalarFem);
     }
+}
+
+TEST_CASE("cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility",
+          "[cuda_mixed_socu][contract][socu_approx][m67]")
+{
+    if(!has_cuda_device())
+        SKIP("no CUDA device is available for SOCU contact assembly plan tests");
+
+    SocuContactAssemblyPlanM2Workspace workspace;
+    auto plan = build_plan({Vector4i{0, 5, 2, 0}},
+                           {},
+                           StructuredContactOffbandPolicy::Diag,
+                           workspace,
+                           true);
+
+    std::vector<SocuContactProgramHeader> programs;
+    std::vector<SocuContactMicroTask> tasks;
+    plan.program_plan.programs.copy_to(programs);
+    plan.program_plan.tasks.copy_to(tasks);
+    REQUIRE(programs.size() == 1);
+    CHECK(programs[0].program_kind == SocuContactProgramKind::Diag);
+    CHECK(programs[0].task_count > 0);
+    REQUIRE(static_cast<SizeT>(programs[0].first_task) + programs[0].task_count
+            <= tasks.size());
+
+    SizeT diag_scalar_fem_count = 0;
+    SizeT diag_scalar_abd_count = 0;
+    SizeT diag_block_count = 0;
+    for(SizeT i = 0; i < programs[0].task_count; ++i)
+    {
+        const auto& task = tasks[static_cast<SizeT>(programs[0].first_task) + i];
+        switch(task.write_kind)
+        {
+            case SocuAssemblyWriteKind::DiagScalarFem:
+                ++diag_scalar_fem_count;
+                break;
+            case SocuAssemblyWriteKind::DiagScalarAbd:
+                ++diag_scalar_abd_count;
+                break;
+            case SocuAssemblyWriteKind::DiagBlockFem:
+            case SocuAssemblyWriteKind::DiagBlockAbd:
+                ++diag_block_count;
+                break;
+            default:
+                break;
+        }
+    }
+
+    CHECK(diag_scalar_fem_count > 0);
+    CHECK(diag_scalar_abd_count > 0);
+    CHECK(diag_block_count == 0);
+    CHECK(plan.program_plan.last_stats.diag_scalar_task_count == programs[0].task_count);
+    CHECK(plan.program_plan.last_stats.diag_block_task_count == 0);
 }
 
 TEST_CASE("cuda_mixed_socu_contact_assembly_plan_buckets_and_stats",

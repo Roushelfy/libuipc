@@ -25,8 +25,6 @@ Open blockers before M8 cutover:
   sources, and triplet compatibility sources.
 - Performance gates do not yet have the required repeated median table,
   baseline artifact, and cold/cache-hit/topology-churn split.
-- `native_contact_scalar_diag_compat` must be proven to change builder task
-  emission, not only key/report fields.
 - `hybrid` must be implemented as explicit counted fallback instead of an
   uncounted alias for `direct`.
 - `fixed_mapping_epoch` and `vertex_projection_epoch` producer ownership must be
@@ -46,6 +44,9 @@ Local validation snapshot, 2026-05-14:
 - Builder-generated ABD side lanes now have a contract fixture that checks
   legacy projection components and `ABDJacobi::x_bar()` weights from real
   builder output.
+- `native_contact_scalar_diag_compat` now has a builder contract proving that
+  `Diag` fallback emits `DiagScalarFem` and `DiagScalarAbd`, not only key/report
+  fields.
 - The contract gate still skips the MathDx LTO synthetic solve smoke when
   `build/socu_native_contact/mathdx_lto/manifest.json` is absent.
 
