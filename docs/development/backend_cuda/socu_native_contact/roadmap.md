@@ -78,9 +78,11 @@ Acceptance gates:
 
 ### M7: Replay Observability (Next)
 
-- [ ] Make probe, replay, and final cache states observable in reports.
-- [ ] Split timing so side-plan and program-plan rebuild costs are not
+- [x] Make probe, replay, and final cache states observable in reports.
+- [x] Split timing so side-plan and program-plan rebuild costs are not
   double-counted by aggregate build timing.
+- [ ] Add a source-order mutation contract proving every consumer observes the
+  same `source_id`.
 
 Acceptance gates:
 
@@ -137,6 +139,7 @@ Acceptance gates:
 | Report direct | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct --require-no-triplets --format markdown` | Native direct reports have no triplet timing |
 | Report compare | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct_compare --require-direct-compare-zero --format markdown` | Direct compare mismatch count is zero |
 | Report direct strict | `uv run --no-project python scripts/analyze_socu_native_contact_reports.py <reports> --require-native-plan --require-evaluator direct --require-no-triplets --require-no-direct-fallbacks --format markdown` | Native direct reports have no unsupported or fallback programs |
+| Replay/cache report contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_report_native_contact_plan_stats_mapping"` | Reports expose probe/replay/final cache states and split side/program build timing |
 | ABD projection builder contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_side_table_active_set"` | Real builder output ABD lanes match legacy projection components and weights |
 | Scalar diag builder contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_assembly_plan_scalar_diag_compatibility"` | Real builder output emits `DiagScalarFem` and `DiagScalarAbd` when compat is enabled |
 | Hybrid fallback direct contract | `build/socu_native_contact/RelWithDebInfo/bin/uipc_test_backend_cuda_mixed_socu "cuda_mixed_socu_contact_direct_evaluator_flags_unsupported_sources"` | Unsupported direct sources are flagged and can be replaced by fallback Hessians |

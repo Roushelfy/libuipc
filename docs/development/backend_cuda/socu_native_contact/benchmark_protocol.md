@@ -32,6 +32,17 @@ Tables must include these fields when present:
 - `native_contact_numeric_ms`;
 - `contact_assembly_time_ms`.
 
+Tables should also group by:
+
+- `native_contact_probe_cache_state`;
+- `native_contact_replay_cache_state`;
+- `native_contact_final_cache_state`;
+
+`native_contact_plan_build_ms` is the aggregate symbolic build wall time.
+`native_contact_side_plan_build_ms` and
+`native_contact_program_plan_build_ms` are split substage timings and must not
+be produced by copying the same aggregate value into both columns.
+
 ## Benchmark Questions
 
 Do not mix these questions into one number:

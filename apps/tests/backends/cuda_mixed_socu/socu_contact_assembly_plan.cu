@@ -2058,6 +2058,8 @@ TEST_CASE("cuda_mixed_socu_contact_assembly_plan_source_scan",
           != std::string::npos);
     CHECK(analyzer.find("--require-no-direct-fallbacks")
           != std::string::npos);
+    CHECK(analyzer.find("native_contact_final_cache_state")
+          != std::string::npos);
     CHECK(gate_runner.find("--mode") != std::string::npos);
     CHECK(gate_runner.find("source-scan") != std::string::npos);
     CHECK(gate_runner.find("SOCU_NATIVE_CONTACT_EVALUATOR")

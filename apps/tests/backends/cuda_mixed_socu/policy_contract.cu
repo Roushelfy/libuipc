@@ -112,6 +112,12 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_defaults",
           == "not_run");
     CHECK(contact.at("native_contact_evaluator_path").get<std::string>()
           == "triplet_compat");
+    CHECK(contact.at("native_contact_probe_cache_state").get<std::string>()
+          == "off");
+    CHECK(contact.at("native_contact_replay_cache_state").get<std::string>()
+          == "off");
+    CHECK(contact.at("native_contact_final_cache_state").get<std::string>()
+          == "off");
     for(const char* field : {"native_contact_plan_rebuild_count",
                              "native_contact_side_plan_rebuild_count",
                              "native_contact_program_plan_rebuild_count",
@@ -277,6 +283,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(!report.native_contact_program_plan_cache_hit);
     CHECK(report.native_contact_side_plan_rebuild_count == 1);
     CHECK(report.native_contact_program_plan_rebuild_count == 1);
+    CHECK(report.native_contact_final_cache_state == "cold_rebuild");
+    CHECK(report.native_contact_replay_cache_state == "cold_rebuild");
 
     auto topology_changed = key;
     ++topology_changed.contact_topology_epoch;
@@ -302,6 +310,8 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(!report.native_contact_program_plan_cache_hit);
     CHECK(report.native_contact_side_plan_rebuild_count == 1);
     CHECK(report.native_contact_program_plan_rebuild_count == 2);
+    CHECK(report.native_contact_final_cache_state == "program_rebuild");
+    CHECK(report.native_contact_replay_cache_state == "program_rebuild");
 
     decision = cache.update(topology_changed);
     if(!(decision.side_plan_hit() && decision.contact_program_hit()))
@@ -321,6 +331,38 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
     CHECK(report.native_contact_plan_rebuild_count == 2);
     CHECK(report.native_contact_side_plan_cache_hit);
     CHECK(report.native_contact_program_plan_cache_hit);
+    CHECK(report.native_contact_final_cache_state == "cache_hit");
+    CHECK(report.native_contact_replay_cache_state == "cache_hit");
+
+    {
+        SocuApproxSolveReport side_churn_report;
+        SocuContactPlanCacheState side_churn_cache;
+        SizeT side_churn_rebuild_count = 0;
+        auto side_churn_decision = side_churn_cache.update(key);
+        if(!(side_churn_decision.side_plan_hit()
+             && side_churn_decision.contact_program_hit()))
+            ++side_churn_rebuild_count;
+        apply_native_contact_plan_cache_decision(side_churn_report,
+                                                 side_churn_decision,
+                                                 side_churn_rebuild_count,
+                                                 SizeT{1},
+                                                 SizeT{1});
+
+        auto side_key_changed = key;
+        ++side_key_changed.native_descriptor_epoch;
+        side_churn_decision = side_churn_cache.update(side_key_changed);
+        if(!(side_churn_decision.side_plan_hit()
+             && side_churn_decision.contact_program_hit()))
+            ++side_churn_rebuild_count;
+        apply_native_contact_plan_cache_decision(side_churn_report,
+                                                 side_churn_decision,
+                                                 side_churn_rebuild_count,
+                                                 SizeT{2},
+                                                 SizeT{2});
+        CHECK(!side_churn_decision.side_plan_hit());
+        CHECK(!side_churn_decision.contact_program_hit());
+        CHECK(side_churn_report.native_contact_final_cache_state == "full_rebuild");
+    }
 
     const auto report_path =
         std::filesystem::temp_directory_path()
@@ -359,6 +401,10 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_plan_stats_mapping",
               .get<SizeT>()
           == 12);
     CHECK(contact.at("native_contact_plan_cache_hit").get<bool>());
+    CHECK(contact.at("native_contact_final_cache_state").get<std::string>()
+          == "cache_hit");
+    CHECK(contact.at("native_contact_replay_cache_state").get<std::string>()
+          == "cache_hit");
     CHECK(!contact.at("native_contact_plan_cold_start").get<bool>());
     CHECK(!contact.at("native_contact_plan_rebuilt_this_solve").get<bool>());
     CHECK(contact.at("native_contact_plan_rebuild_count").get<SizeT>() == 2);
@@ -398,6 +444,9 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_replay_paths",
     report.report_path = report_path.string();
     report.native_contact_probe_path = "legacy_structured";
     report.native_contact_replay_path = "native_plan";
+    report.native_contact_probe_cache_state = "installed";
+    report.native_contact_replay_cache_state = "cache_hit";
+    report.native_contact_final_cache_state = "cache_hit";
     report.native_contact_plan_cache_hit = true;
     report.native_contact_plan_build_ms = 0.0;
     report.native_contact_numeric_ms = 1.25;
@@ -416,6 +465,18 @@ TEST_CASE("cuda_mixed_socu_report_native_contact_replay_paths",
     CHECK(json.at("contact")
               .at("native_contact_plan_cache_hit")
               .get<bool>());
+    CHECK(json.at("contact")
+              .at("native_contact_probe_cache_state")
+              .get<std::string>()
+          == "installed");
+    CHECK(json.at("contact")
+              .at("native_contact_replay_cache_state")
+              .get<std::string>()
+          == "cache_hit");
+    CHECK(json.at("contact")
+              .at("native_contact_final_cache_state")
+              .get<std::string>()
+          == "cache_hit");
     CHECK(json.at("timing").at("native_contact_plan_build_ms").get<double>()
           == 0.0);
     CHECK(json.at("timing").at("native_contact_numeric_ms").get<double>()

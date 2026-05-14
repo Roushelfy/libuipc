@@ -97,6 +97,9 @@ paths:
 
 - `native_contact_replay_path`;
 - `native_contact_evaluator_path`;
+- `native_contact_probe_cache_state`;
+- `native_contact_replay_cache_state`;
+- `native_contact_final_cache_state`;
 - `native_contact_plan_cache_hit`;
 - `native_contact_plan_cold_start`;
 - `native_contact_plan_rebuilt_this_solve`;

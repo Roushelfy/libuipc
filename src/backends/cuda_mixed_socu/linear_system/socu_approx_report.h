@@ -127,6 +127,9 @@ struct SocuApproxSolveReport
     bool native_contact_hot_reduce_enabled = false;
     bool native_contact_scalar_diag_compat_enabled = false;
     std::string native_contact_evaluator_path = "triplet_compat";
+    std::string native_contact_probe_cache_state = "off";
+    std::string native_contact_replay_cache_state = "off";
+    std::string native_contact_final_cache_state = "off";
     bool native_contact_plan_cache_hit = false;
     bool native_contact_plan_cold_start = false;
     bool native_contact_plan_rebuilt_this_solve = false;

@@ -66,12 +66,21 @@ def evaluator_path(payload: dict[str, Any]) -> str:
 
 def cache_state(payload: dict[str, Any]) -> str:
     contact = payload.get("contact", {})
+    explicit = contact.get("native_contact_final_cache_state")
+    if isinstance(explicit, str) and explicit:
+        return explicit
     if contact.get("native_contact_plan_cold_start", False):
         return "cold_rebuild"
     if contact.get("native_contact_plan_cache_hit", False):
         return "cache_hit"
+    side_hit = contact.get("native_contact_side_plan_cache_hit", False)
+    program_hit = contact.get("native_contact_program_plan_cache_hit", False)
     if contact.get("native_contact_plan_rebuilt_this_solve", False):
-        return "partial_rebuild"
+        if side_hit and not program_hit:
+            return "program_rebuild"
+        if not side_hit and program_hit:
+            return "side_rebuild"
+        return "full_rebuild"
     return "off_or_unknown"
 
 

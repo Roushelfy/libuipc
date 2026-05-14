@@ -19,7 +19,8 @@ Build and runtime setup lives in [build_and_run.md](build_and_run.md).
 | Invariant | Unit/Contract | Source Scan | Scene/Benchmark |
 | --- | --- | --- | --- |
 | Source ids are dense and source-local ids map to O(1) programs | `cuda_mixed_socu_contact_source_id_dense_contract`, `cuda_mixed_socu_contact_assembly_plan_*` | Builder source scan rejects host-copy topology patterns | Wrecking Ball final report has valid source/program counts |
-| Side plan and program plan invalidate separately | `cuda_mixed_socu_contact_plan_cache_split_layers` | Solver scan requires split cache stats mapping | Reports separate side/program cache state |
+| Side plan and program plan invalidate separately | `cuda_mixed_socu_contact_plan_cache_split_layers` and report cache-state checks distinguish cold rebuild, program rebuild, full rebuild, and cache hit | Solver scan requires split cache stats mapping | Reports separate side/program cache state |
+| Probe/replay/final cache states are visible | `cuda_mixed_socu_report_native_contact_plan_stats_mapping` and `cuda_mixed_socu_report_native_contact_replay_paths` check cache state fields | Source scan requires the analyzer to consume `native_contact_final_cache_state` | Analyzer groups reports by explicit cache state |
 | Direct production path avoids reporter triplet assembly | Report defaults and evaluator path tests | Direct branch scan allows triplets only in `direct_compare`, counted `hybrid` fallback, and `triplet_compat` | Direct scene gate requires `native_contact_hessian_triplet_ms == 0` |
 | Direct compare remains an oracle | Report field tests | Scan requires direct compare launcher and error recorder | Direct compare scene gate requires zero mismatch |
 | Executor does not depend on legacy target/sink/classification | Executor and writer parity tests | Executor/writer source isolation scans | Native replay path remains `native_plan` |

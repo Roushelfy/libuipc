@@ -217,6 +217,9 @@ void reset_native_contact_plan_report(SocuApproxSolveReport& report,
         socu_contact_evaluator_path_name(evaluator_path);
     report.native_contact_hot_reduce_strategy =
         std::string{hot_reduce_strategy};
+    report.native_contact_probe_cache_state = "off";
+    report.native_contact_replay_cache_state = "off";
+    report.native_contact_final_cache_state = "off";
     report.native_contact_plan_cache_hit = false;
     report.native_contact_plan_cold_start = false;
     report.native_contact_plan_rebuilt_this_solve = false;
@@ -1510,6 +1513,8 @@ void SocuApproxSolver::prepare_structured_chain(
     m_report.damping_shift = m_damping_shift;
     const std::string native_contact_probe_path =
         m_report.native_contact_probe_path;
+    const std::string native_contact_probe_cache_state =
+        m_report.native_contact_probe_cache_state;
     reset_native_contact_plan_report(
         m_report,
         m_native_contact_plan_enabled,
@@ -1525,6 +1530,8 @@ void SocuApproxSolver::prepare_structured_chain(
         m_native_contact_side_coverage_fill_count,
         m_native_contact_active_side_set_changed_count);
     m_report.native_contact_probe_path = native_contact_probe_path;
+    m_report.native_contact_probe_cache_state =
+        native_contact_probe_cache_state;
 
     const cudaStream_t stream = system().stream();
     if(m_report_counters_enabled && m_runtime->report_counters.size() == Runtime::kReportCounterCount)
@@ -1742,6 +1749,7 @@ auto SocuApproxSolver::prepare_structured_probe(
     return StructuredProbeAssembly::None;
 #else
     m_report.native_contact_probe_path = "off";
+    m_report.native_contact_probe_cache_state = "off";
     if(!m_runtime || m_runtime_reorder_frame_interval == 0
        || m_runtime_reorder_edge_capacity == 0)
         return StructuredProbeAssembly::None;
@@ -1771,6 +1779,7 @@ auto SocuApproxSolver::prepare_structured_probe(
             m_runtime_reorder_last_applied_frame;
         m_report.runtime_reorder_applied = false;
         m_report.runtime_reorder_failure_detail.clear();
+        m_report.native_contact_probe_cache_state = "signature_hit";
         return StructuredProbeAssembly::None;
     }
 
@@ -1834,6 +1843,7 @@ auto SocuApproxSolver::prepare_structured_probe(
     }
 
     m_report.native_contact_probe_path = "legacy_structured";
+    m_report.native_contact_probe_cache_state = "collecting";
     return runtime_graph_source_full(m_runtime_reorder_graph_source)
                ? StructuredProbeAssembly::Full
                : StructuredProbeAssembly::ContactOnly;
@@ -1883,6 +1893,8 @@ bool SocuApproxSolver::finalize_structured_probe(
     m_report.runtime_reorder_collecting_frame = m_runtime_reorder_collecting_frame;
     m_report.runtime_reorder_last_applied_frame =
         m_runtime_reorder_last_applied_frame;
+    m_report.native_contact_probe_cache_state =
+        installed ? "installed" : "install_failed";
     return installed;
 #endif
 }
@@ -1994,12 +2006,23 @@ void SocuApproxSolver::prepare_structured_contact_plan(
                     .count();
             info.record_native_contact_plan_build_time_ms(build_ms);
             m_report.native_contact_plan_build_ms = build_ms;
-            if(!decision.side_plan_hit())
-                m_report.native_contact_side_plan_build_ms = build_ms;
-            if(!decision.contact_program_hit())
-                m_report.native_contact_program_plan_build_ms = build_ms;
             const auto& side_stats =
                 m_native_contact_plan->side_plan.last_stats;
+            const auto& program_stats =
+                m_native_contact_plan->program_plan.last_stats;
+            const double side_plan_build_ms =
+                side_stats.active_vertex_collect_ms
+                + side_stats.missing_side_fill_ms;
+            const double program_plan_build_ms =
+                program_stats.program_emit_ms
+                + program_stats.bucket_build_ms
+                + program_stats.hot_block_build_ms;
+            if(!decision.side_plan_hit())
+                m_report.native_contact_side_plan_build_ms =
+                    side_plan_build_ms;
+            if(!decision.contact_program_hit())
+                m_report.native_contact_program_plan_build_ms =
+                    program_plan_build_ms;
             if(decision.side_plan_hit()
                && !decision.contact_program_hit()
                && m_native_contact_side_coverage_mode
@@ -2099,6 +2122,17 @@ void SocuApproxSolver::finalize_structured_chain(
     m_report.native_contact_hot_reduce_ms =
         info.native_contact_hot_reduce_time_ms();
     m_report.native_contact_replay_path = info.native_contact_replay_path();
+    if(m_report.native_contact_replay_path == "native_plan")
+    {
+        if(m_report.native_contact_replay_cache_state == "off")
+            m_report.native_contact_replay_cache_state =
+                m_report.native_contact_final_cache_state;
+    }
+    else
+    {
+        m_report.native_contact_replay_cache_state =
+            m_report.native_contact_replay_path;
+    }
     m_report.native_contact_evaluator_path =
         socu_contact_evaluator_path_name(info.native_contact_evaluator_path());
 

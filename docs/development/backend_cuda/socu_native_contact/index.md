@@ -57,6 +57,9 @@ Local validation snapshot, 2026-05-14:
 - Cache-key producer epochs now have a contract proving
   `fixed_mapping_epoch` and `vertex_projection_epoch` follow descriptor epoch,
   which currently owns fixed mapping and ABD projection changes.
+- Reports now expose probe, replay, and final native contact cache states, and
+  split side/program build timing without copying aggregate build time into both
+  fields.
 - Wrecking Ball 20-frame scene gates passed for `direct` and `direct_compare`.
   A 3-run partial-rebuild median showed `direct` contact assembly at
   `10.2849 ms` and `triplet_compat` at `13.1288 ms`; this is useful evidence,

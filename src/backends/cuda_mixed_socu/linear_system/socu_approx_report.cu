@@ -29,6 +29,20 @@ std::string_view coverage_mode_name(SocuVertexSideCoverageMode mode) noexcept
     return "unknown";
 }
 
+std::string_view plan_cache_state_name(
+    const SocuContactPlanCacheDecision& decision) noexcept
+{
+    if(decision.cold_start)
+        return "cold_rebuild";
+    if(decision.side_plan_hit() && decision.contact_program_hit())
+        return "cache_hit";
+    if(!decision.side_plan_hit() && !decision.contact_program_hit())
+        return "full_rebuild";
+    if(!decision.side_plan_hit())
+        return "side_rebuild";
+    return "program_rebuild";
+}
+
 Json to_json(const SocuApproxSolveReport& report)
 {
     Json blocks = Json::array();
@@ -109,6 +123,12 @@ Json to_json(const SocuApproxSolveReport& report)
                    report.contact_offband_lump_fallback_count},
                   {"native_contact_evaluator_path",
                    report.native_contact_evaluator_path},
+                  {"native_contact_probe_cache_state",
+                   report.native_contact_probe_cache_state},
+                  {"native_contact_replay_cache_state",
+                   report.native_contact_replay_cache_state},
+                  {"native_contact_final_cache_state",
+                   report.native_contact_final_cache_state},
                   {"native_contact_plan_cache_hit",
                    report.native_contact_plan_cache_hit},
                   {"native_contact_plan_cold_start",
@@ -363,6 +383,9 @@ void apply_native_contact_plan_cache_decision(
     SizeT                               side_plan_rebuild_count,
     SizeT                               program_plan_rebuild_count) noexcept
 {
+    const std::string cache_state{plan_cache_state_name(decision)};
+    report.native_contact_final_cache_state = cache_state;
+    report.native_contact_replay_cache_state = cache_state;
     report.native_contact_plan_cache_hit =
         decision.side_plan_hit() && decision.contact_program_hit();
     report.native_contact_plan_cold_start = decision.cold_start;
