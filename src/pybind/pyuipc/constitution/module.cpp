@@ -39,6 +39,7 @@
 #include <pyuipc/constitution/affine_body_revolute_joint_external_force.h>
 #include <pyuipc/constitution/finite_element_external_force.h>
 #include <pyuipc/constitution/external_articulation_constraint.h>
+#include <pyuipc/constitution/rcc_adhesive.h>
 
 namespace pyuipc::constitution
 {
@@ -96,5 +97,8 @@ PyModule::PyModule(py::module& m)
     PySoftPositionConstraint{m};
     PySoftTransformConstraint{m};
     PyExternalArticulationConstraint{m};
+
+    // Contact-model augmentors
+    PyRCCAdhesive{m};
 }
 }  // namespace pyuipc::constitution
