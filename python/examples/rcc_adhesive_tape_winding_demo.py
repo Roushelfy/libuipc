@@ -122,7 +122,7 @@ SPC_STRENGTH      = 1.0e5        # matches rcc_adhesive_cloth_peel_demo.py
 # right at the wrap-off region is where bending onto the hub actually
 # happens. Smaller buffer → sharper bend (stress concentration);
 # larger buffer → tape doesn't actually contact the hub in time.
-BUFFER_LENGTH     = 0.04         # ~ 1 hub circumference's worth of slack
+BUFFER_LENGTH     = float(_CFG.get("BUFFER_LENGTH", 0.04))
 # Anchor strip: the first ANCHOR_ROWS mesh rows (at i=0..ANCHOR_ROWS-1)
 # are locked at their rest pose for the ENTIRE simulation — mimics a
 # tape with a permanent glue-tab. Specified in *cell count* rather than

@@ -116,6 +116,74 @@ namespace sym::codim_ipc_rcc_adhesive
         return fmax(beta_kick, initial_beta);
     }
 
+    // -------- PT single-sided adhesion gate (v3) --------
+    //
+    // Returns true ⇔ this PT pair's adhesion contribution is active given the
+    // sticky-side preferences of P and T. For both signs == 0 (double-sided —
+    // the default when set_sticky_side has never been called), always returns
+    // true so v2 behaviour is bit-for-bit preserved.
+    //
+    // Geometry: the gate fires when EITHER endpoint's "sticky outward
+    // direction" points toward its contact partner — i.e. that endpoint's
+    // sticky face is the side touching the partner.
+    //
+    //   P-side:   sticky_P · n̂_P  points toward T  ⇔  (P − closest)·(sticky_P · n̂_P) < 0
+    //   T-side:   sticky_T · n̂_T  points toward P  ⇔  (P − closest)·(sticky_T · n̂_T) > 0
+    //
+    // (Note the opposite inequalities — `(P − closest)` is "from T toward P",
+    //  so for P's sticky-outward pointing TO T it's anti-aligned, dot < 0;
+    //  for T's sticky-outward pointing TO P it's aligned, dot > 0.)
+    //
+    // Adhesion fires when either side passes. This handles:
+    //   • shell-vs-rigid (only the shell has a side): the shell-side check
+    //     gates, the rigid-side has sticky=0 and contributes nothing.
+    //   • rolled-up shell self-contact: the inside-of-roll turn has its
+    //     sticky face engaged on one of the two PT pair directions; the
+    //     extended gate guarantees that whichever pair direction has the
+    //     sticky face on EITHER end fires correctly.
+    //
+    // A sticky_sign of 0 on one side means "no preference"; that side does
+    // not contribute to the OR, the other side decides. If both are 0 the
+    // gate falls through to the v2 always-on path.
+    //
+    // n̂_T is approximated by the vertex normal at T0 (passed in from the
+    // lagged per-vertex normal buffer). For a shell with consistent winding
+    // this matches the face normal up to area-weighting smoothing; for a
+    // closed body where T0 is not a shell vert (n̂_T = 0) the T-side check
+    // automatically yields 0 and contributes nothing.
+    inline __device__ bool PT_sticky_gate(IndexT         sticky_P,
+                                          IndexT         sticky_T,
+                                          const Vector3& n_P,
+                                          const Vector3& n_T,
+                                          const Vector3& P,
+                                          const Vector3& T0,
+                                          const Vector3& T1,
+                                          const Vector3& T2)
+    {
+        if(sticky_P == 0 && sticky_T == 0)
+            return true;
+
+        using namespace friction;
+        Vector2 bary;
+        point_triangle_closest_point(P, T0, T1, T2, bary);
+        Vector3 closest = T0 + bary[0] * (T1 - T0) + bary[1] * (T2 - T0);
+        Vector3 v_TP   = P - closest;  // direction from T toward P
+
+        if(sticky_P != 0)
+        {
+            Float d_P = v_TP.dot(Float(sticky_P) * n_P);
+            if(d_P < Float{0})
+                return true;  // P's sticky face is the contact side.
+        }
+        if(sticky_T != 0)
+        {
+            Float d_T = v_TP.dot(Float(sticky_T) * n_T);
+            if(d_T > Float{0})
+                return true;  // T's sticky face is the contact side.
+        }
+        return false;
+    }
+
     // -------- PT-pair sorted-vertex U64 hash key --------
     // (p, t0, t1, t2): sort (t0,t1,t2) into ascending order, then mix.
     // Collision probability across ~10⁶ pairs ≈ N²/2^64 ≈ 1e-8.

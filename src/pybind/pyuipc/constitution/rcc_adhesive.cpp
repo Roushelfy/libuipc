@@ -2,6 +2,7 @@
 #include <uipc/constitution/rcc_adhesive.h>
 #include <uipc/core/contact_tabular.h>
 #include <uipc/core/contact_element.h>
+#include <uipc/geometry/simplicial_complex.h>
 
 namespace pyuipc::constitution
 {
@@ -87,6 +88,22 @@ barrier + friction. See docs/specification/contact_models/rcc_adhesion.md.)");
         py::arg("initial_beta"),
         py::arg("enabled") = true,
         R"(Set default RCC adhesion parameters for unspecified (L, R) pairs (row 0).)");
+
+    class_RCCAdhesive.def_static(
+        "set_sticky_side",
+        &RCCAdhesive::set_sticky_side,
+        py::arg("geo"),
+        py::arg("sign"),
+        R"(Mark a shell geometry's sticky face for single-sided (oriented) adhesion.
+
+sign = +1  → the +n̂ face (the face that the triangle winding makes outward)
+              is the sticky face.
+sign = -1  → the -n̂ face is sticky.
+sign =  0  → double-sided (default behaviour when set_sticky_side is never
+              called).
+
+Writes (or overwrites) the per-vertex `rcc_sticky_sign` <IndexT> attribute
+on the geometry, broadcast-filling every vertex with the same sign.)");
 
     class_RCCAdhesive.def("get_uid", &RCCAdhesive::get_uid);
 }

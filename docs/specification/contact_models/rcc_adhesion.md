@@ -157,6 +157,10 @@ On contact state:
 - `beta`: $\beta_k$, adhesion intensity
 - `area`: $A_k$, contact area or quadrature weight
 
+On shell vertices (optional, v3+):
+
+- `rcc_sticky_sign` <IndexT>: $-1$, $0$, or $+1$. Default $0$ keeps double-sided adhesion (v2 behaviour). $\pm 1$ enables single-sided adhesion where only the $\pm \hat n$ face of the shell participates in the adhesion energy. See "Single-sided adhesion (oriented shells)" below.
+
 ## Notes
 
 RCC Adhesion is additive to IPC barrier contact and friction. It should not disable the barrier term or friction term.
@@ -178,6 +182,26 @@ The CUDA backend ports XBow's `RCCAdhesionEnergy3D` (`XBow-main/src/Bow/Energy/F
 Adhesion (energy, gradient, Hessian, and $\beta$ evolution) runs **only on point-triangle (PT) pairs**. PE/PP/EE adhesion and vertex–half-plane adhesion are **disabled**.
 
 **Why**: the libuipc trajectory filter classifies a candidate (vert, tri) pair into PT/PE/PP based on which sub-feature is closest (interior, edge, or vertex). The IPC barrier — which is *repulsive* — handles all three feature types symmetrically, since "push away from the closest sub-feature" is direction-consistent. RCC adhesion is *attractive*, so the gradient becomes "pull toward the closest sub-feature": on faceted meshes (e.g. the diagonal that splits a cube face into two triangles), the same cloth vert hovering above the face interior emits a PT pair against one triangle and a PE pair (against the shared diagonal edge) against the other — and the PE pair's attractive gradient pulls the cloth sideways toward the diagonal. Restricting v2 adhesion to PT pairs eliminates this artifact. The PT gradient itself uses the *plane-projection* form ($g_{PT}$) regardless of where the perpendicular foot lands, so it always pulls perpendicular to the triangle's plane (no sub-feature dispatch inside the PT branch either).
+
+### Single-sided adhesion (oriented shells)
+
+Each shell vertex may carry an optional `rcc_sticky_sign` <IndexT> attribute with values $-1, 0, +1$ (default $0$ — double-sided, identical to v2 behaviour). When non-zero on either endpoint of a PT pair $(P, T)$, the adhesion contribution is **gated** by
+
+$$
+\underbrace{\bigl(P - \mathrm{closest}_T(P)\bigr) \cdot \bigl(s_P \cdot \hat n_P\bigr) < 0}_{P\text{-side: } P\text{'s sticky face faces } T}
+\quad\lor\quad
+\underbrace{\bigl(P - \mathrm{closest}_T(P)\bigr) \cdot \bigl(s_T \cdot \hat n_T\bigr) > 0}_{T\text{-side: } T\text{'s sticky face faces } P},
+$$
+
+where $s_P, s_T$ are the sticky signs at $P$ and at any vertex of triangle $T$, and $\hat n_P, \hat n_T$ are the corresponding shell vertex normals. The disjunction reflects "either side's sticky face engaging the contact is enough to bond." When both signs are zero the gate trivially passes (v2 fallback). When the gate fails, the adhesion energy, gradient, Hessian, and $\beta$-evolution all return zero on that pair; only the IPC barrier survives.
+
+$\hat n_P$ and $\hat n_T$ are **lagged**: they are recomputed once per step from the begin-of-step positions and held constant through that step's Newton iterations (same convention as the friction tangent basis). Concretely each is the area-weighted average of the incident-triangle face normals.
+
+**Self-contact / rolled-up tape**: shell-shell PT pairs are emitted in both directions by the trajectory filter — $(P\in A, T\in B)$ and $(P\in B, T\in A)$. As long as one PT pair has at least one side's sticky face engaged, adhesion fires at that contact. So a tape rolled with the sticky face on the inside will bond adjacent turns (outer turn's sticky face touches inner turn's non-sticky face — the outer turn's P-side or the inner turn's T-side passes). Two truly non-sticky faces back-to-back have all gates fail → no bond.
+
+**Shell-vs-rigid**: when one side is a closed body or a rigid that did not call `set_sticky_side`, its sticky sign is 0 and that side does not contribute to the disjunction — the gate is decided entirely by the shell's preference. So a tape with sticky-up bonds only to objects it touches with its sticky face, never with its back face, regardless of which PT direction (cube vert vs cloth tri or vice versa) the trajectory filter happens to emit.
+
+**Frontend API**: `RCCAdhesive::set_sticky_side(geo, sign)` writes the per-vertex attribute across an entire geometry. Per-vertex granularity is also possible by writing the attribute directly.
 
 ### Persistence
 

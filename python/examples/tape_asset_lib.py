@@ -476,6 +476,7 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    1.0e-4,
         "D_HAT":             1.0e-3,
         "LAYER_THICKNESS":   7.0e-4,
+        "BUFFER_LENGTH":     0.04,     # wind demo: free-bend window length
     },
     # ===== 3M Temflex 175 vinyl electrical tape =====
     # Geometry from 3M's official datasheet:
@@ -506,6 +507,7 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    9.0e-5,   # = ½ physical 0.178 mm
         "D_HAT":             4.0e-4,
         "LAYER_THICKNESS":   2.5e-4,   # > 2·t=0.18mm, < 2·t+D_HAT=0.58mm
+        "BUFFER_LENGTH":     0.04,
     },
     "temflex175-3turn": {
         # Quick test: 3 turns instead of 5. Faster wind sim for iteration.
@@ -522,6 +524,7 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    9.0e-5,
         "D_HAT":             4.0e-4,
         "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
     },
     "temflex175-thick": {
         # Sim TAPE_THICKNESS = full physical 0.178 mm. Larger IPC band
@@ -541,6 +544,7 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    1.78e-4,
         "D_HAT":             6.0e-4,
         "LAYER_THICKNESS":   4.5e-4,
+        "BUFFER_LENGTH":     0.04,
     },
     "temflex175-10turn": {
         # 10 turns instead of 5 — more impressive spool, slower to sim.
@@ -557,6 +561,7 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    9.0e-5,
         "D_HAT":             4.0e-4,
         "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
     },
 }
 

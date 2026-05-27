@@ -15,11 +15,14 @@
 #include <thrust/binary_search.h>
 #include <thrust/execution_policy.h>
 #include <uipc/common/log.h>
+#include <uipc/geometry/simplicial_complex.h>
+#include <uipc/builtin/attribute_name.h>
 #include <sim_engine.h>
 #include <collision_detection/global_trajectory_filter.h>
 #include <collision_detection/simplex_trajectory_filter.h>
 #include <global_geometry/global_vertex_manager.h>
 #include <contact_system/global_contact_manager.h>
+#include <vector>
 
 namespace uipc::backend::cuda
 {
@@ -74,6 +77,44 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // Newton iterations within the same frame just read m_beta_PT.
     SizeT m_last_seen_frame = ~SizeT(0);
     bool  m_first_step      = true;
+
+    // ---- v3 state: single-sided adhesion (oriented shells) ----
+    // Per-(global) vertex sticky sign. Length = total vertex count. Filled
+    // lazily on the first do_compute_energy from per-SC `rcc_sticky_sign`
+    // attributes. Verts whose SC has no attribute stay at 0 (= double-sided,
+    // identical to v2 behaviour).
+    muda::DeviceBuffer<IndexT>   m_sticky_sign;
+
+    // Triangle topology + v→tri CSR adjacency, used to compute shell vertex
+    // normals from begin-of-step positions. Both filled at the same time as
+    // m_sticky_sign.
+    //
+    //   m_shell_triangles  : Vector3i triangles (global vertex indices),
+    //                        one per surface triangle of every SC that
+    //                        opted into v3.
+    //   m_v2t_offsets      : CSR row pointers; m_v2t_offsets.size() ==
+    //                        n_total_verts + 1.
+    //   m_v2t_tri_indices  : CSR column entries; index into
+    //                        m_shell_triangles.
+    muda::DeviceBuffer<Vector3i> m_shell_triangles;
+    muda::DeviceBuffer<IndexT>   m_v2t_offsets;
+    muda::DeviceBuffer<IndexT>   m_v2t_tri_indices;
+
+    // Per-(global) vertex lagged shell normal n̂_P. Recomputed once per step
+    // from `m_pos_at_step_begin` (i.e. begin-of-frame positions) and held
+    // constant through that frame's Newton iterations — same convention as
+    // friction's lagged tangent basis.
+    muda::DeviceBuffer<Vector3> m_vertex_normal;
+
+    // Set true once the v3 topology buffers are populated (lazy: needs the
+    // global_vertex_offset attributes which are only filled after vertex
+    // reporters run).
+    bool m_v3_built = false;
+
+    // Set true iff at least one vertex in the scene has a non-zero
+    // rcc_sticky_sign. Lets the per-pair gate cheaply short-circuit when v3
+    // is unused.
+    bool m_has_sticky = false;
 
     virtual void do_build(BuildInfo& info) override
     {
@@ -156,6 +197,143 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         m_adhesive_tabular.view().copy_from(host.data());
     }
 
+    // ---- v3 helpers: oriented-adhesion topology + vertex normals ----
+
+    // Build m_sticky_sign + m_v2t_* + m_shell_triangles from scene SCs that
+    // carry an `rcc_sticky_sign` per-vertex attribute. Skipped if the user
+    // never called RCCAdhesive::set_sticky_side — in that case m_sticky_sign
+    // is sized to total vertex count and zero-filled, so the gate always
+    // returns true (= v2 double-sided behaviour).
+    void _build_sticky_topology(SizeT n_total_verts)
+    {
+        std::vector<IndexT>   h_sticky(n_total_verts, 0);
+        std::vector<Vector3i> h_tris;
+        std::vector<std::vector<IndexT>> h_v2t(n_total_verts);
+
+        m_has_sticky = false;
+
+        auto geo_slots = world().scene().geometries();
+        for(auto& geo_slot : geo_slots)
+        {
+            auto* sc = geo_slot->geometry().as<geometry::SimplicialComplex>();
+            if(!sc)
+                continue;
+
+            auto attr_sign = sc->vertices().find<IndexT>("rcc_sticky_sign");
+            if(!attr_sign)
+                continue;  // SC opted out of v3 → its verts stay at 0.
+
+            auto gvo = sc->meta().find<IndexT>(builtin::global_vertex_offset);
+            UIPC_ASSERT(gvo,
+                        "Geometry has rcc_sticky_sign attribute but no "
+                        "global_vertex_offset. The vertex layout may not be "
+                        "built yet at the time of this call.");
+            IndexT offset = gvo->view()[0];
+
+            auto sign_view = attr_sign->view();
+            for(SizeT v = 0; v < sign_view.size(); ++v)
+            {
+                IndexT s         = sign_view[v];
+                h_sticky[offset + v] = s;
+                if(s != 0)
+                    m_has_sticky = true;
+            }
+
+            // Collect every triangle of the SC (works for codim shells and
+            // closed bodies alike — for a closed body the average of incident
+            // face normals at a corner is the inward/outward bisector, also
+            // geometrically sensible).
+            auto tri_view = sc->triangles().topo().view();
+            for(SizeT t = 0; t < tri_view.size(); ++t)
+            {
+                const Vector3i& local = tri_view[t];
+                Vector3i        global_tri{local[0] + offset,
+                                           local[1] + offset,
+                                           local[2] + offset};
+                IndexT tri_idx = IndexT(h_tris.size());
+                h_tris.push_back(global_tri);
+                h_v2t[global_tri[0]].push_back(tri_idx);
+                h_v2t[global_tri[1]].push_back(tri_idx);
+                h_v2t[global_tri[2]].push_back(tri_idx);
+            }
+        }
+
+        // Pack v→tri into CSR.
+        std::vector<IndexT> h_offsets(n_total_verts + 1, 0);
+        for(SizeT v = 0; v < n_total_verts; ++v)
+            h_offsets[v + 1] = h_offsets[v] + IndexT(h_v2t[v].size());
+        std::vector<IndexT> h_csr(h_offsets.back());
+        for(SizeT v = 0; v < n_total_verts; ++v)
+            std::copy(h_v2t[v].begin(),
+                      h_v2t[v].end(),
+                      h_csr.begin() + h_offsets[v]);
+
+        // Upload (resize-then-copy; muda's BufferView::copy_from needs a
+        // non-empty source for some backends, so guard with size checks).
+        m_sticky_sign.resize(n_total_verts);
+        if(n_total_verts > 0)
+            m_sticky_sign.view().copy_from(h_sticky.data());
+
+        m_v2t_offsets.resize(n_total_verts + 1);
+        if(n_total_verts > 0)
+            m_v2t_offsets.view().copy_from(h_offsets.data());
+
+        m_v2t_tri_indices.resize(h_csr.size());
+        if(!h_csr.empty())
+            m_v2t_tri_indices.view().copy_from(h_csr.data());
+
+        m_shell_triangles.resize(h_tris.size());
+        if(!h_tris.empty())
+            m_shell_triangles.view().copy_from(h_tris.data());
+
+        m_vertex_normal.resize(n_total_verts);
+        if(n_total_verts > 0)
+            m_vertex_normal.fill(Vector3::Zero());
+    }
+
+    // Area-weighted vertex normal recompute. Iterates the v→tri CSR; each
+    // thread sums `(B-A)×(C-A)` (unnormalized → area-weighted) across its
+    // incident triangles, then normalizes. Verts with no incident triangle
+    // (non-shell verts) get a zero normal — they're never read because their
+    // sticky_sign is 0 and the gate short-circuits.
+    void _recompute_vertex_normals(muda::CBufferView<Vector3> positions)
+    {
+        if(!m_has_sticky)
+            return;  // gate is short-circuited by sticky_sign==0; normals unused.
+
+        using namespace muda;
+        auto n_verts = positions.size();
+        if(n_verts == 0)
+            return;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(n_verts,
+                   [Ps      = positions.viewer().name("Ps"),
+                    offsets = m_v2t_offsets.cviewer().name("v2t_offsets"),
+                    v2t     = m_v2t_tri_indices.cviewer().name("v2t_tris"),
+                    tris    = m_shell_triangles.cviewer().name("shell_tris"),
+                    normals = m_vertex_normal.view().viewer().name("normals")] __device__(int v) mutable
+                   {
+                       IndexT  begin = offsets(v);
+                       IndexT  end   = offsets(v + 1);
+                       Vector3 sum   = Vector3::Zero();
+                       for(IndexT k = begin; k < end; ++k)
+                       {
+                           const Vector3i& t = tris(v2t(k));
+                           Vector3 A = Ps(t[0]);
+                           Vector3 B = Ps(t[1]);
+                           Vector3 C = Ps(t[2]);
+                           sum += (B - A).cross(C - A);
+                       }
+                       Float   nrm = sum.norm();
+                       Vector3 out = Vector3::Zero();
+                       if(nrm > Float{0})
+                           out = sum / nrm;
+                       normals(v) = out;
+                   });
+    }
+
     // ---- v2 helper kernels (PT only) ----
 
     // Compute sorted-vertex u64 keys for the current PT pair list.
@@ -204,6 +382,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                     d_hats      = d_hats.viewer().name("d_hats"),
                     Ps          = positions.viewer().name("Ps"),
                     beta_dst    = m_beta_PT.view().viewer().name("beta_PT"),
+                    sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
+                    vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
                     dt] __device__(int i) mutable
                    {
                        using namespace sym::codim_ipc_rcc_adhesive;
@@ -224,6 +404,21 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                        Vector3 T0 = Ps(PT[1]);
                        Vector3 T1 = Ps(PT[2]);
                        Vector3 T2 = Ps(PT[3]);
+
+                       // v3 gate: a new pair on the non-sticky side starts at
+                       // β = 0 (no initial bonding kick, no initial_beta
+                       // override). Without this, initial_beta=1 would
+                       // force-bond a wrong-side new pair.
+                       if(!PT_sticky_gate(sticky_sign(PT[0]),
+                                          sticky_sign(PT[1]),
+                                          vert_normal(PT[0]),
+                                          vert_normal(PT[1]),
+                                          P, T0, T1, T2))
+                       {
+                           beta_dst(i) = 0;
+                           return;
+                       }
+
                        Float   D;
                        distance::point_triangle_distance2(P, T0, T1, T2, D);
                        beta_dst(i) = PT_beta_init_new(rcc.initial_beta, kappa, rcc.Cn,
@@ -261,6 +456,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                     d_hats     = d_hats.viewer().name("d_hats"),
                     Ps         = positions.viewer().name("Ps"),
                     beta_dst   = m_beta_PT.view().viewer().name("beta_PT"),
+                    sticky_sign= m_sticky_sign.cviewer().name("sticky_sign"),
+                    vert_normal= m_vertex_normal.cviewer().name("vert_normal"),
                     dt] __device__(int i) mutable
                    {
                        using namespace sym::codim_ipc_rcc_adhesive;
@@ -292,14 +489,23 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                        }
                        else
                        {
-                           // new pair → bonding kick
-                           Float kappa = PT_contact_coeff(bar_table, cids).kappa;
-                           Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
-                                                  d_hats(PT[2]), d_hats(PT[3]));
+                           // new pair → bonding kick (gated by v3 sticky-side check)
                            Vector3 P  = Ps(PT[0]);
                            Vector3 T0 = Ps(PT[1]);
                            Vector3 T1 = Ps(PT[2]);
                            Vector3 T2 = Ps(PT[3]);
+                           if(!PT_sticky_gate(sticky_sign(PT[0]),
+                                              sticky_sign(PT[1]),
+                                              vert_normal(PT[0]),
+                                              vert_normal(PT[1]),
+                                              P, T0, T1, T2))
+                           {
+                               beta_dst(i) = 0;
+                               return;
+                           }
+                           Float kappa = PT_contact_coeff(bar_table, cids).kappa;
+                           Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
+                                                  d_hats(PT[2]), d_hats(PT[3]));
                            Float   D;
                            distance::point_triangle_distance2(P, T0, T1, T2, D);
                            beta_dst(i) = PT_beta_init_new(rcc.initial_beta, kappa, rcc.Cn,
@@ -323,10 +529,36 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         m_beta_PP.resize(n_pp); if(n_pp > 0) m_beta_PP.fill(Float{0});
     }
 
+    // v3: lazy-init the oriented-adhesion topology + lagged vertex normals
+    // on the first compute call. Needs total vertex count + global_vertex_offset
+    // attributes, both of which only exist after vertex reporters run — too
+    // late for on_init_scene.
+    template <typename Info>
+    void _ensure_v3_state(Info& info)
+    {
+        auto positions = info.positions();
+        if(!m_v3_built)
+        {
+            _build_sticky_topology(positions.size());
+            m_v3_built = true;
+        }
+        // Initialize m_pos_at_step_begin from begin-of-frame positions if
+        // v3 is active. (For v2-only scenes Phase A's existing first-call
+        // skip block handles this — see _evolve_beta_step_at_end.)
+        if(m_has_sticky && m_pos_at_step_begin.size() != positions.size())
+        {
+            m_pos_at_step_begin.resize(positions.size());
+            m_pos_at_step_begin.view().copy_from(positions);
+            _recompute_vertex_normals(m_pos_at_step_begin.view());
+        }
+    }
+
     // Phase B entry: run once per frame at the top of do_compute_energy
     // (and idempotent if called from do_assemble too).
     void _phase_b_if_new_frame(EnergyInfo& info)
     {
+        _ensure_v3_state(info);
+
         SizeT cur = engine().frame();
         if(cur == m_last_seen_frame)
             return;
@@ -365,6 +597,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // Same Phase B trigger but takes a ContactInfo (for do_assemble path).
     void _phase_b_if_new_frame(ContactInfo& info)
     {
+        _ensure_v3_state(info);
+
         SizeT cur = engine().frame();
         if(cur == m_last_seen_frame)
             return;
@@ -427,6 +661,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         prev_Ps     = info.prev_positions().viewer().name("prev_Ps"),
                         d_hats      = info.d_hats().viewer().name("d_hats"),
                         beta_buf    = m_beta_PT.cviewer().name("beta_PT"),
+                        sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
+                        vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
                         dt          = info.dt()] __device__(int i) mutable
                        {
                            using namespace sym::codim_ipc_rcc_adhesive;
@@ -452,6 +688,21 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            const auto& T0 = Ps(PT[1]);
                            const auto& T1 = Ps(PT[2]);
                            const auto& T2 = Ps(PT[3]);
+
+                           // v3 single-sided gate: adhesion fires iff
+                           // either P's or T's sticky face is the contact
+                           // side. For both signs==0 this trivially passes
+                           // (v2 fallback).
+                           if(!PT_sticky_gate(sticky_sign(PT[0]),
+                                              sticky_sign(PT[1]),
+                                              vert_normal(PT[0]),
+                                              vert_normal(PT[1]),
+                                              P, T0, T1, T2))
+                           {
+                               Es(i) = 0;
+                               return;
+                           }
+
                            const auto& pP  = prev_Ps(PT[0]);
                            const auto& pT0 = prev_Ps(PT[1]);
                            const auto& pT1 = prev_Ps(PT[2]);
@@ -624,7 +875,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         PTs         = info.friction_PTs().viewer().name("PTs"),
                         PT_Gs       = info.friction_PT_gradients().viewer().name("PT_Gs"),
                         PT_Hs       = info.friction_PT_hessians().viewer().name("PT_Hs"),
-                        beta_buf    = m_beta_PT.cviewer().name("beta_PT")] __device__(IndexT i) mutable
+                        beta_buf    = m_beta_PT.cviewer().name("beta_PT"),
+                        sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
+                        vert_normal = m_vertex_normal.cviewer().name("vert_normal")] __device__(IndexT i) mutable
                        {
                            using namespace sym::codim_ipc_rcc_adhesive;
                            const auto& PT   = PTs(i);
@@ -646,34 +899,44 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                    const auto& T0 = Ps(PT[1]);
                                    const auto& T1 = Ps(PT[2]);
                                    const auto& T2 = Ps(PT[3]);
-                                   const auto& pP  = prev_Ps(PT[0]);
-                                   const auto& pT0 = prev_Ps(PT[1]);
-                                   const auto& pT1 = prev_Ps(PT[2]);
-                                   const auto& pT2 = prev_Ps(PT[3]);
 
-                                   Vector12    Gn = Vector12::Zero(), Gt = Vector12::Zero();
-                                   Matrix12x12 Hn = Matrix12x12::Zero(), Ht = Matrix12x12::Zero();
-                                   if(gradient_only)
+                                   // v3 single-sided gate (P-side OR T-side).
+                                   bool gate_ok = PT_sticky_gate(
+                                       sticky_sign(PT[0]), sticky_sign(PT[1]),
+                                       vert_normal(PT[0]), vert_normal(PT[1]),
+                                       P, T0, T1, T2);
+
+                                   if(gate_ok)
                                    {
-                                       PT_normal_adhesion_gradient(
-                                           Gn, coeff.Cn, beta, d_hat, dt, P, T0, T1, T2);
-                                       if(coeff.Ct > 0)
-                                           PT_tangential_adhesion_gradient(
-                                               Gt, coeff.Ct, beta, d_hat, dt,
-                                               pP, pT0, pT1, pT2, P, T0, T1, T2);
-                                       G = Gn + Gt;
-                                   }
-                                   else
-                                   {
-                                       PT_normal_adhesion_gradient_hessian(
-                                           Gn, Hn, coeff.Cn, beta, d_hat, dt, P, T0, T1, T2);
-                                       if(coeff.Ct > 0)
-                                           PT_tangential_adhesion_gradient_hessian(
-                                               Gt, Ht, coeff.Ct, beta, d_hat, dt,
-                                               pP, pT0, pT1, pT2, P, T0, T1, T2);
-                                       G = Gn + Gt;
-                                       cuda::make_spd(Hn);
-                                       H = Hn + Ht;
+                                       const auto& pP  = prev_Ps(PT[0]);
+                                       const auto& pT0 = prev_Ps(PT[1]);
+                                       const auto& pT1 = prev_Ps(PT[2]);
+                                       const auto& pT2 = prev_Ps(PT[3]);
+
+                                       Vector12    Gn = Vector12::Zero(), Gt = Vector12::Zero();
+                                       Matrix12x12 Hn = Matrix12x12::Zero(), Ht = Matrix12x12::Zero();
+                                       if(gradient_only)
+                                       {
+                                           PT_normal_adhesion_gradient(
+                                               Gn, coeff.Cn, beta, d_hat, dt, P, T0, T1, T2);
+                                           if(coeff.Ct > 0)
+                                               PT_tangential_adhesion_gradient(
+                                                   Gt, coeff.Ct, beta, d_hat, dt,
+                                                   pP, pT0, pT1, pT2, P, T0, T1, T2);
+                                           G = Gn + Gt;
+                                       }
+                                       else
+                                       {
+                                           PT_normal_adhesion_gradient_hessian(
+                                               Gn, Hn, coeff.Cn, beta, d_hat, dt, P, T0, T1, T2);
+                                           if(coeff.Ct > 0)
+                                               PT_tangential_adhesion_gradient_hessian(
+                                                   Gt, Ht, coeff.Ct, beta, d_hat, dt,
+                                                   pP, pT0, pT1, pT2, P, T0, T1, T2);
+                                           G = Gn + Gt;
+                                           cuda::make_spd(Hn);
+                                           H = Hn + Ht;
+                                       }
                                    }
                                }
                            }
@@ -955,6 +1218,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         Ps          = positions.viewer().name("Ps"),
                         Ps_begin    = m_pos_at_step_begin.cviewer().name("Ps_begin"),
                         beta_buf    = m_beta_PT.view().viewer().name("beta_PT"),
+                        sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
+                        vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
                         dt] __device__(int i) mutable
                        {
                            using namespace sym::codim_ipc_rcc_adhesive;
@@ -980,6 +1245,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            Vector3 T00 = Ps_begin(PT[1]);
                            Vector3 T10 = Ps_begin(PT[2]);
                            Vector3 T20 = Ps_begin(PT[3]);
+
+                           // v3 single-sided gate (same gate the energy/grad
+                           // kernels use). If neither end's sticky face is on
+                           // the contact side, leave β unchanged (it'll
+                           // naturally stay 0 since the new-pair-init kernel
+                           // also gates it).
+                           if(!PT_sticky_gate(sticky_sign(PT[0]),
+                                              sticky_sign(PT[1]),
+                                              vert_normal(PT[0]),
+                                              vert_normal(PT[1]),
+                                              P, T0, T1, T2))
+                               return;
 
                            Float D;
                            point_triangle_distance2(P, T0, T1, T2, D);
@@ -1026,6 +1303,10 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
 
         // Snapshot positions for next step's u-signal.
         m_pos_at_step_begin.view().copy_from(positions);
+
+        // v3: refresh lagged vertex normals from the new begin-of-next-step
+        // positions. Held constant through the next frame's Newton iters.
+        _recompute_vertex_normals(m_pos_at_step_begin.view());
     }
 };
 

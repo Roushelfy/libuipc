@@ -3,7 +3,9 @@
 #include <uipc/core/contact_model_collection.h>
 #include <uipc/geometry/attribute_collection.h>
 #include <uipc/geometry/attribute_slot.h>
+#include <uipc/geometry/simplicial_complex.h>
 #include <uipc/common/log.h>
+#include <algorithm>
 
 namespace uipc::constitution
 {
@@ -157,5 +159,18 @@ void RCCAdhesive::default_model(core::ContactTabular& tabular,
     apply_to(tabular);
     // ContactTabular always has a default model at row 0.
     _write_row(tabular, 0, Cn, Ct, W, eta, bonding_rate, p0, initial_beta, enabled);
+}
+
+void RCCAdhesive::set_sticky_side(geometry::SimplicialComplex& geo, IndexT sign)
+{
+    UIPC_ASSERT(sign == -1 || sign == 0 || sign == 1,
+                "RCCAdhesive::set_sticky_side: sign must be -1, 0, or +1; got {}.",
+                sign);
+
+    auto attr = geo.vertices().find<IndexT>("rcc_sticky_sign");
+    if(!attr)
+        attr = geo.vertices().create<IndexT>("rcc_sticky_sign", sign);
+    else
+        std::ranges::fill(geometry::view(*attr), sign);
 }
 }  // namespace uipc::constitution

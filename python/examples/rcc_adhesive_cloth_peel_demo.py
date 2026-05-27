@@ -83,7 +83,7 @@ SPACING      = CLOTH_SIZE / N
 
 # top face of the cube is at y = CUBE_CENTER_Y + CUBE_SCALE / 2
 TOP_FACE_Y   = CUBE_CENTER_Y + 0.5 * CUBE_SCALE
-Y_BONDED     = TOP_FACE_Y + 0.012   # just above the cube (inside IPC band)
+Y_BONDED     = TOP_FACE_Y + 0.019   # just above the cube (inside IPC band)
 Y_LIFTED     = TOP_FACE_Y + 0.45    # peeled-up height
 
 # ---- timeline (frames at dt=0.01) ----
@@ -156,7 +156,7 @@ def build_demo(adhesion_on: bool):
 
     config = Scene.default_config()
     config["dt"] = 0.01
-    config["gravity"] = [[0.0], [0.0], [0.0]]
+    config["gravity"] = [[0.0], [-9.8], [0.0]]
     config["contact"]["enable"] = True
     config["contact"]["friction"]["enable"] = True
     # v1 adhesion reach is bounded by the IPC active band; widen it slightly.

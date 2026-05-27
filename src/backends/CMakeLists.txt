@@ -10,6 +10,27 @@ add_library(uipc::backends ALIAS uipc_backends)
 set(UIPC_BACKENDS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
+# Auto-sync rebuilt backend .so files to the venv's pyuipc/_native directory.
+# Without this, a `cmake --build --target cuda` re-link will leave the
+# Python-side pyuipc loading a stale backend (the `pip install` step that
+# would refresh it only runs when the pyuipc target itself rebuilds). This
+# detection is best-effort: if pyuipc isn't installed yet, the post-build
+# step is skipped silently.
+# ---------------------------------------------------------------------------
+execute_process(
+    COMMAND "${UIPC_PYTHON_EXECUTABLE_PATH}" -c
+        "import os, sys\ntry:\n    import uipc\n    print(os.path.dirname(uipc.__file__) + '/_native', end='')\nexcept ImportError:\n    pass"
+    OUTPUT_VARIABLE _UIPC_PYUIPC_NATIVE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(_UIPC_PYUIPC_NATIVE_DIR AND IS_DIRECTORY "${_UIPC_PYUIPC_NATIVE_DIR}")
+    set(UIPC_PYUIPC_NATIVE_DIR "${_UIPC_PYUIPC_NATIVE_DIR}")
+    uipc_info("Backend auto-sync enabled: rebuilt .so files will be copied to ${UIPC_PYUIPC_NATIVE_DIR}")
+else()
+    uipc_info("pyuipc not yet installed; backend auto-sync disabled (will activate after first `pip install`).")
+endif()
+
+# ---------------------------------------------------------------------------
 # function to set some common properties for backends
 # ---------------------------------------------------------------------------
 function(uipc_add_backend name)
@@ -48,6 +69,17 @@ function(uipc_add_backend name)
 
     # install the target
     uipc_install_target(${name})
+
+    # Auto-sync rebuilt backend to pyuipc venv. See header note above.
+    if(UIPC_PYUIPC_NATIVE_DIR)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:${name}>"
+                "${UIPC_PYUIPC_NATIVE_DIR}/$<TARGET_FILE_NAME:${name}>"
+            COMMENT "[uipc] sync ${name} → ${UIPC_PYUIPC_NATIVE_DIR}"
+            VERBATIM
+        )
+    endif()
 endfunction()
 
 

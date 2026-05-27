@@ -5,6 +5,11 @@
 #include <uipc/core/contact_element.h>
 #include <uipc/core/contact_tabular.h>
 
+namespace uipc::geometry
+{
+class SimplicialComplex;
+}  // namespace uipc::geometry
+
 namespace uipc::constitution
 {
 // RCC Adhesion frontend handle (augmented IPC for sticky interactions;
@@ -60,6 +65,20 @@ class UIPC_CONSTITUTION_API RCCAdhesive
                        Float                 p0,
                        Float                 initial_beta,
                        bool                  enabled = true) const;
+
+    /// Mark a shell geometry's sticky face for v3 single-sided adhesion.
+    ///
+    /// `sign = +1`  → the +n̂ face (the face that the triangle winding makes
+    ///                outward) is the sticky face.
+    /// `sign = -1`  → the -n̂ face is sticky.
+    /// `sign = 0`   → double-sided (identical to v2 behaviour; this is the
+    ///                default if `set_sticky_side` is never called).
+    ///
+    /// Writes/overwrites the per-vertex `rcc_sticky_sign` <IndexT> attribute
+    /// on the geometry, broadcast-filling every vertex with the same sign.
+    /// The CUDA backend reads this attribute once at scene init and gates
+    /// adhesion contributions accordingly.
+    static void set_sticky_side(geometry::SimplicialComplex& geo, IndexT sign);
 
     U64         get_uid() const noexcept;
     static Json default_config() noexcept;
