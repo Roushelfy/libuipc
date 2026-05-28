@@ -394,6 +394,20 @@ def make_wound_tape(hub_R_outer: float,
 # ----------------------------------------------------------------------
 # Save / load
 # ----------------------------------------------------------------------
+def filter_cfg_for_save(cfg: dict) -> dict:
+    """Strip runtime / CLI bookkeeping fields from a parsed cfg so the
+    remainder can be serialized into an asset .npz under `params`.
+
+    Drops `__explicit__` (a Python set tracking which keys the user
+    overrode on the CLI), `__list_assets__` and `__asset_arg__`
+    (transient CLI flags). Keeps `__preset_name__` (provenance) and
+    every actual parameter so a later loader sees exactly what config
+    the sim ran with.
+    """
+    transient = {"__explicit__", "__list_assets__", "__asset_arg__"}
+    return {k: v for k, v in cfg.items() if k not in transient}
+
+
 def save_tape_asset(npz_path: str,
                     hub_transform: np.ndarray,
                     tape_positions: np.ndarray,
@@ -522,10 +536,10 @@ WIND_PRESETS = {
         # bonding_rate=5 a layer under sustained SPC compression reaches
         # β≈1 within a few frames — by the time it's saved into the asset,
         # the wound region is fully bonded.
-        "ADH_CN":            1.0e4,
-        "ADH_CT":            1.0e5,
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
-        "ADH_ETA":           2.0,
+        "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
     },
@@ -561,10 +575,10 @@ WIND_PRESETS = {
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
-        "ADH_CN":            1.0e4,
-        "ADH_CT":            1.0e5,
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
-        "ADH_ETA":           2.0,
+        "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
     },
@@ -586,10 +600,10 @@ WIND_PRESETS = {
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
-        "ADH_CN":            1.0e4,
-        "ADH_CT":            1.0e5,
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
-        "ADH_ETA":           2.0,
+        "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
     },
@@ -614,10 +628,10 @@ WIND_PRESETS = {
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
-        "ADH_CN":            1.0e4,
-        "ADH_CT":            1.0e5,
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
-        "ADH_ETA":           2.0,
+        "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
     },
@@ -639,10 +653,10 @@ WIND_PRESETS = {
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
-        "ADH_CN":            1.0e4,
-        "ADH_CT":            1.0e5,
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
-        "ADH_ETA":           2.0,
+        "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
     },
@@ -658,24 +672,28 @@ WIND_PRESETS = {
 # ----------------------------------------------------------------------
 UNWIND_PRESETS = {
     "default": {
-        # Original unwind-demo defaults — the working config from before
-        # the Temflex sweep. Matches the wind-demo "default" IPC band
-        # (TAPE_THICKNESS=0.1mm, D_HAT=1mm), so it pairs naturally with
-        # an asset saved by `wind --preset default`.
+        # Mirrors WIND_PRESETS["temflex175"] — material + IPC numerics +
+        # adhesion all match, so a wound asset from `wind --preset
+        # temflex175` round-trips cleanly into `unwind --preset default`
+        # without any IPC-band or material mismatch. SPC_STRENGTH is the
+        # unwind-only knob (pull stiffness for the peel animation).
         "TAPE_YOUNGS":       1.0e9,
-        "TAPE_POISSON":      0.4,
+        "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         # IPC dims — should match the wind asset's; left here as
         # fallback for legacy .npz files without saved IPC.
-        "TAPE_THICKNESS":    1.0e-4,
-        "D_HAT_RATIO":       10.0,        # → D_HAT = 1.0e-3
-        # Adhesion (the user's iterated values)
-        "ADH_CN":            5.0e1,
-        "ADH_CT":            2.0e3,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
+        # Adhesion — same values used during wind. With β restored from
+        # the asset via RCCAdhesionStateAccessorFeature, this gets the
+        # wound layers back to their bonded state at frame 0; new tail
+        # contacts use ADH_INITIAL_BETA=0 so they don't auto-bond.
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
         "ADH_W":             1.0,
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  1.0,
-        "ADH_INITIAL_BETA":  1.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
         # Pull stiffness
         "SPC_STRENGTH":      1.0e9,
     },

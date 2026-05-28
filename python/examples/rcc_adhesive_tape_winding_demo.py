@@ -142,10 +142,12 @@ ANCHOR_ROWS       = 3
 # ---- timeline (dt=0.01) ----
 # Free-end tangential speed = r · ω. At start, r ≈ TAPE_LENGTH, so a
 # fast schedule launches the free end at ~5 m/s — way past d_hat per
-# step. WIND_FRAMES = 1500 (= 3 s/turn) keeps it under ~2 m/s and
-# gives IPC time to engage each new contact pair.
+# step. WIND_FRAMES = 4500 (~9 s/turn) keeps it well under 1 m/s and
+# gives IPC time to engage each new contact pair (3× slower than the
+# previous default; the slower pull also lets β grow more under each
+# new layer's compression before the next layer rolls on).
 PREHEAT_FRAMES    = 30
-WIND_FRAMES       = 1500
+WIND_FRAMES       = 4500
 SETTLE_FRAMES     = 60
 TOTAL_FRAMES      = PREHEAT_FRAMES + WIND_FRAMES + SETTLE_FRAMES
 THETA_END         = 2.0 * np.pi * N_TURNS
@@ -493,22 +495,14 @@ def run_demo():
         tape_geo = sim["tape_geo"].geometry()
         hub_T = np.array(view(hub_geo.transforms()), copy=True).reshape(4, 4)
         tape_pos = np.array(view(tape_geo.positions()), copy=True).reshape(-1, 3)
-        params = dict(
-            # geometry (needed to rebuild SC topology on load)
-            HUB_R_OUTER=HUB_R_OUTER, HUB_R_INNER=HUB_R_INNER,
-            HUB_HEIGHT=HUB_HEIGHT,
-            N_TURNS=N_TURNS, TAPE_LENGTH=TAPE_LENGTH,
-            TAPE_WIDTH=TAPE_WIDTH,
-            TAPE_NX=TAPE_NX, TAPE_NZ=TAPE_NZ,
-            # IPC numerics — unwind MUST match these to keep the active
-            # band aligned. Stored so the unwind demo can warn on mismatch.
-            TAPE_THICKNESS=TAPE_THICKNESS, D_HAT=D_HAT,
-            # material params (informational; unwind can use different ones)
-            TAPE_YOUNGS=TAPE_YOUNGS, TAPE_POISSON=TAPE_POISSON,
-            TAPE_MASS_DENSITY=TAPE_MASS_DENSITY,
-            # provenance
-            __preset_name__=_CFG["__preset_name__"],
-        )
+        # Dump the full parsed cfg (geometry + IPC numerics + material +
+        # adhesion + provenance), minus runtime CLI bookkeeping. Plus
+        # `TAPE_NX`, which is derived at module-init and not part of
+        # _CFG. This way the .npz is self-describing — every param the
+        # sim actually used (after `--set` overrides and D_HAT_RATIO
+        # derivation) is preserved verbatim.
+        params = L.filter_cfg_for_save(_CFG)
+        params["TAPE_NX"] = TAPE_NX
         # Snapshot the RCC adhesion β state so unwind/drop demos can restore
         # the wound bond at frame 0. Only the prev-step (keys, β) snapshot is
         # exposed — that's exactly what Phase B match_or_init reads at the

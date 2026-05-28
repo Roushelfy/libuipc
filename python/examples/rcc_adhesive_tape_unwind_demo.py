@@ -336,6 +336,16 @@ def build_demo(adhesion_on: bool = True):
     state = {
         "target_xy": wound_free_pos[:, :2].mean(axis=0).copy(),
         "last_perp": np.array([1.0, 0.0]),
+        # Free-end SPC toggle. When False, animate_tape skips ALL
+        # free-end is_constrained/aim_position writes — the tape's
+        # outer row is unconstrained and only governed by physics
+        # (elasticity + adhesion + contact). Toggled live from the UI.
+        "pull_enabled":     True,
+        # OFF→ON edge marker. animate_tape consumes this to snap
+        # target_xy back onto the live free-end center (so the pull
+        # resumes from wherever the tape currently is, not from where
+        # the target was stale-frozen at).
+        "pull_needs_reset": False,
     }
 
     def _compute_live_perp(geo) -> np.ndarray:
@@ -368,6 +378,20 @@ def build_demo(adhesion_on: bool = True):
         for jj, k in enumerate(anchor_ids):
             is_c[k] = 1
             aim[k] = wound_anchor_pos[jj].reshape(3, 1)
+
+        # Free-end SPC is gated by the UI toggle. When disabled,
+        # leave free_ids unconstrained and freeze target advancement
+        # so re-enabling resumes from the live geometry.
+        if not state["pull_enabled"]:
+            return
+
+        # OFF→ON edge: snap target back onto the current free-end
+        # center so the SPC doesn't yank the tape from wherever the
+        # tape drifted to back to a stale target.
+        if state["pull_needs_reset"]:
+            pos = np.asarray(view(geo.positions())).reshape(-1, 3)
+            state["target_xy"] = pos[free_ids][:, :2].mean(axis=0).copy()
+            state["pull_needs_reset"] = False
 
         # Advance the free-end target along the peel direction. The
         # direction is re-sampled from the live geometry every
@@ -410,6 +434,17 @@ def build_demo(adhesion_on: bool = True):
         "scene_io": SceneIO(scene),
         "hub_geo": hub_geo, "tape_geo": tape_geo,
         "params": params,
+        # Effective IPC numerics actually used by the running sim
+        # (may differ from the module-level preset values when the
+        # asset's saved IPC overrides them — see the "← asset" log
+        # above). `save_asset` reuses these to keep the snapshot
+        # consistent with what was simulated.
+        "D_HAT_eff":          D_HAT,
+        "TAPE_THICKNESS_eff": TAPE_THICKNESS,
+        # Animator state dict — the UI's "pull" toggle button flips
+        # state["pull_enabled"] and arms state["pull_needs_reset"]
+        # to make the OFF→ON edge resume from the live tape pose.
+        "anim_state":         state,
     }
 
 
@@ -470,6 +505,70 @@ def run_demo():
         sim = build_demo(state["adhesion_on"])
         update_visual()
 
+    def save_asset():
+        """Snapshot the paused-frame state as a fresh .npz.
+
+        Captures the current hub transform, current tape positions, the
+        full params dict that was loaded with the original asset (so the
+        downstream loader gets the same geometry / IPC / material), and
+        — when adhesion is on — the live per-pair β snapshot via
+        RCCAdhesionStateAccessorFeature. Saved to
+        ASSET_DIR/<input_stem>_paused_F<frame>.npz so it doesn't clobber
+        the source asset.
+        """
+        sim["world"].retrieve()
+        hub_geo  = sim["hub_geo"].geometry()
+        tape_geo = sim["tape_geo"].geometry()
+        hub_T    = np.array(view(hub_geo.transforms()), copy=True).reshape(4, 4)
+        tape_pos = np.array(view(tape_geo.positions()), copy=True).reshape(-1, 3)
+
+        # Merge order (later wins):
+        #   1) source asset's params  — keeps wind-time geometry +
+        #      provenance fields that the unwind cfg doesn't carry
+        #      (HUB_*, TAPE_LENGTH, TAPE_NX, etc.).
+        #   2) the full unwind cfg    — every preset/--set value
+        #      actually driving this sim (material, adhesion, IPC,
+        #      and `__preset_name__` = unwind preset).
+        #   3) effective IPC numerics — what the sim REALLY used,
+        #      which can differ from the unwind cfg when the asset
+        #      itself overrode them (build_demo's "← asset" logic).
+        #   4) provenance fields chaining back to the source asset.
+        source_preset = sim["params"].get("__preset_name__", "?")
+        out_params = dict(sim["params"])
+        out_params.update(L.filter_cfg_for_save(_CFG))
+        out_params["TAPE_THICKNESS"]     = sim["TAPE_THICKNESS_eff"]
+        out_params["D_HAT"]              = sim["D_HAT_eff"]
+        out_params["__source_preset__"]  = source_preset
+        out_params["__unwind_preset__"]  = _CFG["__preset_name__"]
+        out_params["__unwind_source__"]  = os.path.basename(ASSET_IN_PATH)
+        out_params["__unwind_frame__"]   = int(sim["world"].frame())
+
+        pair_state = None
+        if state["adhesion_on"]:
+            acc = sim["world"].features().find(RCCAdhesionStateAccessorFeature)
+            if acc is not None:
+                keys, betas = acc.dump_pt_state()
+                pair_state = (keys, betas)
+
+        # Output path: <input_stem>_paused_F<frame>.npz in the asset dir.
+        stem = os.path.splitext(os.path.basename(ASSET_IN_PATH))[0]
+        f    = int(sim["world"].frame())
+        out_path = os.path.join(ASSET_DIR, f"{stem}_paused_F{f}.npz")
+        os.makedirs(ASSET_DIR, exist_ok=True)
+        L.save_tape_asset(out_path, hub_T, tape_pos, out_params,
+                          pair_state=pair_state)
+        print(f"saved paused-state asset → {out_path}")
+        if pair_state is not None:
+            keys, betas = pair_state
+            if len(betas):
+                print(f"  β snapshot: n={len(betas)} pairs, "
+                      f"mean={betas.mean():.3f}, "
+                      f"frac>0.9={(betas > 0.9).mean():.2%}")
+            else:
+                print("  β snapshot: 0 PT pairs (no active contacts)")
+        else:
+            print("  (adhesion off; β not saved)")
+
     def on_update():
         if psim.Button("run / pause"):
             ui["run"] = not ui["run"]
@@ -480,8 +579,21 @@ def run_demo():
         if psim.Button(f"adhesion: {'ON' if state['adhesion_on'] else 'OFF'}"):
             state["adhesion_on"] = not state["adhesion_on"]
         psim.SameLine()
+        anim = sim["anim_state"]
+        if psim.Button(f"pull: {'ON' if anim['pull_enabled'] else 'OFF'}"):
+            was_on = anim["pull_enabled"]
+            anim["pull_enabled"] = not was_on
+            # OFF→ON: arm a one-shot reset so the SPC target snaps
+            # onto wherever the free end currently is, instead of
+            # yanking back to the stale target_xy.
+            if not was_on:
+                anim["pull_needs_reset"] = True
+        psim.SameLine()
         if psim.Button("reset"):
             reset()
+        psim.SameLine()
+        if psim.Button("save asset"):
+            save_asset()
 
         if ui["run"]:
             step_once()
@@ -498,7 +610,8 @@ def run_demo():
             p = (f1 - HOLD_FRAMES) / PULL_FRAMES
         else:
             p = 1.0
-        psim.Text(f"Pull: {p*100:.1f}%  ({p*PULL_DISTANCE*1000:.0f} mm of {PULL_DISTANCE*1000:.0f} mm)")
+        pull_state = "ENABLED" if sim["anim_state"]["pull_enabled"] else "DISABLED (free end)"
+        psim.Text(f"Pull: {p*100:.1f}%  ({p*PULL_DISTANCE*1000:.0f} mm of {PULL_DISTANCE*1000:.0f} mm)  SPC: {pull_state}")
         psim.Text(f"Adhesion: {'ENABLED' if state['adhesion_on'] else 'DISABLED'}")
 
     ps.set_user_callback(on_update)
