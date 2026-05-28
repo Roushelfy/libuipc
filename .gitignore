@@ -45,3 +45,11 @@ vsxmake*/
 # venv
 .venv/
 .omc/
+
+# pyuipc in-tree build artifacts (auto-synced by CMakeLists; the
+# *.so binaries and pybind-generated *.pyi stubs in
+# python/src/uipc/_native/ are regenerated on every build).
+python/src/uipc/_native/*.so
+python/src/uipc/_native/*.so.*
+python/src/uipc/_native/__init__.pyi
+python/src/uipc/_native/pyuipc/
