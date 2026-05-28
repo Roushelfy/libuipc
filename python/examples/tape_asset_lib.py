@@ -474,7 +474,11 @@ WIND_PRESETS = {
         "TAPE_POISSON":      0.4,
         "TAPE_MASS_DENSITY": 2.0e2,
         "TAPE_THICKNESS":    1.0e-4,
-        "D_HAT":             1.0e-3,
+        # D_HAT_RATIO: d_hat = D_HAT_RATIO * TAPE_THICKNESS, so reducing
+        # TAPE_THICKNESS auto-shrinks the IPC active band. Avoids stale
+        # d_hat triggering spurious self-contact on fine meshes. Explicit
+        # `--set D_HAT=...` still overrides if needed.
+        "D_HAT_RATIO":       10.0,     # → D_HAT = 1.0e-3
         "LAYER_THICKNESS":   7.0e-4,
         "BUFFER_LENGTH":     0.04,     # wind demo: free-bend window length
     },
@@ -505,7 +509,7 @@ WIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,   # = ½ physical 0.178 mm
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,   # > 2·t=0.18mm, < 2·t+D_HAT=0.58mm
         "BUFFER_LENGTH":     0.04,
     },
@@ -522,7 +526,7 @@ WIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,
         "BUFFER_LENGTH":     0.04,
     },
@@ -542,7 +546,7 @@ WIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    1.78e-4,
-        "D_HAT":             6.0e-4,
+        "D_HAT_RATIO":       6.0 / 1.78,  # ≈ 3.371 → D_HAT = 6.0e-4
         "LAYER_THICKNESS":   4.5e-4,
         "BUFFER_LENGTH":     0.04,
     },
@@ -559,7 +563,7 @@ WIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,
         "BUFFER_LENGTH":     0.04,
     },
@@ -585,7 +589,7 @@ UNWIND_PRESETS = {
         # IPC dims — should match the wind asset's; left here as
         # fallback for legacy .npz files without saved IPC.
         "TAPE_THICKNESS":    1.0e-4,
-        "D_HAT":             1.0e-3,
+        "D_HAT_RATIO":       10.0,        # → D_HAT = 1.0e-3
         # Adhesion (the user's iterated values)
         "ADH_CN":            5.0e1,
         "ADH_CT":            2.0e3,
@@ -603,7 +607,7 @@ UNWIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "ADH_CN":            1.0e1,
         "ADH_CT":            1.0e2,
         "ADH_W":             0.5,
@@ -618,7 +622,7 @@ UNWIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
@@ -634,7 +638,7 @@ UNWIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "ADH_CN":            1.0e3,
         "ADH_CT":            1.0e4,
         "ADH_W":             2.0,
@@ -651,7 +655,7 @@ UNWIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
@@ -667,7 +671,7 @@ UNWIND_PRESETS = {
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
-        "D_HAT":             4.0e-4,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
@@ -725,6 +729,7 @@ def parse_tape_cli(presets: dict, argv=None) -> dict:
         _sys.exit(0)
 
     cfg = dict(presets[args.preset])
+    explicitly_set = set()
     for kv in args.overrides:
         if "=" not in kv:
             raise SystemExit(f"--set expects KEY=VALUE, got: {kv}")
@@ -739,9 +744,58 @@ def parse_tape_cli(presets: dict, argv=None) -> dict:
                 cfg[key] = float(val)
             except ValueError:
                 cfg[key] = val
+        explicitly_set.add(key)
+
+    # Auto-derive D_HAT unless `--set D_HAT=X` is given. Two candidates,
+    # take the smaller (conservative against spurious self-contact):
+    #
+    #   (1) thickness-based:  D_HAT = D_HAT_RATIO × TAPE_THICKNESS
+    #         Base value tuned per material/preset. Doesn't know about mesh
+    #         resolution — wins when the mesh is coarse enough.
+    #
+    #   (2) mesh-aware clamp: D_HAT = D_HAT_SAFETY × h/√2 − 2·TAPE_THICKNESS
+    #         where h = min(TAPE_WIDTH/TAPE_NZ, TAPE_LENGTH/TAPE_NX) is the
+    #         smaller in-plane cell side. Enforces that the IPC active band
+    #         [2t, 2t+d_hat] stays narrower than the cell's interior
+    #         self-distance ≈ h/√2, so a flat tape at rest doesn't trigger
+    #         neighbour-cell self-contact. D_HAT_SAFETY defaults to 0.8.
+    #         TAPE_NX falls back to the square-cell rule
+    #         (round(TAPE_LENGTH/(TAPE_WIDTH/TAPE_NZ))) if not given —
+    #         matches what rcc_adhesive_tape_winding_demo.py uses.
+    #
+    # So increasing TAPE_NZ (refining the mesh) shrinks the mesh-aware
+    # candidate, and once it drops below the thickness-based one it takes
+    # over → D_HAT auto-tracks NZ without the user thinking about it.
+    if "D_HAT" not in explicitly_set:
+        candidates = []
+        if "D_HAT_RATIO" in cfg and "TAPE_THICKNESS" in cfg:
+            candidates.append(float(cfg["D_HAT_RATIO"]) * float(cfg["TAPE_THICKNESS"]))
+        if all(k in cfg for k in ("TAPE_THICKNESS", "TAPE_WIDTH",
+                                  "TAPE_LENGTH", "TAPE_NZ")):
+            nz = float(cfg["TAPE_NZ"])
+            if "TAPE_NX" in cfg:
+                nx = float(cfg["TAPE_NX"])
+            else:
+                # square-cell default (mirrors the demo's derivation)
+                nx = max(1.0, round(float(cfg["TAPE_LENGTH"]) * nz
+                                    / float(cfg["TAPE_WIDTH"])))
+            h = min(float(cfg["TAPE_WIDTH"]) / nz,
+                    float(cfg["TAPE_LENGTH"]) / nx)
+            safety = float(cfg.get("D_HAT_SAFETY", 0.8))
+            cfg["D_HAT_SAFETY"] = safety   # surface in --list
+            d_hat_mesh = safety * h / np.sqrt(2.0) - 2.0 * float(cfg["TAPE_THICKNESS"])
+            if d_hat_mesh > 0.0:
+                candidates.append(d_hat_mesh)
+        if candidates:
+            cfg["D_HAT"] = min(candidates)
+
     cfg["__preset_name__"] = args.preset
     cfg["__asset_arg__"] = args.asset
     cfg["__list_assets__"] = args.list_assets
+    # Record which keys the user touched on the CLI — used by the unwind
+    # demo so asset-saved values (D_HAT, TAPE_THICKNESS, …) override the
+    # preset's literals for keys the user didn't explicitly --set.
+    cfg["__explicit__"] = explicitly_set
     return cfg
 
 

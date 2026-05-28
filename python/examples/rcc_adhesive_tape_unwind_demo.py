@@ -74,8 +74,12 @@ print(f"[unwind] preset={_CFG['__preset_name__']}: "
       f"Cn={_CFG['ADH_CN']:.1e}, Ct={_CFG['ADH_CT']:.1e}, W={_CFG['ADH_W']}, "
       f"η={_CFG['ADH_ETA']}, SPC={_CFG['SPC_STRENGTH']:.1e}")
 
-# ---- IPC contact band (preset value is a fallback; build_demo prefers
-# what's stored in the asset's params dict — see warning logic there) ----
+# ---- IPC contact band — preset value is only a fallback.
+# `build_demo()` overrides D_HAT and TAPE_THICKNESS from the loaded asset
+# unless the user passed `--set D_HAT=...` / `--set TAPE_THICKNESS=...`
+# on the CLI. The asset's IPC band must match the geometry that the wind
+# step laid out (e.g. wind with TAPE_NZ=20 saves a smaller D_HAT — unwind
+# has to use the same so the layers don't pop on frame 0).
 D_HAT             = _CFG["D_HAT"]
 TAPE_THICKNESS    = _CFG["TAPE_THICKNESS"]
 
@@ -190,19 +194,31 @@ def build_demo(adhesion_on: bool = True):
     TAPE_NX     = int(params["TAPE_NX"])
     TAPE_NZ     = int(params["TAPE_NZ"])
 
-    # Warn if the asset's saved IPC params don't match the current preset.
-    # The active barrier band shifts otherwise → init penetration or
-    # missed contacts.
-    saved_t = params.get("TAPE_THICKNESS", None)
-    saved_dhat = params.get("D_HAT", None)
     saved_preset = params.get("__preset_name__", "(unknown)")
     print(f"loaded asset [preset={saved_preset}]: tape ({TAPE_NX+1}×{TAPE_NZ+1} verts), "
           f"hub R∈[{HUB_R_INNER},{HUB_R_OUTER}], L_tape={TAPE_LENGTH:.3f} m")
-    if saved_t is not None and abs(saved_t - TAPE_THICKNESS) > 1e-9:
-        print(f"  WARNING: TAPE_THICKNESS mismatch — asset={saved_t}, "
-              f"current={TAPE_THICKNESS}. IPC band will shift.")
-    if saved_dhat is not None and abs(saved_dhat - D_HAT) > 1e-9:
-        print(f"  WARNING: D_HAT mismatch — asset={saved_dhat}, current={D_HAT}.")
+
+    # Asset's saved IPC params win by default (must match the geometry
+    # the wind step laid out). User `--set D_HAT=...` /
+    # `--set TAPE_THICKNESS=...` on the CLI still overrides.
+    explicit = _CFG.get("__explicit__", set())
+    asset_t = params.get("TAPE_THICKNESS", None)
+    asset_dhat = params.get("D_HAT", None)
+    D_HAT_eff = _CFG["D_HAT"]
+    TAPE_THICKNESS_eff = _CFG["TAPE_THICKNESS"]
+    if asset_dhat is not None and "D_HAT" not in explicit:
+        D_HAT_eff = float(asset_dhat)
+    if asset_t is not None and "TAPE_THICKNESS" not in explicit:
+        TAPE_THICKNESS_eff = float(asset_t)
+    if abs(D_HAT_eff - _CFG["D_HAT"]) > 1e-12:
+        print(f"  D_HAT          ← asset {D_HAT_eff:.4e}  "
+              f"(preset value {_CFG['D_HAT']:.4e} overridden)")
+    if abs(TAPE_THICKNESS_eff - _CFG["TAPE_THICKNESS"]) > 1e-12:
+        print(f"  TAPE_THICKNESS ← asset {TAPE_THICKNESS_eff:.4e}  "
+              f"(preset value {_CFG['TAPE_THICKNESS']:.4e} overridden)")
+    # Shadow the module-level fallbacks for the rest of build_demo.
+    D_HAT = D_HAT_eff
+    TAPE_THICKNESS = TAPE_THICKNESS_eff
 
     # Anchor radius identical to the wind demo's so positions match.
     R_ANCHOR = HUB_R_OUTER + TAPE_THICKNESS + 0.5 * D_HAT
