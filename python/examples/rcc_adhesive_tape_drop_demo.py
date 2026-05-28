@@ -2,18 +2,21 @@
 Tape-roll-on-its-side drop demo.
 
 Loads a wound-tape asset (saved by `rcc_adhesive_tape_winding_demo.py`)
-and drops it on the ground:
+and stands it on the ground:
 
-  - the wind demo already saves the roll with hub axis along world +z
-    (i.e. lying on its side, round face facing ±z). All we do here is
-    shift the assembly up so the lowest tape vertex sits one IPC-band
+  - the wind demo saves the roll with hub axis along world +z; we
+    rotate the whole assembly by R_x(-90°) so the hub axis lands on
+    world +y (vertical — like a tape dispenser standing on a desk).
+  - then translate it upward so the lowest vertex sits one IPC-band
     offset above the ground (tape thickness + ½ d_hat) — gives the
     barrier something to engage with at frame 0.
   - hub is NOT fixed: it's an ABD body free to move under gravity.
   - no SPC anchor on the tape, no pull animation. The wound layers and
     the inner-most layer–to–hub bond are held together purely by RCC
     adhesion (β=1 at frame 0 per the preset).
-  - ground at y=0, gravity (0, -9.8, 0).
+  - ground = libuipc's implicit half-plane at y=0 (the contact engine
+    uses it; polyscope shows a matching flat quad for visualization).
+  - gravity (0, -9.8, 0).
 
 Adhesion preset comes from `UNWIND_PRESETS` (`rigid`/`strong-bond`
 recommended — soft-bond may not survive elastic + gravity loads).
@@ -141,25 +144,53 @@ def _mat4_to_uipc(M: np.ndarray) -> Matrix4x4:
 
 
 # ----------------------------------------------------------------------
-# Lay the roll on the ground: the wind demo already saves the wound
-# assembly with hub axis along world +z (i.e. horizontal — the roll is
-# lying on its side around the xy plane, width direction along z).
-# All we have to do is translate the assembly upward so the lowest
-# tape vertex sits a small clearance above the ground at y=0.
+# Stand the roll on the ground.
+#
+# Asset frame: wind demo saves the roll with hub axis along world +z
+# (axis horizontal; the round face faces ±z). To make it stand up like
+# a tape dispenser on a desk, we apply R_x(-90°) which sends world +z
+# to world +y. Under that rotation, vertex (x, y, z) → (x, z, -y).
+#
+# Then we shift upward in +y so the lowest geometry point (hub or
+# tape — hub is usually slightly taller than the tape width) sits
+# `ground_clearance` above the ground plane y=0.
 # ----------------------------------------------------------------------
-def _lay_on_ground(tape_pos: np.ndarray,
-                   hub_T:    np.ndarray,
-                   ground_clearance: float):
-    """Return (tape_pos_new, hub_T_new) shifted up in +y so the lowest
-    tape vertex is `ground_clearance` above the ground plane (y=0)."""
-    min_y = tape_pos[:, 1].min()
+_R_X_NEG90 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, -1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+])
+
+
+def _stand_on_ground(tape_pos: np.ndarray,
+                     hub_T:    np.ndarray,
+                     hub_height: float,
+                     ground_clearance: float):
+    """Return (tape_pos_new, hub_T_new) with the assembly rotated so
+    the hub axis stands vertical (+y) and translated so the lowest
+    point sits `ground_clearance` above y=0."""
+    # rotate tape verts: (x, y, z) → (x, z, -y)
+    tape_rot = np.column_stack([
+        tape_pos[:, 0],
+        tape_pos[:, 2],
+        -tape_pos[:, 1],
+    ])
+    hub_T_rot = _R_X_NEG90 @ hub_T
+
+    # After the rotation the hub's local +y axis ends up on world +y,
+    # so its local z-extent [-H/2, H/2] becomes the world y-extent
+    # [-H/2, H/2] around the hub's translated center. Use whichever is
+    # lower — tape or hub — as the contact reference.
+    hub_center_y = float(hub_T_rot[1, 3])
+    hub_bottom_y = hub_center_y - 0.5 * hub_height
+    min_y = min(float(tape_rot[:, 1].min()), hub_bottom_y)
+
     shift_y = ground_clearance - min_y
-    tape_new = tape_pos.copy()
-    tape_new[:, 1] += shift_y
+    tape_rot[:, 1] += shift_y
     T_shift = np.eye(4)
     T_shift[1, 3] = shift_y
-    hub_T_new = T_shift @ hub_T
-    return tape_new, hub_T_new
+    return tape_rot, T_shift @ hub_T_rot
 
 
 # ----------------------------------------------------------------------
@@ -205,11 +236,14 @@ def build_demo(adhesion_on: bool = True):
     D_HAT = D_HAT_eff
     TAPE_THICKNESS = TAPE_THICKNESS_eff
 
-    # ---- lay the roll on the ground, lowest point inside the IPC band ----
+    # ---- stand the roll on the ground (axis +y), lowest point inside
+    # the IPC band so the barrier engages on frame 0
     GROUND_CLEARANCE = TAPE_THICKNESS + 0.5 * D_HAT
-    tape_pos_lay, hub_T_lay = _lay_on_ground(tape_pos, hub_T, GROUND_CLEARANCE)
-    lowest_y = tape_pos_lay[:, 1].min()
-    print(f"[drop] lowest tape vertex y = {lowest_y*1e3:.3f} mm "
+    tape_pos_lay, hub_T_lay = _stand_on_ground(
+        tape_pos, hub_T, HUB_HEIGHT, GROUND_CLEARANCE)
+    hub_bottom_y = float(hub_T_lay[1, 3]) - 0.5 * HUB_HEIGHT
+    print(f"[drop] hub bottom y={hub_bottom_y*1e3:.3f} mm, "
+          f"tape lowest y={tape_pos_lay[:,1].min()*1e3:.3f} mm "
           f"(IPC band offset = {GROUND_CLEARANCE*1e3:.3f} mm above ground)")
 
     workspace = AssetDir.output_path(__file__)
@@ -312,6 +346,23 @@ def run_demo():
     ps.init()
     ps.set_ground_plane_mode("none")
     ps.set_up_dir("y_up")
+
+    # libuipc's `ground(0.0)` is an implicit half-plane — the contact
+    # engine uses it but SceneIO won't return it through
+    # `simplicial_surface()`, so we register a flat quad at y=0 just
+    # for visualization. Size: 1 m × 1 m centered at origin (much
+    # bigger than the roll's footprint).
+    ground_quad_verts = np.array([
+        [-0.5, 0.0, -0.5],
+        [ 0.5, 0.0, -0.5],
+        [ 0.5, 0.0,  0.5],
+        [-0.5, 0.0,  0.5],
+    ], dtype=np.float64)
+    ground_quad_tris = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+    ground_mesh = ps.register_surface_mesh(
+        "ground", ground_quad_verts, ground_quad_tris)
+    ground_mesh.set_color((0.6, 0.6, 0.6))
+    ground_mesh.set_transparency(0.5)
 
     def fresh_surface():
         return sim["scene_io"].simplicial_surface()
