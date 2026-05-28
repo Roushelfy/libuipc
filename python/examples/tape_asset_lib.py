@@ -397,7 +397,8 @@ def make_wound_tape(hub_R_outer: float,
 def save_tape_asset(npz_path: str,
                     hub_transform: np.ndarray,
                     tape_positions: np.ndarray,
-                    params: dict) -> None:
+                    params: dict,
+                    pair_state=None) -> None:
     """Save a wound tape asset.
 
     Stores:
@@ -407,19 +408,51 @@ def save_tape_asset(npz_path: str,
                           tape_width, layer_thickness, NZ, ds, etc.) so the
                           loader can reconstruct the SC topology with the
                           same generator call.
+        pair_state      : optional (keys, betas) tuple from
+                          RCCAdhesionStateAccessorFeature.dump_pt_state().
+                          `keys` is uint64 (sorted vertex-tuple hashes),
+                          `betas` is float64 (per-pair adhesion intensity).
+                          When provided, the unwind/drop demos can restore
+                          the wound bond state on load. When omitted, the
+                          .npz is backward-compatible with old loaders.
     """
-    np.savez(npz_path,
-             hub_transform=np.asarray(hub_transform, dtype=np.float64),
-             tape_positions=np.asarray(tape_positions, dtype=np.float64),
-             params=np.array([params], dtype=object))
+    payload = dict(
+        hub_transform=np.asarray(hub_transform, dtype=np.float64),
+        tape_positions=np.asarray(tape_positions, dtype=np.float64),
+        params=np.array([params], dtype=object),
+    )
+    if pair_state is not None:
+        keys, betas = pair_state
+        keys  = np.asarray(keys,  dtype=np.uint64)
+        betas = np.asarray(betas, dtype=np.float64)
+        if keys.shape != betas.shape:
+            raise ValueError(
+                f"save_tape_asset: pair_state keys/betas shape mismatch "
+                f"({keys.shape} vs {betas.shape})")
+        payload["pair_state_pt_keys"]  = keys
+        payload["pair_state_pt_betas"] = betas
+    np.savez(npz_path, **payload)
 
 
-def load_tape_asset(npz_path: str) -> Tuple[np.ndarray, np.ndarray, dict]:
-    """Inverse of save_tape_asset. Returns (hub_transform, tape_positions, params)."""
+def load_tape_asset(npz_path: str):
+    """Inverse of save_tape_asset.
+
+    Returns a 4-tuple:
+        hub_transform, tape_positions, params, pair_state
+
+    `pair_state` is either None (legacy asset without saved β) or a tuple
+    (keys_uint64, betas_float64) ready to feed into
+    RCCAdhesionStateAccessorFeature.load_pt_state().
+    """
     data = np.load(npz_path, allow_pickle=True)
+    pair_state = None
+    if "pair_state_pt_keys" in data.files:
+        pair_state = (np.asarray(data["pair_state_pt_keys"],  dtype=np.uint64),
+                      np.asarray(data["pair_state_pt_betas"], dtype=np.float64))
     return (data["hub_transform"],
             data["tape_positions"],
-            data["params"][0])
+            data["params"][0],
+            pair_state)
 
 
 # ----------------------------------------------------------------------
@@ -481,6 +514,20 @@ WIND_PRESETS = {
         "D_HAT_RATIO":       10.0,     # → D_HAT = 1.0e-3
         "LAYER_THICKNESS":   7.0e-4,
         "BUFFER_LENGTH":     0.04,     # wind demo: free-bend window length
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # initial_beta=0 makes new contacts start with NO adhesion force, so
+        # the β=0→1 jump that fires when trajectory-filter detects a fresh
+        # pair (and which used to cause visible jitter / line-search blips)
+        # is replaced by smooth growth via the bonding-rate rule. With
+        # bonding_rate=5 a layer under sustained SPC compression reaches
+        # β≈1 within a few frames — by the time it's saved into the asset,
+        # the wound region is fully bonded.
+        "ADH_CN":            1.0e4,
+        "ADH_CT":            1.0e5,
+        "ADH_W":             1.0,
+        "ADH_ETA":           2.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
     },
     # ===== 3M Temflex 175 vinyl electrical tape =====
     # Geometry from 3M's official datasheet:
@@ -512,6 +559,14 @@ WIND_PRESETS = {
         "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,   # > 2·t=0.18mm, < 2·t+D_HAT=0.58mm
         "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            1.0e4,
+        "ADH_CT":            1.0e5,
+        "ADH_W":             1.0,
+        "ADH_ETA":           2.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
     },
     "temflex175-3turn": {
         # Quick test: 3 turns instead of 5. Faster wind sim for iteration.
@@ -529,6 +584,14 @@ WIND_PRESETS = {
         "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,
         "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            1.0e4,
+        "ADH_CT":            1.0e5,
+        "ADH_W":             1.0,
+        "ADH_ETA":           2.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
     },
     "temflex175-thick": {
         # Sim TAPE_THICKNESS = full physical 0.178 mm. Larger IPC band
@@ -549,6 +612,14 @@ WIND_PRESETS = {
         "D_HAT_RATIO":       6.0 / 1.78,  # ≈ 3.371 → D_HAT = 6.0e-4
         "LAYER_THICKNESS":   4.5e-4,
         "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            1.0e4,
+        "ADH_CT":            1.0e5,
+        "ADH_W":             1.0,
+        "ADH_ETA":           2.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
     },
     "temflex175-10turn": {
         # 10 turns instead of 5 — more impressive spool, slower to sim.
@@ -566,6 +637,14 @@ WIND_PRESETS = {
         "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,
         "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            1.0e4,
+        "ADH_CT":            1.0e5,
+        "ADH_W":             1.0,
+        "ADH_ETA":           2.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
     },
 }
 
@@ -829,7 +908,7 @@ def list_assets(asset_dir: str) -> None:
     for f in npzs:
         path = _os.path.join(asset_dir, f)
         try:
-            _, _, params = load_tape_asset(path)
+            _, _, params, pair_state = load_tape_asset(path)
             preset = params.get("__preset_name__", "?")
             extra = []
             if "TAPE_THICKNESS" in params:
@@ -838,6 +917,9 @@ def list_assets(asset_dir: str) -> None:
                 extra.append(f"d_hat={params['D_HAT']*1e3:.3f}mm")
             if "TAPE_YOUNGS" in params:
                 extra.append(f"E={params['TAPE_YOUNGS']:.1e}")
+            if pair_state is not None:
+                _keys, _betas = pair_state
+                extra.append(f"β:n={len(_betas)},mean={_betas.mean():.2f}")
             extras = f"  ({', '.join(extra)})" if extra else ""
             print(f"  {f}  [preset={preset}]{extras}")
         except Exception as e:

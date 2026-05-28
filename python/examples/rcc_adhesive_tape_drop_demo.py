@@ -52,6 +52,7 @@ from uipc import (
     builtin,
 )
 from uipc.geometry import trimesh, label_surface, mesh_partition, ground
+from uipc.core import RCCAdhesionStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
@@ -203,7 +204,7 @@ def build_demo(adhesion_on: bool = True):
             f"Run the wind demo first and click 'save asset':\n"
             f"  python/.venv/bin/python python/examples/rcc_adhesive_tape_winding_demo.py")
 
-    hub_T, tape_pos, params = L.load_tape_asset(ASSET_IN_PATH)
+    hub_T, tape_pos, params, pair_state = L.load_tape_asset(ASSET_IN_PATH)
     HUB_R_OUTER = float(params["HUB_R_OUTER"])
     HUB_R_INNER = float(params["HUB_R_INNER"])
     HUB_HEIGHT  = float(params["HUB_HEIGHT"])
@@ -331,6 +332,25 @@ def build_demo(adhesion_on: bool = True):
     ground_obj.geometries().create(ground(0.0))
 
     world.init(scene)
+
+    # Restore β from the asset if it was saved with one. Must happen AFTER
+    # world.init() (the backend feature is only registered then) and BEFORE
+    # the first world.advance() (so the next step's Phase B reads the
+    # loaded prev-state via match_or_init instead of init_all_new). With
+    # the wound β=1 restored on existing layer pairs, the user can use
+    # `--set ADH_INITIAL_BETA=0` to keep new tail-flop contacts unbonded.
+    if adhesion_on and pair_state is not None:
+        keys, betas = pair_state
+        acc = world.features().find(RCCAdhesionStateAccessorFeature)
+        if acc is not None and len(betas) > 0:
+            acc.load_pt_state(keys, betas)
+            print(f"[drop] restored β: n={len(betas)} pairs, "
+                  f"mean={betas.mean():.3f}, frac>0.9={(betas > 0.9).mean():.2%}")
+        else:
+            if acc is None:
+                print("[drop] WARNING: RCCAdhesionStateAccessorFeature not found "
+                      "— β was not restored.")
+
     return {
         "engine": engine, "world": world, "scene": scene,
         "scene_io": SceneIO(scene),

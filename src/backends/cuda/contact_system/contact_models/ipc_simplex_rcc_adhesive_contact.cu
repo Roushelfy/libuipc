@@ -15,6 +15,7 @@
 #include <thrust/binary_search.h>
 #include <thrust/execution_policy.h>
 #include <uipc/common/log.h>
+#include <uipc/common/span.h>
 #include <uipc/geometry/simplicial_complex.h>
 #include <uipc/builtin/attribute_name.h>
 #include <sim_engine.h>
@@ -77,6 +78,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // Newton iterations within the same frame just read m_beta_PT.
     SizeT m_last_seen_frame = ~SizeT(0);
     bool  m_first_step      = true;
+
+    // Set true by set_prev_pt_state() (called from
+    // RCCAdhesionStateAccessorFeature::load_pt_state). When true, the first
+    // step's Phase B enters _phase_b_match_or_init against the loaded
+    // m_prev_keys_PT instead of _phase_b_init_all_new. Cleared after the
+    // first frame consumes it.
+    bool  m_has_loaded_prev_state = false;
 
     // ---- v3 state: single-sided adhesion (oriented shells) ----
     // Per-(global) vertex sticky sign. Length = total vertex count. Filled
@@ -582,16 +590,20 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         muda::DeviceBuffer<U64> curr_keys;
         _compute_curr_keys_PT(curr_keys, pairs);
 
-        if(m_first_step || m_prev_keys_PT.size() == 0)
+        // Branch on whether we already have prev-state to match against.
+        // m_prev_keys_PT is filled either by Phase A (end of previous step)
+        // or by set_prev_pt_state() (asset load).
+        if(m_prev_keys_PT.size() == 0)
         {
             _phase_b_init_all_new(pairs, contact_ids, barrier_tab, d_hats, positions, dt);
-            m_first_step = false;
         }
         else
         {
             _phase_b_match_or_init(curr_keys.view(), pairs, contact_ids,
                                    barrier_tab, d_hats, positions, dt);
         }
+        m_first_step = false;
+        m_has_loaded_prev_state = false;  // one-shot, consumed by this frame
     }
 
     // Same Phase B trigger but takes a ContactInfo (for do_assemble path).
@@ -622,16 +634,20 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         muda::DeviceBuffer<U64> curr_keys;
         _compute_curr_keys_PT(curr_keys, pairs);
 
-        if(m_first_step || m_prev_keys_PT.size() == 0)
+        // Branch on whether we already have prev-state to match against.
+        // m_prev_keys_PT is filled either by Phase A (end of previous step)
+        // or by set_prev_pt_state() (asset load).
+        if(m_prev_keys_PT.size() == 0)
         {
             _phase_b_init_all_new(pairs, contact_ids, barrier_tab, d_hats, positions, dt);
-            m_first_step = false;
         }
         else
         {
             _phase_b_match_or_init(curr_keys.view(), pairs, contact_ids,
                                    barrier_tab, d_hats, positions, dt);
         }
+        m_first_step = false;
+        m_has_loaded_prev_state = false;  // one-shot, consumed by this frame
     }
 
     virtual void do_compute_energy(EnergyInfo& info) override
@@ -1308,6 +1324,66 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         // positions. Held constant through the next frame's Newton iters.
         _recompute_vertex_normals(m_pos_at_step_begin.view());
     }
+
+    // ====================================================================
+    // β state dump / restore — exposed via RCCAdhesionStateAccessorFeature
+    // so applications (wind demo → asset .npz → unwind/drop demo) can
+    // round-trip per-pair β across processes.
+    //
+    // Only PT is persisted: EE/PE/PP β buffers are always sized 0 in v2.
+    //
+    // Round-trip protocol:
+    //   wind side:  after world.advance(); call dump_prev_pt_state() at
+    //               any frame boundary (Phase A has run, so the snapshot
+    //               buffers are filled and sorted).
+    //   load side:  after world.init(scene) and BEFORE the first
+    //               world.advance(); call set_prev_pt_state(). The next
+    //               step's Phase B then takes the match_or_init branch
+    //               against these loaded keys (instead of init_all_new).
+    // ====================================================================
+
+    void dump_prev_pt_state(vector<U64>&   out_keys,
+                            vector<Float>& out_betas) const
+    {
+        // m_prev_keys_PT / m_prev_beta_PT are already sorted by key
+        // (Phase A ran thrust::sort_by_key on them at the end of the
+        // previous step). BufferView::copy_to(T*) is the pointer-based
+        // device→host primitive (see buffer_view.h:87).
+        const SizeT n = m_prev_keys_PT.size();
+        out_keys.resize(n);
+        out_betas.resize(n);
+        if(n == 0)
+            return;
+        m_prev_keys_PT.view().copy_to(out_keys.data());
+        m_prev_beta_PT.view().copy_to(out_betas.data());
+    }
+
+    void set_prev_pt_state(span<const U64>   keys,
+                           span<const Float> betas)
+    {
+        UIPC_ASSERT(keys.size() == betas.size(),
+                    "RCC adhesion: set_prev_pt_state size mismatch (keys={}, betas={}).",
+                    keys.size(), betas.size());
+        const SizeT n = keys.size();
+        m_prev_keys_PT.resize(n);
+        m_prev_beta_PT.resize(n);
+        if(n > 0)
+        {
+            m_prev_keys_PT.view().copy_from(keys.data());
+            m_prev_beta_PT.view().copy_from(betas.data());
+            // Defensive: keep the same sort-by-key invariant Phase A maintains.
+            // If the caller provided already-sorted input (the dump round-trip
+            // case) this is a no-op cost. If unsorted, match_or_init's binary
+            // search would silently miss matches without this.
+            thrust::sort_by_key(thrust::device,
+                                m_prev_keys_PT.view().data(),
+                                m_prev_keys_PT.view().data() + n,
+                                m_prev_beta_PT.view().data());
+        }
+        m_has_loaded_prev_state = true;
+    }
+
+    SizeT prev_pt_pair_count() const { return m_prev_keys_PT.size(); }
 };
 
 REGISTER_SIM_SYSTEM(IPCSimplexRCCAdhesiveContact);
@@ -1354,5 +1430,65 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
     }
 };
 REGISTER_SIM_SYSTEM(RCCBetaEvolutionTimeIntegrator);
+
+
+// ========================================================================
+// RCCAdhesionStateAccessorFeature — exposes the reporter's
+// dump_prev_pt_state / set_prev_pt_state methods to the frontend via the
+// World::features() registry. Mirrors AffineBodyStateAccessor at
+// src/backends/cuda/affine_body/affine_body_state_accessor.cu.
+// ========================================================================
+}  // namespace uipc::backend::cuda
+
+#include <uipc/core/rcc_adhesion_state_accessor_feature.h>
+
+namespace uipc::backend::cuda
+{
+class RCCAdhesionStateAccessorOverriderImpl final
+    : public core::RCCAdhesionStateAccessorFeatureOverrider
+{
+  public:
+    explicit RCCAdhesionStateAccessorOverriderImpl(IPCSimplexRCCAdhesiveContact& reporter)
+        : m_reporter{reporter}
+    {
+    }
+
+    SizeT get_pt_pair_count() const override
+    {
+        return m_reporter.prev_pt_pair_count();
+    }
+
+    void do_dump_pt_state(vector<U64>&   out_keys,
+                          vector<Float>& out_betas) const override
+    {
+        m_reporter.dump_prev_pt_state(out_keys, out_betas);
+    }
+
+    void do_load_pt_state(span<const U64>   keys,
+                          span<const Float> betas) override
+    {
+        m_reporter.set_prev_pt_state(keys, betas);
+    }
+
+  private:
+    IPCSimplexRCCAdhesiveContact& m_reporter;
+};
+
+class RCCAdhesionStateAccessor final : public SimSystem
+{
+  public:
+    using SimSystem::SimSystem;
+
+    virtual void do_build() override
+    {
+        auto& reporter = require<IPCSimplexRCCAdhesiveContact>();
+        auto  overrider =
+            std::make_shared<RCCAdhesionStateAccessorOverriderImpl>(reporter);
+        auto  feature =
+            std::make_shared<core::RCCAdhesionStateAccessorFeature>(overrider);
+        features().insert(feature);
+    }
+};
+REGISTER_SIM_SYSTEM(RCCAdhesionStateAccessor);
 
 }  // namespace uipc::backend::cuda

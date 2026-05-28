@@ -45,6 +45,7 @@ from uipc import (
     builtin,
 )
 from uipc.geometry import trimesh, label_surface, mesh_partition
+from uipc.core import RCCAdhesionStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
@@ -70,7 +71,9 @@ print(f"[wind] preset={_CFG['__preset_name__']}: "
       f"ρ={_CFG['TAPE_MASS_DENSITY']} kg/m³, t={_CFG['TAPE_THICKNESS']*1e3:.3f} mm, "
       f"d_hat={_CFG['D_HAT']*1e3:.3f} mm, LAYER={_CFG['LAYER_THICKNESS']*1e3:.3f} mm, "
       f"hub R={_CFG['HUB_R_OUTER']*1e3:.1f} mm × W={_CFG['TAPE_WIDTH']*1e3:.1f} mm, "
-      f"N_TURNS={_CFG['N_TURNS']}")
+      f"N_TURNS={_CFG['N_TURNS']}, "
+      f"adh: Cn={_CFG['ADH_CN']:.0e} Ct={_CFG['ADH_CT']:.0e} "
+      f"r={_CFG['ADH_BONDING_RATE']} β₀={_CFG['ADH_INITIAL_BETA']}")
 
 # ---- hub geometry (from preset) ----
 HUB_R_OUTER       = _CFG["HUB_R_OUTER"]
@@ -106,13 +109,17 @@ TAPE_MASS_DENSITY = _CFG["TAPE_MASS_DENSITY"]
 HUB_KAPPA         = 1.0e8
 HUB_MASS_DENSITY  = 1000.0
 
-# ---- adhesion ----
-ADH_CN            = 1.0e4
-ADH_CT            = 1.0e5
-ADH_W             = 1.0
-ADH_ETA           = 2.0
-ADH_BONDING_RATE  = 1.0
-ADH_INITIAL_BETA  = 1.0
+# ---- adhesion (from preset; override with `--set ADH_INITIAL_BETA=...`) ----
+# Wind defaults: initial_beta=0, bonding_rate=5. New PT contact pairs start
+# unbonded (no β-jump at first contact → smoother sim, no line-search
+# blips), and β grows quickly under SPC-driven compression to reach
+# ~1 in a few frames of sustained pressure.
+ADH_CN            = _CFG["ADH_CN"]
+ADH_CT            = _CFG["ADH_CT"]
+ADH_W             = _CFG["ADH_W"]
+ADH_ETA           = _CFG["ADH_ETA"]
+ADH_BONDING_RATE  = _CFG["ADH_BONDING_RATE"]
+ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 
 # ---- SPC ----
 SPC_STRENGTH      = 1.0e5        # matches rcc_adhesive_cloth_peel_demo.py
@@ -502,7 +509,22 @@ def run_demo():
             # provenance
             __preset_name__=_CFG["__preset_name__"],
         )
-        L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params)
+        # Snapshot the RCC adhesion β state so unwind/drop demos can restore
+        # the wound bond at frame 0. Only the prev-step (keys, β) snapshot is
+        # exposed — that's exactly what Phase B match_or_init reads at the
+        # start of the next step.
+        pair_state = None
+        if state["adhesion_on"]:
+            acc = sim["world"].features().find(RCCAdhesionStateAccessorFeature)
+            if acc is not None:
+                keys, betas = acc.dump_pt_state()
+                pair_state = (keys, betas)
+                print(f"  β snapshot: n={len(betas)} pairs, "
+                      f"mean={betas.mean():.3f}, "
+                      f"frac>0.9={(betas > 0.9).mean():.2%}" if len(betas)
+                      else "  β snapshot: 0 pairs (no PT contacts saved)")
+        L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params,
+                          pair_state=pair_state)
         print(f"saved wound-tape asset → {ASSET_OUT_PATH}")
         state["saved"] = True
 
