@@ -11,9 +11,14 @@ and stands it on the ground:
     offset above the ground (tape thickness + ½ d_hat) — gives the
     barrier something to engage with at frame 0.
   - hub is NOT fixed: it's an ABD body free to move under gravity.
-  - no SPC anchor on the tape, no pull animation. The wound layers and
-    the inner-most layer–to–hub bond are held together purely by RCC
-    adhesion (β=1 at frame 0 per the preset).
+  - the wound layers and the inner-most layer-to-hub bond are held
+    together purely by RCC adhesion (β restored from the asset when
+    saved, otherwise driven by `initial_beta` and bonding-rate growth).
+  - after a brief HOLD phase, an SPC engages on the tape's free-end
+    row and lifts it upward by `LIFT_HEIGHT` (10 cm by default —
+    clears the roll's diameter) over `PULL_FRAMES`. With strong
+    adhesion the whole spool lifts off the ground; with weak adhesion
+    the outer layer peels off and the roll stays grounded.
   - ground = libuipc's implicit half-plane at y=0 (the contact engine
     uses it; polyscope shows a matching flat quad for visualization).
   - gravity (0, -9.8, 0).
@@ -48,6 +53,7 @@ from uipc import (
     World,
     Scene,
     SceneIO,
+    Animation,
     view,
     builtin,
 )
@@ -56,6 +62,7 @@ from uipc.core import RCCAdhesionStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
+    SoftPositionConstraint,
     ElasticModuli2D,
     RCCAdhesive,
 )
@@ -96,8 +103,59 @@ ADH_ETA           = _CFG["ADH_ETA"]
 ADH_BONDING_RATE  = _CFG["ADH_BONDING_RATE"]
 ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 
-# ---- timeline ----
-SETTLE_FRAMES     = 600       # 6 s @ dt=0.01 — long enough to see settle/roll
+# ---- timeline (dt=0.01) ----
+# Three phases:
+#   HOLD       — assembly settles on ground under gravity alone, free
+#                end is unconstrained so its initial pose can relax.
+#   PULL       — SPC engages on the tape's free-end row and smoothly
+#                ramps it upward by LIFT_HEIGHT. The ramp uses a cosine
+#                ease (smooth_lerp) so there's no velocity discontinuity
+#                at either end of the pull.
+#   TOP        — SPC holds the free end at the top while the rest of
+#                the roll either follows (strong adhesion → whole spool
+#                lifts off the ground) or peels off (weak adhesion →
+#                outer layer detaches).
+HOLD_FRAMES        = 30
+PULL_FRAMES        = 600
+TOP_FRAMES         = 60
+TOTAL_FRAMES       = HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES
+
+# How high to lift the free end (metres, +y). Must exceed the roll's
+# vertical reach (≈ R_outer + N_TURNS·2·t when standing on side, plus
+# slack for the tail) so a successful lift visibly clears the ground.
+# 10 cm is comfortable for the temflex175 5-turn family (roll radius
+# ≈ 2.2 cm). Override per-run with `--set LIFT_HEIGHT=0.05` for a
+# shorter pull, etc.
+LIFT_HEIGHT        = float(_CFG.get("LIFT_HEIGHT", 0.10))
+
+# Initial drop height of the assembly above the IPC active band. The
+# `_stand_on_ground` shift puts the lowest geometry vertex at
+# `(t + 0.5·d_hat) + DROP_HEIGHT` above y=0. With `DROP_HEIGHT=0`
+# the roll starts essentially touching the ground (IPC barrier
+# immediately active). A small positive value (default 1 cm) gives
+# gravity a brief free-fall window before contact engages — visually
+# clearer "drop onto ground" motion, and a more honest test of the
+# barrier's response to incoming velocity. Override with `--set
+# DROP_HEIGHT=0` to recover the old "place on the band" behaviour.
+DROP_HEIGHT        = float(_CFG.get("DROP_HEIGHT", 0.01))
+
+SPC_STRENGTH       = float(_CFG.get("SPC_STRENGTH", 1.0e9))
+
+# FEM rest reference. Default 1 mirrors wind's setup: rest = the same
+# straight-tangent strip wind started with, so the wound state at load
+# is in the SAME elastic-energy configuration as wind's end state.
+# Concretely: at end of wind, elastic (outward) + adhesion (inward) +
+# barrier together net to zero — i.e. it's an equilibrium. Setting
+# rest = wound (REST_FROM_WIND=0) zeros the elastic component, which
+# breaks the balance: adhesion pulls layers inward unopposed and the
+# barrier has to compensate via large pressure → visible first-frame
+# motion. With REST_FROM_WIND=1 (default), the load is force-balanced
+# and the only frame-0 motion is what gravity drives (DROP_HEIGHT).
+#
+# Use REST_FROM_WIND=0 only for the "tape with memory" interpretation
+# — a long-stored roll whose wound shape IS the rest pose. That
+# variant won't spring-back on peel either.
+REST_FROM_WIND     = int(_CFG.get("REST_FROM_WIND", 1))
 
 ASSET_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "output",
@@ -112,6 +170,25 @@ print(f"[drop] load source: {ASSET_IN_PATH}")
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+def _straight_rest_positions(R_anchor, length, width, NX, NZ):
+    """The same straight-tangent layout wind originally built its rest
+    around. Used as the FEM strain reference when REST_FROM_WIND=1.
+
+    Returned in the wind demo's coord frame (x=R_anchor, long axis y,
+    width z). NeoHookean strain is per-element so a global rotation
+    between rest and current cancels out — no need to apply the
+    `_stand_on_ground` transform here.
+    """
+    dy = length / NX
+    dz = width  / NZ
+    n_width = NZ + 1
+    verts = np.empty(((NX + 1) * n_width, 3), dtype=np.float64)
+    for i in range(NX + 1):
+        for j in range(n_width):
+            verts[i * n_width + j] = (R_anchor, i * dy, j * dz - 0.5 * width)
+    return verts
+
+
 def _make_tape_topology_tris(NX, NZ):
     """Identical triangle layout / winding to wind & unwind demos so
     `set_sticky_side(-1)` still tags the hub-facing side as sticky."""
@@ -204,7 +281,7 @@ def build_demo(adhesion_on: bool = True):
             f"Run the wind demo first and click 'save asset':\n"
             f"  python/.venv/bin/python python/examples/rcc_adhesive_tape_winding_demo.py")
 
-    hub_T, tape_pos, params, pair_state = L.load_tape_asset(ASSET_IN_PATH)
+    hub_T, tape_pos, params, pair_state, tape_vel = L.load_tape_asset(ASSET_IN_PATH)
     HUB_R_OUTER = float(params["HUB_R_OUTER"])
     HUB_R_INNER = float(params["HUB_R_INNER"])
     HUB_HEIGHT  = float(params["HUB_HEIGHT"])
@@ -217,35 +294,47 @@ def build_demo(adhesion_on: bool = True):
     print(f"loaded asset [preset={saved_preset}]: tape ({TAPE_NX+1}×{TAPE_NZ+1} verts), "
           f"hub R∈[{HUB_R_INNER},{HUB_R_OUTER}], L_tape={TAPE_LENGTH:.3f} m")
 
-    # Asset's saved IPC params win unless user --set them on CLI (same
-    # rule as the unwind demo).
-    explicit = _CFG.get("__explicit__", set())
-    asset_t = params.get("TAPE_THICKNESS", None)
-    asset_dhat = params.get("D_HAT", None)
-    D_HAT_eff = _CFG["D_HAT"]
-    TAPE_THICKNESS_eff = _CFG["TAPE_THICKNESS"]
-    if asset_dhat is not None and "D_HAT" not in explicit:
-        D_HAT_eff = float(asset_dhat)
-    if asset_t is not None and "TAPE_THICKNESS" not in explicit:
-        TAPE_THICKNESS_eff = float(asset_t)
-    if abs(D_HAT_eff - _CFG["D_HAT"]) > 1e-12:
-        print(f"  D_HAT          ← asset {D_HAT_eff:.4e}  "
-              f"(preset value {_CFG['D_HAT']:.4e} overridden)")
-    if abs(TAPE_THICKNESS_eff - _CFG["TAPE_THICKNESS"]) > 1e-12:
-        print(f"  TAPE_THICKNESS ← asset {TAPE_THICKNESS_eff:.4e}  "
-              f"(preset value {_CFG['TAPE_THICKNESS']:.4e} overridden)")
-    D_HAT = D_HAT_eff
-    TAPE_THICKNESS = TAPE_THICKNESS_eff
+    # Asset-loaded values win for IPC numerics, material, and adhesion
+    # — same `--set > asset > preset` precedence rule for every
+    # physical parameter. Geometry (HUB_*, TAPE_LENGTH/WIDTH/NX/NZ) is
+    # always taken from the asset above; β state is restored after
+    # world.init below. Shadows the matching module-level constants
+    # for the rest of build_demo.
+    def _resolve_and_log(key, label, fmt=".4e"):
+        before = _CFG[key]
+        after  = L.resolve_param(_CFG, params, key)
+        if isinstance(before, float) and abs(after - before) > 1e-12:
+            print(f"  {label:<18s} ← asset {after:{fmt}}  "
+                  f"(preset value {before:{fmt}} overridden)")
+        return after
 
-    # ---- stand the roll on the ground (axis +y), lowest point inside
-    # the IPC band so the barrier engages on frame 0
-    GROUND_CLEARANCE = TAPE_THICKNESS + 0.5 * D_HAT
+    D_HAT             = _resolve_and_log("D_HAT",             "D_HAT")
+    TAPE_THICKNESS    = _resolve_and_log("TAPE_THICKNESS",    "TAPE_THICKNESS")
+    TAPE_YOUNGS       = _resolve_and_log("TAPE_YOUNGS",       "TAPE_YOUNGS")
+    TAPE_POISSON      = _resolve_and_log("TAPE_POISSON",      "TAPE_POISSON", ".3f")
+    TAPE_MASS_DENSITY = _resolve_and_log("TAPE_MASS_DENSITY", "TAPE_MASS_DENSITY", ".1f")
+    ADH_CN            = _resolve_and_log("ADH_CN",            "ADH_CN")
+    ADH_CT            = _resolve_and_log("ADH_CT",            "ADH_CT")
+    ADH_W             = _resolve_and_log("ADH_W",             "ADH_W",   ".3f")
+    ADH_ETA           = _resolve_and_log("ADH_ETA",           "ADH_ETA", ".3f")
+    ADH_BONDING_RATE  = _resolve_and_log("ADH_BONDING_RATE",  "ADH_BONDING_RATE", ".3f")
+    ADH_INITIAL_BETA  = _resolve_and_log("ADH_INITIAL_BETA",  "ADH_INITIAL_BETA", ".3f")
+
+    # ---- stand the roll on the ground (axis +y). Lowest geometry
+    # vertex ends up at (TAPE_THICKNESS + 0.5·D_HAT) + DROP_HEIGHT
+    # above y=0. The first summand keeps it inside the IPC active band
+    # so the barrier is well-defined; DROP_HEIGHT (default 1 cm) adds
+    # a free-fall margin so gravity has a visible drop phase before
+    # ground contact engages.
+    GROUND_CLEARANCE = TAPE_THICKNESS + 0.5 * D_HAT + DROP_HEIGHT
     tape_pos_lay, hub_T_lay = _stand_on_ground(
         tape_pos, hub_T, HUB_HEIGHT, GROUND_CLEARANCE)
     hub_bottom_y = float(hub_T_lay[1, 3]) - 0.5 * HUB_HEIGHT
     print(f"[drop] hub bottom y={hub_bottom_y*1e3:.3f} mm, "
           f"tape lowest y={tape_pos_lay[:,1].min()*1e3:.3f} mm "
-          f"(IPC band offset = {GROUND_CLEARANCE*1e3:.3f} mm above ground)")
+          f"(clearance = {GROUND_CLEARANCE*1e3:.3f} mm above ground: "
+          f"IPC band {(TAPE_THICKNESS + 0.5*D_HAT)*1e3:.3f} + "
+          f"drop {DROP_HEIGHT*1e3:.3f})")
 
     workspace = AssetDir.output_path(__file__)
     engine = Engine("cuda", workspace)
@@ -259,10 +348,19 @@ def build_demo(adhesion_on: bool = True):
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
+    # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
+    # libuipc nested config here, AFTER the demo's own defaults so
+    # CLI always wins. Passing `params` makes asset-saved solver
+    # knobs (from `wind --set …`) auto-apply too — matches the
+    # `--set > asset > preset` rule we use for material/adhesion.
+    # See SOLVER_KEYS in tape_asset_lib.
+    L.apply_solver_overrides(config, _CFG, params=params)
     scene = Scene(config)
 
     abd = AffineBodyConstitution()
     nhs = NeoHookeanShell()
+    spc = SoftPositionConstraint()
 
     tabular = scene.contact_tabular()
     tabular.default_model(0.5, 1.0e9)
@@ -306,12 +404,25 @@ def build_demo(adhesion_on: bool = True):
     hub_obj = scene.objects().create("hub")
     hub_geo, _ = hub_obj.geometries().create(hub_sc)
 
-    # ---- tape: rest = wound = current (no internal elastic energy at
-    # frame 0; pure gravity + adhesion demo). Different from unwind,
-    # which sets rest = straight to drive the unrolling spring-back.
+    # ---- tape: REST geometry choice — see REST_FROM_WIND knob above.
+    # Default (REST_FROM_WIND=1): rest = wind's original straight-
+    # tangent strip → preserves wind's elastic-vs-adhesion force
+    # balance → frame 0 is a true equilibrium except for gravity.
+    # Legacy (REST_FROM_WIND=0): rest = wound = current → no elastic
+    # spring-back when layers debond; but adhesion is no longer
+    # balanced at frame 0, causing visible collapse.
     tris = _make_tape_topology_tris(TAPE_NX, TAPE_NZ)
     current_sc = _make_tape_sc(tape_pos_lay, tris)
-    rest_sc    = _make_tape_sc(tape_pos_lay, tris)
+    if REST_FROM_WIND:
+        # Same R_anchor formula wind used → rest matches wind's setup
+        # element-by-element. Per-element strain absorbs any global
+        # rotation between rest and current's coord frames.
+        R_anchor_rest = HUB_R_OUTER + TAPE_THICKNESS + 0.5 * D_HAT
+        rest_positions = _straight_rest_positions(
+            R_anchor_rest, TAPE_LENGTH, TAPE_WIDTH, TAPE_NX, TAPE_NZ)
+        rest_sc = _make_tape_sc(rest_positions, tris)
+    else:
+        rest_sc = _make_tape_sc(tape_pos_lay, tris)
 
     moduli = ElasticModuli2D.youngs_poisson(TAPE_YOUNGS, TAPE_POISSON)
     nhs.apply_to(current_sc, moduli,
@@ -321,8 +432,27 @@ def build_demo(adhesion_on: bool = True):
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
     tape_contact.apply_to(current_sc)
+    spc.apply_to(current_sc, SPC_STRENGTH)
     if adhesion_on:
         RCCAdhesive.set_sticky_side(current_sc, -1)
+
+    # Seed FEM velocity from asset (None on legacy assets → v=0 default).
+    # Drop applies the same R_x(-90°) rotation that `_stand_on_ground`
+    # applied to positions: (vx, vy, vz) → (vx, vz, -vy).
+    # The shift in y is a translation, which doesn't affect velocity.
+    # libuipc stores Vector3 attributes as (N, 3, 1) so we reshape.
+    if tape_vel is not None and tape_vel.shape == tape_pos.shape:
+        tape_vel_lay = np.column_stack([tape_vel[:, 0],
+                                         tape_vel[:, 2],
+                                         -tape_vel[:, 1]])
+        existing = current_sc.vertices().find("velocity")
+        if existing is None:
+            current_sc.vertices().create("velocity", np.zeros(3, dtype=np.float64))
+        vel_view = view(current_sc.vertices().find("velocity"))
+        vel_view[:] = tape_vel_lay.reshape(-1, 3, 1)
+        vmax = float(np.linalg.norm(tape_vel_lay, axis=1).max())
+        if vmax > 0:
+            print(f"[drop] seeded tape velocity: max={vmax:.3e} m/s")
 
     tape_obj = scene.objects().create("tape")
     tape_geo, _ = tape_obj.geometries().create(current_sc, rest_sc)
@@ -330,6 +460,70 @@ def build_demo(adhesion_on: bool = True):
     # ---- ground at y=0 ----
     ground_obj = scene.objects().create("ground")
     ground_obj.geometries().create(ground(0.0))
+
+    # ---- free-end SPC + lift animation ----
+    # Tape mesh uses vid(i, j) = i*(NZ+1) + j (matches
+    # _make_tape_topology_tris). The free end is the last row of
+    # vertices along the tape's length direction — these stuck out
+    # tangentially from the wound spool at the end of the wind sim.
+    def vid_drop(i, j): return i * (TAPE_NZ + 1) + j
+    free_ids = [vid_drop(TAPE_NX, j) for j in range(TAPE_NZ + 1)]
+
+    def smooth_lerp(a: float, b: float, t: float) -> float:
+        t = float(np.clip(t, 0.0, 1.0))
+        s = 0.5 - 0.5 * np.cos(np.pi * t)  # cosine ease (slow start + end)
+        return a + (b - a) * s
+
+    anim_state = {
+        # UI toggle: when False, animate_tape writes no constraints —
+        # the free end is governed entirely by physics. Toggling back
+        # to True triggers a one-shot snapshot of the live free-end
+        # positions so the SPC trajectory restarts from wherever the
+        # tape currently is, not from a stale frozen target.
+        "pull_enabled":   True,
+        # Captured at the first PULL-phase frame (or after OFF→ON).
+        # Each free vertex's aim is `pull_start_pos[jj] + (0, lift_y, 0)`.
+        "pull_start_pos": None,
+    }
+
+    def animate_tape(info: Animation.UpdateInfo):
+        geo = info.geo_slots()[0].geometry()
+        f = max(info.frame() - 1, 0)
+        is_c = view(geo.vertices().find(builtin.is_constrained))
+        aim  = view(geo.vertices().find(builtin.aim_position))
+        is_c[:] = 0
+
+        # Pull disabled by UI → leave free end unconstrained, drop the
+        # stale start-pos snapshot so re-enabling captures fresh.
+        if not anim_state["pull_enabled"]:
+            anim_state["pull_start_pos"] = None
+            return
+        # HOLD phase: free end free, let gravity settle the assembly.
+        if f < HOLD_FRAMES:
+            anim_state["pull_start_pos"] = None
+            return
+
+        # On PULL phase entry (or after OFF→ON edge) snapshot the live
+        # free-end positions so the ramp departs from where the tape
+        # actually is, with no positional jump.
+        if anim_state["pull_start_pos"] is None:
+            live = np.asarray(view(geo.positions())).reshape(-1, 3)
+            anim_state["pull_start_pos"] = live[free_ids].copy()
+
+        # Compute current lift height. After PULL_FRAMES the ramp
+        # saturates at LIFT_HEIGHT and SPC holds the free end there.
+        pull_idx = f - HOLD_FRAMES
+        t = min(pull_idx / max(PULL_FRAMES, 1), 1.0)
+        lift_y = smooth_lerp(0.0, LIFT_HEIGHT, t)
+
+        start = anim_state["pull_start_pos"]
+        for jj, k in enumerate(free_ids):
+            is_c[k] = 1
+            aim[k] = np.array([start[jj, 0],
+                               start[jj, 1] + lift_y,
+                               start[jj, 2]], dtype=np.float64).reshape(3, 1)
+
+    scene.animator().insert(tape_obj, animate_tape)
 
     world.init(scene)
 
@@ -356,6 +550,10 @@ def build_demo(adhesion_on: bool = True):
         "scene_io": SceneIO(scene),
         "hub_geo": hub_geo, "tape_geo": tape_geo,
         "params": params,
+        # Animator state — the UI's "pull" button flips
+        # state["pull_enabled"] live; animate_tape consumes it on the
+        # next frame.
+        "anim_state": anim_state,
     }
 
 
@@ -410,7 +608,7 @@ def run_demo():
             mesh.update_vertex_positions(v)
 
     def step_once():
-        if sim["world"].frame() >= SETTLE_FRAMES:
+        if sim["world"].frame() >= TOTAL_FRAMES:
             ui["run"] = False
             return
         sim["world"].advance()
@@ -425,6 +623,11 @@ def run_demo():
         sim = build_demo(state["adhesion_on"])
         update_visual()
 
+    def phase_at(f: int) -> str:
+        if f < HOLD_FRAMES:                       return "hold"
+        if f < HOLD_FRAMES + PULL_FRAMES:         return "pull"
+        return "top"
+
     def on_update():
         if psim.Button("run / pause"):
             ui["run"] = not ui["run"]
@@ -435,15 +638,34 @@ def run_demo():
         if psim.Button(f"adhesion: {'ON' if state['adhesion_on'] else 'OFF'}"):
             state["adhesion_on"] = not state["adhesion_on"]
         psim.SameLine()
+        anim = sim["anim_state"]
+        if psim.Button(f"pull: {'ON' if anim['pull_enabled'] else 'OFF'}"):
+            anim["pull_enabled"] = not anim["pull_enabled"]
+            # animate_tape consumes pull_start_pos=None on the next
+            # frame as the OFF→ON re-snapshot trigger.
+        psim.SameLine()
         if psim.Button("reset"):
             reset()
 
         if ui["run"]:
             step_once()
 
-        f = min(sim["world"].frame(), SETTLE_FRAMES)
+        f = min(sim["world"].frame(), TOTAL_FRAMES)
         psim.Separator()
-        psim.Text(f"Frame: {f} / {SETTLE_FRAMES}")
+        psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
+
+        # Pull progress + lift height in mm
+        f1 = max(f - 1, 0)
+        if f1 < HOLD_FRAMES:
+            t = 0.0
+        elif f1 < HOLD_FRAMES + PULL_FRAMES:
+            t = (f1 - HOLD_FRAMES) / PULL_FRAMES
+        else:
+            t = 1.0
+        # smooth_lerp progress; raw t is enough for the UI bar
+        lift_mm = (0.5 - 0.5 * np.cos(np.pi * float(np.clip(t, 0, 1)))) * LIFT_HEIGHT * 1000
+        pull_state = "ENABLED" if anim["pull_enabled"] else "DISABLED (free end)"
+        psim.Text(f"Lift: {t*100:.1f}%  ({lift_mm:.1f} mm of {LIFT_HEIGHT*1000:.0f} mm)  SPC: {pull_state}")
         psim.Text(f"Adhesion: {'ENABLED' if state['adhesion_on'] else 'DISABLED'}")
 
     ps.set_user_callback(on_update)

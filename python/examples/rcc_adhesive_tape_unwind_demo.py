@@ -113,8 +113,21 @@ PULL_DISTANCE         = 0.5      # 50 cm
 PULL_FRAMES           = 1500     # 15 s @ dt=0.01 — slow, lets β evolve
 PERP_UPDATE_INTERVAL  = 100      # frames between pull-direction refreshes
 SETTLE_FRAMES         = 60
+# Initial settle phase: no SPC at all. Mirrors wind's `settle2`
+# (also fully unconstrained). If wind ended in a self-sustaining
+# wound state, this phase should show near-zero displacement —
+# acts as a smoke test for "was the saved asset actually at
+# equilibrium?". After it, anchor + free-end SPCs engage at the
+# *live* positions (not the asset's wound positions) so the
+# transition is bump-free even if there was a tiny drift.
+INITIAL_SETTLE_FRAMES = 60
 HOLD_FRAMES           = 20       # short hold before pulling, lets β rise
-TOTAL_FRAMES      = HOLD_FRAMES + PULL_FRAMES + SETTLE_FRAMES
+TOTAL_FRAMES      = INITIAL_SETTLE_FRAMES + HOLD_FRAMES + PULL_FRAMES + SETTLE_FRAMES
+
+# Frame markers (used by animator + UI to dispatch).
+_INIT_END     = INITIAL_SETTLE_FRAMES
+_HOLD_END     = _INIT_END + HOLD_FRAMES
+_PULL_END     = _HOLD_END + PULL_FRAMES
 
 ASSET_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "output",
@@ -186,7 +199,7 @@ def build_demo(adhesion_on: bool = True):
             f"Run the wind demo first and click 'save asset':\n"
             f"  python/.venv/bin/python python/examples/rcc_adhesive_tape_winding_demo.py")
 
-    hub_T, tape_pos, params, pair_state = L.load_tape_asset(ASSET_IN_PATH)
+    hub_T, tape_pos, params, pair_state, tape_vel = L.load_tape_asset(ASSET_IN_PATH)
     HUB_R_OUTER = float(params["HUB_R_OUTER"])
     HUB_R_INNER = float(params["HUB_R_INNER"])
     HUB_HEIGHT  = float(params["HUB_HEIGHT"])
@@ -199,27 +212,31 @@ def build_demo(adhesion_on: bool = True):
     print(f"loaded asset [preset={saved_preset}]: tape ({TAPE_NX+1}×{TAPE_NZ+1} verts), "
           f"hub R∈[{HUB_R_INNER},{HUB_R_OUTER}], L_tape={TAPE_LENGTH:.3f} m")
 
-    # Asset's saved IPC params win by default (must match the geometry
-    # the wind step laid out). User `--set D_HAT=...` /
-    # `--set TAPE_THICKNESS=...` on the CLI still overrides.
-    explicit = _CFG.get("__explicit__", set())
-    asset_t = params.get("TAPE_THICKNESS", None)
-    asset_dhat = params.get("D_HAT", None)
-    D_HAT_eff = _CFG["D_HAT"]
-    TAPE_THICKNESS_eff = _CFG["TAPE_THICKNESS"]
-    if asset_dhat is not None and "D_HAT" not in explicit:
-        D_HAT_eff = float(asset_dhat)
-    if asset_t is not None and "TAPE_THICKNESS" not in explicit:
-        TAPE_THICKNESS_eff = float(asset_t)
-    if abs(D_HAT_eff - _CFG["D_HAT"]) > 1e-12:
-        print(f"  D_HAT          ← asset {D_HAT_eff:.4e}  "
-              f"(preset value {_CFG['D_HAT']:.4e} overridden)")
-    if abs(TAPE_THICKNESS_eff - _CFG["TAPE_THICKNESS"]) > 1e-12:
-        print(f"  TAPE_THICKNESS ← asset {TAPE_THICKNESS_eff:.4e}  "
-              f"(preset value {_CFG['TAPE_THICKNESS']:.4e} overridden)")
-    # Shadow the module-level fallbacks for the rest of build_demo.
-    D_HAT = D_HAT_eff
-    TAPE_THICKNESS = TAPE_THICKNESS_eff
+    # Asset-loaded values win for IPC numerics, material, and adhesion
+    # — same `--set > asset > preset` precedence rule for every
+    # physical parameter. Geometry (HUB_*, TAPE_LENGTH/WIDTH/NX/NZ) is
+    # always taken from the asset above; β state is restored after
+    # world.init below. Shadows the matching module-level constants
+    # for the rest of build_demo.
+    def _resolve_and_log(key, label, fmt=".4e"):
+        before = _CFG[key]
+        after  = L.resolve_param(_CFG, params, key)
+        if isinstance(before, float) and abs(after - before) > 1e-12:
+            print(f"  {label:<18s} ← asset {after:{fmt}}  "
+                  f"(preset value {before:{fmt}} overridden)")
+        return after
+
+    D_HAT             = _resolve_and_log("D_HAT",             "D_HAT")
+    TAPE_THICKNESS    = _resolve_and_log("TAPE_THICKNESS",    "TAPE_THICKNESS")
+    TAPE_YOUNGS       = _resolve_and_log("TAPE_YOUNGS",       "TAPE_YOUNGS")
+    TAPE_POISSON      = _resolve_and_log("TAPE_POISSON",      "TAPE_POISSON", ".3f")
+    TAPE_MASS_DENSITY = _resolve_and_log("TAPE_MASS_DENSITY", "TAPE_MASS_DENSITY", ".1f")
+    ADH_CN            = _resolve_and_log("ADH_CN",            "ADH_CN")
+    ADH_CT            = _resolve_and_log("ADH_CT",            "ADH_CT")
+    ADH_W             = _resolve_and_log("ADH_W",             "ADH_W",   ".3f")
+    ADH_ETA           = _resolve_and_log("ADH_ETA",           "ADH_ETA", ".3f")
+    ADH_BONDING_RATE  = _resolve_and_log("ADH_BONDING_RATE",  "ADH_BONDING_RATE", ".3f")
+    ADH_INITIAL_BETA  = _resolve_and_log("ADH_INITIAL_BETA",  "ADH_INITIAL_BETA", ".3f")
 
     # Anchor radius identical to the wind demo's so positions match.
     R_ANCHOR = HUB_R_OUTER + TAPE_THICKNESS + 0.5 * D_HAT
@@ -236,6 +253,14 @@ def build_demo(adhesion_on: bool = True):
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
+    # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
+    # libuipc nested config here, AFTER the demo's own defaults so
+    # CLI always wins. Passing `params` makes asset-saved solver
+    # knobs (from `wind --set …`) auto-apply too — matches the
+    # `--set > asset > preset` rule we use for material/adhesion.
+    # See SOLVER_KEYS in tape_asset_lib.
+    L.apply_solver_overrides(config, _CFG, params=params)
     scene = Scene(config)
 
     abd = AffineBodyConstitution()
@@ -313,6 +338,21 @@ def build_demo(adhesion_on: bool = True):
         # sticky = inward toward hub center (same gate as wind demo).
         RCCAdhesive.set_sticky_side(current_sc, -1)
 
+    # Seed FEM velocity from asset (None on legacy assets → v=0 default).
+    # Unwind shares wind's coordinate frame so velocities go in raw.
+    # Must happen BEFORE geometries().create so the FEM ingests them.
+    # libuipc stores Vector3 attributes as (N, 3, 1) column-vector
+    # tensors, so we reshape the (N, 3) numpy array to match.
+    if tape_vel is not None and tape_vel.shape == tape_pos.shape:
+        existing = current_sc.vertices().find("velocity")
+        if existing is None:
+            current_sc.vertices().create("velocity", np.zeros(3, dtype=np.float64))
+        vel_view = view(current_sc.vertices().find("velocity"))
+        vel_view[:] = tape_vel.reshape(-1, 3, 1)
+        vmax = float(np.linalg.norm(tape_vel, axis=1).max())
+        if vmax > 0:
+            print(f"[unwind] seeded tape velocity: max={vmax:.3e} m/s")
+
     tape_obj = scene.objects().create("tape")
     tape_geo, _ = tape_obj.geometries().create(current_sc, rest_sc)
 
@@ -334,8 +374,17 @@ def build_demo(adhesion_on: bool = True):
     # the peeled portion rotates.
     PULL_STEP = PULL_DISTANCE / PULL_FRAMES
     state = {
-        "target_xy": wound_free_pos[:, :2].mean(axis=0).copy(),
-        "last_perp": np.array([1.0, 0.0]),
+        # Set lazily at the INITIAL_SETTLE → HOLD edge from live
+        # geometry, not from the asset's wound positions. This lets
+        # any tiny drift during initial-settle propagate forward
+        # without a yank.
+        "target_xy":      None,
+        "last_perp":      np.array([1.0, 0.0]),
+        # SPC targets for anchor + free-end. Both snapshotted at the
+        # initial-settle boundary so they reflect the actually-
+        # equilibrated state (not the asset's saved positions).
+        "live_anchor_pos": None,
+        "live_free_pos":   None,
         # Free-end SPC toggle. When False, animate_tape skips ALL
         # free-end is_constrained/aim_position writes — the tape's
         # outer row is unconstrained and only governed by physics
@@ -374,10 +423,32 @@ def build_demo(adhesion_on: bool = True):
         aim  = view(geo.vertices().find(builtin.aim_position))
         is_c[:] = 0
 
-        # Anchor: locked forever at the wound state.
+        # ───── INITIAL_SETTLE ─────
+        # No SPC anywhere — mirrors wind's settle2 end state.
+        # If the asset is at true equilibrium, this phase shows
+        # near-zero displacement. If not (β too low, IPC drift),
+        # the system relaxes here before SPC engages.
+        if f < _INIT_END:
+            return
+
+        # First time we leave initial-settle: snapshot the LIVE
+        # anchor + free-end positions and use those as SPC targets.
+        # This avoids a position jump that would happen if we
+        # blindly used the asset's `wound_anchor_pos` after the
+        # system has already drifted slightly.
+        if state["live_anchor_pos"] is None:
+            pos = np.asarray(view(geo.positions())).reshape(-1, 3)
+            state["live_anchor_pos"] = pos[anchor_ids].copy()
+            state["live_free_pos"]   = pos[free_ids].copy()
+            state["target_xy"]       = state["live_free_pos"][:, :2].mean(axis=0).copy()
+
+        # ───── HOLD / PULL / SETTLE ─────
+        # Anchor: locked at the live snapshot from the boundary,
+        # not at the asset's `wound_anchor_pos` (which may have
+        # drifted by a sub-mm during initial settle).
         for jj, k in enumerate(anchor_ids):
             is_c[k] = 1
-            aim[k] = wound_anchor_pos[jj].reshape(3, 1)
+            aim[k] = state["live_anchor_pos"][jj].reshape(3, 1)
 
         # Free-end SPC is gated by the UI toggle. When disabled,
         # leave free_ids unconstrained and freeze target advancement
@@ -396,8 +467,11 @@ def build_demo(adhesion_on: bool = True):
         # Advance the free-end target along the peel direction. The
         # direction is re-sampled from the live geometry every
         # PERP_UPDATE_INTERVAL frames and held constant in between.
-        if HOLD_FRAMES <= f < HOLD_FRAMES + PULL_FRAMES:
-            pull_idx = f - HOLD_FRAMES
+        # PULL phase runs from _HOLD_END to _PULL_END (frame indices
+        # are global, the +1 shift via `f = info.frame() - 1` is
+        # already applied above).
+        if _HOLD_END <= f < _PULL_END:
+            pull_idx = f - _HOLD_END
             if pull_idx % PERP_UPDATE_INTERVAL == 0:
                 state["last_perp"] = _compute_live_perp(geo)
             state["target_xy"] = state["target_xy"] + PULL_STEP * state["last_perp"]
@@ -449,10 +523,9 @@ def build_demo(adhesion_on: bool = True):
 
 
 def phase_at(f: int) -> str:
-    if f < HOLD_FRAMES:
-        return "hold"
-    if f < HOLD_FRAMES + PULL_FRAMES:
-        return "pull"
+    if f < _INIT_END:  return "initial-settle"
+    if f < _HOLD_END:  return "hold"
+    if f < _PULL_END:  return "pull"
     return "settle"
 
 
@@ -602,12 +675,12 @@ def run_demo():
         psim.Separator()
         psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
 
-        # show free-end pull progress
+        # show free-end pull progress (PULL phase runs _HOLD_END..PULL_END)
         f1 = max(f - 1, 0)
-        if f1 < HOLD_FRAMES:
+        if f1 < _HOLD_END:
             p = 0.0
-        elif f1 < HOLD_FRAMES + PULL_FRAMES:
-            p = (f1 - HOLD_FRAMES) / PULL_FRAMES
+        elif f1 < _PULL_END:
+            p = (f1 - _HOLD_END) / PULL_FRAMES
         else:
             p = 1.0
         pull_state = "ENABLED" if sim["anim_state"]["pull_enabled"] else "DISABLED (free end)"

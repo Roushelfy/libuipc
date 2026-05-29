@@ -45,7 +45,7 @@ from uipc import (
     builtin,
 )
 from uipc.geometry import trimesh, label_surface, mesh_partition
-from uipc.core import RCCAdhesionStateAccessorFeature
+from uipc.core import RCCAdhesionStateAccessorFeature, FiniteElementStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
@@ -122,7 +122,14 @@ ADH_BONDING_RATE  = _CFG["ADH_BONDING_RATE"]
 ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 
 # ---- SPC ----
-SPC_STRENGTH      = 1.0e5        # matches rcc_adhesive_cloth_peel_demo.py
+# SPC strength rate. Force per vertex ≈ strength * mass * (x - aim).
+# Lower values make the pinning "softer" — less inertial shock on the
+# inner anchor when the wind starts, less Hessian-conditioning trouble
+# during the release ramp. 1e3 still firmly pins for typical tape mass
+# (ρ * V_vertex ≈ 1e-6 kg → effective k ≈ 1 N/m per vertex; aggregated
+# across the anchor strip it's plenty stiff). Override per-run with
+# `--set SPC_STRENGTH=...` if the wind asset slips during winding.
+SPC_STRENGTH      = float(_CFG.get("SPC_STRENGTH", 1.0e3))
 # Free tail strategy: every vertex whose arc-length from the anchor is
 # more than (L_wound + BUFFER_LENGTH) is pinned along the tangent line
 # from the wrap-off point. The unpinned BUFFER_LENGTH worth of tape
@@ -148,9 +155,29 @@ ANCHOR_ROWS       = 3
 # new layer's compression before the next layer rolls on).
 PREHEAT_FRAMES    = 30
 WIND_FRAMES       = 4500
-SETTLE_FRAMES     = 60
-TOTAL_FRAMES      = PREHEAT_FRAMES + WIND_FRAMES + SETTLE_FRAMES
+# Long settle1 lets β grow under the wound-end SPC pressure — anchor
+# rows + tail-tangent rows still pinned, middle wound zone in
+# compression. Goal: most PT pairs reach β > 0.9 before we let go.
+SETTLE1_FRAMES    = 300
+# RELEASE: gradually unpin the SPC, walking from the inner anchor
+# row outward through the tail. Each pinned row's release time is
+# linear in its index in the ordered list [0, 1, …, ANCHOR_ROWS-1,
+# i_pin_start, …, NX]. At the end of this phase no SPC remains; the
+# tape is held together purely by RCC adhesion + IPC barrier.
+RELEASE_FRAMES    = 1500
+# Final relaxation with no SPC. Asset is meant to be saved at the
+# END of this phase — captures the truly self-sustaining wound state
+# (which is what downstream demos load).
+SETTLE2_FRAMES    = 300
+TOTAL_FRAMES      = (PREHEAT_FRAMES + WIND_FRAMES
+                     + SETTLE1_FRAMES + RELEASE_FRAMES + SETTLE2_FRAMES)
 THETA_END         = 2.0 * np.pi * N_TURNS
+
+# Frame markers (used by the animator + UI to dispatch).
+_WIND_END     = PREHEAT_FRAMES + WIND_FRAMES
+_SETTLE1_END  = _WIND_END + SETTLE1_FRAMES
+_RELEASE_END  = _SETTLE1_END + RELEASE_FRAMES
+# (SETTLE2 ends at TOTAL_FRAMES.)
 
 # Anchor radius: inside the tape-hub IPC active band so adhesion fires.
 R_ANCHOR          = HUB_R_OUTER + TAPE_THICKNESS + 0.5 * D_HAT
@@ -206,11 +233,11 @@ def theta_at_frame(f: int) -> float:
 
 
 def phase_at(f: int) -> str:
-    if f < PREHEAT_FRAMES:
-        return "preheat"
-    if f < PREHEAT_FRAMES + WIND_FRAMES:
-        return "wind"
-    return "settle"
+    if f < PREHEAT_FRAMES:        return "preheat"
+    if f < _WIND_END:             return "wind"
+    if f < _SETTLE1_END:          return "settle1"
+    if f < _RELEASE_END:          return "release"
+    return "settle2"
 
 
 # ----------------------------------------------------------------------
@@ -296,6 +323,11 @@ def build_demo(adhesion_on: bool = True):
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
+    # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
+    # libuipc nested config here, AFTER the demo's own defaults so
+    # CLI always wins. See SOLVER_KEYS in tape_asset_lib.
+    L.apply_solver_overrides(config, _CFG)
     scene = Scene(config)
 
     abd = AffineBodyConstitution()
@@ -380,17 +412,23 @@ def build_demo(adhesion_on: bool = True):
         f = max(info.frame() - 1, 0)
         is_c = view(geo.vertices().find(builtin.is_constrained))
         aim  = view(geo.vertices().find(builtin.aim_position))
+        # Per-vertex SPC strength multiplier. SoftPositionConstraint
+        # creates this attribute at apply_to time (`strength_ratio`,
+        # set to SPC_STRENGTH for every vertex). The cuda backend
+        # reads it per-vertex per-step (force ∝ strength · mass), so
+        # writing here lets us smoothly fade SPC strength to zero
+        # during the RELEASE phase without unpinning any row.
+        strength = view(geo.vertices().find("strength_ratio"))
         is_c[:] = 0
 
-        # 1) Anchor strip — always locked at rest pose. The very start of
-        #    the tape never moves, even during the wind animation.
-        for i in range(ANCHOR_ROWS):
-            for j in range(TAPE_NZ + 1):
-                k = vid(i, j)
-                is_c[k] = 1
-                aim[k] = rest_positions[k].reshape(3, 1)
+        # SETTLE2: all SPCs released — tape is held purely by RCC
+        # adhesion + IPC barrier. This is the state captured by
+        # save_asset to give downstream demos a self-consistent
+        # equilibrium (no SPC-dependence to recover from on load).
+        if f >= _RELEASE_END:
+            return
 
-        # 2) Tail — pinned along the tangent line beyond (l_wound + BUFFER).
+        # Tangent geometry from the current θ (constant after wind).
         theta = theta_at_frame(f)
         l_wound = L_wound(theta)
         cos_t, sin_t = np.cos(theta), np.sin(theta)
@@ -398,23 +436,56 @@ def build_demo(adhesion_on: bool = True):
         p_wrap = np.array([r * cos_t, r * sin_t])
         tangent = np.array([-sin_t, cos_t])
 
-        # i_pin_start is the first row beyond the active-bend window. Clamp
-        # so we don't pin into the anchor strip if l_wound is still tiny.
+        # i_pin_start: first row beyond the active-bend window.
         i_pin_start = int(np.ceil((l_wound + BUFFER_LENGTH) / dy_tape))
         i_pin_start = max(ANCHOR_ROWS, min(i_pin_start, TAPE_NX + 1))
 
+        # RELEASE-phase strength multiplier: linearly decays from 1
+        # (full SPC_STRENGTH) at _SETTLE1_END to 0 at _RELEASE_END.
+        # Before SETTLE1 ends, multiplier stays at 1 (constraints
+        # are at full strength during preheat / wind / settle1).
+        if f >= _SETTLE1_END:
+            t = (f - _SETTLE1_END) / max(RELEASE_FRAMES, 1)
+            t = float(np.clip(t, 0.0, 1.0))
+            spc_mul = 1.0 - t
+        else:
+            spc_mul = 1.0
+        spc_now = SPC_STRENGTH * spc_mul
+
+        # Helpers: pin one row at either the rest pose (anchor side)
+        # or along the tangent line (tail side). Both write the
+        # current strength so the release ramp is uniform across all
+        # constrained rows.
+        def _pin_anchor_row(i: int):
+            for j in range(TAPE_NZ + 1):
+                k = vid(i, j)
+                is_c[k] = 1
+                aim[k] = rest_positions[k].reshape(3, 1)
+                strength[k] = spc_now
+
+        def _pin_tail_row(i: int):
+            s = arc_at_row[i] - l_wound
+            x, y = p_wrap + s * tangent
+            for j in range(TAPE_NZ + 1):
+                k = vid(i, j)
+                is_c[k] = 1
+                aim[k] = np.array(
+                    [x, y, rest_positions[k, 2]],
+                    dtype=np.float64,
+                ).reshape(3, 1)
+                strength[k] = spc_now
+
+        # Pin all originally-constrained rows every frame in the
+        # release window. The release schedule is now a global
+        # strength ramp (spc_mul above), not per-row removal — every
+        # constrained vertex loses strength at the same rate so the
+        # system has time to settle into a self-supporting state
+        # without redistributing stress through suddenly-freed rows.
+        for i in range(ANCHOR_ROWS):
+            _pin_anchor_row(i)
         if i_pin_start <= TAPE_NX:
-            s_offsets = arc_at_row[i_pin_start:] - l_wound       # (N_pinned,)
-            xy = p_wrap[None, :] + s_offsets[:, None] * tangent[None, :]
-            for ii, i in enumerate(range(i_pin_start, TAPE_NX + 1)):
-                x, y = xy[ii]
-                for j in range(TAPE_NZ + 1):
-                    k = vid(i, j)
-                    is_c[k] = 1
-                    aim[k] = np.array(
-                        [x, y, rest_positions[k, 2]],
-                        dtype=np.float64,
-                    ).reshape(3, 1)
+            for i in range(i_pin_start, TAPE_NX + 1):
+                _pin_tail_row(i)
 
     scene.animator().insert(tape_obj, animate_tape)
 
@@ -495,6 +566,23 @@ def run_demo():
         tape_geo = sim["tape_geo"].geometry()
         hub_T = np.array(view(hub_geo.transforms()), copy=True).reshape(4, 4)
         tape_pos = np.array(view(tape_geo.positions()), copy=True).reshape(-1, 3)
+        # Live tape velocity.
+        # IMPORTANT: `FiniteElementMethod::write_scene` (called from
+        # world.retrieve()) only writes positions back to the SC, NOT
+        # velocities — so `tape_geo.vertices().find("velocity")` would
+        # stay stuck at the init-time zero. The official channel for
+        # reading live device velocity is FiniteElementStateAccessorFeature.
+        tape_vel = None
+        fe_acc = sim["world"].features().find(FiniteElementStateAccessorFeature)
+        if fe_acc is not None:
+            state_geo = fe_acc.create_geometry()  # empty SC sized to FE vert count
+            # `copy_to` only fills attributes that already exist on state_geo —
+            # we have to create position + velocity ourselves first.
+            state_geo.vertices().create("position", np.zeros(3, dtype=np.float64))
+            state_geo.vertices().create("velocity", np.zeros(3, dtype=np.float64))
+            fe_acc.copy_to(state_geo)
+            tape_vel = np.array(view(state_geo.vertices().find("velocity")),
+                                copy=True).reshape(-1, 3)
         # Dump the full parsed cfg (geometry + IPC numerics + material +
         # adhesion + provenance), minus runtime CLI bookkeeping. Plus
         # `TAPE_NX`, which is derived at module-init and not part of
@@ -518,7 +606,11 @@ def run_demo():
                       f"frac>0.9={(betas > 0.9).mean():.2%}" if len(betas)
                       else "  β snapshot: 0 pairs (no PT contacts saved)")
         L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params,
-                          pair_state=pair_state)
+                          pair_state=pair_state, tape_velocity=tape_vel)
+        if tape_vel is not None:
+            vmax = float(np.linalg.norm(tape_vel, axis=1).max())
+            vmean = float(np.linalg.norm(tape_vel, axis=1).mean())
+            print(f"  velocity snapshot: max={vmax:.3e} m/s, mean={vmean:.3e} m/s")
         print(f"saved wound-tape asset → {ASSET_OUT_PATH}")
         state["saved"] = True
 
@@ -553,6 +645,14 @@ def run_demo():
         psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
         psim.Text(f"θ = {theta:.2f} rad   ({theta/(2*np.pi):.2f} turns)")
         psim.Text(f"L_wound = {L_wound(theta):.3f} / {TAPE_LENGTH} m")
+        # Release-phase progress: SPC strength multiplier on every
+        # constrained vertex. 100% during settle1 → 0% at release end.
+        if _SETTLE1_END <= f < _RELEASE_END:
+            rel_t = (f - _SETTLE1_END) / max(RELEASE_FRAMES, 1)
+            psim.Text(f"SPC strength: {(1.0 - rel_t)*100:.1f}% "
+                      f"(ramping uniformly to 0)")
+        elif f >= _RELEASE_END:
+            psim.Text("SPC strength: 0% — adhesion + barrier only")
         psim.Text(f"Adhesion: {'ENABLED' if state['adhesion_on'] else 'DISABLED'}")
         if state["saved"]:
             psim.Text(f"asset @ {ASSET_OUT_PATH}")

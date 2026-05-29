@@ -394,6 +394,110 @@ def make_wound_tape(hub_R_outer: float,
 # ----------------------------------------------------------------------
 # Save / load
 # ----------------------------------------------------------------------
+def resolve_param(cfg: dict, params: dict, key: str):
+    """Resolve a parameter with precedence:
+
+        explicit `--set KEY=...` > saved asset value > preset default.
+
+    Used by demos that LOAD a wound-tape asset (unwind / drop / ...)
+    and want the .npz to define physical parameters by default, but
+    let CLI overrides win when the user is intentionally retargeting.
+
+    The asset's raw value is cast to the type of the preset's value
+    (typically `float`) so numpy scalars from `np.load` come back as
+    plain Python numerics — clean for pybind sites that expect floats.
+    """
+    explicit = cfg.get("__explicit__", set())
+    if key in explicit:
+        return cfg[key]
+    if key in params and params[key] is not None:
+        preset_val = cfg.get(key)
+        if isinstance(preset_val, (int, float)):
+            return type(preset_val)(params[key])
+        return params[key]
+    return cfg[key]
+
+
+# ----------------------------------------------------------------------
+# Solver-config plumbing — translate flat user-facing CLI keys into the
+# nested libuipc scene config dict (`Scene.default_config()`).
+#
+# Each entry maps:    flat CLI key  →  (libuipc nested path, type)
+# Type coercion matters: libuipc's config attributes have a specific
+# dtype (Float vs IndexT) that the json-roundtrip respects.
+# ----------------------------------------------------------------------
+SOLVER_KEYS = {
+    # Tighter → fewer line-search blips, less leftover residual at end
+    # of each step → less effective numerical damping. libuipc default
+    # 1e-3 is loose; 1e-5 makes implicit BDF1 sims noticeably more
+    # accurate at ~2× wall-clock cost.
+    "LIN_TOL_RATE":         ("linear_system/tol_rate",  float),
+    # Per-Newton-step velocity residual tolerance. Tighter → solver
+    # converges further per step → less damped motion. Default 0.05
+    # m/s is generous; 0.005 is conservative; 0.001 nearly elastic.
+    "NEWTON_VELOCITY_TOL":  ("newton/velocity_tol",     float),
+    "NEWTON_TRANSRATE_TOL": ("newton/transrate_tol",    float),
+    "NEWTON_CCD_TOL":       ("newton/ccd_tol",          float),
+    "NEWTON_MAX_ITER":      ("newton/max_iter",         int),
+    "NEWTON_MIN_ITER":      ("newton/min_iter",         int),
+    "LINE_SEARCH_MAX_ITER": ("line_search/max_iter",    int),
+    # Friction transition velocity — below this the friction force
+    # smoothly interpolates to zero. Smaller → less "viscous" friction
+    # at low speeds (less effective damping for slow motions).
+    "EPS_VELOCITY":         ("contact/eps_velocity",    float),
+    # Adaptive substep: when a vertex moves >d_hat in a step the
+    # engine shrinks dt locally. Helps stability under fast motion.
+    "CFL_ENABLE":           ("cfl/enable",              int),
+}
+
+
+def apply_solver_overrides(config,
+                           cfg: dict,
+                           params: dict | None = None,
+                           verbose: bool = True) -> None:
+    """Translate the user's `--set NEWTON_VELOCITY_TOL=…` etc. into the
+    libuipc scene config dict. Mutates `config` in place; leaves
+    untouched keys at their libuipc defaults.
+
+    Precedence per key:
+        explicit `--set` (CLI)  >  asset's saved params  >  cfg/preset
+
+    `params` is the asset's `params` dict (the third return value of
+    `load_tape_asset`); pass it from unwind/drop so saved solver knobs
+    apply automatically. Wind passes `None` (no asset to load from).
+
+    Recognised CLI keys are listed in `SOLVER_KEYS` above.
+
+    Call sites: each demo invokes this right after building its
+    `Scene.default_config()` so `--set` always wins, even over the
+    demo's own explicit `config[...] = ...` assignments.
+    """
+    explicit = cfg.get("__explicit__", set())
+    for cli_key, (path, ty) in SOLVER_KEYS.items():
+        # Resolve value with CLI > asset > cfg precedence. Skip
+        # entirely when no source provides this key (libuipc default
+        # stays in effect).
+        if cli_key in explicit:
+            val = cfg[cli_key]
+            src = f"--set {cli_key}"
+        elif params is not None and cli_key in params and params[cli_key] is not None:
+            val = params[cli_key]
+            src = f"asset {cli_key}"
+        elif cli_key in cfg:
+            val = cfg[cli_key]
+            src = f"cfg {cli_key}"
+        else:
+            continue
+        val = ty(val)
+        keys = path.split("/")
+        d = config
+        for k in keys[:-1]:
+            d = d[k]
+        d[keys[-1]] = val
+        if verbose:
+            print(f"  solver: {path:<28s} = {val:<12} (from {src})")
+
+
 def filter_cfg_for_save(cfg: dict) -> dict:
     """Strip runtime / CLI bookkeeping fields from a parsed cfg so the
     remainder can be serialized into an asset .npz under `params`.
@@ -412,7 +516,8 @@ def save_tape_asset(npz_path: str,
                     hub_transform: np.ndarray,
                     tape_positions: np.ndarray,
                     params: dict,
-                    pair_state=None) -> None:
+                    pair_state=None,
+                    tape_velocity=None) -> None:
     """Save a wound tape asset.
 
     Stores:
@@ -445,28 +550,47 @@ def save_tape_asset(npz_path: str,
                 f"({keys.shape} vs {betas.shape})")
         payload["pair_state_pt_keys"]  = keys
         payload["pair_state_pt_betas"] = betas
+    if tape_velocity is not None:
+        # Per-vertex Vector3 velocities at save time. Loaders use this
+        # to seed the FEM `velocity` attribute BEFORE world.init, so
+        # the first BDF1 step doesn't see a v=0 → v=v_end jump that
+        # would produce spurious position increments. Optional; legacy
+        # assets without it just start at v=0 (the libuipc default).
+        tape_velocity = np.asarray(tape_velocity, dtype=np.float64)
+        if tape_velocity.shape != tape_positions.shape:
+            raise ValueError(
+                f"save_tape_asset: tape_velocity shape {tape_velocity.shape} "
+                f"must match tape_positions shape {tape_positions.shape}")
+        payload["tape_velocity"] = tape_velocity
     np.savez(npz_path, **payload)
 
 
 def load_tape_asset(npz_path: str):
     """Inverse of save_tape_asset.
 
-    Returns a 4-tuple:
-        hub_transform, tape_positions, params, pair_state
+    Returns a 5-tuple:
+        hub_transform, tape_positions, params, pair_state, tape_velocity
 
-    `pair_state` is either None (legacy asset without saved β) or a tuple
-    (keys_uint64, betas_float64) ready to feed into
-    RCCAdhesionStateAccessorFeature.load_pt_state().
+    `pair_state`    : None for legacy assets without saved β; otherwise
+                      (keys_uint64, betas_float64) ready for
+                      RCCAdhesionStateAccessorFeature.load_pt_state().
+    `tape_velocity` : None for legacy assets; otherwise (N, 3) float64
+                      vertex velocities to seed the FEM v buffer
+                      BEFORE world.init.
     """
     data = np.load(npz_path, allow_pickle=True)
     pair_state = None
     if "pair_state_pt_keys" in data.files:
         pair_state = (np.asarray(data["pair_state_pt_keys"],  dtype=np.uint64),
                       np.asarray(data["pair_state_pt_betas"], dtype=np.float64))
+    tape_velocity = None
+    if "tape_velocity" in data.files:
+        tape_velocity = np.asarray(data["tape_velocity"], dtype=np.float64)
     return (data["hub_transform"],
             data["tape_positions"],
             data["params"][0],
-            pair_state)
+            pair_state,
+            tape_velocity)
 
 
 # ----------------------------------------------------------------------
@@ -517,7 +641,7 @@ WIND_PRESETS = {
         "TAPE_NZ":          10,        # mesh cells across tape width;
                                         # TAPE_NX auto-derived for square
                                         # cells unless explicitly --set.
-        "TAPE_YOUNGS":       1.0e8,
+        "TAPE_YOUNGS":       1.0e9,
         "TAPE_POISSON":      0.4,
         "TAPE_MASS_DENSITY": 2.0e2,
         "TAPE_THICKNESS":    1.0e-4,
@@ -566,12 +690,40 @@ WIND_PRESETS = {
         "TAPE_LENGTH":       0.73,    # ≈ 5cm slack after 5 turns
         "N_TURNS":           5,
         "TAPE_NZ":           10,
-        "TAPE_YOUNGS":       1.0e8,    # 50 MPa × 2 (sim-thickness comp)
+        "TAPE_YOUNGS":       1.0e9,    # 50 MPa × 2 (sim-thickness comp)
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,   # = ½ physical 0.178 mm
         "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
         "LAYER_THICKNESS":   2.5e-4,   # > 2·t=0.18mm, < 2·t+D_HAT=0.58mm
+        "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            5e1,
+        "ADH_CT":            2e3,
+        "ADH_W":             1.0,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  5.0,
+        "ADH_INITIAL_BETA":  0.0,
+    },
+    "temflex175-2turn": {
+        # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
+        # (~1/3 the frames of the 5-turn baseline) — best for iterating
+        # on solver / adhesion parameters where you don't need a fat
+        # roll. L_wound(4π) ≈ 26.9 cm; 32 cm gives ~5 cm tail slack.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.32,    # ≈ 5cm slack after 2 turns
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       1.0e9,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
+        "LAYER_THICKNESS":   2.5e-4,
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
@@ -591,7 +743,7 @@ WIND_PRESETS = {
         "TAPE_LENGTH":       0.46,    # ≈ 5cm slack after 3 turns
         "N_TURNS":           3,
         "TAPE_NZ":           10,
-        "TAPE_YOUNGS":       1.0e8,
+        "TAPE_YOUNGS":       1.0e9,
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
@@ -926,7 +1078,7 @@ def list_assets(asset_dir: str) -> None:
     for f in npzs:
         path = _os.path.join(asset_dir, f)
         try:
-            _, _, params, pair_state = load_tape_asset(path)
+            _, _, params, pair_state, _ = load_tape_asset(path)
             preset = params.get("__preset_name__", "?")
             extra = []
             if "TAPE_THICKNESS" in params:
