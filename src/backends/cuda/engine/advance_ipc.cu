@@ -300,6 +300,18 @@ void SimEngine::advance()
 
             // 1. Record Friction Candidates at the beginning of the frame
             m_global_vertex_manager->record_prev_positions();
+            // First frame has no "previous step" to source friction
+            // candidates from — without seeding, the trajectory
+            // filter's PT/EE/PE/PP lists stay empty for all of frame 1,
+            // which (a) silently disables IPC friction and (b) silently
+            // disables RCC adhesion on the very first frame (Phase B
+            // iterates over friction_PTs). For an asset-loaded sim
+            // that starts in mid-air-contact, this drops the whole
+            // adhesion budget and lets the tape spring apart. Run an
+            // initial DCD so record_friction_candidates has something
+            // to copy from. Cheap: one extra detect on frame 1 only.
+            if(m_current_frame == 1)
+                detect_dcd_candidates();
             record_friction_candidates();
 
             // 2. Predict Motion => x_tilde = x + v * dt

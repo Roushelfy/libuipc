@@ -129,7 +129,7 @@ ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 # (ρ * V_vertex ≈ 1e-6 kg → effective k ≈ 1 N/m per vertex; aggregated
 # across the anchor strip it's plenty stiff). Override per-run with
 # `--set SPC_STRENGTH=...` if the wind asset slips during winding.
-SPC_STRENGTH      = float(_CFG.get("SPC_STRENGTH", 1.0e3))
+SPC_STRENGTH      = float(_CFG.get("SPC_STRENGTH", 1000))
 # Free tail strategy: every vertex whose arc-length from the anchor is
 # more than (L_wound + BUFFER_LENGTH) is pinned along the tangent line
 # from the wrap-off point. The unpinned BUFFER_LENGTH worth of tape
@@ -154,21 +154,21 @@ ANCHOR_ROWS       = 3
 # previous default; the slower pull also lets β grow more under each
 # new layer's compression before the next layer rolls on).
 PREHEAT_FRAMES    = 30
-WIND_FRAMES       = 4500
+WIND_FRAMES       = 1500
 # Long settle1 lets β grow under the wound-end SPC pressure — anchor
 # rows + tail-tangent rows still pinned, middle wound zone in
 # compression. Goal: most PT pairs reach β > 0.9 before we let go.
-SETTLE1_FRAMES    = 300
+SETTLE1_FRAMES    = 1000
 # RELEASE: gradually unpin the SPC, walking from the inner anchor
 # row outward through the tail. Each pinned row's release time is
 # linear in its index in the ordered list [0, 1, …, ANCHOR_ROWS-1,
 # i_pin_start, …, NX]. At the end of this phase no SPC remains; the
 # tape is held together purely by RCC adhesion + IPC barrier.
-RELEASE_FRAMES    = 1500
+RELEASE_FRAMES    = 2000
 # Final relaxation with no SPC. Asset is meant to be saved at the
 # END of this phase — captures the truly self-sustaining wound state
 # (which is what downstream demos load).
-SETTLE2_FRAMES    = 300
+SETTLE2_FRAMES    = 1000
 TOTAL_FRAMES      = (PREHEAT_FRAMES + WIND_FRAMES
                      + SETTLE1_FRAMES + RELEASE_FRAMES + SETTLE2_FRAMES)
 THETA_END         = 2.0 * np.pi * N_TURNS
@@ -309,7 +309,8 @@ def _hub_axis_to_z() -> Matrix4x4:
 
 
 def build_demo(adhesion_on: bool = True):
-    Logger.set_level(Logger.Level.Warn)
+    # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
+    L.apply_log_level(_CFG, default="warn")
 
     workspace = AssetDir.output_path(__file__)
     engine = Engine("cuda", workspace)

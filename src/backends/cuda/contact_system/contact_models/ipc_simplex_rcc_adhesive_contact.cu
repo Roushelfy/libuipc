@@ -581,6 +581,15 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto positions   = info.positions();
         auto dt          = info.dt();
 
+        // Diagnostic: empty friction-PT list at the start of any frame
+        // means adhesion is silently OFF for that whole frame. Most
+        // common cause: frame 1 right after world.init() — the
+        // SimplexTrajectoryFilter's friction candidates are recorded
+        // from the *previous* step's DCD output, and at frame 1 there
+        // is no previous step. Visible at INFO log level.
+        logger::debug("RCC Phase B (frame={}): friction_PT={} pairs, prev_keys={} (loaded={})",
+                     cur, pairs.size(), m_prev_keys_PT.size(),
+                     m_has_loaded_prev_state ? "yes" : "no");
         if(pairs.size() == 0)
         {
             m_beta_PT.resize(0);
@@ -625,6 +634,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto positions   = info.positions();
         auto dt          = info.dt();
 
+        // Same diagnostic as the EnergyInfo overload. Both should
+        // fire per frame; if only one logs, the other branch is
+        // taking the early-return path.
+        logger::debug("RCC Phase B [ContactInfo] (frame={}): friction_PT={} pairs, "
+                     "prev_keys={} (loaded={})",
+                     cur, pairs.size(), m_prev_keys_PT.size(),
+                     m_has_loaded_prev_state ? "yes" : "no");
         if(pairs.size() == 0)
         {
             m_beta_PT.resize(0);
@@ -1310,12 +1326,22 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                 m_prev_keys_PT.view().data() + n,
                                 m_prev_beta_PT.view().data());
         }
-        else
-        {
-            // No active pairs this step — drop snapshot so next step starts fresh.
-            m_prev_keys_PT.resize(0);
-            m_prev_beta_PT.resize(0);
-        }
+        // else: pairs.size() == 0 on this step. PREVIOUSLY we wiped
+        // m_prev_keys_PT/m_prev_beta_PT here so the next step would
+        // start fresh. That's wrong for two cases:
+        //   1) Frame 1 after world.init() — libuipc's friction
+        //      candidate list (which we use as `pairs` here) is
+        //      sourced from the *previous* step's DCD output. At
+        //      frame 1 there is no previous step → `pairs.size()` is
+        //      always 0. Wiping kills the β state we just loaded
+        //      from an asset BEFORE it has a chance to be used in
+        //      frame 2.
+        //   2) Any frame where the tape briefly loses all PT contacts
+        //      but the same pairs will form again next step.
+        // Keep the prev snapshot intact so the next step's
+        // match_or_init can re-bond returning pairs to their saved
+        // β values. Stale prev entries are harmless: binary search
+        // misses never trigger a match.
 
         // Snapshot positions for next step's u-signal.
         m_pos_at_step_begin.view().copy_from(positions);

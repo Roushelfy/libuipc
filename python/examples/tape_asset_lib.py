@@ -451,6 +451,43 @@ SOLVER_KEYS = {
 }
 
 
+def apply_log_level(cfg: dict, default: str = "warn") -> None:
+    """Set the libuipc `Logger` level from the user-facing cfg.
+
+    Reads the (optional) `LOG_LEVEL` cfg key — accepted as either
+    case-insensitive string ("trace" / "debug" / "info" / "warn" /
+    "error" / "critical") or one of the numeric enum values (0..5).
+    Default 'warn' matches the demos' historical hardcoded behaviour
+    so adding this helper is backward-compatible.
+
+    Usage: `--set LOG_LEVEL=info` turns on libuipc's INFO output
+    (adaptive κ / Newton residuals / contact stats / etc.).
+    """
+    from uipc import Logger
+    val = cfg.get("LOG_LEVEL", default)
+    if isinstance(val, (int, float)):
+        # Numeric enum value
+        level = Logger.Level(int(val))
+    else:
+        name = str(val).strip().lower()
+        mapping = {
+            "trace":    Logger.Level.Trace,
+            "debug":    Logger.Level.Debug,
+            "info":     Logger.Level.Info,
+            "warn":     Logger.Level.Warn,
+            "warning":  Logger.Level.Warn,
+            "error":    Logger.Level.Error,
+            "critical": Logger.Level.Critical,
+            "fatal":    Logger.Level.Critical,
+        }
+        if name not in mapping:
+            raise ValueError(
+                f"LOG_LEVEL='{val}' is not recognised; pick one of "
+                f"{sorted(set(mapping) - {'warning', 'fatal'})} (case-insensitive)")
+        level = mapping[name]
+    Logger.set_level(level)
+
+
 def apply_solver_overrides(config,
                            cfg: dict,
                            params: dict | None = None,
@@ -715,7 +752,7 @@ WIND_PRESETS = {
         "HUB_R_INNER":       0.01905,
         "HUB_HEIGHT":        0.020,
         "TAPE_WIDTH":        0.019,
-        "TAPE_LENGTH":       0.32,    # ≈ 5cm slack after 2 turns
+        "TAPE_LENGTH":       0.34,    # ≈ 5cm slack after 2 turns
         "N_TURNS":           2,
         "TAPE_NZ":           10,
         "TAPE_YOUNGS":       1.0e9,
@@ -731,7 +768,7 @@ WIND_PRESETS = {
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  5.0,
+        "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
     },
     "temflex175-3turn": {

@@ -273,7 +273,8 @@ def _stand_on_ground(tape_pos: np.ndarray,
 
 # ----------------------------------------------------------------------
 def build_demo(adhesion_on: bool = True):
-    Logger.set_level(Logger.Level.Warn)
+    # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
+    L.apply_log_level(_CFG, default="warn")
 
     if not os.path.isfile(ASSET_IN_PATH):
         raise SystemExit(
