@@ -232,6 +232,58 @@ def theta_at_frame(f: int) -> float:
     return THETA_END
 
 
+def _save_asset_impl(sim, state):
+    """Module-level save-asset routine. Used by both the interactive
+    UI button (via the `save_asset` closure inside `run_demo`) and
+    the headless `RECORD_DIR` path (which can't reach in-function
+    closures). Mutates `state["saved"] = True` on success."""
+    os.makedirs(os.path.dirname(ASSET_OUT_PATH), exist_ok=True)
+    hub_geo = sim["hub_geo"].geometry()
+    tape_geo = sim["tape_geo"].geometry()
+    hub_T = np.array(view(hub_geo.transforms()), copy=True).reshape(4, 4)
+    tape_pos = np.array(view(tape_geo.positions()), copy=True).reshape(-1, 3)
+    # Live tape velocity via FE state accessor (the SC's velocity
+    # attribute is NOT written back by FEM.write_scene, so we have
+    # to ask FE directly).
+    tape_vel = None
+    fe_acc = sim["world"].features().find(FiniteElementStateAccessorFeature)
+    if fe_acc is not None:
+        state_geo = fe_acc.create_geometry()
+        state_geo.vertices().create("position", np.zeros(3, dtype=np.float64))
+        state_geo.vertices().create("velocity", np.zeros(3, dtype=np.float64))
+        fe_acc.copy_to(state_geo)
+        tape_vel = np.array(view(state_geo.vertices().find("velocity")),
+                            copy=True).reshape(-1, 3)
+    # Full cfg dump (geometry + IPC + material + adhesion + provenance)
+    # plus derived TAPE_NX. Asset becomes self-describing.
+    params = L.filter_cfg_for_save(_CFG)
+    params["TAPE_NX"] = TAPE_NX
+    # Snapshot the RCC adhesion β state for downstream demos.
+    pair_state = None
+    if state["adhesion_on"]:
+        acc = sim["world"].features().find(RCCAdhesionStateAccessorFeature)
+        if acc is not None:
+            keys, betas = acc.dump_pt_state()
+            pair_state = (keys, betas)
+            print(f"  β snapshot: n={len(betas)} pairs, "
+                  f"mean={betas.mean():.3f}, "
+                  f"frac>0.9={(betas > 0.9).mean():.2%}" if len(betas)
+                  else "  β snapshot: 0 pairs (no PT contacts saved)")
+    L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params,
+                      pair_state=pair_state, tape_velocity=tape_vel)
+    if tape_vel is not None:
+        vmax = float(np.linalg.norm(tape_vel, axis=1).max())
+        vmean = float(np.linalg.norm(tape_vel, axis=1).mean())
+        print(f"  velocity snapshot: max={vmax:.3e} m/s, mean={vmean:.3e} m/s")
+    print(f"saved wound-tape asset → {ASSET_OUT_PATH}")
+    state["saved"] = True
+
+
+def _record_save_asset_after_run(sim, state):
+    """Thin wrapper called by the headless record path."""
+    _save_asset_impl(sim, state)
+
+
 def phase_at(f: int) -> str:
     if f < PREHEAT_FRAMES:        return "preheat"
     if f < _WIND_END:             return "wind"
@@ -521,6 +573,26 @@ def run_demo():
               f"L_free={max(TAPE_LENGTH - L_wound(th), 0.0):.4f}, "
               f"free_end=({p[0]:+.4f}, {p[1]:+.4f}, {p[2]:+.4f})")
 
+    # Headless record mode (EGL). Must branch BEFORE any `ps.init()`
+    # because the interactive init tries the display backend and
+    # crashes on a headless box. See drop demo for full notes.
+    # Auto-saves the asset at the end (the wind sim's whole point).
+    record_dir = _CFG.get("RECORD_DIR")
+    if record_dir:
+        every_n = int(_CFG.get("RECORD_EVERY", 10))
+        zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        def _on_progress(f, tot):
+            print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
+                  f"Phase: {phase_at(f - 1)}")
+        L.record_demo_to_pngs(sim=sim, total_frames=TOTAL_FRAMES,
+                              output_dir=record_dir, every_n=every_n,
+                              up_dir="z_up", mesh_name="wound_tape",
+                              zoom=zoom, on_progress=_on_progress)
+        # Inline the save_asset equivalent (the regular closure is
+        # defined later in this function and not in scope here).
+        _record_save_asset_after_run(sim, state)
+        return
+
     ps.init()
     ps.set_ground_plane_mode("none")
     ps.set_up_dir("z_up")
@@ -561,59 +633,11 @@ def run_demo():
         sim["world"].retrieve()
         update_visual()
 
+    # save_asset is the closure used by the interactive UI button.
+    # It delegates to the module-level _save_asset_impl so the
+    # headless record path can reuse the same logic.
     def save_asset():
-        os.makedirs(os.path.dirname(ASSET_OUT_PATH), exist_ok=True)
-        hub_geo = sim["hub_geo"].geometry()
-        tape_geo = sim["tape_geo"].geometry()
-        hub_T = np.array(view(hub_geo.transforms()), copy=True).reshape(4, 4)
-        tape_pos = np.array(view(tape_geo.positions()), copy=True).reshape(-1, 3)
-        # Live tape velocity.
-        # IMPORTANT: `FiniteElementMethod::write_scene` (called from
-        # world.retrieve()) only writes positions back to the SC, NOT
-        # velocities — so `tape_geo.vertices().find("velocity")` would
-        # stay stuck at the init-time zero. The official channel for
-        # reading live device velocity is FiniteElementStateAccessorFeature.
-        tape_vel = None
-        fe_acc = sim["world"].features().find(FiniteElementStateAccessorFeature)
-        if fe_acc is not None:
-            state_geo = fe_acc.create_geometry()  # empty SC sized to FE vert count
-            # `copy_to` only fills attributes that already exist on state_geo —
-            # we have to create position + velocity ourselves first.
-            state_geo.vertices().create("position", np.zeros(3, dtype=np.float64))
-            state_geo.vertices().create("velocity", np.zeros(3, dtype=np.float64))
-            fe_acc.copy_to(state_geo)
-            tape_vel = np.array(view(state_geo.vertices().find("velocity")),
-                                copy=True).reshape(-1, 3)
-        # Dump the full parsed cfg (geometry + IPC numerics + material +
-        # adhesion + provenance), minus runtime CLI bookkeeping. Plus
-        # `TAPE_NX`, which is derived at module-init and not part of
-        # _CFG. This way the .npz is self-describing — every param the
-        # sim actually used (after `--set` overrides and D_HAT_RATIO
-        # derivation) is preserved verbatim.
-        params = L.filter_cfg_for_save(_CFG)
-        params["TAPE_NX"] = TAPE_NX
-        # Snapshot the RCC adhesion β state so unwind/drop demos can restore
-        # the wound bond at frame 0. Only the prev-step (keys, β) snapshot is
-        # exposed — that's exactly what Phase B match_or_init reads at the
-        # start of the next step.
-        pair_state = None
-        if state["adhesion_on"]:
-            acc = sim["world"].features().find(RCCAdhesionStateAccessorFeature)
-            if acc is not None:
-                keys, betas = acc.dump_pt_state()
-                pair_state = (keys, betas)
-                print(f"  β snapshot: n={len(betas)} pairs, "
-                      f"mean={betas.mean():.3f}, "
-                      f"frac>0.9={(betas > 0.9).mean():.2%}" if len(betas)
-                      else "  β snapshot: 0 pairs (no PT contacts saved)")
-        L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params,
-                          pair_state=pair_state, tape_velocity=tape_vel)
-        if tape_vel is not None:
-            vmax = float(np.linalg.norm(tape_vel, axis=1).max())
-            vmean = float(np.linalg.norm(tape_vel, axis=1).mean())
-            print(f"  velocity snapshot: max={vmax:.3e} m/s, mean={vmean:.3e} m/s")
-        print(f"saved wound-tape asset → {ASSET_OUT_PATH}")
-        state["saved"] = True
+        _save_asset_impl(sim, state)
 
     def reset():
         nonlocal sim

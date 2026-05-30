@@ -534,6 +534,22 @@ def run_demo():
     state = {"adhesion_on": True}
     sim = build_demo(state["adhesion_on"])
 
+    # Headless record mode (EGL). Must branch BEFORE any `ps.init()`
+    # because the interactive init tries the display backend and
+    # crashes on a headless box. See drop demo for full notes.
+    record_dir = _CFG.get("RECORD_DIR")
+    if record_dir:
+        every_n = int(_CFG.get("RECORD_EVERY", 10))
+        zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        def _on_progress(f, tot):
+            print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
+                  f"Phase: {phase_at(f - 1)}")
+        L.record_demo_to_pngs(sim=sim, total_frames=TOTAL_FRAMES,
+                              output_dir=record_dir, every_n=every_n,
+                              up_dir="z_up", mesh_name="unwind_tape",
+                              zoom=zoom, on_progress=_on_progress)
+        return
+
     ps.init()
     ps.set_ground_plane_mode("none")
     ps.set_up_dir("z_up")

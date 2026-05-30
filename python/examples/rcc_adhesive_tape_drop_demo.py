@@ -117,8 +117,19 @@ ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 #                outer layer detaches).
 HOLD_FRAMES        = 30
 PULL_FRAMES        = 600
-TOP_FRAMES         = 60
+# Hold at top long enough to see whether the lifted roll stays
+# bonded or starts peeling — 6 s @ dt=0.01.
+TOP_FRAMES         = 600
 TOTAL_FRAMES       = HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES
+
+
+def phase_at(f: int) -> str:
+    """Frame → phase label. Module-level so headless record's progress
+    callback can use it (it would otherwise be a closure local to
+    run_demo and unreachable from the helper)."""
+    if f < HOLD_FRAMES:               return "hold"
+    if f < HOLD_FRAMES + PULL_FRAMES: return "pull"
+    return "top"
 
 # How high to lift the free end (metres, +y). Must exceed the roll's
 # vertical reach (≈ R_outer + N_TURNS·2·t when standing on side, plus
@@ -562,6 +573,52 @@ def run_demo():
     state = {"adhesion_on": True}
     sim = build_demo(state["adhesion_on"])
 
+    # Ground quad shared between interactive and headless paths.
+    ground_quad_verts = np.array([
+        [-0.5, 0.0, -0.5],
+        [ 0.5, 0.0, -0.5],
+        [ 0.5, 0.0,  0.5],
+        [-0.5, 0.0,  0.5],
+    ], dtype=np.float64)
+    ground_quad_tris = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+
+    # Headless record mode: when RECORD_DIR is set, skip the interactive
+    # polyscope GUI entirely and dump a PNG sequence via EGL. Must
+    # branch BEFORE any `ps.init()` (which would try a display backend
+    # on headless boxes and crash). Combine PNGs to MP4 with the
+    # ffmpeg command the helper prints at the end.
+    record_dir = _CFG.get("RECORD_DIR")
+    if record_dir:
+        every_n = int(_CFG.get("RECORD_EVERY", 10))
+        zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        def _setup_extras(ps_mod):
+            gm = ps_mod.register_surface_mesh(
+                "ground", ground_quad_verts, ground_quad_tris)
+            gm.set_color((0.6, 0.6, 0.6))
+            gm.set_transparency(0.5)
+        def _on_progress(f, tot):
+            print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
+                  f"Phase: {phase_at(f - 1)}")
+        # Tell the helper to frame for the full vertical trajectory
+        # (roll diameter + LIFT_HEIGHT + DROP_HEIGHT) so the lifted
+        # tape stays in view at the end of the pull. Without this,
+        # at zoom=5 the bbox is computed only from the roll's initial
+        # pose and the lifted tape flies off-screen mid-sim.
+        # HUB_R_OUTER / HUB_HEIGHT live in the asset params (not at
+        # module scope), so read them via sim["params"].
+        _hub_r = float(sim["params"]["HUB_R_OUTER"])
+        _hub_h = float(sim["params"]["HUB_HEIGHT"])
+        full_extent = max(2.0 * _hub_r,
+                          LIFT_HEIGHT + DROP_HEIGHT + 2.0 * _hub_h)
+        L.record_demo_to_pngs(sim=sim, total_frames=TOTAL_FRAMES,
+                              output_dir=record_dir, every_n=every_n,
+                              up_dir="y_up", mesh_name="drop_tape",
+                              setup_extras_fn=_setup_extras,
+                              zoom=zoom, on_progress=_on_progress,
+                              bbox_extent_override=full_extent)
+        return
+
+    # Interactive path: needs a display.
     ps.init()
     ps.set_ground_plane_mode("none")
     ps.set_up_dir("y_up")
@@ -571,13 +628,6 @@ def run_demo():
     # `simplicial_surface()`, so we register a flat quad at y=0 just
     # for visualization. Size: 1 m × 1 m centered at origin (much
     # bigger than the roll's footprint).
-    ground_quad_verts = np.array([
-        [-0.5, 0.0, -0.5],
-        [ 0.5, 0.0, -0.5],
-        [ 0.5, 0.0,  0.5],
-        [-0.5, 0.0,  0.5],
-    ], dtype=np.float64)
-    ground_quad_tris = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
     ground_mesh = ps.register_surface_mesh(
         "ground", ground_quad_verts, ground_quad_tris)
     ground_mesh.set_color((0.6, 0.6, 0.6))
@@ -624,10 +674,8 @@ def run_demo():
         sim = build_demo(state["adhesion_on"])
         update_visual()
 
-    def phase_at(f: int) -> str:
-        if f < HOLD_FRAMES:                       return "hold"
-        if f < HOLD_FRAMES + PULL_FRAMES:         return "pull"
-        return "top"
+    # phase_at is now module-level (see above), reused by the
+    # interactive on_update text below.
 
     def on_update():
         if psim.Button("run / pause"):

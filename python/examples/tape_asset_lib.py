@@ -488,6 +488,145 @@ def apply_log_level(cfg: dict, default: str = "warn") -> None:
     Logger.set_level(level)
 
 
+def record_demo_to_pngs(*,
+                        sim: dict,
+                        total_frames: int,
+                        output_dir: str,
+                        every_n: int = 10,
+                        up_dir: str = "z_up",
+                        setup_extras_fn=None,
+                        mesh_name: str = "sim",
+                        edge_width: float = 0.3,
+                        on_progress=None,
+                        width: int = 1280,
+                        height: int = 720,
+                        zoom: float = 5.0,
+                        bbox_extent_override: float = None) -> None:
+    """Run a sim demo headlessly, screenshot every `every_n` frames,
+    save sequence to `output_dir/frame_NNNNNN.png`.
+
+    Designed to replace `ps.show()`'s interactive main loop. Uses
+    polyscope's EGL backend — no X server, no display, no xvfb
+    required (the bundled polyscope was compiled with headless EGL
+    support).
+
+    Args:
+        sim:               build_demo's return dict (must have
+                           "world", "scene_io" keys).
+        total_frames:      stop after this many advances.
+        output_dir:        PNG sequence destination (created).
+        every_n:           capture every N sim frames (default 10 →
+                           60 s sim at dt=0.01 → 600 frames → 20 s
+                           video at 30 fps).
+        up_dir:            polyscope up direction ("y_up" or "z_up").
+        setup_extras_fn:   optional `f(ps) -> None` called once after
+                           ps.init() — register extra static meshes
+                           (e.g. the drop demo's ground quad) here.
+        mesh_name:         polyscope surface mesh name.
+        on_progress:       optional `f(frame, total) -> None` called
+                           every `every_n` frames for status print.
+        zoom:              optical zoom factor relative to polyscope's
+                           default (FoV 45°). 5.0 → FoV 9° → scene
+                           appears 5× larger on the image. 1.0 keeps
+                           the default. The tape roll is ~5 cm and
+                           polyscope's auto-fit fills the viewport
+                           from a few times that distance, so the
+                           tape looks small at zoom=1; bump to 3-10
+                           to fill the frame.
+
+    Prints the ffmpeg command to assemble the PNG sequence into mp4
+    when done.
+    """
+    import polyscope as ps
+    os.makedirs(output_dir, exist_ok=True)
+    # EGL = offscreen rendering, no X server needed. The bundled
+    # polyscope was compiled with this backend; just opt in.
+    ps.set_allow_headless_backends(True)
+    ps.init("openGL3_egl")
+    ps.set_ground_plane_mode("none")
+    ps.set_up_dir(up_dir)
+    ps.set_window_size(width, height)
+
+    if setup_extras_fn is not None:
+        setup_extras_fn(ps)
+
+    # Initial surface mesh registration (libuipc geometry — excludes
+    # the visualization-only ground quad some demos add via extras).
+    surface = sim["scene_io"].simplicial_surface()
+    init_positions = np.asarray(surface.positions().view()).reshape(-1, 3)
+    mesh = ps.register_surface_mesh(
+        mesh_name,
+        init_positions,
+        surface.triangles().topo().view().reshape(-1, 3),
+    )
+    mesh.set_edge_width(edge_width)
+
+    # Explicit camera placement — bypasses polyscope's auto-fit.
+    # Auto-fit otherwise compensates for FoV changes by moving the
+    # camera further back, so a narrowed FoV produces NO visible
+    # zoom. By computing target/distance ourselves from the actual
+    # tape geometry (NOT the huge ground quad), we get a real
+    # "telephoto" effect: same FoV, closer camera → bigger scene.
+    bbox_min = init_positions.min(axis=0)
+    bbox_max = init_positions.max(axis=0)
+    target   = (bbox_min + bbox_max) * 0.5
+    extent   = float((bbox_max - bbox_min).max())
+    # Demos that move the tape over the course of the sim (drop's
+    # vertical lift, etc.) pass an explicit extent so the camera
+    # is framed for the FULL trajectory, not just frame 0's bbox.
+    if bbox_extent_override is not None and bbox_extent_override > extent:
+        extent = float(bbox_extent_override)
+    # Distance scaled so the tape fills ~70% of the frame at zoom=1;
+    # zoom=5 brings the camera 5× closer.
+    distance = (extent * 1.5) / max(float(zoom), 1e-6)
+    # Back direction: a diagonal that keeps both the up axis and
+    # the long axis visible.
+    if up_dir == "y_up":
+        back = np.array([1.0, 0.5, 1.0])
+    else:  # "z_up" or anything else
+        back = np.array([1.0, 1.0, 0.5])
+    back = back / np.linalg.norm(back)
+    cam_pos = target + back * distance
+    ps.look_at(cam_pos.tolist(), target.tolist(), fly_to=False)
+
+    world = sim["world"]
+    n_saved = 0
+    for f in range(total_frames):
+        if not world.is_valid():
+            print(f"[record] world invalid at frame {f}, stopping.")
+            break
+        world.advance()
+        if not world.is_valid():
+            print(f"[record] world invalid after frame {f}, stopping.")
+            break
+        world.retrieve()
+
+        if (f + 1) % every_n == 0 or f + 1 == total_frames:
+            merged = sim["scene_io"].simplicial_surface()
+            v = merged.positions().view().reshape(-1, 3)
+            t = merged.triangles().topo().view().reshape(-1, 3)
+            # Topology may change between frames if reporters resize;
+            # re-register if so.
+            if mesh.n_vertices() != v.shape[0]:
+                ps.remove_surface_mesh(mesh_name)
+                mesh = ps.register_surface_mesh(mesh_name, v, t)
+                mesh.set_edge_width(edge_width)
+            else:
+                mesh.update_vertex_positions(v)
+            png_path = os.path.join(output_dir, f"frame_{n_saved:06d}.png")
+            ps.frame_tick()           # render once
+            ps.screenshot(png_path)
+            n_saved += 1
+            if on_progress is not None:
+                on_progress(f + 1, total_frames)
+
+    print(f"[record] saved {n_saved} PNGs → {output_dir}")
+    print(f"[record] combine to mp4:")
+    print(f"  ffmpeg -y -framerate 30 -i '{output_dir}/frame_%06d.png' \\")
+    print(f"         -c:v libx264 -pix_fmt yuv420p -crf 18 "
+          f"'{output_dir}/output.mp4'")
+
+
 def apply_solver_overrides(config,
                            cfg: dict,
                            params: dict | None = None,
