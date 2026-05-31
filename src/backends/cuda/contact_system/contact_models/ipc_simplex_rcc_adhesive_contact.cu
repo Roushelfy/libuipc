@@ -69,6 +69,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     muda::DeviceBuffer<U64>     m_prev_keys_PT;
     muda::DeviceBuffer<Float>   m_prev_beta_PT;
 
+    // ---- cross-layer occlusion gate ----
+    // Per-PT-pair flag: 1 ⇔ an intervening surface triangle sits between
+    // P and T at frame-open positions, so this pair cannot physically bond.
+    // Aligned with m_beta_PT / friction_PTs(). Re-evaluated every frame at
+    // Phase B (both for newly-created pairs and for pairs matched from
+    // m_prev_keys_PT); threaded into PT_beta_evolve_existing in Phase A so
+    // β stays pinned at 0 for blocked pairs (β=0 is not absorbing in the
+    // evolution rule — the bonding_term can lift it from zero without this
+    // gate). Not snapshotted across steps: the next frame's Phase B re-runs
+    // the test against the current geometry, so persistence is unnecessary.
+    muda::DeviceBuffer<IndexT>  m_blocked_PT;
+
     // Positions at the START of the current step. Phase A uses these to compute
     // the lagged tangent basis and tangential displacement `u` over the step
     // that just ended.
@@ -377,6 +389,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         using namespace muda;
         auto n = pairs.size();
         m_beta_PT.resize(n);
+        m_blocked_PT.resize(n);
         if(n == 0)
             return;
 
@@ -390,12 +403,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                     d_hats      = d_hats.viewer().name("d_hats"),
                     Ps          = positions.viewer().name("Ps"),
                     beta_dst    = m_beta_PT.view().viewer().name("beta_PT"),
+                    blocked_dst = m_blocked_PT.view().viewer().name("blocked_PT"),
                     sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
                     vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
+                    shell_tris  = m_shell_triangles.cviewer().name("shell_tris"),
+                    v2t_offsets = m_v2t_offsets.cviewer().name("v2t_offsets"),
+                    v2t_tris    = m_v2t_tri_indices.cviewer().name("v2t_tris"),
+                    n_tris      = (IndexT)m_shell_triangles.size(),
                     dt] __device__(int i) mutable
                    {
                        using namespace sym::codim_ipc_rcc_adhesive;
                        using namespace sym::codim_ipc_contact;
+                       blocked_dst(i) = 0;
                        const auto& PT   = pairs(i);
                        Vector4i    cids = {contact_ids(PT[0]), contact_ids(PT[1]),
                                            contact_ids(PT[2]), contact_ids(PT[3])};
@@ -427,6 +446,44 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            return;
                        }
 
+                       // Cross-layer occlusion gate: cast a segment from
+                       // centroid(T) toward P at frame-open positions; if
+                       // any other shell triangle blocks it, this pair is
+                       // separated by an intervening layer and must not bond.
+                       // Normal-side test: only fire when T faces P
+                       // (otherwise IPC barrier already keeps them apart and
+                       // there's no adhesion semantics on the wrong side).
+                       bool blocked = false;
+                       {
+                           Vector3 N    = (T1 - T0).cross(T2 - T0);
+                           Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
+                           Vector3 sdir = P - Cen;
+                           if(N.dot(sdir) > Float{0})
+                           {
+                               constexpr Float TMIN = Float{1e-5};
+                               constexpr Float TMAX = Float{1} - Float{1e-5};
+                               for(IndexT j = 0; j < n_tris; ++j)
+                               {
+                                   const Vector3i& tri = shell_tris(j);
+                                   if(tri[0] == PT[0] || tri[1] == PT[0] || tri[2] == PT[0]) continue;
+                                   if(tri[0] == PT[1] || tri[1] == PT[1] || tri[2] == PT[1]) continue;
+                                   if(tri[0] == PT[2] || tri[1] == PT[2] || tri[2] == PT[2]) continue;
+                                   if(tri[0] == PT[3] || tri[1] == PT[3] || tri[2] == PT[3]) continue;
+                                   Vector3 A = Ps(tri[0]);
+                                   Vector3 B = Ps(tri[1]);
+                                   Vector3 Cv = Ps(tri[2]);
+                                   if(segment_triangle_hit(Cen, sdir, A, B, Cv, TMIN, TMAX))
+                                   { blocked = true; break; }
+                               }
+                           }
+                       }
+                       blocked_dst(i) = blocked ? IndexT{1} : IndexT{0};
+                       if(blocked)
+                       {
+                           beta_dst(i) = 0;
+                           return;
+                       }
+
                        Float   D;
                        distance::point_triangle_distance2(P, T0, T1, T2, D);
                        beta_dst(i) = PT_beta_init_new(rcc.initial_beta, kappa, rcc.Cn,
@@ -436,6 +493,15 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
 
     // Phase B (subsequent step) — match curr keys against m_prev_keys_PT.
     // If found: carry prev β. If not found: new-pair bonding kick.
+    //
+    // The cross-layer occlusion test is re-evaluated for EVERY pair on EVERY
+    // frame (not cached via m_prev_blocked_PT). That way:
+    //  • Pairs that newly become occluded (geometry shifted) immediately
+    //    flip β=0 in the same frame, not 1 frame later.
+    //  • Pairs that newly become unoccluded (an intervening layer slid
+    //    away) immediately become eligible for bonding.
+    //  • Asset-load (set_prev_pt_state, which lacks blocked info) is
+    //    self-correcting: the first frame after load re-evaluates.
     void _phase_b_match_or_init(muda::CBufferView<U64>            curr_keys,
                                 muda::CBufferView<Vector4i>       pairs,
                                 muda::CBufferView<IndexT>         contact_ids,
@@ -447,6 +513,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         using namespace muda;
         auto n = curr_keys.size();
         m_beta_PT.resize(n);
+        m_blocked_PT.resize(n);
         if(n == 0)
             return;
 
@@ -464,12 +531,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                     d_hats     = d_hats.viewer().name("d_hats"),
                     Ps         = positions.viewer().name("Ps"),
                     beta_dst   = m_beta_PT.view().viewer().name("beta_PT"),
+                    blocked_dst= m_blocked_PT.view().viewer().name("blocked_PT"),
                     sticky_sign= m_sticky_sign.cviewer().name("sticky_sign"),
                     vert_normal= m_vertex_normal.cviewer().name("vert_normal"),
+                    shell_tris = m_shell_triangles.cviewer().name("shell_tris"),
+                    v2t_offsets= m_v2t_offsets.cviewer().name("v2t_offsets"),
+                    v2t_tris   = m_v2t_tri_indices.cviewer().name("v2t_tris"),
+                    n_tris     = (IndexT)m_shell_triangles.size(),
                     dt] __device__(int i) mutable
                    {
                        using namespace sym::codim_ipc_rcc_adhesive;
                        using namespace sym::codim_ipc_contact;
+                       blocked_dst(i) = 0;
                        U64 key = curr_keys(i);
                        // Binary-search in prev_keys (already sorted ascending).
                        IndexT lo = 0, hi = n_prev;
@@ -491,26 +564,64 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            return;
                        }
 
+                       Vector3 P  = Ps(PT[0]);
+                       Vector3 T0 = Ps(PT[1]);
+                       Vector3 T1 = Ps(PT[2]);
+                       Vector3 T2 = Ps(PT[3]);
+
+                       // v3 sticky-side gate: applies to ALL pairs (found or
+                       // new) — non-sticky-side pairs never bond.
+                       if(!PT_sticky_gate(sticky_sign(PT[0]),
+                                          sticky_sign(PT[1]),
+                                          vert_normal(PT[0]),
+                                          vert_normal(PT[1]),
+                                          P, T0, T1, T2))
+                       {
+                           beta_dst(i) = 0;
+                           return;
+                       }
+
+                       // Cross-layer occlusion gate (same logic as
+                       // _phase_b_init_all_new). Runs for found pairs too so
+                       // geometry changes flip the blocked state immediately.
+                       bool blocked = false;
+                       {
+                           Vector3 N    = (T1 - T0).cross(T2 - T0);
+                           Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
+                           Vector3 sdir = P - Cen;
+                           if(N.dot(sdir) > Float{0})
+                           {
+                               constexpr Float TMIN = Float{1e-5};
+                               constexpr Float TMAX = Float{1} - Float{1e-5};
+                               for(IndexT j = 0; j < n_tris; ++j)
+                               {
+                                   const Vector3i& tri = shell_tris(j);
+                                   if(tri[0] == PT[0] || tri[1] == PT[0] || tri[2] == PT[0]) continue;
+                                   if(tri[0] == PT[1] || tri[1] == PT[1] || tri[2] == PT[1]) continue;
+                                   if(tri[0] == PT[2] || tri[1] == PT[2] || tri[2] == PT[2]) continue;
+                                   if(tri[0] == PT[3] || tri[1] == PT[3] || tri[2] == PT[3]) continue;
+                                   Vector3 A = Ps(tri[0]);
+                                   Vector3 B = Ps(tri[1]);
+                                   Vector3 Cv = Ps(tri[2]);
+                                   if(segment_triangle_hit(Cen, sdir, A, B, Cv, TMIN, TMAX))
+                                   { blocked = true; break; }
+                               }
+                           }
+                       }
+                       blocked_dst(i) = blocked ? IndexT{1} : IndexT{0};
+                       if(blocked)
+                       {
+                           beta_dst(i) = 0;
+                           return;
+                       }
+
                        if(found)
                        {
                            beta_dst(i) = prev_beta(lo);
                        }
                        else
                        {
-                           // new pair → bonding kick (gated by v3 sticky-side check)
-                           Vector3 P  = Ps(PT[0]);
-                           Vector3 T0 = Ps(PT[1]);
-                           Vector3 T1 = Ps(PT[2]);
-                           Vector3 T2 = Ps(PT[3]);
-                           if(!PT_sticky_gate(sticky_sign(PT[0]),
-                                              sticky_sign(PT[1]),
-                                              vert_normal(PT[0]),
-                                              vert_normal(PT[1]),
-                                              P, T0, T1, T2))
-                           {
-                               beta_dst(i) = 0;
-                               return;
-                           }
+                           // new pair → bonding kick
                            Float kappa = PT_contact_coeff(bar_table, cids).kappa;
                            Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
                                                   d_hats(PT[2]), d_hats(PT[3]));
@@ -550,10 +661,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             _build_sticky_topology(positions.size());
             m_v3_built = true;
         }
-        // Initialize m_pos_at_step_begin from begin-of-frame positions if
-        // v3 is active. (For v2-only scenes Phase A's existing first-call
-        // skip block handles this — see _evolve_beta_step_at_end.)
-        if(m_has_sticky && m_pos_at_step_begin.size() != positions.size())
+        // Initialize m_pos_at_step_begin from begin-of-frame positions on
+        // every first-frame call. Previously this was gated by m_has_sticky;
+        // dropped because the cross-layer occlusion gate (Phase B) needs
+        // begin-of-frame positions even when single-sided adhesion v3 is
+        // unused. _recompute_vertex_normals is internally guarded by
+        // m_has_sticky so no extra work is done for non-v3 scenes.
+        if(m_pos_at_step_begin.size() != positions.size())
         {
             m_pos_at_step_begin.resize(positions.size());
             m_pos_at_step_begin.view().copy_from(positions);
@@ -1250,6 +1364,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         Ps          = positions.viewer().name("Ps"),
                         Ps_begin    = m_pos_at_step_begin.cviewer().name("Ps_begin"),
                         beta_buf    = m_beta_PT.view().viewer().name("beta_PT"),
+                        blocked_buf = m_blocked_PT.cviewer().name("blocked_PT"),
+                        n_blocked   = (IndexT)m_blocked_PT.size(),
                         sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
                         vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
                         dt] __device__(int i) mutable
@@ -1306,11 +1422,17 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            point_triangle_tan_rel_dx(dP, dT0, dT1, dT2, basis, bary, u);
                            Float u_sq = u.squaredNorm();
 
+                           // Cross-layer occlusion gate: Phase B writes this
+                           // every frame. When set, PT_beta_evolve_existing
+                           // short-circuits to β=0 (the bonding_term at
+                           // p_k>0 would otherwise re-ignite β from zero).
+                           bool blocked = (i < n_blocked) && (blocked_buf(i) != 0);
+
                            beta_buf(i) = PT_beta_evolve_existing(
                                beta_buf(i), kappa,
                                rcc.Cn, rcc.Ct, rcc.W, rcc.eta,
                                rcc.bonding_rate, rcc.p0,
-                               d_hat, dt, D, u_sq);
+                               d_hat, dt, D, u_sq, blocked);
                        });
 
             // Compute keys for the just-evolved pairs and snapshot.

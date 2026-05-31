@@ -61,6 +61,12 @@ namespace sym::codim_ipc_rcc_adhesive
 
     // Existing-pair β evolution. β_in is the previous step's β; returns the
     // clamped new β.
+    //
+    // `blocked` is the cross-layer occlusion flag (an intervening triangle
+    // sits between P and T → no physical contact possible). When set, we
+    // short-circuit to β = 0. β=0 is NOT absorbing in the evolution rule
+    // (the bonding_term at p_k > 0 can re-ignite β from zero), so a separate
+    // persistent flag is needed.
     inline __device__ Float PT_beta_evolve_existing(Float beta_in,
                                                     Float kappa,
                                                     Float Cn,
@@ -72,8 +78,12 @@ namespace sym::codim_ipc_rcc_adhesive
                                                     Float dHat,
                                                     Float dt,
                                                     Float D,
-                                                    Float u_sq)
+                                                    Float u_sq,
+                                                    bool  blocked)
     {
+        if(blocked)
+            return Float{0};
+
         Float r_scale, W_scale, db_dd2;
         Float p_k = _pk_and_scales(r_scale, W_scale, db_dd2, beta_in, kappa, Cn, dHat, D);
 
@@ -182,6 +192,45 @@ namespace sym::codim_ipc_rcc_adhesive
                 return true;  // T's sticky face is the contact side.
         }
         return false;
+    }
+
+    // -------- Möller-Trumbore segment-triangle intersection --------
+    //
+    // Tests whether the open segment (origin, origin + dir) hits the triangle
+    // (t0, t1, t2) at parameter tt ∈ (tmin, tmax). `dir` is NOT normalized; it
+    // is the full segment vector (so the canonical TMIN=1e-5 and TMAX=1-1e-5
+    // bounds exclude tiny grazes at the endpoints).
+    //
+    // Used by the PT-pair cross-layer occlusion gate (Phase B): for a freshly
+    // proposed adhesion pair (P, T0..T2), cast a segment from centroid(T) to
+    // P at frame-open positions; if some other shell triangle intervenes the
+    // pair is geometrically unreachable and must not bond.
+    inline __device__ bool segment_triangle_hit(const Vector3& origin,
+                                                const Vector3& dir,
+                                                const Vector3& t0,
+                                                const Vector3& t1,
+                                                const Vector3& t2,
+                                                Float          tmin,
+                                                Float          tmax)
+    {
+        constexpr Float EPS = Float{1e-12};
+        Vector3 e1 = t1 - t0;
+        Vector3 e2 = t2 - t0;
+        Vector3 h  = dir.cross(e2);
+        Float   a  = e1.dot(h);
+        if(a > -EPS && a < EPS)
+            return false;  // segment parallel to triangle plane
+        Float   f  = Float{1} / a;
+        Vector3 s  = origin - t0;
+        Float   u  = f * s.dot(h);
+        if(u < Float{0} || u > Float{1})
+            return false;
+        Vector3 q = s.cross(e1);
+        Float   v = f * dir.dot(q);
+        if(v < Float{0} || u + v > Float{1})
+            return false;
+        Float tt = f * e2.dot(q);
+        return (tt > tmin) && (tt < tmax);
     }
 
     // -------- PT-pair sorted-vertex U64 hash key --------
