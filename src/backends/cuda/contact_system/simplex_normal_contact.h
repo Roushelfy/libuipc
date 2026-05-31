@@ -163,6 +163,15 @@ class SimplexNormalContact : public ContactReporter
         muda::CBufferView<Float>           PP_energies;
         muda::CDoubletVectorView<Float, 3> PP_gradients;
         muda::CTripletMatrixView<Float, 3> PP_hessians;
+
+        // Per-Newton-iter min PT contact distance instrumentation. Sized to
+        // PT_count on demand; reduced to a single Float via DeviceReduce::Min.
+        muda::DeviceBuffer<Float> per_pt_dist2;
+        muda::DeviceVar<Float>    min_pt_dist2;
+
+        // Public so the extended __device__ lambda can live in a non-private
+        // enclosing function (nvcc constraint).
+        void log_min_pt_distance();
     };
 
     muda::CBufferView<Vector4i>        PTs() const;

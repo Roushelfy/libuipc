@@ -1,8 +1,12 @@
 #include <contact_system/simplex_normal_contact.h>
 #include <muda/ext/eigen/evd.h>
 #include <muda/cub/device/device_merge_sort.h>
+#include <muda/cub/device/device_reduce.h>
 #include <utils/distance.h>
 #include <utils/codim_thickness.h>
+#include <uipc/common/log.h>
+#include <global_geometry/global_vertex_manager.h>
+#include <cmath>
 
 namespace uipc::backend::cuda
 {
@@ -68,6 +72,53 @@ void SimplexNormalContact::do_compute_energy(GlobalContactManager::EnergyInfo& i
                 offset);
 
     do_compute_energy(this_info);
+
+    // Per-Newton-iter min PT contact distance — log at info for sweep
+    // telemetry. Fires multiple times per Newton iter (once per energy
+    // evaluation including line search); the sweep parser takes the last
+    // emission before each "Frame N Newton Iteration M" header line and
+    // attributes it to iter N.
+    m_impl.log_min_pt_distance();
+}
+
+void SimplexNormalContact::Impl::log_min_pt_distance()
+{
+    if(PT_count == 0)
+    {
+        logger::info("ContactPairMinDist: PT=inf, count=0");
+        return;
+    }
+
+    auto PTs_view       = simplex_trajectory_filter->PTs();
+    auto positions_view = global_vertex_manager->positions();
+    loose_resize(per_pt_dist2, PT_count);
+
+    using namespace muda;
+    ParallelFor()
+        .file_line(__FILE__, __LINE__)
+        .apply(PT_count,
+               [PTs       = PTs_view.cviewer().name("PTs"),
+                positions = positions_view.cviewer().name("positions"),
+                per_pt_dist2 = per_pt_dist2.viewer().name(
+                    "per_pt_dist2")] __device__(int I) mutable
+               {
+                   const Vector4i& pt = PTs(I);
+                   Vector3         p  = positions(pt[0]);
+                   Vector3         t0 = positions(pt[1]);
+                   Vector3         t1 = positions(pt[2]);
+                   Vector3         t2 = positions(pt[3]);
+                   Float           d2;
+                   distance::point_triangle_distance2(p, t0, t1, t2, d2);
+                   per_pt_dist2(I) = d2;
+               });
+
+    DeviceReduce().Min(per_pt_dist2.data(),
+                       min_pt_dist2.data(),
+                       PT_count);
+    Float h_min_d2 = min_pt_dist2;
+    logger::info("ContactPairMinDist: PT={:.6e}, count={}",
+                 std::sqrt(std::max(h_min_d2, Float(0))),
+                 PT_count);
 }
 
 void SimplexNormalContact::do_report_gradient_hessian_extent(GlobalContactManager::GradientHessianExtentInfo& info)
