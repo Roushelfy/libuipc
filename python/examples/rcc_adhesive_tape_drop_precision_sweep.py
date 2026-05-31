@@ -62,53 +62,17 @@ import threading
 import time
 
 
-# ---------------------------------------------------------------------
-# Precision profiles
-# ---------------------------------------------------------------------
-# Each profile is a dict of (cli-key → value) passed as `--set KEY=VAL`
-# to the drop demo. See `tape_asset_lib.SOLVER_KEYS` for the mapping
-# to libuipc's nested scene config (`linear_system/tol_rate`,
-# `newton/velocity_tol`, etc.).
-PROFILES = {
-    "quick": dict(
-        LIN_TOL_RATE=1e-3,
-        NEWTON_VELOCITY_TOL=0.05,
-        NEWTON_TRANSRATE_TOL=0.1,
-        NEWTON_MAX_ITER=1024,
-        LINE_SEARCH_MAX_ITER=8,
-    ),
-    "default": dict(
-        LIN_TOL_RATE=1e-4,
-        NEWTON_VELOCITY_TOL=5e-3,
-        NEWTON_TRANSRATE_TOL=1e-2,
-        NEWTON_MAX_ITER=1024,
-        LINE_SEARCH_MAX_ITER=8,
-    ),
-    "high": dict(
-        LIN_TOL_RATE=1e-4,
-        NEWTON_VELOCITY_TOL=5e-4,
-        NEWTON_TRANSRATE_TOL=1e-3,
-        NEWTON_MAX_ITER=2048,
-        LINE_SEARCH_MAX_ITER=16,
-    ),
-    "extreme": dict(
-        LIN_TOL_RATE=1e-4,
-        NEWTON_VELOCITY_TOL=5e-5,
-        NEWTON_TRANSRATE_TOL=1e-3,
-        NEWTON_MAX_ITER=4096,
-        LINE_SEARCH_MAX_ITER=64,
-    ),
-    "paranoid": dict(
-        LIN_TOL_RATE=1e-7,
-        NEWTON_VELOCITY_TOL=5e-6,
-        NEWTON_TRANSRATE_TOL=1e-5,
-        NEWTON_MAX_ITER=8192,
-        LINE_SEARCH_MAX_ITER=64,
-    ),
-}
-
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(REPO_ROOT, "python", "examples"))
+
+# Single source of truth for the precision profiles — shared with the
+# wind/unwind/drop demos via `SOLVER_PROFILE` on each WIND preset, so
+# tightening "high" here also tightens any wind asset built with
+# SOLVER_PROFILE="high". Each profile is a dict of (cli-key → value)
+# passed as `--set KEY=VAL` to the drop demo. See
+# `tape_asset_lib.SOLVER_KEYS` for the mapping to libuipc's nested
+# scene config (`linear_system/tol_rate`, `newton/velocity_tol`, etc.).
+from tape_asset_lib import SOLVER_PROFILES as PROFILES  # noqa: E402
 DROP_DEMO = os.path.join(
     REPO_ROOT, "python", "examples", "rcc_adhesive_tape_drop_demo.py"
 )

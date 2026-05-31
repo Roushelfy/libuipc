@@ -451,6 +451,57 @@ SOLVER_KEYS = {
 }
 
 
+# ----------------------------------------------------------------------
+# Named precision profiles. A `SOLVER_PROFILE` key on a preset (or via
+# `--set SOLVER_PROFILE=...`) selects a bundle of solver knobs from this
+# dict. The drop precision sweep iterates over the same dict.
+#
+# Precedence inside `apply_solver_overrides`:
+#   --set CLI  >  asset's saved value  >  preset inline value  >  profile default
+#
+# Tweaking a single knob without leaving the profile is fine: drop the
+# explicit key into the preset (e.g. `"NEWTON_MAX_ITER": 8192`) and the
+# profile fills in the rest.
+# ----------------------------------------------------------------------
+SOLVER_PROFILES = {
+    "quick": dict(
+        LIN_TOL_RATE=1e-3,
+        NEWTON_VELOCITY_TOL=0.05,
+        NEWTON_TRANSRATE_TOL=0.1,
+        NEWTON_MAX_ITER=1024,
+        LINE_SEARCH_MAX_ITER=8,
+    ),
+    "default": dict(
+        LIN_TOL_RATE=1e-4,
+        NEWTON_VELOCITY_TOL=5e-3,
+        NEWTON_TRANSRATE_TOL=1e-2,
+        NEWTON_MAX_ITER=1024,
+        LINE_SEARCH_MAX_ITER=8,
+    ),
+    "high": dict(
+        LIN_TOL_RATE=1e-4,
+        NEWTON_VELOCITY_TOL=5e-4,
+        NEWTON_TRANSRATE_TOL=1e-3,
+        NEWTON_MAX_ITER=2048,
+        LINE_SEARCH_MAX_ITER=16,
+    ),
+    "extreme": dict(
+        LIN_TOL_RATE=1e-4,
+        NEWTON_VELOCITY_TOL=5e-5,
+        NEWTON_TRANSRATE_TOL=1e-3,
+        NEWTON_MAX_ITER=4096,
+        LINE_SEARCH_MAX_ITER=64,
+    ),
+    "paranoid": dict(
+        LIN_TOL_RATE=1e-7,
+        NEWTON_VELOCITY_TOL=5e-6,
+        NEWTON_TRANSRATE_TOL=1e-5,
+        NEWTON_MAX_ITER=8192,
+        LINE_SEARCH_MAX_ITER=64,
+    ),
+}
+
+
 def apply_log_level(cfg: dict, default: str = "warn") -> None:
     """Set the libuipc `Logger` level from the user-facing cfg.
 
@@ -636,23 +687,50 @@ def apply_solver_overrides(config,
     untouched keys at their libuipc defaults.
 
     Precedence per key:
-        explicit `--set` (CLI)  >  asset's saved params  >  cfg/preset
+        explicit `--set` (CLI)  >  asset's saved params
+                                >  cfg/preset (inline knob)
+                                >  SOLVER_PROFILE bundle (named profile)
 
     `params` is the asset's `params` dict (the third return value of
     `load_tape_asset`); pass it from unwind/drop so saved solver knobs
     apply automatically. Wind passes `None` (no asset to load from).
 
-    Recognised CLI keys are listed in `SOLVER_KEYS` above.
+    SOLVER_PROFILE resolution mirrors SOLVER_KEYS' precedence (CLI >
+    asset > preset). It expands its 5 knob values as the lowest-priority
+    fallback, so a preset with `SOLVER_PROFILE: "high"` gets the high
+    profile's NEWTON_VELOCITY_TOL etc. unless something tighter is in
+    play. Asset saves preserve SOLVER_PROFILE so unwind/drop inherit
+    automatically from a wind asset.
+
+    Recognised CLI keys are listed in `SOLVER_KEYS` above; named
+    profiles in `SOLVER_PROFILES`.
 
     Call sites: each demo invokes this right after building its
     `Scene.default_config()` so `--set` always wins, even over the
     demo's own explicit `config[...] = ...` assignments.
     """
     explicit = cfg.get("__explicit__", set())
+
+    # Resolve the effective SOLVER_PROFILE first — CLI > asset > preset.
+    profile_name = None
+    if "SOLVER_PROFILE" in explicit:
+        profile_name = cfg.get("SOLVER_PROFILE")
+    elif params is not None and params.get("SOLVER_PROFILE"):
+        profile_name = params["SOLVER_PROFILE"]
+    elif cfg.get("SOLVER_PROFILE"):
+        profile_name = cfg["SOLVER_PROFILE"]
+    if profile_name is not None and profile_name not in SOLVER_PROFILES:
+        raise ValueError(
+            f"unknown SOLVER_PROFILE '{profile_name}'; "
+            f"available: {list(SOLVER_PROFILES)}")
+    profile_knobs = SOLVER_PROFILES.get(profile_name, {}) if profile_name else {}
+    if verbose and profile_name:
+        print(f"  solver: SOLVER_PROFILE             = {profile_name}")
+
     for cli_key, (path, ty) in SOLVER_KEYS.items():
-        # Resolve value with CLI > asset > cfg precedence. Skip
-        # entirely when no source provides this key (libuipc default
-        # stays in effect).
+        # Resolve value with CLI > asset > cfg > profile precedence.
+        # Skip entirely when no source provides this key (libuipc
+        # default stays in effect).
         if cli_key in explicit:
             val = cfg[cli_key]
             src = f"--set {cli_key}"
@@ -662,6 +740,9 @@ def apply_solver_overrides(config,
         elif cli_key in cfg:
             val = cfg[cli_key]
             src = f"cfg {cli_key}"
+        elif cli_key in profile_knobs:
+            val = profile_knobs[cli_key]
+            src = f"profile {profile_name}"
         else:
             continue
         val = ty(val)
@@ -842,6 +923,9 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
     # ===== 3M Temflex 175 vinyl electrical tape =====
     # Geometry from 3M's official datasheet:
@@ -881,6 +965,9 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
     "temflex175-2turn": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
@@ -909,6 +996,39 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
+    },    "temflex175-2turn-soft": {
+        # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
+        # (~1/3 the frames of the 5-turn baseline) — best for iterating
+        # on solver / adhesion parameters where you don't need a fat
+        # roll. L_wound(4π) ≈ 26.9 cm; 32 cm gives ~5 cm tail slack.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,    # ≈ 5cm slack after 2 turns
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       1.0e9,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            1,
+        "ADH_CT":            1,
+        "ADH_W":             1.0,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  20.0,
+        "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
     "temflex175-3turn": {
         # Quick test: 3 turns instead of 5. Faster wind sim for iteration.
@@ -934,6 +1054,9 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
     "temflex175-thick": {
         # Sim TAPE_THICKNESS = full physical 0.178 mm. Larger IPC band
@@ -962,6 +1085,9 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
     "temflex175-10turn": {
         # 10 turns instead of 5 — more impressive spool, slower to sim.
@@ -987,6 +1113,9 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
     },
 }
 
