@@ -29,6 +29,16 @@ struct UIPC_CORE_API RCCBondedPTEntry
     U32      release_flags = RCCBondedPTReleaseNone;
 };
 
+struct UIPC_CORE_API RCCBondedPTCounters
+{
+    SizeT candidate_count = 0;
+    SizeT locked_count = 0;
+    SizeT released_count = 0;
+    SizeT degenerate_rejected_count = 0;
+    SizeT filter_skipped_count = 0;
+    SizeT duplicate_suppressed_count = 0;
+};
+
 class UIPC_CORE_API RCCBondedPTState
 {
   public:
@@ -41,6 +51,7 @@ class UIPC_CORE_API RCCBondedPTState
     SizeT size() const;
     bool  empty() const;
     bool  validate() const;
+    const RCCBondedPTCounters& counters() const;
 
     span<const U64>      locked_keys() const;
     span<const Vector4i> locked_topos() const;
@@ -55,11 +66,20 @@ class UIPC_CORE_API RCCBondedPTState
     bool  mark_released(U64 key, U32 release_flags);
     vector<RCCBondedPTEntry> extract_released();
 
+    void clear_counters();
+    void record_candidates(SizeT count);
+    void record_degenerate_rejected(SizeT count);
+    void record_filter_skipped(SizeT count);
+    void record_duplicate_suppressed(SizeT count);
+
   private:
+    void sync_locked_count();
+
     vector<U64>      m_locked_keys;
     vector<Vector4i> m_locked_topos;
     vector<Float>    m_locked_beta;
     vector<IndexT>   m_locked_age;
     vector<U32>      m_release_flags;
+    RCCBondedPTCounters m_counters;
 };
 }  // namespace uipc::core

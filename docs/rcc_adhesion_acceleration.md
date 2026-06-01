@@ -168,7 +168,9 @@ The gate must read simulation state or report fields. Writing OBJ sequences is u
 
 ## Reports
 
-Minimum report fields before scene gates:
+The host state contract now has matching `RCCBondedPTCounters` fields. Before bonded scene gates can claim ownership correctness, the CUDA backend must expose the same fields through reports or feature accessors.
+
+Minimum backend report fields before scene gates:
 
 | Field | Meaning |
 | --- | --- |

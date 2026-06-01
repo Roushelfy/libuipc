@@ -269,3 +269,29 @@ After rest-shape construction is deterministic, the bonded PT reporter needs a C
 ### Decision
 
 The CPU oracle layer is now sufficient for the next implementation step. Before touching filter kernels, add observable `rcc_bonded_pt_*` counters and release flag plumbing so later scene and benchmark gates can prove pair ownership.
+
+## 2026-06-01 Minimum Bonded PT Counters
+
+### Context
+
+The bonded PT path needs reportable counters before filter or reporter integration. Without candidate, lock, release, rejection, skip, and duplicate accounting, scene gates cannot prove that a PT pair is owned by exactly one path.
+
+### Implemented
+
+- Added `RCCBondedPTCounters` to the host state contract with `candidate_count`, `locked_count`, `released_count`, `degenerate_rejected_count`, `filter_skipped_count`, and `duplicate_suppressed_count`.
+- Kept `locked_count` synchronized with the active lock set and incremented `released_count` when released entries are extracted.
+- Added explicit record methods for candidate, degeneracy rejection, filter skip, and duplicate suppression events.
+- Added `[rcc_bonded_pt][state][counters]` assertions.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target core -j2` | Passed. Built `uipc_core` and `uipc_test_core`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Passed. Reported `All tests passed (48 assertions in 2 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state][counters]" -r compact` | Passed. Reported `All tests passed (16 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (68 assertions in 5 test cases)`. |
+
+### Decision
+
+The requested pre-filter pieces are now present in host-side contracts and CPU oracles. The next implementation step should create the CUDA-owned state/reporting bridge before any simplex filter skips are enabled.

@@ -35,7 +35,8 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 - [x] Implement `RCCBondedPTState` minimum host contract for locked keys, oriented topologies, beta, age, and release flags.
 - [ ] Extend the state owner with rest-shape metrics once the SVTS oracle lands.
 - [ ] Define feature-disabled default behavior and explicit config keys under the `rcc_bonded_pt` prefix.
-- [ ] Add debug/report counters for candidate, locked, released, degenerate-rejected, filter-skipped, and duplicate-suppressed pairs.
+- [x] Add minimum `RCCBondedPTCounters` fields for candidate, locked, released, degenerate-rejected, filter-skipped, and duplicate-suppressed pairs.
+- [ ] Expose `RCCBondedPTCounters` through backend reports or feature accessors once the CUDA owner exists.
 
 ### Oracles
 
@@ -83,9 +84,9 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
-| No backend-owned bonded PT state integration | A host `RCCBondedPTState` contract exists, but filter/reporter work has no live CUDA-owned source of locked keys | Finish rest-shape/oracle work, then mirror the contract into the CUDA backend |
-| No CPU oracle | Numeric correctness cannot be separated from GPU implementation bugs | Add rest-shape and E/G/H oracle fixtures |
-| No bonded-PT runtime counters | Current legacy RCC scene gates can prove lift/release behavior, but not bonded-pair ownership | Add `rcc_bonded_pt_*` counters and release flags |
+| No backend-owned bonded PT state integration | A host `RCCBondedPTState` contract exists, but filter/reporter work has no live CUDA-owned source of locked keys | Mirror the state contract into the CUDA backend |
+| No GPU reporter oracle | CPU rest-shape and E/G/H oracles exist, but GPU bonded-tet reporter has not been compared against them | Add reporter and GPU-vs-CPU oracle fixture |
+| No backend-reported bonded-PT counters | Host counters exist, but current legacy RCC scene gates still cannot prove bonded-pair ownership through reports | Expose `rcc_bonded_pt_*` counters from the CUDA owner/reporting path |
 | No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions and report fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` once bonded state, counters, and release instrumentation exist |
 | No subsystem timers | Performance claims would collapse into total frame time | Add or expose timing fields before benchmarks |
 
@@ -111,7 +112,7 @@ These commands are runnable today from the repository root and must pass before 
 | Source/doc boundary gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Confirms doc skeleton, nav link, all-gates entry, and current source anchors |
 | Python syntax gate | `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/build_docs.py` | Exits 0 |
 | Docs site build | `uv run --no-sync python scripts/build_docs.py -o /tmp/libuipc-docs-check` | MkDocs and MkDoxy build the docs and API pages |
-| Bonded PT state contract | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release fixture passes |
+| Bonded PT state and counters | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release fixture and counter fixture pass |
 | Bonded PT CPU oracles | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Rest-shape conditioning plus virtual-tet energy, gradient, and Hessian CPU oracles pass |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
 | Legacy RCC C++ lift/release scenes | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Two native scene gates pass after the sim case target is built |
@@ -129,4 +130,4 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 ## Next Safe Task
 
-Implement the `rcc_bonded_pt_*` counters and release flags next. Do not touch filter kernels until counter/report fields can prove candidate, lock, release, skip, duplicate, and degeneracy accounting.
+Mirror `RCCBondedPTState` into a CUDA-owned backend state next. Keep filter kernels unchanged until backend reports expose candidate, lock, release, skip, duplicate, and degeneracy accounting.

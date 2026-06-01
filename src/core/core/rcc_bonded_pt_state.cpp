@@ -12,6 +12,7 @@ void RCCBondedPTState::clear()
     m_locked_beta.clear();
     m_locked_age.clear();
     m_release_flags.clear();
+    sync_locked_count();
 }
 
 void RCCBondedPTState::reserve(SizeT size)
@@ -30,6 +31,7 @@ void RCCBondedPTState::push_locked(const RCCBondedPTEntry& entry)
     m_locked_beta.push_back(entry.beta);
     m_locked_age.push_back(entry.age);
     m_release_flags.push_back(entry.release_flags);
+    sync_locked_count();
 }
 
 SizeT RCCBondedPTState::size() const
@@ -47,6 +49,11 @@ bool RCCBondedPTState::validate() const
     const SizeT n = m_locked_keys.size();
     return m_locked_topos.size() == n && m_locked_beta.size() == n
            && m_locked_age.size() == n && m_release_flags.size() == n;
+}
+
+const RCCBondedPTCounters& RCCBondedPTState::counters() const
+{
+    return m_counters;
 }
 
 span<const U64> RCCBondedPTState::locked_keys() const
@@ -125,6 +132,7 @@ void RCCBondedPTState::sort_by_key()
     m_locked_beta   = std::move(beta);
     m_locked_age    = std::move(age);
     m_release_flags = std::move(flags);
+    sync_locked_count();
 }
 
 bool RCCBondedPTState::mark_released(U64 key, U32 release_flags)
@@ -174,6 +182,39 @@ vector<RCCBondedPTEntry> RCCBondedPTState::extract_released()
     m_locked_beta   = std::move(keep_beta);
     m_locked_age    = std::move(keep_age);
     m_release_flags = std::move(keep_flags);
+    m_counters.released_count += released.size();
+    sync_locked_count();
     return released;
+}
+
+void RCCBondedPTState::clear_counters()
+{
+    m_counters = {};
+    sync_locked_count();
+}
+
+void RCCBondedPTState::record_candidates(SizeT count)
+{
+    m_counters.candidate_count += count;
+}
+
+void RCCBondedPTState::record_degenerate_rejected(SizeT count)
+{
+    m_counters.degenerate_rejected_count += count;
+}
+
+void RCCBondedPTState::record_filter_skipped(SizeT count)
+{
+    m_counters.filter_skipped_count += count;
+}
+
+void RCCBondedPTState::record_duplicate_suppressed(SizeT count)
+{
+    m_counters.duplicate_suppressed_count += count;
+}
+
+void RCCBondedPTState::sync_locked_count()
+{
+    m_counters.locked_count = size();
 }
 }  // namespace uipc::core

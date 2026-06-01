@@ -29,6 +29,7 @@ TEST_CASE("rcc_bonded_pt_state_keeps_payloads_zipped",
 
     REQUIRE(state.size() == 2);
     REQUIRE(state.validate());
+    CHECK(state.counters().locked_count == 2);
     CHECK(state.locked_keys()[0] == release_key);
     CHECK(same_topo(state.locked_topos()[0], release_topo));
     CHECK(state.locked_beta()[0] == Catch::Approx(0.625));
@@ -57,9 +58,48 @@ TEST_CASE("rcc_bonded_pt_state_keeps_payloads_zipped",
 
     REQUIRE(state.size() == 1);
     REQUIRE(state.validate());
+    CHECK(state.counters().locked_count == 1);
+    CHECK(state.counters().released_count == 1);
     CHECK(state.locked_keys()[0] == stay_key);
     CHECK(same_topo(state.locked_topos()[0], stay_topo));
     CHECK(state.locked_beta()[0] == Catch::Approx(0.875));
     CHECK(state.locked_age()[0] == 5);
     CHECK(state.release_flags()[0] == RCCBondedPTReleaseNone);
+}
+
+TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
+          "[rcc_bonded_pt][state][counters]")
+{
+    using namespace uipc;
+    using namespace uipc::core;
+
+    RCCBondedPTState state;
+    state.record_candidates(5);
+    state.record_degenerate_rejected(2);
+    state.record_filter_skipped(3);
+    state.record_duplicate_suppressed(1);
+    state.push_locked(RCCBondedPTEntry{17, Vector4i{1, 2, 3, 4}, 0.9, 6});
+    state.push_locked(RCCBondedPTEntry{23, Vector4i{5, 6, 7, 8}, 0.8, 4});
+
+    CHECK(state.counters().candidate_count == 5);
+    CHECK(state.counters().locked_count == 2);
+    CHECK(state.counters().released_count == 0);
+    CHECK(state.counters().degenerate_rejected_count == 2);
+    CHECK(state.counters().filter_skipped_count == 3);
+    CHECK(state.counters().duplicate_suppressed_count == 1);
+
+    REQUIRE(state.mark_released(17, RCCBondedPTReleasePolicy));
+    auto released = state.extract_released();
+    REQUIRE(released.size() == 1);
+
+    CHECK(state.counters().locked_count == 1);
+    CHECK(state.counters().released_count == 1);
+
+    state.clear_counters();
+    CHECK(state.counters().candidate_count == 0);
+    CHECK(state.counters().locked_count == 1);
+    CHECK(state.counters().released_count == 0);
+    CHECK(state.counters().degenerate_rejected_count == 0);
+    CHECK(state.counters().filter_skipped_count == 0);
+    CHECK(state.counters().duplicate_suppressed_count == 0);
 }
