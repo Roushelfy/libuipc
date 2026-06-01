@@ -44,7 +44,7 @@ Target config keys are not live API until implemented and tested.
 
 | Key | Meaning | Default Until Gates Pass |
 | --- | --- | --- |
-| `rcc_bonded_pt_enabled` | Master switch | `false` |
+| `rcc_bonded_pt_enabled` | Master switch | Implemented, default `false` |
 | `rcc_bonded_pt_beta_lock_threshold` | Minimum beta to consider locking | Planned |
 | `rcc_bonded_pt_min_lock_age` | Consecutive accepted steps before lock | Planned |
 | `rcc_bonded_pt_min_separate_distance` | Rest-shape thickness floor | Planned |
@@ -79,6 +79,7 @@ Target config keys are not live API until implemented and tested.
 | Host bonded PT state roundtrips through CUDA device buffers | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Implemented |
 | Locked-key membership lookup matches RCC PT persistence semantics | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Implemented |
 | Locked PT is absent from common active/friction PT views when sorted keys are supplied | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Implemented |
+| CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
 | Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
 | PT lift/release scene locks, reuses, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |

@@ -384,3 +384,32 @@ This is still later than the final performance target. It does not skip PT candi
 ### Decision
 
 The common active/contact path now has a tested locked-PT compact hook, but live simulation still needs a bonded-PT owner to feed sorted keys into it. The next safe step is live owner wiring and report counters; after that, move the same membership check earlier into the concrete PT candidate/TOI paths to get the intended CCD broadphase speedup.
+
+## 2026-06-01 CUDA Bonded PT Owner
+
+### Context
+
+The CUDA bridge and common active-filter compact were still disconnected: tests could feed sorted locked keys by hand, but no runtime owner held the bridge or owned counter synchronization. The next step was to add a small backend owner while keeping the feature disabled by default and avoiding fake lock generation.
+
+### Implemented
+
+- Added `rcc_bonded_pt_enabled` to the default scene config with default `0`.
+- Added `RCCBondedPTSystem` under `src/backends/cuda/contact_system`.
+- The owner holds `RCCBondedPTStateBridge`, keeps a host counter snapshot, binds an optional `SimplexTrajectoryFilter`, feeds sorted locked keys when enabled, and syncs common active-filter skip counts back into counters.
+- Added `[rcc_bonded_pt][owner][cuda]` assertions covering upload, key feed, filter compact, skip-counter sync, download, and clear behavior.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Failed inside the sandbox because vcpkg could not write `/home/zhaofeng/work/vcpkg/buildtrees/vcpkg-running.lock`. |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` with filesystem escalation | Passed. Refreshed source globs for the new owner and test files. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` | Passed. Built core, CUDA backend, and backend CUDA tests; only existing local architecture warnings appeared. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` in the sandbox | Failed with `cudaErrorNoDevice`; the sandbox could not see the GPU. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` with GPU escalation | Passed. Reported `All tests passed (12 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` with GPU escalation | Passed. Reported `All tests passed (84 assertions in 4 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (74 assertions in 5 test cases)`. |
+
+### Decision
+
+The live owner plumbing now exists, but it still needs a real producer. The next safe step is to connect RCC end-of-step PT beta/age/rest-shape gates to `RCCBondedPTSystem` so the owner receives real locked pairs, release flags, and counters.

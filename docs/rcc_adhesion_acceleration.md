@@ -126,6 +126,7 @@ The reporter must not:
 | --- | --- | --- |
 | Host state owner | `include/uipc/core/rcc_bonded_pt_state.h`, `src/core/core/rcc_bonded_pt_state.cpp` | Minimum host contract, counters, release flags, and deterministic fixtures |
 | CUDA state bridge | `src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.*` | Owns device buffers for locked keys, topologies, beta, age, release flags, and host counter snapshots; not yet wired into live filters/reporters |
+| CUDA owner | `src/backends/cuda/contact_system/rcc_bonded_pt_system.*` | Owns the bridge at runtime, honors `rcc_bonded_pt_enabled`, feeds sorted locked keys to `SimplexTrajectoryFilter`, and syncs common active-filter skip counters |
 | Filter helper | `src/backends/cuda/contact_system/rcc_bonded_pt_lookup.h` | Shared device helper for RCC PT key construction, sorted membership lower-bound, and lock lookup |
 | Common active filter | `src/backends/cuda/collision_detection/simplex_trajectory_filter.*` | Can compact locked PTs out of active `PTs()` and `friction_PTs()` when supplied sorted locked keys; default is no-op |
 | Filter backends | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | Planned: skip before PT CCD broadphase |
@@ -146,6 +147,7 @@ Required oracles before production use:
 | CUDA state bridge oracle | Host state with pending and extracted release paths | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]"`: device buffers preserve key/topology/beta/age/release alignment and counters roundtrip through upload/download |
 | CUDA lookup oracle | One locked key, one triangle permutation, two misses, and an empty locked set | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][lookup]"`: lookup uses the existing RCC PT key, treats triangle permutations as the same membership key, keeps the point id distinct, and misses cleanly |
 | Common active-filter oracle | Synthetic active PT list with two locked and two unlocked pairs | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][filter]"`: locked pairs are compacted out of `SimplexTrajectoryFilter::PTs()` and stay absent after `record_friction_candidates()` copies to `friction_PTs()` |
+| CUDA owner oracle | Host locked state plus synthetic filter active view | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner]"`: owner uploads state, feeds sorted keys, syncs filter-skip counters, and downloads counters aligned with active locks |
 | Pre-CCD filter ownership oracle | One locked key and one unlocked key in every concrete filter fixture | Planned: locked absent from candidate/TOI/contact views, unlocked unchanged |
 
 ## Scene Gate
@@ -173,7 +175,7 @@ The gate must read simulation state or report fields. Writing OBJ sequences is u
 
 ## Reports
 
-The host state contract and CUDA state bridge now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. Before bonded scene gates can claim ownership correctness, the live CUDA pipeline must feed sorted locked keys into the filter and expose the same fields through reports or feature accessors.
+The host state contract, CUDA state bridge, and CUDA owner now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. Before bonded scene gates can claim ownership correctness, the live CUDA pipeline must populate the owner from real RCC lock gates and expose the same fields through reports or feature accessors.
 
 Minimum backend report fields before scene gates:
 

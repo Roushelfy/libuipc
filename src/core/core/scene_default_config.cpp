@@ -41,6 +41,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("contact/friction/enable", IndexT{1});
     // friction transition velocity
     config.create("contact/eps_velocity", Float{0.01_m / 1.0_s});
+
+    config.create("rcc_bonded_pt_enabled", IndexT{0});
     
     // default:
     //  - ipc
