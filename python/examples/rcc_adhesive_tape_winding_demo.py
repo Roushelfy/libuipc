@@ -158,17 +158,20 @@ WIND_FRAMES       = 1500
 # Long settle1 lets β grow under the wound-end SPC pressure — anchor
 # rows + tail-tangent rows still pinned, middle wound zone in
 # compression. Goal: most PT pairs reach β > 0.9 before we let go.
-SETTLE1_FRAMES    = 1000
+SETTLE1_FRAMES    = int(_CFG.get("SETTLE1_FRAMES", 1000))
 # RELEASE: gradually unpin the SPC, walking from the inner anchor
 # row outward through the tail. Each pinned row's release time is
 # linear in its index in the ordered list [0, 1, …, ANCHOR_ROWS-1,
 # i_pin_start, …, NX]. At the end of this phase no SPC remains; the
-# tape is held together purely by RCC adhesion + IPC barrier.
-RELEASE_FRAMES    = 2000
+# tape is held together purely by RCC adhesion + IPC barrier. Slower
+# release (larger RELEASE_FRAMES) gives β time to ramp up before the
+# spring force vanishes; too fast → elastic snap-back, tape balls up.
+RELEASE_FRAMES    = int(_CFG.get("RELEASE_FRAMES", 2000))
 # Final relaxation with no SPC. Asset is meant to be saved at the
 # END of this phase — captures the truly self-sustaining wound state
-# (which is what downstream demos load).
-SETTLE2_FRAMES    = 1000
+# (which is what downstream demos load). Extend if max|v| at the
+# saved-frame snapshot is still > a few mm/s.
+SETTLE2_FRAMES    = int(_CFG.get("SETTLE2_FRAMES", 1000))
 TOTAL_FRAMES      = (PREHEAT_FRAMES + WIND_FRAMES
                      + SETTLE1_FRAMES + RELEASE_FRAMES + SETTLE2_FRAMES)
 THETA_END         = 2.0 * np.pi * N_TURNS
@@ -581,9 +584,29 @@ def run_demo():
     if record_dir:
         every_n = int(_CFG.get("RECORD_EVERY", 10))
         zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        # Periodic max|v| sample — pulled from the FE state accessor.
+        # Helps tune RELEASE_FRAMES / SETTLE2_FRAMES by showing the
+        # velocity trajectory through release + final settle.
+        vel_log_every = int(_CFG.get("VEL_LOG_EVERY", 100))
+        fe_acc_for_log = sim["world"].features().find(FiniteElementStateAccessorFeature)
+        state_geo_for_log = None
+        if fe_acc_for_log is not None:
+            state_geo_for_log = fe_acc_for_log.create_geometry()
+            state_geo_for_log.vertices().create("position", np.zeros(3, dtype=np.float64))
+            state_geo_for_log.vertices().create("velocity", np.zeros(3, dtype=np.float64))
         def _on_progress(f, tot):
             print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
                   f"Phase: {phase_at(f - 1)}")
+            if (state_geo_for_log is not None
+                    and (f % vel_log_every == 0 or f == tot)):
+                fe_acc_for_log.copy_to(state_geo_for_log)
+                v = np.array(view(state_geo_for_log.vertices().find("velocity")),
+                             copy=True).reshape(-1, 3)
+                vn = np.linalg.norm(v, axis=1)
+                print(f"  [v-trace] frame {f:>5d}  "
+                      f"max|v|={vn.max():.3e} m/s  "
+                      f"mean|v|={vn.mean():.3e} m/s  "
+                      f"phase={phase_at(f - 1)}")
         L.record_demo_to_pngs(sim=sim, total_frames=TOTAL_FRAMES,
                               output_dir=record_dir, every_n=every_n,
                               up_dir="z_up", mesh_name="wound_tape",

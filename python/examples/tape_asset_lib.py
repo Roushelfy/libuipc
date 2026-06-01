@@ -923,6 +923,22 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    4000,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
@@ -947,8 +963,8 @@ WIND_PRESETS = {
         "HUB_R_INNER":       0.01905,   # 1.5" core hole (= 19.05 mm)
         "HUB_HEIGHT":        0.020,     # ≈ tape width (measured 19 mm) + 1 mm sim margin
         "TAPE_WIDTH":        0.019,
-        "TAPE_LENGTH":       0.73,    # ≈ 5cm slack after 5 turns
-        "N_TURNS":           5,
+        "TAPE_LENGTH":       0.34,    # ≈ 5cm slack after 2 turns
+        "N_TURNS":           2,
         "TAPE_NZ":           10,
         "TAPE_YOUNGS":       1.0e9,    # 50 MPa × 2 (sim-thickness comp)
         "TAPE_POISSON":      0.45,
@@ -963,13 +979,29 @@ WIND_PRESETS = {
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  5.0,
+        "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "default",
     },
-    "temflex175-2turn": {
+    "temflex175-2turn-middle": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
         # (~1/3 the frames of the 5-turn baseline) — best for iterating
         # on solver / adhesion parameters where you don't need a fat
@@ -990,16 +1022,78 @@ WIND_PRESETS = {
         "BUFFER_LENGTH":     0.04,
         # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
         # See `default` preset for the rationale on initial_beta=0.
-        "ADH_CN":            5e1,
-        "ADH_CT":            2e3,
+        "ADH_CN":            10,
+        "ADH_CT":             10,
         "ADH_W":             1.0,
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    4000,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
     },    "temflex175-2turn-soft": {
+        # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
+        # (~1/3 the frames of the 5-turn baseline) — best for iterating
+        # on solver / adhesion parameters where you don't need a fat
+        # roll. L_wound(4π) ≈ 26.9 cm; 32 cm gives ~5 cm tail slack.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,    # ≈ 5cm slack after 2 turns
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       1.0e9,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       40.0 / 9.0,  # ≈ 4.444 → D_HAT = 4.0e-4
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
+        # RCC adhesion applied during wind to tape↔tape and tape↔hub pairs.
+        # See `default` preset for the rationale on initial_beta=0.
+        "ADH_CN":            10,
+        "ADH_CT":            10,
+        "ADH_W":             1.0,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  20.0,
+        "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    4000,
+        "SETTLE2_FRAMES":    2000,
+        # Solver precision (see SOLVER_PROFILES). Override per-preset by
+        # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
+        "SOLVER_PROFILE":    "high",
+    },"temflex175-2turn-soft": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
         # (~1/3 the frames of the 5-turn baseline) — best for iterating
         # on solver / adhesion parameters where you don't need a fat
@@ -1026,6 +1120,22 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
@@ -1054,6 +1164,22 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
@@ -1085,6 +1211,22 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    4000,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
@@ -1113,6 +1255,22 @@ WIND_PRESETS = {
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
+        # SPC pinning + release schedule.
+        # SPC_STRENGTH:    force per vertex ≈ strength · mass · (x − aim).
+        #                   1000 is firm pinning for typical tape mass; lower
+        #                   to soften the spring-back at release.
+        # SETTLE1_FRAMES:  pre-release dwell. Longer → β grows higher
+        #                   before SPC starts vanishing.
+        # RELEASE_FRAMES:  duration of the linear SPC-strength ramp from
+        #                   1×SPC_STRENGTH down to 0. Slower → less
+        #                   elastic snap-back when the spring vanishes.
+        # SETTLE2_FRAMES:  post-release relaxation. Asset is snapshotted at
+        #                   the END of this phase, so longer = quieter
+        #                   saved state.
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    4000,
+        "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
