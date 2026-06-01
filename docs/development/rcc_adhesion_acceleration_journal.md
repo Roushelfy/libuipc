@@ -295,3 +295,33 @@ The bonded PT path needs reportable counters before filter or reporter integrati
 ### Decision
 
 The requested pre-filter pieces are now present in host-side contracts and CPU oracles. The next implementation step should create the CUDA-owned state/reporting bridge before any simplex filter skips are enabled.
+
+## 2026-06-01 CUDA Bonded PT State Bridge
+
+### Context
+
+After the host state, counters, rest-shape oracle, and virtual-tet E/G/H oracle passed, the next safe step was to mirror the state contract into CUDA-owned buffers without changing filter behavior yet. This gives filter and reporter integration a deterministic device-side owner for locked keys, oriented topologies, beta, age, release flags, and counter snapshots.
+
+### Implemented
+
+- Added `RCCBondedPTStateBridge` under `src/backends/cuda/contact_system`.
+- Mirrored `locked_keys`, `locked_topos`, `locked_beta`, `locked_age`, and `release_flags` into `muda::DeviceBuffer` storage.
+- Added host upload/download roundtrip and clear behavior.
+- Added `RCCBondedPTState::set_counters()` for backend-controlled counter restore while always re-syncing `locked_count` with active locks.
+- Added `[rcc_bonded_pt][backend_state][cuda]` assertions covering pending release flags, extracted release counters, and device buffer extent alignment.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed CUDA backend and backend test source globs. |
+| `cmake --build build/cuda_mixed_fused_pcg --target core backend_cuda -j2` | Passed. Built `uipc_core`, `uipc_test_core`, `libuipc_backend_cuda`, and `uipc_test_backend_cuda`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Passed. Reported `All tests passed (54 assertions in 2 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Passed. Reported `All tests passed (44 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (74 assertions in 5 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (44 assertions in 1 test case)`. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc anchors now include the CUDA bridge files and the docs site builds successfully. |
+
+### Decision
+
+The CUDA bridge is now a tested state transport layer, not a live simulation owner. The next step should add the shared locked-key membership lookup helper and a CUDA filter contract fixture while keeping production filter skipping disabled until live `rcc_bonded_pt_*` reports are available.

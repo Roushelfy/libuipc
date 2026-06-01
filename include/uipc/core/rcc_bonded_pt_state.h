@@ -67,6 +67,7 @@ class UIPC_CORE_API RCCBondedPTState
     vector<RCCBondedPTEntry> extract_released();
 
     void clear_counters();
+    void set_counters(const RCCBondedPTCounters& counters);
     void record_candidates(SizeT count);
     void record_degenerate_rejected(SizeT count);
     void record_filter_skipped(SizeT count);

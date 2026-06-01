@@ -40,7 +40,7 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Phase 1: State Contract And CPU Oracle (Current)", "roadmap identifies current phase"),
+                ("Phase 1: State Contract, CPU Oracle, And CUDA State Bridge (Current)", "roadmap identifies current phase"),
                 ("Blockers", "roadmap names current blockers"),
                 ("Validation Gates", "roadmap lists runnable current gates"),
                 ("Planned Gates", "roadmap separates future gates from current proof"),
@@ -168,6 +168,26 @@ def main() -> int:
         "src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu",
         "RCCBetaEvolutionTimeIntegrator",
         "current end-of-step integrator anchor",
+    )
+    expect_contains(
+        "include/uipc/core/rcc_bonded_pt_state.h",
+        "set_counters",
+        "host state counter restore anchor",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.h",
+        "muda::DeviceBuffer<U64>",
+        "CUDA locked-key bridge anchor",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.cu",
+        "copy_span_to_device",
+        "CUDA state upload anchor",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_state_bridge.cu",
+        "[rcc_bonded_pt][backend_state][cuda]",
+        "CUDA state bridge fixture anchor",
     )
     expect_contains(
         "src/backends/cuda/collision_detection/simplex_trajectory_filter.cu",

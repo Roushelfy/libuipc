@@ -102,4 +102,20 @@ TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
     CHECK(state.counters().degenerate_rejected_count == 0);
     CHECK(state.counters().filter_skipped_count == 0);
     CHECK(state.counters().duplicate_suppressed_count == 0);
+
+    RCCBondedPTCounters restored;
+    restored.candidate_count             = 8;
+    restored.locked_count                = 999;
+    restored.released_count              = 5;
+    restored.degenerate_rejected_count   = 4;
+    restored.filter_skipped_count        = 3;
+    restored.duplicate_suppressed_count = 2;
+    state.set_counters(restored);
+
+    CHECK(state.counters().candidate_count == 8);
+    CHECK(state.counters().locked_count == 1);
+    CHECK(state.counters().released_count == 5);
+    CHECK(state.counters().degenerate_rejected_count == 4);
+    CHECK(state.counters().filter_skipped_count == 3);
+    CHECK(state.counters().duplicate_suppressed_count == 2);
 }

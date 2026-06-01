@@ -193,6 +193,12 @@ void RCCBondedPTState::clear_counters()
     sync_locked_count();
 }
 
+void RCCBondedPTState::set_counters(const RCCBondedPTCounters& counters)
+{
+    m_counters = counters;
+    sync_locked_count();
+}
+
 void RCCBondedPTState::record_candidates(SizeT count)
 {
     m_counters.candidate_count += count;

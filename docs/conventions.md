@@ -24,7 +24,7 @@ Runtime state uses structure-of-arrays device buffers.
 | `locked_age` | `DeviceBuffer<IndexT>` | Count of accepted stable steps, not wall-clock frames |
 | `Dm_inv` | `DeviceBuffer<Matrix3x3>` | Built only after rest-shape conditioning passes |
 | `rest_volume` | `DeviceBuffer<Float>` | Positive and above minimum volume |
-| `release_flags` | `DeviceBuffer<IndexT>` | Bit mask or enum, stable enough for tests and reports |
+| `release_flags` | `DeviceBuffer<U32>` | Bit mask or enum, stable enough for tests and reports |
 
 Sorting keys alone is forbidden. Any sort of `locked_keys` must carry the permutation for `locked_topos`, `locked_beta`, `locked_age`, `Dm_inv`, `rest_volume`, and release metadata.
 
@@ -76,6 +76,7 @@ Target config keys are not live API until implemented and tested.
 | Candidate, lock, release, reject, filter-skip, and duplicate counters are observable in the state contract | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state][counters]" -r compact` | Implemented |
 | Rest-shape construction matches SVTS behavior | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]" -r compact` | Implemented |
 | Bonded virtual tet E/G/H match CPU reference | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][energy]" -r compact` | Implemented |
+| Host bonded PT state roundtrips through CUDA device buffers | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Implemented |
 | Locked PT is absent from all simplex filter active views | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]"` | Planned |
 | Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
 | PT lift/release scene locks, reuses, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |
