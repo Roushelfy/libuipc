@@ -5,11 +5,23 @@
 
 namespace uipc::backend::cuda
 {
+struct RCCBondedPTDeviceEntry
+{
+    U64      key;
+    Vector4i topo;
+    Float    beta;
+    IndexT   age;
+    U32      release_flags;
+};
+
 class RCCBondedPTStateBridge
 {
   public:
     void clear();
     void upload(const core::RCCBondedPTState& state);
+    void replace_from_sorted_device_entries(
+        muda::CBufferView<RCCBondedPTDeviceEntry> entries,
+        const core::RCCBondedPTCounters& counters);
     core::RCCBondedPTState download() const;
 
     SizeT size() const noexcept;

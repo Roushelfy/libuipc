@@ -1,4 +1,5 @@
 #include <contact_system/rcc_bonded_pt_state_bridge.h>
+#include <muda/launch/parallel_for.h>
 #include <uipc/common/log.h>
 
 namespace uipc::backend::cuda
@@ -44,6 +45,43 @@ void RCCBondedPTStateBridge::upload(const core::RCCBondedPTState& state)
     copy_span_to_device(state.locked_age(), m_locked_age);
     copy_span_to_device(state.release_flags(), m_release_flags);
     m_counters = state.counters();
+}
+
+void RCCBondedPTStateBridge::replace_from_sorted_device_entries(
+    muda::CBufferView<RCCBondedPTDeviceEntry> entries,
+    const core::RCCBondedPTCounters& counters)
+{
+    using namespace muda;
+
+    const SizeT n = entries.size();
+    m_locked_keys.resize(n);
+    m_locked_topos.resize(n);
+    m_locked_beta.resize(n);
+    m_locked_age.resize(n);
+    m_release_flags.resize(n);
+
+    if(n > 0)
+    {
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(n,
+                   [entries = entries.viewer().name("entries"),
+                    keys    = m_locked_keys.view().viewer().name("locked_keys"),
+                    topos   = m_locked_topos.view().viewer().name("locked_topos"),
+                    beta    = m_locked_beta.view().viewer().name("locked_beta"),
+                    age     = m_locked_age.view().viewer().name("locked_age"),
+                    flags = m_release_flags.view().viewer().name("release_flags")] __device__(int i) mutable
+                   {
+                       const auto entry = entries(i);
+                       keys(i)         = entry.key;
+                       topos(i)        = entry.topo;
+                       beta(i)         = entry.beta;
+                       age(i)          = entry.age;
+                       flags(i)        = entry.release_flags;
+                   });
+    }
+
+    m_counters = counters;
 }
 
 core::RCCBondedPTState RCCBondedPTStateBridge::download() const

@@ -1,5 +1,6 @@
 #include <contact_system/simplex_frictional_contact.h>
 #include <contact_system/rcc_adhesive_coeff.h>
+#include <contact_system/rcc_bonded_pt_system.h>
 #include <contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h>
 #include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
 #include <time_integrator/time_integrator.h>
@@ -1330,6 +1331,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     SimSystemSlot<GlobalContactManager>      m_gcm_for_phase_a;
     SimSystemSlot<GlobalVertexManager>       m_gvm_for_phase_a;
     SimSystemSlot<SimplexTrajectoryFilter>   m_stf_for_phase_a;
+    SimSystemSlot<RCCBondedPTSystem>         m_bonded_pt_system_for_phase_a;
+    Float                                    m_bonded_pt_beta_lock_threshold = 1.0;
 
     void _evolve_beta_step_at_end(Float dt)
     {
@@ -1471,6 +1474,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         // v3: refresh lagged vertex normals from the new begin-of-next-step
         // positions. Held constant through the next frame's Newton iters.
         _recompute_vertex_normals(m_pos_at_step_begin.view());
+
+        if(m_bonded_pt_system_for_phase_a
+           && m_bonded_pt_system_for_phase_a->enabled())
+        {
+            m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
+                pairs, m_beta_PT.view(), m_bonded_pt_beta_lock_threshold);
+        }
     }
 
     // ====================================================================
@@ -1551,6 +1561,7 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
     SimSystemSlot<GlobalContactManager>         gcm;
     SimSystemSlot<GlobalVertexManager>          gvm;
     SimSystemSlot<GlobalTrajectoryFilter>       gtf;
+    SimSystemSlot<RCCBondedPTSystem>            bonded_pt;
 
     void do_build(BuildInfo&) override
     {
@@ -1558,6 +1569,14 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
         gcm = require<GlobalContactManager>();
         gvm = require<GlobalVertexManager>();
         gtf = require<GlobalTrajectoryFilter>();
+        bonded_pt = find<RCCBondedPTSystem>();
+
+        auto& config = world().scene().config();
+        auto  beta_lock_threshold =
+            config.find<Float>("rcc_bonded_pt_beta_lock_threshold");
+        if(beta_lock_threshold)
+            rcc->m_bonded_pt_beta_lock_threshold =
+                beta_lock_threshold->view()[0];
 
         on_init_scene(
             [this]
@@ -1566,6 +1585,7 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
                 rcc->m_gvm_for_phase_a = gvm.view();
                 auto stf = gtf->find<SimplexTrajectoryFilter>();
                 rcc->m_stf_for_phase_a = stf.view();
+                rcc->m_bonded_pt_system_for_phase_a = bonded_pt.view();
             });
     }
 

@@ -413,3 +413,32 @@ The CUDA bridge and common active-filter compact were still disconnected: tests 
 ### Decision
 
 The live owner plumbing now exists, but it still needs a real producer. The next safe step is to connect RCC end-of-step PT beta/age/rest-shape gates to `RCCBondedPTSystem` so the owner receives real locked pairs, release flags, and counters.
+
+## 2026-06-01 RCC Phase A Beta Producer
+
+### Context
+
+The CUDA owner could hold bonded PT state, but live RCC still did not populate it. The first live producer slice should avoid host roundtrips and avoid claiming release or virtual-tet correctness before those systems exist.
+
+### Implemented
+
+- Added `rcc_bonded_pt_beta_lock_threshold` to the default scene config with default `1.0`.
+- Added a zipped `RCCBondedPTDeviceEntry` path so `RCCBondedPTStateBridge` can replace its device buffers from sorted GPU entries.
+- Added `RCCBondedPTSystem::lock_from_rcc_pt_snapshot()`.
+- The producer compacts RCC Phase A PT pairs whose evolved beta meets the threshold, suppresses duplicate candidate keys, refreshes existing locks, carries prior locks that are absent from the current friction list, increments age, and feeds the updated sorted keys back to `SimplexTrajectoryFilter`.
+- Wired `IPCSimplexRCCAdhesiveContact::_evolve_beta_step_at_end()` to call the producer when `rcc_bonded_pt_enabled` is true.
+- Added `[rcc_bonded_pt][owner][producer][cuda]` assertions covering refresh, carry, new lock, low-beta rejection, duplicate suppression, age update, and active PT filtering from produced keys.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` | Failed initially because the kernel captured a dense viewer where the shared lower-bound helper expects `CBufferView`; fixed by capturing both the raw view and viewer. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` after the capture fix | Failed in the new test because `Approx` was unqualified; fixed by using `Catch::Approx`. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` after the test fix | Passed. Built `libuipc_backend_cuda` and `uipc_test_backend_cuda`; only existing local architecture warnings and unrelated CUDA warnings appeared. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` with GPU escalation | Passed. Reported `All tests passed (32 assertions in 2 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` with GPU escalation | Passed. Reported `All tests passed (104 assertions in 5 test cases)`. |
+
+### Decision
+
+The live owner now has a device-side beta producer, but bonded mode is still not a correctness-complete acceleration. Existing locks are intentionally carried until release logic lands; the next safe steps are rest-shape storage/quality gates, release reason accounting, and the bonded virtual-tet reporter.

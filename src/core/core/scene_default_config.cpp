@@ -43,6 +43,7 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("contact/eps_velocity", Float{0.01_m / 1.0_s});
 
     config.create("rcc_bonded_pt_enabled", IndexT{0});
+    config.create("rcc_bonded_pt_beta_lock_threshold", Float{1.0});
     
     // default:
     //  - ipc
