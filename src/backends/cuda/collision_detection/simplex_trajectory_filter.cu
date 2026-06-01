@@ -1,5 +1,7 @@
 #include <collision_detection/simplex_trajectory_filter.h>
+#include <contact_system/rcc_bonded_pt_lookup.h>
 #include <muda/atomic.h>
+#include <muda/cub/device/device_select.h>
 namespace uipc::backend::cuda
 {
 void SimplexTrajectoryFilter::do_build()
@@ -93,6 +95,7 @@ void SimplexTrajectoryFilter::do_filter_active(GlobalTrajectoryFilter::FilterAct
 {
     FilterActiveInfo this_info{&m_impl};
     do_filter_active(this_info);
+    m_impl.filter_rcc_bonded_pt_locked_active_pairs();
 
     logger::info("SimplexTrajectoryFilter PTs: {}, EEs: {}, PEs: {}, PPs: {}",
                  m_impl.PTs.size(),
@@ -107,6 +110,48 @@ void SimplexTrajectoryFilter::do_filter_toi(GlobalTrajectoryFilter::FilterTOIInf
     this_info.m_alpha = info.alpha();
     this_info.m_toi   = info.toi();
     do_filter_toi(this_info);
+}
+
+void SimplexTrajectoryFilter::Impl::filter_rcc_bonded_pt_locked_active_pairs()
+{
+    rcc_bonded_pt_filter_skipped = 0;
+
+    const SizeT original_count = PTs.size();
+    if(original_count == 0 || rcc_bonded_pt_locked_keys.size() == 0)
+        return;
+
+    using namespace muda;
+    rcc_bonded_pt_unlocked_PT.resize(original_count);
+    auto locked_keys = rcc_bonded_pt_locked_keys;
+
+    DeviceSelect().If(PTs.data(),
+                      rcc_bonded_pt_unlocked_PT.data(),
+                      rcc_bonded_pt_unlocked_PT_count.data(),
+                      original_count,
+                      [locked_keys] CUB_RUNTIME_FUNCTION(const Vector4i& PT)
+                      { return !rcc_bonded_pt_is_locked(locked_keys, PT); });
+
+    const IndexT kept_count = rcc_bonded_pt_unlocked_PT_count;
+    rcc_bonded_pt_unlocked_PT.resize(kept_count);
+    PTs = rcc_bonded_pt_unlocked_PT.view();
+    rcc_bonded_pt_filter_skipped =
+        original_count - static_cast<SizeT>(kept_count);
+}
+
+void SimplexTrajectoryFilter::Impl::set_rcc_bonded_pt_locked_keys(
+    muda::CBufferView<U64> locked_keys) noexcept
+{
+    rcc_bonded_pt_locked_keys = locked_keys;
+}
+
+void SimplexTrajectoryFilter::Impl::clear_rcc_bonded_pt_locked_keys() noexcept
+{
+    rcc_bonded_pt_locked_keys = {};
+}
+
+SizeT SimplexTrajectoryFilter::Impl::rcc_bonded_pt_filter_skipped_count() const noexcept
+{
+    return rcc_bonded_pt_filter_skipped;
 }
 
 void SimplexTrajectoryFilter::Impl::record_friction_candidates(
@@ -249,6 +294,22 @@ muda::CBufferView<Vector2i> SimplexTrajectoryFilter::PPs() const noexcept
 muda::CBufferView<Vector4i> SimplexTrajectoryFilter::friction_PTs() const noexcept
 {
     return m_impl.friction_PT;
+}
+
+void SimplexTrajectoryFilter::set_rcc_bonded_pt_locked_keys(
+    muda::CBufferView<U64> locked_keys) noexcept
+{
+    m_impl.set_rcc_bonded_pt_locked_keys(locked_keys);
+}
+
+void SimplexTrajectoryFilter::clear_rcc_bonded_pt_locked_keys() noexcept
+{
+    m_impl.clear_rcc_bonded_pt_locked_keys();
+}
+
+SizeT SimplexTrajectoryFilter::rcc_bonded_pt_filter_skipped_count() const noexcept
+{
+    return m_impl.rcc_bonded_pt_filter_skipped_count();
 }
 
 muda::CBufferView<Vector4i> SimplexTrajectoryFilter::friction_EEs() const noexcept

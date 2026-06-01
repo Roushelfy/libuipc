@@ -352,3 +352,35 @@ Before any simplex filter skips are enabled, all filter backends need one shared
 ### Decision
 
 The lookup primitive is ready as a contract for filter integration, but it still does not change live simulation behavior. The next safe step is to feed this helper into the PT-producing simplex filters with instrumentation proving that locked keys disappear before `friction_PTs()` is recorded.
+
+## 2026-06-01 Common Active PT Filter Compact
+
+### Context
+
+All four simplex filter backends pass their active PT view through `SimplexTrajectoryFilter` before `record_friction_candidates()` copies it into `friction_PTs()`. A common compact at that layer can prove pair ownership for active/contact/RCC assembly without duplicating code in stackless BVH, info stackless BVH, v0 info stackless BVH, and LBVH.
+
+This is still later than the final performance target. It does not skip PT candidate generation or PT CCD broadphase yet.
+
+### Implemented
+
+- Added a sorted locked-key view to `SimplexTrajectoryFilter::Impl`, defaulting to an empty no-op.
+- Added `filter_rcc_bonded_pt_locked_active_pairs()` using the shared lookup helper plus CUB `DeviceSelect`.
+- Replaced active `PTs()` with the unlocked compacted view before `record_friction_candidates()`.
+- Added an exposed skip count for the common active compact path.
+- Added `[rcc_bonded_pt][filter][cuda]` assertions proving two locked PTs are removed from active `PTs()` and remain absent from `friction_PT` after the friction candidate copy.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` | Failed initially because CUB extended host/device lambdas do not allow init-capture. Fixed by capturing a local `locked_keys` variable. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` after the capture fix | Failed in the new test because `SimplexTrajectoryFilter` needs the backend-common include root. Fixed by adding `${PROJECT_SOURCE_DIR}/src` to the backend CUDA test target include path. |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed the backend CUDA test target after the include-path change. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` | Passed. Built `libuipc_backend_cuda` and `uipc_test_backend_cuda`. Existing CUDA warnings remained in unrelated include chains. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Passed. Reported `All tests passed (11 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Passed. Reported `All tests passed (17 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (72 assertions in 3 test cases)`. |
+
+### Decision
+
+The common active/contact path now has a tested locked-PT compact hook, but live simulation still needs a bonded-PT owner to feed sorted keys into it. The next safe step is live owner wiring and report counters; after that, move the same membership check earlier into the concrete PT candidate/TOI paths to get the intended CCD broadphase speedup.

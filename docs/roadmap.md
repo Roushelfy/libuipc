@@ -57,8 +57,9 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 - [x] Add one shared device helper for locked PT membership lookup.
 - [x] Add a CUDA deterministic lookup fixture for RCC PT key semantics, sorted membership search, misses, and empty locked sets.
-- [ ] Use the helper in stackless BVH, info stackless BVH, v0 info stackless BVH, and LBVH simplex filters.
-- [ ] Prove locked PTs are absent before `record_friction_candidates()` copies `PTs()` into `friction_PTs()`.
+- [x] Use the helper in the common `SimplexTrajectoryFilter` active-PT compact path, defaulting to no-op when no locked-key owner is connected.
+- [x] Prove locked PTs are absent before `record_friction_candidates()` copies `PTs()` into `friction_PTs()` for the common active-view path.
+- [ ] Use the helper before PT CCD broadphase in stackless BVH, info stackless BVH, v0 info stackless BVH, and LBVH simplex filters.
 - [ ] Add duplicate-accounting diagnostics for pair ownership.
 
 ## Phase 3: Bonded Virtual-Tet Reporter
@@ -87,7 +88,8 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
-| CUDA bridge not wired into live RCC pipeline | `RCCBondedPTStateBridge` owns device buffers and counters in tests, and a shared lookup helper exists, but filters/reporters still do not consume it during simulation | Add a SimSystem owner or RCC-contact integration point that feeds filters and reports counters |
+| CUDA bridge not wired into live RCC pipeline | `RCCBondedPTStateBridge` owns device buffers and counters in tests; `SimplexTrajectoryFilter` can compact active locked PTs if given sorted keys, but no SimSystem owner feeds those keys during simulation | Add a SimSystem owner or RCC-contact integration point that feeds filters and reports counters |
+| PT CCD broadphase still sees locked keys | The common active-view compact prevents locked PTs from reaching `friction_PTs()` when keys are supplied, but concrete filter `candidate_PTs()` and `toi_PTs()` are still generated before that compact | Move lookup into the PT candidate/TOI path for all simplex filter backends |
 | No GPU reporter oracle | CPU rest-shape and E/G/H oracles exist, but GPU bonded-tet reporter has not been compared against them | Add reporter and GPU-vs-CPU oracle fixture |
 | No backend-reported bonded-PT counters | Host counters and CUDA bridge counters exist, but current legacy RCC scene gates still cannot prove bonded-pair ownership through reports | Expose `rcc_bonded_pt_*` counters from the live CUDA owner/reporting path |
 | No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions and report fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` once bonded state, counters, and release instrumentation exist |
@@ -100,7 +102,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 | Current roadmap names principle, phase, next tasks, blockers, and gates | Satisfied | This file is the current status surface |
 | Stable architecture and conventions are documented | Satisfied | [architecture](./architecture.md) and [conventions](./conventions.md) |
 | Runnable gates and planned gates are separated | Satisfied | Current gates are below; future commands are in planned gates |
-| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, counter, CPU oracle, CUDA state bridge, and CUDA lookup fixtures are implemented; bonded-PT live filter and reporter gates are still planned |
+| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, counter, CPU oracle, CUDA state bridge, CUDA lookup, and common active-filter fixtures are implemented; bonded-PT live owner, pre-CCD filter, and reporter gates are still planned |
 | Numeric or algorithmic claims have CPU or legacy oracles | Satisfied for current scope | State, rest-shape, and virtual-tet E/G/H CPU gates exist; GPU reporter matching is still planned |
 | Benchmark claims split cold, cache-hot, churn, and end-to-end timing | Not yet implemented | Phase 5 requires benchmark script, timers, and correctness fields |
 | Journals record commands, observed results, and decisions | Satisfied | [journal](./development/rcc_adhesion_acceleration_journal.md) |
@@ -119,6 +121,7 @@ These commands are runnable today from the repository root and must pass before 
 | Bonded PT CPU oracles | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Rest-shape conditioning plus virtual-tet energy, gradient, and Hessian CPU oracles pass |
 | Bonded PT CUDA state bridge | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Host state, device buffers, pending release flags, extract-release counters, and clear behavior roundtrip |
 | Bonded PT CUDA lookup helper | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | RCC PT key semantics, sorted membership lookup, miss handling, and empty locked-set behavior pass on CUDA |
+| Bonded PT common active-filter compact | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Locked PTs are removed from `SimplexTrajectoryFilter::PTs()` and therefore from `friction_PTs()` when sorted locked keys are supplied |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
 | Legacy RCC C++ lift/release scenes | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Two native scene gates pass after the sim case target is built |
 
@@ -129,10 +132,10 @@ These commands are target gates for missing code, missing tests, or missing syst
 | Gate | Target Command | Required Result | Missing Piece |
 | --- | --- | --- | --- |
 | GPU virtual-tet reporter oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | GPU bonded-tet E/G/H match CPU oracle within tolerance | Add reporter and GPU-vs-CPU oracle fixture |
-| Filter contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]"` | Locked PT key is absent from `PTs()` and `friction_PTs()` in every simplex filter backend | Wire the lookup helper into all simplex filters and add active-view instrumentation |
+| Pre-CCD filter contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Locked PT key is absent from PT candidate and TOI paths in every simplex filter backend | Wire the lookup helper before PT CCD broadphase in all simplex filters and add candidate/TOI instrumentation |
 | PT lift/release scene | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | PT-rich fixture locks during press/hold, adhered geometry follows during sub-threshold lift, forced pull releases and separates, adhesion-off baseline does not lift, beta carry and zero duplicate ownership are reported | Add bonded-PT implementation, report counters, release instrumentation, and assertion-based scene |
 | Benchmark matrix | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Reports cold, cache-hot, churn, and end-to-end medians with correctness fields | Add benchmark script, timers, and report parser |
 
 ## Next Safe Task
 
-Wire the shared locked-PT membership lookup helper into one simplex filter behind diagnostics, then expand to every PT-producing filter backend. Keep production skipping disabled until the live RCC pipeline exposes candidate, lock, release, skip, duplicate, and degeneracy accounting.
+Add the live owner/integration point that feeds sorted bonded-PT keys into `SimplexTrajectoryFilter`, then move the same lookup earlier into PT candidate/TOI filtering. Keep production skipping disabled until the live RCC pipeline exposes candidate, lock, release, skip, duplicate, and degeneracy accounting.
