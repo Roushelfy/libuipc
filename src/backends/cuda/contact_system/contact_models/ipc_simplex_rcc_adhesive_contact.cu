@@ -1080,8 +1080,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                                    Gt, Ht, coeff.Ct, beta, d_hat, dt,
                                                    pP, pT0, pT1, pT2, P, T0, T1, T2);
                                            G = Gn + Gt;
-                                           cuda::make_spd(Hn);
                                            H = Hn + Ht;
+                                           cuda::make_spd(H);
                                        }
                                    }
                                }
