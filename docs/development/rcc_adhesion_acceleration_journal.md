@@ -244,3 +244,28 @@ The bonded PT virtual tet must build the same rest shape as `SoftVertexTriangleS
 ### Decision
 
 Use this rest-shape oracle as the reference for future dynamic bonded PT lock construction. The next implementation step is the virtual tet Stable Neo-Hookean energy, gradient, and Hessian CPU oracle.
+
+## 2026-06-01 Virtual Tet E/G/H CPU Oracle
+
+### Context
+
+After rest-shape construction is deterministic, the bonded PT reporter needs a CPU reference for the virtual tet complement energy. This oracle should match the `SoftVertexTriangleStitch` Stable Neo-Hookean path, including `F = Ds * Dm_inv`, `dFdx`, `rest_volume * dt^2` scaling, and SPD projection of the F-space Hessian for the default Hessian path.
+
+### Implemented
+
+- Added `build_rcc_bonded_pt_virtual_tet_oracle()` for CPU energy, 12-vector gradient, and 12x12 Hessian.
+- Used the SVTS simplified Stable Neo-Hookean energy density, not the separate log-form `StableNeoHookean3D` formula.
+- Added finite-difference checks for gradient and raw Hessian, plus a default projected-Hessian positive-semidefinite check.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target core -j2` | Failed initially because `Matrix9x12` is a CUDA-backend-local alias and was not visible in core. Fixed by using a local `Matrix<Float, 9, 12>` alias in the CPU oracle implementation. |
+| `cmake --build build/cuda_mixed_fused_pcg --target core -j2` after the alias fix | Passed. Built `uipc_core` and `uipc_test_core`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][energy]" -r compact` | Passed. Reported `All tests passed (9 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Passed. Reported `All tests passed (20 assertions in 3 test cases)`. |
+
+### Decision
+
+The CPU oracle layer is now sufficient for the next implementation step. Before touching filter kernels, add observable `rcc_bonded_pt_*` counters and release flag plumbing so later scene and benchmark gates can prove pair ownership.

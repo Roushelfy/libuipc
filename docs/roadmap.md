@@ -41,13 +41,13 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 - [x] Add a deterministic two-pair state fixture: one pair stays locked, one pair releases.
 - [x] Add a CPU rest-shape oracle matching `SoftVertexTriangleStitch` construction, including `min_separate_distance`.
-- [ ] Add a CPU Stable Neo-Hookean E/G/H oracle for a single bonded PT virtual tet.
+- [x] Add a CPU Stable Neo-Hookean E/G/H oracle for a single bonded PT virtual tet.
 
 ### Default Validation
 
 - [x] Wire the state fixture into the current validation path.
 - [x] Wire the rest-shape CPU oracle into the current validation path.
-- [ ] Wire the Stable Neo-Hookean E/G/H CPU oracle into the default validation path.
+- [x] Wire the Stable Neo-Hookean E/G/H CPU oracle into the current validation path.
 - [ ] Keep source scans as boundary checks only; do not use them as proof of math.
 
 ## Phase 2: Filter Integration
@@ -97,7 +97,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 | Stable architecture and conventions are documented | Satisfied | [architecture](./architecture.md) and [conventions](./conventions.md) |
 | Runnable gates and planned gates are separated | Satisfied | Current gates are below; future commands are in planned gates |
 | New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; the bonded-PT state fixture is implemented; bonded-PT CPU oracle/filter gates are not implemented |
-| Numeric or algorithmic claims have CPU or legacy oracles | Partially satisfied | State and rest-shape CPU gates exist; Phase 1 still requires virtual-tet E/G/H CPU oracle |
+| Numeric or algorithmic claims have CPU or legacy oracles | Satisfied for current scope | State, rest-shape, and virtual-tet E/G/H CPU gates exist; GPU reporter matching is still planned |
 | Benchmark claims split cold, cache-hot, churn, and end-to-end timing | Not yet implemented | Phase 5 requires benchmark script, timers, and correctness fields |
 | Journals record commands, observed results, and decisions | Satisfied | [journal](./development/rcc_adhesion_acceleration_journal.md) |
 
@@ -112,7 +112,7 @@ These commands are runnable today from the repository root and must pass before 
 | Python syntax gate | `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/build_docs.py` | Exits 0 |
 | Docs site build | `uv run --no-sync python scripts/build_docs.py -o /tmp/libuipc-docs-check` | MkDocs and MkDoxy build the docs and API pages |
 | Bonded PT state contract | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release fixture passes |
-| SVTS rest-shape CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]" -r compact` | Point-triangle rest-shape conditioning, orientation swap, `Dm_inv`, and rest volume match SVTS rules |
+| Bonded PT CPU oracles | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Rest-shape conditioning plus virtual-tet energy, gradient, and Hessian CPU oracles pass |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
 | Legacy RCC C++ lift/release scenes | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Two native scene gates pass after the sim case target is built |
 
@@ -122,11 +122,11 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 | Gate | Target Command | Required Result | Missing Piece |
 | --- | --- | --- | --- |
-| CPU virtual-tet E/G/H oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | GPU bonded-tet E/G/H match CPU oracle within tolerance | Add reporter and E/G/H oracle fixture |
+| GPU virtual-tet reporter oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | GPU bonded-tet E/G/H match CPU oracle within tolerance | Add reporter and GPU-vs-CPU oracle fixture |
 | Filter contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]"` | Locked PT key is absent from `PTs()` and `friction_PTs()` in every simplex filter backend | Add locked-key lookup and instrumentation |
 | PT lift/release scene | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | PT-rich fixture locks during press/hold, adhered geometry follows during sub-threshold lift, forced pull releases and separates, adhesion-off baseline does not lift, beta carry and zero duplicate ownership are reported | Add bonded-PT implementation, report counters, release instrumentation, and assertion-based scene |
 | Benchmark matrix | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Reports cold, cache-hot, churn, and end-to-end medians with correctness fields | Add benchmark script, timers, and report parser |
 
 ## Next Safe Task
 
-Implement the Stable Neo-Hookean virtual-tet E/G/H CPU oracle next. Do not touch filter kernels until there is an authoritative locked-key/topology state owner and CPU oracles for rest-shape and virtual-tet E/G/H construction.
+Implement the `rcc_bonded_pt_*` counters and release flags next. Do not touch filter kernels until counter/report fields can prove candidate, lock, release, skip, duplicate, and degeneracy accounting.
