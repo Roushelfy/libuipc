@@ -139,7 +139,7 @@ Required oracles before production use:
 | Oracle | Input | Expected Output |
 | --- | --- | --- |
 | State oracle | Two PT pairs with deterministic beta/age/release flags | Implemented by `uipc_test_core "[rcc_bonded_pt][state]"`: one lock stays active, one release is extracted, stable key/topology/beta/age/release permutation is preserved |
-| Rest-shape oracle | Point near triangle plane with known `min_separate_distance` | `Dm_inv` and rest volume match host reference |
+| Rest-shape oracle | Point near triangle plane with known `min_separate_distance` | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]"`: `Dm_inv`, positive rest volume, point offset, orientation swap, and degenerate-triangle rejection match SVTS rules |
 | Energy oracle | Single virtual tet with deterministic deformation | GPU E/G/H match CPU Stable Neo-Hookean reference |
 | Legacy ownership oracle | One locked key and one unlocked key in filter fixture | Locked absent from contact views, unlocked unchanged |
 

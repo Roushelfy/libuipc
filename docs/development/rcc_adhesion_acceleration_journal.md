@@ -220,3 +220,27 @@ The first bonded PT implementation step needs a small state owner before any CUD
 ### Decision
 
 Keep this as a host-side contract for now. The next step is the SVTS-compatible rest-shape CPU oracle; CUDA device buffers and filter/reporter integration should wait until state, rest-shape, and E/G/H oracles are all executable.
+
+## 2026-06-01 SVTS Rest-Shape CPU Oracle
+
+### Context
+
+The bonded PT virtual tet must build the same rest shape as `SoftVertexTriangleStitch`: condition the point-triangle separation with `min_separate_distance`, orient the tetrahedron to positive determinant, and produce `Dm_inv` plus positive rest volume.
+
+### Implemented
+
+- Added `build_rcc_bonded_pt_rest_shape_svts()` as a CPU reference for SVTS-compatible point-triangle rest-shape construction.
+- Added tests for the plane-degenerate point case that requires `min_separate_distance` offset and tri0/tri1 orientation swap.
+- Added a degenerate-triangle rejection test.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg && cmake --build build/cuda_mixed_fused_pcg --target core -j2` | Failed initially at link because the new oracle used Eigen `cross`, `determinant`, and `inverse` without explicit `Eigen/Geometry` and `Eigen/LU` includes. |
+| `cmake --build build/cuda_mixed_fused_pcg --target core -j2` after adding explicit Eigen includes | Passed. Built `uipc_core` and `uipc_test_core`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]" -r compact` | Passed. Reported `All tests passed (11 assertions in 2 test cases)`. |
+
+### Decision
+
+Use this rest-shape oracle as the reference for future dynamic bonded PT lock construction. The next implementation step is the virtual tet Stable Neo-Hookean energy, gradient, and Hessian CPU oracle.
