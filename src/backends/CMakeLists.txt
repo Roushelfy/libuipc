@@ -10,12 +10,15 @@ add_library(uipc::backends ALIAS uipc_backends)
 set(UIPC_BACKENDS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
-# Auto-sync rebuilt backend .so files to the venv's pyuipc/_native directory.
+# Auto-sync rebuilt backend .so files to the venv's pyuipc/_native directory,
+# along with the runtime libraries loaded from the same directory.
 # Without this, a `cmake --build --target cuda` re-link will leave the
 # Python-side pyuipc loading a stale backend (the `pip install` step that
-# would refresh it only runs when the pyuipc target itself rebuilds). This
-# detection is best-effort: if pyuipc isn't installed yet, the post-build
-# step is skipped silently.
+# would refresh it only runs when the pyuipc target itself rebuilds). Copying
+# the dependent libuipc libraries as well avoids mixing a fresh backend with a
+# stale core/geometry/constitution/io ABI in the installed venv. This detection
+# is best-effort: if pyuipc isn't installed yet, the post-build step is skipped
+# silently.
 # ---------------------------------------------------------------------------
 execute_process(
     COMMAND "${UIPC_PYTHON_EXECUTABLE_PATH}" -c
@@ -70,13 +73,19 @@ function(uipc_add_backend name)
     # install the target
     uipc_install_target(${name})
 
-    # Auto-sync rebuilt backend to pyuipc venv. See header note above.
+    # Auto-sync rebuilt backend and pyuipc runtime libraries to the venv.
+    # See header note above.
     if(UIPC_PYUIPC_NATIVE_DIR)
         add_custom_command(TARGET ${name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<TARGET_FILE:${name}>"
-                "${UIPC_PYUIPC_NATIVE_DIR}/$<TARGET_FILE_NAME:${name}>"
-            COMMENT "[uipc] sync ${name} → ${UIPC_PYUIPC_NATIVE_DIR}"
+                "$<TARGET_FILE:uipc_core>"
+                "$<TARGET_FILE:uipc_geometry>"
+                "$<TARGET_FILE:uipc_constitution>"
+                "$<TARGET_FILE:uipc_io>"
+                "$<TARGET_FILE:uipc_sanity_check>"
+                "${UIPC_PYUIPC_NATIVE_DIR}"
+            COMMENT "[uipc] sync ${name} and libuipc runtime → ${UIPC_PYUIPC_NATIVE_DIR}"
             VERBATIM
         )
     endif()
@@ -91,6 +100,5 @@ add_subdirectory(none)
 if(UIPC_WITH_CUDA_BACKEND)
     add_subdirectory(cuda)
 endif()
-
 
 
