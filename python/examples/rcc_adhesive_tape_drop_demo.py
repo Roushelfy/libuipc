@@ -104,7 +104,7 @@ ADH_BONDING_RATE  = _CFG["ADH_BONDING_RATE"]
 ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 
 # ---- timeline (dt=0.01) ----
-# Three phases:
+# Four phases:
 #   HOLD       — assembly settles on ground under gravity alone, free
 #                end is unconstrained so its initial pose can relax.
 #   PULL       — SPC engages on the tape's free-end row and smoothly
@@ -115,21 +115,29 @@ ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 #                the roll either follows (strong adhesion → whole spool
 #                lifts off the ground) or peels off (weak adhesion →
 #                outer layer detaches).
+#   FREEFALL   — SPC is released; the lifted free end + whatever the
+#                adhesion drags along falls back under gravity. This is
+#                the "does the bonded roll stay together after being
+#                dropped from the top?" stress test.
 HOLD_FRAMES        = 30
 PULL_FRAMES        = 600
 # Hold at top long enough to see whether the lifted roll stays
 # bonded or starts peeling — 6 s @ dt=0.01.
 TOP_FRAMES         = 600
-TOTAL_FRAMES       = HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES
+# Post-release free-fall window. 5 s @ dt=0.01 is enough for a 10 cm
+# lift to hit the ground (½·g·t² ≈ 0.49 m after 1 s already).
+FREEFALL_FRAMES    = int(_CFG.get("FREEFALL_FRAMES", 500))
+TOTAL_FRAMES       = HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES + FREEFALL_FRAMES
 
 
 def phase_at(f: int) -> str:
     """Frame → phase label. Module-level so headless record's progress
     callback can use it (it would otherwise be a closure local to
     run_demo and unreachable from the helper)."""
-    if f < HOLD_FRAMES:               return "hold"
-    if f < HOLD_FRAMES + PULL_FRAMES: return "pull"
-    return "top"
+    if f < HOLD_FRAMES:                                          return "hold"
+    if f < HOLD_FRAMES + PULL_FRAMES:                            return "pull"
+    if f < HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES:               return "top"
+    return "freefall"
 
 # How high to lift the free end (metres, +y). Must exceed the roll's
 # vertical reach (≈ R_outer + N_TURNS·2·t when standing on side, plus
@@ -479,7 +487,13 @@ def build_demo(adhesion_on: bool = True):
     # vertices along the tape's length direction — these stuck out
     # tangentially from the wound spool at the end of the wind sim.
     def vid_drop(i, j): return i * (TAPE_NZ + 1) + j
-    free_ids = [vid_drop(TAPE_NX, j) for j in range(TAPE_NZ + 1)]
+    # Pinch a SINGLE vertex (centre of the tape's free-end row) rather
+    # than the whole row. Visually mimics "pick the tape up by one
+    # point" — the rest of the free edge is free to flop, which gives
+    # a more realistic peel/drop response than yanking on 11 verts in
+    # lockstep. Wider TAPE_NZ → still just the middle vert; the asset
+    # geometry doesn't need to change.
+    free_ids = [vid_drop(TAPE_NX, TAPE_NZ // 2)]
 
     def smooth_lerp(a: float, b: float, t: float) -> float:
         t = float(np.clip(t, 0.0, 1.0))
@@ -512,6 +526,15 @@ def build_demo(adhesion_on: bool = True):
             return
         # HOLD phase: free end free, let gravity settle the assembly.
         if f < HOLD_FRAMES:
+            anim_state["pull_start_pos"] = None
+            return
+
+        # FREEFALL phase: SPC released, free end drops under gravity.
+        # is_c[:] is already cleared at the top of this function, so
+        # simply returning leaves every vertex unconstrained — the
+        # lifted roll + tail fall together (and whatever's bonded
+        # falls with them).
+        if f >= HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES:
             anim_state["pull_start_pos"] = None
             return
 
@@ -590,7 +613,11 @@ def run_demo():
     record_dir = _CFG.get("RECORD_DIR")
     if record_dir:
         every_n = int(_CFG.get("RECORD_EVERY", 10))
-        zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        # Default zoom < 1 = wider FoV (zoom 0.6 → FoV ≈ 75°). The drop
+        # demo's vertical trajectory (HOLD → PULL → TOP → FREEFALL spans
+        # `LIFT_HEIGHT + DROP_HEIGHT` ≈ 11 cm) needs a wider view than
+        # the wind/sweep defaults; 0.6 keeps the entire fall in frame.
+        zoom    = float(_CFG.get("RECORD_ZOOM", 0.6))
         def _setup_extras(ps_mod):
             gm = ps_mod.register_surface_mesh(
                 "ground", ground_quad_verts, ground_quad_tris)
@@ -713,7 +740,12 @@ def run_demo():
             t = 1.0
         # smooth_lerp progress; raw t is enough for the UI bar
         lift_mm = (0.5 - 0.5 * np.cos(np.pi * float(np.clip(t, 0, 1)))) * LIFT_HEIGHT * 1000
-        pull_state = "ENABLED" if anim["pull_enabled"] else "DISABLED (free end)"
+        if f1 >= HOLD_FRAMES + PULL_FRAMES + TOP_FRAMES:
+            pull_state = "RELEASED (freefall)"
+        elif anim["pull_enabled"]:
+            pull_state = "ENABLED"
+        else:
+            pull_state = "DISABLED (free end)"
         psim.Text(f"Lift: {t*100:.1f}%  ({lift_mm:.1f} mm of {LIFT_HEIGHT*1000:.0f} mm)  SPC: {pull_state}")
         psim.Text(f"Adhesion: {'ENABLED' if state['adhesion_on'] else 'DISABLED'}")
 
