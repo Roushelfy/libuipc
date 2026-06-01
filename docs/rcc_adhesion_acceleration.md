@@ -52,7 +52,7 @@ Use two representations:
 
 | Representation | Contents | Use |
 | --- | --- | --- |
-| Membership key | Sorted global vertex ids packed/hash-compatible with RCC PT persistence | Filter lookup and beta matching |
+| Membership key | Point id kept distinct, triangle global vertex ids sorted, then hashed exactly like RCC PT beta persistence | Filter lookup and beta matching |
 | Oriented topology | `(point, tri0, tri1, tri2)` global vertex ids | Virtual-tet rest shape and energy assembly |
 
 The membership key can answer "is this four-vertex set locked?" It cannot answer "what oriented tet should be assembled?" Therefore every lock stores both.
@@ -126,7 +126,7 @@ The reporter must not:
 | --- | --- | --- |
 | Host state owner | `include/uipc/core/rcc_bonded_pt_state.h`, `src/core/core/rcc_bonded_pt_state.cpp` | Minimum host contract, counters, release flags, and deterministic fixtures |
 | CUDA state bridge | `src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.*` | Owns device buffers for locked keys, topologies, beta, age, release flags, and host counter snapshots; not yet wired into live filters/reporters |
-| Filter helper | `src/backends/cuda/collision_detection/...` | Shared device helper for all simplex filters |
+| Filter helper | `src/backends/cuda/contact_system/rcc_bonded_pt_lookup.h` | Shared device helper for RCC PT key construction, sorted membership lower-bound, and lock lookup |
 | Filter backends | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | Skip before PT CCD broadphase |
 | Reporter | `src/backends/cuda/inter_primitive_effect_system/...` or contact-adjacent complement reporter | Dynamic, no frontend geometry rebuild |
 | RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Beta carry and Phase A/B coordination |
@@ -143,7 +143,8 @@ Required oracles before production use:
 | Rest-shape oracle | Point near triangle plane with known `min_separate_distance` | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]"`: `Dm_inv`, positive rest volume, point offset, orientation swap, and degenerate-triangle rejection match SVTS rules |
 | Energy oracle | Single virtual tet with deterministic deformation | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][energy]"`: CPU energy, gradient, and Hessian match center-difference checks; GPU reporter matching remains planned |
 | CUDA state bridge oracle | Host state with pending and extracted release paths | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]"`: device buffers preserve key/topology/beta/age/release alignment and counters roundtrip through upload/download |
-| Legacy ownership oracle | One locked key and one unlocked key in filter fixture | Locked absent from contact views, unlocked unchanged |
+| CUDA lookup oracle | One locked key, one triangle permutation, two misses, and an empty locked set | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][lookup]"`: lookup uses the existing RCC PT key, treats triangle permutations as the same membership key, keeps the point id distinct, and misses cleanly |
+| Live filter ownership oracle | One locked key and one unlocked key in every filter fixture | Planned: locked absent from contact views, unlocked unchanged |
 
 ## Scene Gate
 

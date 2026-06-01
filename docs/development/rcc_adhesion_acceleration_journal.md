@@ -325,3 +325,30 @@ After the host state, counters, rest-shape oracle, and virtual-tet E/G/H oracle 
 ### Decision
 
 The CUDA bridge is now a tested state transport layer, not a live simulation owner. The next step should add the shared locked-key membership lookup helper and a CUDA filter contract fixture while keeping production filter skipping disabled until live `rcc_bonded_pt_*` reports are available.
+
+## 2026-06-01 CUDA Bonded PT Lookup Helper
+
+### Context
+
+Before any simplex filter skips are enabled, all filter backends need one shared membership primitive so the RCC PT key semantics cannot drift. The existing RCC beta persistence key keeps the point id distinct and sorts only the three triangle vertices, so the bonded-PT lookup helper must reuse that exact key.
+
+### Implemented
+
+- Added `rcc_bonded_pt_lookup.h` under `src/backends/cuda/contact_system`.
+- Wrapped the existing RCC PT key function for host/device use.
+- Added inline sorted-key lower-bound and `is_locked` helpers over `muda::CBufferView<U64>`.
+- Added `[rcc_bonded_pt][lookup][cuda]` assertions covering triangle-vertex permutation, point-id distinction, sorted lookup hits, miss handling, topology alignment through the bridge, and empty locked-set behavior.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed the backend CUDA test source glob. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` | Failed initially because the RCC adhesive function header was not self-contained for `muda::CDense2D`, and the helper used viewer-style `operator()` on a raw `CBufferView`. |
+| `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda -j2` after adding the missing dense viewer include and using `CBufferView::operator[]` | Passed. Built `uipc_test_backend_cuda`; only the pre-existing unused `xi2` warning in the adhesive header remained. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Passed. Reported `All tests passed (17 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (61 assertions in 2 test cases)`. |
+
+### Decision
+
+The lookup primitive is ready as a contract for filter integration, but it still does not change live simulation behavior. The next safe step is to feed this helper into the PT-producing simplex filters with instrumentation proving that locked keys disappear before `friction_PTs()` is recorded.
