@@ -195,4 +195,28 @@ The visual Python adhesive demos were promoted into assertion-based fixtures bef
 
 ### Decision
 
-Treat these as current legacy RCC behavior gates, not as proof of bonded PT acceleration. The bonded path still needs `RCCBondedPTState`, key/topology/beta/age/release fixtures, SVTS-compatible rest-shape and virtual tet E/G/H oracles, `rcc_bonded_pt_*` counters, and release reason fields before the final `pt_lift_release` gate can claim pair ownership correctness.
+Treat these as current legacy RCC behavior gates, not as proof of bonded PT acceleration. At this point the bonded path still needed `RCCBondedPTState`, key/topology/beta/age/release fixtures, SVTS-compatible rest-shape and virtual tet E/G/H oracles, `rcc_bonded_pt_*` counters, and release reason fields before the final `pt_lift_release` gate could claim pair ownership correctness.
+
+## 2026-06-01 Minimal Bonded PT State Contract
+
+### Context
+
+The first bonded PT implementation step needs a small state owner before any CUDA filter or reporter integration. The state fixture should prove that sorted keys stay zipped with oriented topologies, beta, age, and release flags.
+
+### Implemented
+
+- Added `RCCBondedPTState` with host-side arrays for `locked_keys`, `locked_topos`, `locked_beta`, `locked_age`, and `release_flags`.
+- Added release flag constants and release extraction so released pairs carry their key, topology, beta, age, and release reason out of the active lock set.
+- Added `rcc_bonded_pt_state_keeps_payloads_zipped` under `[rcc_bonded_pt][state]`.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed the core test source glob. |
+| `cmake --build build/cuda_mixed_fused_pcg --target core -j2` | Passed. Built `uipc_core` and `uipc_test_core` with the new state contract. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Passed. Reported `All tests passed (29 assertions in 1 test case)`. |
+
+### Decision
+
+Keep this as a host-side contract for now. The next step is the SVTS-compatible rest-shape CPU oracle; CUDA device buffers and filter/reporter integration should wait until state, rest-shape, and E/G/H oracles are all executable.

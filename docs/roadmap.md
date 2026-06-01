@@ -32,19 +32,21 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 ### State Owner
 
-- [ ] Implement `RCCBondedPTState` or equivalent owner for locked keys, oriented topologies, beta, age, rest-shape metrics, and release flags.
+- [x] Implement `RCCBondedPTState` minimum host contract for locked keys, oriented topologies, beta, age, and release flags.
+- [ ] Extend the state owner with rest-shape metrics once the SVTS oracle lands.
 - [ ] Define feature-disabled default behavior and explicit config keys under the `rcc_bonded_pt` prefix.
 - [ ] Add debug/report counters for candidate, locked, released, degenerate-rejected, filter-skipped, and duplicate-suppressed pairs.
 
 ### Oracles
 
-- [ ] Add a deterministic two-pair state fixture: one pair stays locked, one pair releases.
+- [x] Add a deterministic two-pair state fixture: one pair stays locked, one pair releases.
 - [ ] Add a CPU rest-shape oracle matching `SoftVertexTriangleStitch` construction, including `min_separate_distance`.
 - [ ] Add a CPU Stable Neo-Hookean E/G/H oracle for a single bonded PT virtual tet.
 
 ### Default Validation
 
-- [ ] Wire the state fixture and CPU oracle into the default validation path.
+- [x] Wire the state fixture into the current validation path.
+- [ ] Wire the CPU oracles into the default validation path.
 - [ ] Keep source scans as boundary checks only; do not use them as proof of math.
 
 ## Phase 2: Filter Integration
@@ -80,7 +82,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
-| No bonded PT state owner | Filter/reporter work has no authoritative source of locked keys | Complete Phase 1 state contract |
+| No backend-owned bonded PT state integration | A host `RCCBondedPTState` contract exists, but filter/reporter work has no live CUDA-owned source of locked keys | Finish rest-shape/oracle work, then mirror the contract into the CUDA backend |
 | No CPU oracle | Numeric correctness cannot be separated from GPU implementation bugs | Add rest-shape and E/G/H oracle fixtures |
 | No bonded-PT runtime counters | Current legacy RCC scene gates can prove lift/release behavior, but not bonded-pair ownership | Add `rcc_bonded_pt_*` counters and release flags |
 | No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions and report fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` once bonded state, counters, and release instrumentation exist |
@@ -93,7 +95,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 | Current roadmap names principle, phase, next tasks, blockers, and gates | Satisfied | This file is the current status surface |
 | Stable architecture and conventions are documented | Satisfied | [architecture](./architecture.md) and [conventions](./conventions.md) |
 | Runnable gates and planned gates are separated | Satisfied | Current gates are below; future commands are in planned gates |
-| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state/oracle/filter gates are not implemented |
+| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; the bonded-PT state fixture is implemented; bonded-PT CPU oracle/filter gates are not implemented |
 | Numeric or algorithmic claims have CPU or legacy oracles | Not yet implemented | Phase 1 requires rest-shape and virtual-tet E/G/H CPU oracles |
 | Benchmark claims split cold, cache-hot, churn, and end-to-end timing | Not yet implemented | Phase 5 requires benchmark script, timers, and correctness fields |
 | Journals record commands, observed results, and decisions | Satisfied | [journal](./development/rcc_adhesion_acceleration_journal.md) |
@@ -108,6 +110,7 @@ These commands are runnable today from the repository root and must pass before 
 | Source/doc boundary gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Confirms doc skeleton, nav link, all-gates entry, and current source anchors |
 | Python syntax gate | `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/build_docs.py` | Exits 0 |
 | Docs site build | `uv run --no-sync python scripts/build_docs.py -o /tmp/libuipc-docs-check` | MkDocs and MkDoxy build the docs and API pages |
+| Bonded PT state contract | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release fixture passes |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
 | Legacy RCC C++ lift/release scenes | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Two native scene gates pass after the sim case target is built |
 
@@ -117,7 +120,6 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 | Gate | Target Command | Required Result | Missing Piece |
 | --- | --- | --- | --- |
-| State contract | `build/bin/uipc_test_core "[rcc_bonded_pt][state]"` | Lock/release bookkeeping and beta carry pass deterministic fixtures | Add state fixture |
 | CPU virtual-tet oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | GPU bonded-tet E/G/H match CPU oracle within tolerance | Add reporter and oracle fixture |
 | Filter contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]"` | Locked PT key is absent from `PTs()` and `friction_PTs()` in every simplex filter backend | Add locked-key lookup and instrumentation |
 | PT lift/release scene | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | PT-rich fixture locks during press/hold, adhered geometry follows during sub-threshold lift, forced pull releases and separates, adhesion-off baseline does not lift, beta carry and zero duplicate ownership are reported | Add bonded-PT implementation, report counters, release instrumentation, and assertion-based scene |
@@ -125,4 +127,4 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 ## Next Safe Task
 
-Implement the Phase 1 state fixture first. Do not touch filter kernels until there is an authoritative locked-key/topology state owner and a CPU oracle for rest-shape construction.
+Implement the SVTS-compatible rest-shape CPU oracle next. Do not touch filter kernels until there is an authoritative locked-key/topology state owner and CPU oracles for rest-shape and virtual-tet E/G/H construction.

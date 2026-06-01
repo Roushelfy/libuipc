@@ -72,7 +72,7 @@ Target config keys are not live API until implemented and tested.
 | Portable docs/source gates have one entry point | Default gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Implemented |
 | Existing RCC subdivided cube and cube-cloth adhesion lift/hold/release behavior is stable | Legacy scene gate | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Implemented |
 | Native sim-case RCC lift/hold/release behavior is stable | Legacy scene gate | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Implemented |
-| Locked key and oriented topology stay zipped through sort | Unit fixture | `build/bin/uipc_test_core "[rcc_bonded_pt][state]"` | Planned |
+| Locked key and oriented topology stay zipped through sort | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Implemented |
 | Rest-shape construction matches SVTS behavior | CPU oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | Planned |
 | Bonded virtual tet E/G/H match CPU reference | CPU oracle | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][oracle]"` | Planned |
 | Locked PT is absent from all simplex filter active views | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]"` | Planned |
