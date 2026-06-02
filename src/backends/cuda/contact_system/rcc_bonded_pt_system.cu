@@ -108,6 +108,52 @@ MUDA_GENERIC bool rest_shape_is_valid(
                                        det_dm_min);
     return rest.valid;
 }
+
+template <typename PositionViewer>
+MUDA_GENERIC U32 release_flags_from_current_shape(
+    const Vector4i& topo,
+    const Matrix3x3& dm_inv,
+    Float rest_volume,
+    muda::CBufferView<Vector3> positions_view,
+    PositionViewer positions,
+    Float det_dm_min,
+    Float strain_threshold)
+{
+    const IndexT n = static_cast<IndexT>(positions_view.size());
+    if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
+       || topo[0] >= n || topo[1] >= n || topo[2] >= n || topo[3] >= n
+       || rest_volume <= 0.0)
+        return core::RCCBondedPTReleaseDegenerate;
+
+    const Vector3 x0 = positions(topo[0]);
+    const Vector3 x1 = positions(topo[1]);
+    const Vector3 x2 = positions(topo[2]);
+    const Vector3 x3 = positions(topo[3]);
+    const Vector3 a  = x1 - x0;
+    const Vector3 b  = x2 - x0;
+    const Vector3 c  = x3 - x0;
+    const Float   det = a.dot(b.cross(c));
+
+    U32 flags = core::RCCBondedPTReleaseNone;
+    if(det < 0.0)
+        flags |= core::RCCBondedPTReleaseFlip;
+    if(std::abs(det) <= det_dm_min)
+        flags |= core::RCCBondedPTReleaseDegenerate;
+
+    Matrix3x3 Ds;
+    Ds.col(0) = a;
+    Ds.col(1) = b;
+    Ds.col(2) = c;
+    const Matrix3x3 F = Ds * dm_inv;
+    const Matrix3x3 C = F * F.transpose() - Matrix3x3::Identity();
+    const Float strain = std::sqrt(C.squaredNorm());
+    if(!std::isfinite(strain))
+        flags |= core::RCCBondedPTReleaseDegenerate;
+    else if(strain_threshold >= 0.0 && strain > strain_threshold)
+        flags |= core::RCCBondedPTReleaseStrain;
+
+    return flags;
+}
 }  // namespace
 
 void RCCBondedPTSystem::Impl::clear()
@@ -121,6 +167,12 @@ void RCCBondedPTSystem::Impl::clear()
     m_new_locked_dm_inv.resize(0);
     m_new_locked_rest_volume.resize(0);
     m_prev_entries.resize(0);
+    m_released_entries.resize(0);
+    m_released_keys.resize(0);
+    m_released_topos.resize(0);
+    m_released_beta.resize(0);
+    m_released_age.resize(0);
+    m_released_flags.resize(0);
     m_carry_prev_entries.resize(0);
     m_merged_entries.resize(0);
     m_merged_keys.resize(0);
@@ -156,7 +208,97 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     const auto prev_beta  = m_bridge.locked_beta();
     const auto prev_age   = m_bridge.locked_age();
     const auto prev_flags = m_bridge.release_flags();
+    const auto prev_dm_inv = m_bridge.locked_dm_inv();
+    const auto prev_rest_volume = m_bridge.locked_rest_volume();
     const SizeT prev_n    = m_bridge.size();
+
+    m_prev_entries.resize(prev_n);
+    if(prev_n > 0)
+    {
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(prev_n,
+                   [keys = prev_keys.viewer().name("prev_keys"),
+                    topos = prev_topos.viewer().name("prev_topos"),
+                    beta = prev_beta.viewer().name("prev_beta"),
+                    age = prev_age.viewer().name("prev_age"),
+                    flags = prev_flags.viewer().name("prev_flags"),
+                    dm_inv = prev_dm_inv.viewer().name("prev_dm_inv"),
+                    rest_volume =
+                        prev_rest_volume.viewer().name("prev_rest_volume"),
+                    positions_view = positions,
+                    positions = positions.viewer().name("positions"),
+                    det_dm_min = m_det_dm_min,
+                    release_strain = m_release_strain_threshold,
+                    entries = m_prev_entries.view().viewer().name("prev_entries")] __device__(int i) mutable
+                   {
+                       U32 release_flags = flags(i);
+                       if(release_flags == core::RCCBondedPTReleaseNone)
+                       {
+                           release_flags |= release_flags_from_current_shape(
+                               topos(i),
+                               dm_inv(i),
+                               rest_volume(i),
+                               positions_view,
+                               positions,
+                               det_dm_min,
+                               release_strain);
+                       }
+
+                       RCCBondedPTDeviceEntry entry;
+                       entry.key           = keys(i);
+                       entry.topo          = topos(i);
+                       entry.beta          = beta(i);
+                       entry.age           = age(i) + 1;
+                       entry.release_flags = release_flags;
+                       entries(i)          = entry;
+                   });
+    }
+
+    m_released_entries.resize(prev_n);
+    if(prev_n > 0)
+    {
+        DeviceSelect().If(
+            m_prev_entries.data(),
+            m_released_entries.data(),
+            m_released_count.data(),
+            prev_n,
+            [] CUB_RUNTIME_FUNCTION(const RCCBondedPTDeviceEntry& entry)
+            { return entry.release_flags != core::RCCBondedPTReleaseNone; });
+    }
+    else
+    {
+        m_released_count = 0;
+    }
+
+    const IndexT released_count = m_released_count;
+    m_released_entries.resize(released_count);
+    m_released_keys.resize(released_count);
+    m_released_topos.resize(released_count);
+    m_released_beta.resize(released_count);
+    m_released_age.resize(released_count);
+    m_released_flags.resize(released_count);
+    if(released_count > 0)
+    {
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(released_count,
+                   [entries = m_released_entries.view().viewer().name("released_entries"),
+                    keys = m_released_keys.view().viewer().name("released_keys"),
+                    topos = m_released_topos.view().viewer().name("released_topos"),
+                    beta = m_released_beta.view().viewer().name("released_beta"),
+                    age = m_released_age.view().viewer().name("released_age"),
+                    flags = m_released_flags.view().viewer().name("released_flags")] __device__(int i) mutable
+                   {
+                       const RCCBondedPTDeviceEntry entry = entries(i);
+                       keys(i)  = entry.key;
+                       topos(i) = entry.topo;
+                       beta(i)  = entry.beta;
+                       age(i)   = entry.age;
+                       flags(i) = entry.release_flags;
+                   });
+        m_counters.released_count += static_cast<SizeT>(released_count);
+    }
 
     m_candidate_entries.resize(n);
     if(n > 0)
@@ -192,16 +334,18 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     m_new_locked_entries.resize(n);
     if(n > 0)
     {
+        muda::CBufferView<U64> released_keys = m_released_keys;
         DeviceSelect().If(
             m_candidate_entries.data(),
             m_new_locked_entries.data(),
             m_new_locked_count.data(),
             n,
-            [beta_lock_threshold] CUB_RUNTIME_FUNCTION(
+            [beta_lock_threshold, released_keys] CUB_RUNTIME_FUNCTION(
                 const RCCBondedPTDeviceEntry& entry)
             {
                 return entry.beta >= beta_lock_threshold
-                       && entry.release_flags == core::RCCBondedPTReleaseNone;
+                       && entry.release_flags == core::RCCBondedPTReleaseNone
+                       && !rcc_bonded_pt_is_locked(released_keys, entry.key);
             });
     }
     else
@@ -333,29 +477,6 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                    });
     }
 
-    m_prev_entries.resize(prev_n);
-    if(prev_n > 0)
-    {
-        ParallelFor()
-            .file_line(__FILE__, __LINE__)
-            .apply(prev_n,
-                   [keys = prev_keys.viewer().name("prev_keys"),
-                    topos = prev_topos.viewer().name("prev_topos"),
-                    beta = prev_beta.viewer().name("prev_beta"),
-                    age = prev_age.viewer().name("prev_age"),
-                    flags = prev_flags.viewer().name("prev_flags"),
-                    entries = m_prev_entries.view().viewer().name("prev_entries")] __device__(int i) mutable
-                   {
-                       RCCBondedPTDeviceEntry entry;
-                       entry.key           = keys(i);
-                       entry.topo          = topos(i);
-                       entry.beta          = beta(i);
-                       entry.age           = age(i) + 1;
-                       entry.release_flags = flags(i);
-                       entries(i)          = entry;
-                   });
-    }
-
     m_carry_prev_entries.resize(prev_n);
     if(prev_n > 0)
     {
@@ -449,6 +570,11 @@ void RCCBondedPTSystem::Impl::set_rest_shape_config(Float min_separate_distance,
     m_det_dm_min = det_dm_min;
 }
 
+void RCCBondedPTSystem::Impl::set_release_config(Float strain_threshold) noexcept
+{
+    m_release_strain_threshold = strain_threshold;
+}
+
 void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexcept
 {
     simplex_trajectory_filter = filter;
@@ -509,6 +635,31 @@ const core::RCCBondedPTCounters& RCCBondedPTSystem::Impl::counters() const noexc
     return m_counters;
 }
 
+muda::CBufferView<U64> RCCBondedPTSystem::Impl::released_keys() const noexcept
+{
+    return m_released_keys;
+}
+
+muda::CBufferView<Vector4i> RCCBondedPTSystem::Impl::released_topos() const noexcept
+{
+    return m_released_topos;
+}
+
+muda::CBufferView<Float> RCCBondedPTSystem::Impl::released_beta() const noexcept
+{
+    return m_released_beta;
+}
+
+muda::CBufferView<IndexT> RCCBondedPTSystem::Impl::released_age() const noexcept
+{
+    return m_released_age;
+}
+
+muda::CBufferView<U32> RCCBondedPTSystem::Impl::released_flags() const noexcept
+{
+    return m_released_flags;
+}
+
 RCCBondedPTStateBridge& RCCBondedPTSystem::Impl::bridge() noexcept
 {
     return m_bridge;
@@ -529,6 +680,10 @@ void RCCBondedPTSystem::do_build()
     auto det_dm_min_attr = config.find<Float>("rcc_bonded_pt_det_dm_min");
     m_impl.set_rest_shape_config(min_sep_attr ? min_sep_attr->view()[0] : 1e-6,
                                  det_dm_min_attr ? det_dm_min_attr->view()[0] : 1e-12);
+    auto release_strain_attr =
+        config.find<Float>("rcc_bonded_pt_release_strain");
+    m_impl.set_release_config(release_strain_attr ? release_strain_attr->view()[0]
+                                                  : 1e30);
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
 
     on_init_scene(
@@ -607,6 +762,16 @@ muda::CBufferView<Matrix3x3> RCCBondedPTSystem::locked_dm_inv() const noexcept
 muda::CBufferView<Float> RCCBondedPTSystem::locked_rest_volume() const noexcept
 {
     return m_impl.bridge().locked_rest_volume();
+}
+
+muda::CBufferView<U64> RCCBondedPTSystem::released_keys() const noexcept
+{
+    return m_impl.released_keys();
+}
+
+muda::CBufferView<Float> RCCBondedPTSystem::released_beta() const noexcept
+{
+    return m_impl.released_beta();
 }
 
 void RCCBondedPTSystem::feed_filter_keys() const noexcept

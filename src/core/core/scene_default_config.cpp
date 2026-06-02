@@ -48,7 +48,8 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("rcc_bonded_pt_det_dm_min", Float{1e-12});
     config.create("rcc_bonded_pt_energy_model", std::string{"abd_ortho"});
     config.create("rcc_bonded_pt_kappa", Float{1e8});
-    
+    config.create("rcc_bonded_pt_release_strain", Float{1e30});
+
     // default:
     //  - ipc
     // or:

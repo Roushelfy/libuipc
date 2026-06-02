@@ -59,7 +59,7 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_kappa` | ABD-style virtual-tet stiffness | Implemented, default `1e8`; scene correctness gates require `>= 1e8` unless they explicitly test failure/diagnostic behavior |
 | `rcc_bonded_pt_release_gap` | Normal release distance | Planned |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Planned |
-| `rcc_bonded_pt_release_strain` | Deformation release threshold | Planned |
+| `rcc_bonded_pt_release_strain` | ABD deformation release threshold | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 
 Retired prototype keys must not be reintroduced as production acceptance criteria:
 
@@ -110,11 +110,12 @@ ABD/SVTS boundary:
 | Locked PT is absent from common active/friction PT views when sorted keys are supplied | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Implemented |
 | CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
 | RCC Phase A high-beta PTs populate the CUDA owner with live rest-shape construction | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
+| Strain release compacts active locks, preserves released key/topology/beta/age/flag alignment, suppresses same-step relock, and carries beta back to RCC persistence | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Implemented |
 | ABD-style bonded reporter E/G/H matches CPU reference at `kappa >= 1e8` | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Implemented |
 | Production path excludes retired SNH config and reporter functions | Source/doc gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Implemented |
 | Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
-| Released pair carries beta back to RCC and is absent from bonded assembly | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
+| Gap, slip, sticky-side, and policy release reasons are covered independently | Backend CUDA fixture | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release][gap][slip][sticky][policy]"` | Planned |
 | PT lift/release scene locks, reuses, avoids penetration under ABD-style energy, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |
 | Stable scene improves hot-path timing without hiding setup cost | Benchmark gate | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Planned |
 

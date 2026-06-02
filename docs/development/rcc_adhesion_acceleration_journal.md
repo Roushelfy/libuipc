@@ -660,3 +660,35 @@ After correcting the implementation from the prototype SNH virtual-tet energy to
 ### Decision
 
 The docs now treat the ABD virtual-tet energy as a non-negotiable production precondition rather than one possible material choice. The next implementation slice remains release/beta carry, followed by no-penetration scene observation and pre-CCD filtering.
+
+## 2026-06-02 Strain Release And Beta Carry
+
+### Context
+
+After ABD OrthoPotential became the production bonded virtual-tet energy, the next lifecycle gap was release. A locked pair that fails a release gate must leave active bonded state, must not immediately re-lock from the same high-beta RCC snapshot, and must carry its last locked beta back into RCC PT persistence.
+
+### Implemented
+
+- Added `rcc_bonded_pt_release_strain`, defaulting to `1e30` so release remains disabled until a test or scene selects a threshold.
+- Added device release evaluation for strain, flip, and degenerate current virtual-tet state in `RCCBondedPTSystem`.
+- Added released key/topology/beta/age/flag snapshots and kept them zipped after release extraction.
+- Compact released entries out of the active locked state before the CUDA owner refreshes bonded reporter/filter input.
+- Suppress same-step relock for keys released by the current owner update.
+- Added `RCCBondedPTBetaCarryScratch` to merge released key/beta pairs back into RCC PT persistence without overwriting newer duplicate beta values already present in the RCC snapshot.
+- Added deterministic backend fixtures for one strained release plus one persistent lock, and for beta-carry merge-without-overwrite behavior.
+- Strengthened the source/doc gate with anchors for release config, released snapshots, RCC beta carry, and the release fixtures.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` | Passed. Built the CUDA backend test binary; existing CUDA warnings remained. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Passed. Reported `All tests passed (24 assertions in 2 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (156 assertions in 8 test cases)`. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed. Source/doc gate accepted the release config, released snapshot, RCC beta-carry, and release-fixture anchors. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs nav/API informational warnings remained. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8` with no work to do, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+
+### Decision
+
+The first release policy slice is implemented and covered: strain/flip/degenerate release, active-lock compaction, released snapshot alignment, same-step relock suppression, one-shot release counters, and released beta carry. Remaining release reasons are normal gap, tangential slip, sticky-side failure, and disabled contact policy. Scene-level no-penetration observation, pre-CCD filtering in all concrete filters, and benchmarks are still required before bonded PT acceleration can claim full production correctness or speedup.

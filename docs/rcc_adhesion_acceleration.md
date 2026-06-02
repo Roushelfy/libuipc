@@ -150,6 +150,14 @@ A locked pair releases when any condition fails.
 
 Release is not failure. It is the intended fallback when the bonded approximation stops matching contact-like adhesion.
 
+Current implementation status:
+
+| Reason | Status |
+| --- | --- |
+| `strain` | Implemented on CUDA using `rcc_bonded_pt_release_strain` against `||F F^T - I||` |
+| `flip` / `degenerate` | Implemented on CUDA from current virtual-tet determinant/topology/rest-volume validity |
+| `gap`, `slip`, `sticky_side`, `policy` | Planned; required before forced-pull scene release can be considered complete |
+
 Release ordering matters:
 
 1. Evaluate release gates against active locks before the bonded reporter consumes its input for the current step.
@@ -187,7 +195,7 @@ The reporter must not:
 | Common active filter | `src/backends/cuda/collision_detection/simplex_trajectory_filter.*` | Can compact locked PTs out of active `PTs()` and `friction_PTs()` when supplied sorted locked keys; default is no-op |
 | Filter backends | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | Planned: skip before PT CCD broadphase |
 | Reporter | `src/backends/cuda/contact_system/rcc_bonded_pt_virtual_tet_reporter.*` | Dynamic ABD-style high-kappa complement reporter, no frontend geometry rebuild |
-| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; release must later merge released key/beta snapshots back into RCC persistence |
+| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; released snapshots preserve key/topology/beta/age/flags, and released key/beta pairs are merged back into RCC persistence through `RCCBondedPTBetaCarryScratch` |
 | Tests | `apps/tests/core`, `apps/tests/backends/cuda`, `apps/tests/sim_case` | Follow the test matrix in conventions |
 | Benchmarks | `scripts/bench_rcc_adhesion_acceleration.py` | Planned after timers/counters exist |
 
@@ -207,8 +215,8 @@ Required oracles before production use:
 | Beta/rest producer oracle | Existing locks plus a RCC PT beta snapshot with one refresh, one carry, one new lock, one duplicate, one low-beta reject, and one degenerate high-beta reject | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]"`: device-side producer carries old locks and their rest-shape payloads, refreshes high-beta candidates, increments age, suppresses duplicate keys, builds SVTS-compatible `Dm_inv/rest_volume` for fresh locks, counts degenerate rejects, and leaves low-beta or degenerate candidates unlocked |
 | ABD-style reporter oracle | One locked pair with known rest shape and high stiffness | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]"`: proves CUDA E/G/H matches the ABD CPU oracle |
 | CUDA BVH/radix-sort regression | Bunny sanity mesh through the existing GPU sanity checker | Implemented by `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` and `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`: bonded-PT device layout changes must not destabilize `SimplicialSurfaceDistanceCheck` or `InfoStacklessBVH` |
+| Release/beta carry oracle | Two locked PTs with controlled current deformation: one stays locked, one releases by strain | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][release]"`: released lock is absent from bonded state, released key/topology/beta/age/flag snapshots stay aligned, release reason/counter is recorded once, same-step relock is suppressed, and released beta is merged into RCC persistence without overwriting newer duplicate beta |
 | Pre-CCD filter ownership oracle | One locked key and one unlocked key in every concrete filter fixture | Planned: locked absent from candidate/TOI/contact views, unlocked unchanged |
-| Release/beta carry oracle | Two locked PTs with controlled current deformation/policy: one stays locked, one releases | Planned: released lock is absent from bonded reporter input, release reason/counter is recorded once, and the released beta is visible to RCC persistence |
 | No-penetration scene observation | PT-rich bonded-mode press/hold/lift with CCD skipped for locked pairs | Planned: scene reports maximum penetration/gap or an equivalent fixture-specific bound while ABD-style energy is active |
 
 ## Scene Gate
@@ -236,7 +244,7 @@ The gate must read simulation state or report fields. Writing OBJ sequences is u
 
 ## Reports
 
-The host state contract, CUDA state bridge, CUDA owner, and beta-threshold producer now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. Before bonded scene gates can claim ownership correctness, the live CUDA pipeline must add release/rest-shape accounting and expose the same fields through reports or feature accessors.
+The host state contract, CUDA state bridge, CUDA owner, beta-threshold producer, and strain release path now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. Before bonded scene gates can claim full ownership correctness, the live CUDA pipeline must add the remaining release reasons, no-penetration observations, and report fields through scene-accessible features.
 
 Minimum backend report fields before scene gates:
 

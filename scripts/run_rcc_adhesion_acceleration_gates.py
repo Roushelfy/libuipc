@@ -108,6 +108,7 @@ def main() -> int:
             "docs/development/rcc_adhesion_acceleration_journal.md",
             [
                 ("2026-05-30", "journal has a dated entry"),
+                ("2026-06-02 Strain Release And Beta Carry", "journal records the current release/beta-carry slice"),
                 ("Source Observations", "journal records observed repository state"),
                 ("Decisions", "journal records decisions"),
                 ("Commands", "journal records command results"),
@@ -241,6 +242,21 @@ def main() -> int:
         "subsystem doc defines release before bonded assembly",
     )
     expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Current implementation status",
+        "subsystem doc separates implemented release reasons from planned reasons",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "released key/topology/beta/age/flag snapshots stay aligned",
+        "subsystem doc requires full released snapshot alignment",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "Remaining release reasons",
+        "roadmap keeps gap/slip/sticky/policy release in planned work",
+    )
+    expect_contains(
         "src/core/core/scene_default_config.cpp",
         "rcc_bonded_pt_energy_model",
         "default config exposes production bonded energy model",
@@ -249,6 +265,11 @@ def main() -> int:
         "src/core/core/scene_default_config.cpp",
         "rcc_bonded_pt_kappa",
         "default config exposes production bonded stiffness",
+    )
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_release_strain",
+        "default config exposes strain-release threshold",
     )
     expect_not_contains(
         "src/core/core/scene_default_config.cpp",
@@ -302,6 +323,16 @@ def main() -> int:
         "current end-of-step integrator anchor",
     )
     expect_contains(
+        "src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu",
+        "RCCBondedPTBetaCarryScratch",
+        "RCC integration owns beta-carry scratch storage",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu",
+        "merge_released_beta",
+        "RCC integration merges released beta back into PT persistence",
+    )
+    expect_contains(
         "include/uipc/core/rcc_bonded_pt_state.h",
         "set_counters",
         "host state counter restore anchor",
@@ -318,9 +349,54 @@ def main() -> int:
         "CUDA state upload anchor",
     )
     expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.h",
+        "released_age()",
+        "CUDA owner exposes released age snapshot for alignment tests",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.h",
+        "m_released_age",
+        "CUDA owner stores released age alongside key/topology/beta/flags",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleaseStrain",
+        "CUDA owner evaluates strain release reason",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "rcc_bonded_pt_release_strain",
+        "CUDA owner reads strain-release config",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "m_released_age",
+        "CUDA owner fills released age snapshot",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_beta_carry.h",
+        "RCCBondedPTBetaCarryScratch",
+        "beta-carry scratch helper is declared",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_beta_carry.cu",
+        "merge_released_beta",
+        "beta-carry helper implements released beta merge",
+    )
+    expect_contains(
         "apps/tests/backends/cuda/rcc_bonded_pt_state_bridge.cu",
         "[rcc_bonded_pt][backend_state][cuda]",
         "CUDA state bridge fixture anchor",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][cuda]",
+        "backend fixture covers strain release lifecycle",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][beta_carry][cuda]",
+        "backend fixture covers released beta carry merge",
     )
     expect_contains(
         "src/backends/cuda/collision_detection/simplex_trajectory_filter.cu",

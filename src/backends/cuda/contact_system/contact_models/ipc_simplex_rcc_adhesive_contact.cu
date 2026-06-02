@@ -1,5 +1,6 @@
 #include <contact_system/simplex_frictional_contact.h>
 #include <contact_system/rcc_adhesive_coeff.h>
+#include <contact_system/rcc_bonded_pt_beta_carry.h>
 #include <contact_system/rcc_bonded_pt_system.h>
 #include <contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h>
 #include <contact_system/contact_models/codim_ipc_simplex_frictional_contact_function.h>
@@ -12,6 +13,7 @@
 #include <kernel_cout.h>
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/device_buffer_2d.h>
+#include <muda/buffer/device_var.h>
 #include <thrust/sort.h>
 #include <thrust/binary_search.h>
 #include <thrust/execution_policy.h>
@@ -1332,6 +1334,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     SimSystemSlot<GlobalVertexManager>       m_gvm_for_phase_a;
     SimSystemSlot<SimplexTrajectoryFilter>   m_stf_for_phase_a;
     SimSystemSlot<RCCBondedPTSystem>         m_bonded_pt_system_for_phase_a;
+    RCCBondedPTBetaCarryScratch              m_bonded_pt_beta_carry;
     Float                                    m_bonded_pt_beta_lock_threshold = 1.0;
 
     void _evolve_beta_step_at_end(Float dt)
@@ -1480,6 +1483,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         {
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
                 pairs, m_beta_PT.view(), positions, m_bonded_pt_beta_lock_threshold);
+            m_bonded_pt_beta_carry.merge_released_beta(
+                m_prev_keys_PT,
+                m_prev_beta_PT,
+                m_bonded_pt_system_for_phase_a->released_keys(),
+                m_bonded_pt_system_for_phase_a->released_beta());
         }
     }
 
