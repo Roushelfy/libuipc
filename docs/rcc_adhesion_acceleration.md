@@ -189,6 +189,8 @@ Release ordering matters:
 
 While a pair is locked it is removed from `friction_PTs()`, so Phase A does not evolve its beta: the lock-time beta is frozen and carried until release. This replaces the spec's energy-driven debonding law (beta evolution from accumulated normal/tangential adhesion energy and pressure, see the RCC adhesion spec) with the geometric release gates (strain/gap/slip) plus sticky-side/policy. This is a deliberate approximation: a pair the RCC energy criterion would gradually debond stays rigidly bonded until a geometric threshold trips. Before any correctness claim the geometric release thresholds must be calibrated so the locked-then-released trajectory matches the unaccelerated beta-evolution debond timing within tolerance on a canonical purely-normal and purely-tangential example (conventions Test Matrix `[rcc_bonded_pt][calibration][debond]`).
 
+Known blind spot (2026-06-02 cross-fixture probe, see journal): geometric release (strain/gap) can be self-defeating. A stiff bonded tet (`kappa` 5e7-1e8) absorbs the imposed motion, so the per-tet strain/gap never exceeds threshold when the counterpart is compliant (e.g. FEM cloth bonded to an ABD cube) — the bond holds and the soft side just follows it, so the pair never releases (the cloth-peel and cube-cloth fixtures did not separate even at `release_strain=0.1, release_gap=0.01`). The all-ABD cube-cube case separates only because two stiff actuators force enough gap/strain across the bond. A robust release law on compliant counterparts likely needs the RCC beta criterion evaluated on locked pairs, a force/strain-rate trigger, lower `kappa`, or a lock gate that excludes soft counterparts.
+
 ## Assembly Contract
 
 The bonded virtual-tet reporter:

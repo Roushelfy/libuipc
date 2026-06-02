@@ -179,7 +179,16 @@ def make_cloth_mesh(base_y: float) -> SimplicialComplex:
     return cloth
 
 
-def build_demo(adhesion_on: bool):
+def build_demo(
+    adhesion_on: bool,
+    bonded: bool = False,
+    skip_ccd: bool = False,
+    beta_lock_threshold: float = 0.9,
+    kappa: float = 1.0e8,
+    release_strain: float = 1.0e30,
+    release_gap: float = 1.0e30,
+    release_slip: float = 1.0e30,
+):
     Logger.set_level(Logger.Level.Warn)
 
     workspace = AssetDir.output_path(__file__)
@@ -194,6 +203,15 @@ def build_demo(adhesion_on: bool):
     config["contact"]["d_hat"] = 0.02
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    if bonded:
+        config["rcc_bonded_pt_enabled"] = 1
+        config["rcc_bonded_pt_skip_ccd"] = 1 if skip_ccd else 0
+        config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
+        config["rcc_bonded_pt_energy_model"] = "abd_ortho"
+        config["rcc_bonded_pt_kappa"] = kappa
+        config["rcc_bonded_pt_release_strain"] = release_strain
+        config["rcc_bonded_pt_release_gap"] = release_gap
+        config["rcc_bonded_pt_release_slip"] = release_slip
     scene = Scene(config)
 
     abd = AffineBodyConstitution()

@@ -887,3 +887,42 @@ This is the first end-to-end scene observation of the bonded lock -> hold -> rel
 | `cmake --build build/cuda_mixed_fused_pcg --target core backend_cuda pyuipc -j8` | Passed; pyuipc auto-installed into the venv. |
 | headless `build_demo(bonded=True, skip_ccd=True, release_gap=0.04, release_strain=0.6)`, 400 frames | 8 locks at hold (gap_min `+0.019`), 8 released at pull (separated, gap_y `1.03`). |
 | `uipc_test_core "[rcc_bonded_pt]"` / `uipc_test_backend_cuda "[rcc_bonded_pt]"` | Passed (91/6, 230/13) — accessor change is regression-free. |
+
+## 2026-06-02 Cross-Fixture Bonded-PT Probe (Cloth Demos)
+
+### Context
+
+Broaden bonded-PT + skip_ccd validation beyond the all-ABD cube fixture to the FEM-cloth demos: oriented-cloth pickup, cube-cloth lift/release, and cloth peel — softer, denser, mixed body types (NeoHookean shell bonded to an ABD cube).
+
+### Implemented
+
+- Added bonded params (default-off) to `build_demo` in `rcc_adhesive_oriented_cloth_demo.py`, `rcc_adhesive_cube_cloth_lift_release_demo.py`, and `rcc_adhesive_cloth_peel_demo.py` (same additive pattern as the subdivided-cube demo).
+- Added `scripts/probe_rcc_bonded_pt_demos.py`: runs each fixture in its own subprocess with bonded + skip_ccd and reports stability, lock trajectory, released count, and a geometry-agnostic penetration proxy (the bonded points' signed distance to their own virtual-tet triangle plane).
+
+### Observed Results (bonded + skip_ccd)
+
+| Fixture | kappa | valid | max_locked | released | min_abs_sep | macro behavior |
+| --- | --- | --- | --- | --- | --- | --- |
+| oriented_cloth (cube picks up cloth) | 1e8 | yes | 111 | 0 | 0.0016 | cloth lifted with the cube (mean Y 0.30 -> 1.01) |
+| cube_cloth lift/release | 5e7 | yes | 88 | 0 | 0.021 (~d_hat) | held; on pull the cloth rode **up** with the cube, did not separate |
+| cloth_peel | 1e8 | yes | 233 | 0 | 0.0031 | bonds held the cloth flat; the peel was **suppressed** (no edge lift) |
+
+- All three run **stably** end-to-end (no NaN/blowup): bonded + skip_ccd does not destabilize the FEM NeoHookean cloth.
+- Locks form **abundantly** (88-233; cloth contact is denser than the cube case).
+- **No penetration**: bonded-tet plane separation stays ~d_hat and never collapses.
+- **Release/separation did NOT fire** (released ~0) even with aggressive thresholds: `release_strain=0.1, release_gap=0.01` gave only 1/88 release on cube_cloth (the externally pulled-down vertex) and 0/233 on cloth_peel.
+
+### Finding
+
+Geometric-proxy release (strain/gap) has a structural blind spot: a stiff ABD bond (kappa 5e7-1e8) **absorbs** the imposed motion, so the per-tet strain/gap never grows past threshold when the counterpart is **compliant** (FEM cloth, weak constraint). The bond then holds and the soft side simply follows it. The all-ABD cube-cube case separates only because two stiff SoftTransformConstraint actuators force enough gap/strain across the bond. This sharpens the phys-1 concern: geometric release is not a reliable substitute for the spec's energy-driven beta debonding on compliant fixtures.
+
+### Decision
+
+Establishment, stability, and non-penetration **generalize** across fixtures (good). Release/separation on compliant-counterpart fixtures is an **open problem** needing release-law redesign — e.g. evaluating the RCC beta criterion on locked pairs, a force/strain-rate release, lower kappa, or a lock gate that excludes soft counterparts. Keep `rcc_bonded_pt_skip_ccd` default-off; do not claim release correctness on cloth.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `python/.venv/bin/python scripts/probe_rcc_bonded_pt_demos.py` | All 3 stable; locks 111/88/233; released 0/0/0; min_abs_sep 0.0016/0.021/0.003. |
+| tuning `release_strain=0.1, release_gap=0.01` on cube_cloth/cloth_peel | released 1/88 and 0/233 — release still largely suppressed (confirms the blind spot). |
