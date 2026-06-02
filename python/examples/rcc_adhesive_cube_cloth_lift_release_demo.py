@@ -58,7 +58,7 @@ try:
         SoftTransformConstraint,
         RCCAdhesive,
     )
-    from uipc.core import RCCAdhesionStateAccessorFeature
+    from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorFeature
 except ImportError as exc:
     raise SystemExit(
         "This example requires the libuipc Python bindings (`uipc._native.pyuipc`). "
@@ -400,9 +400,43 @@ def adhesion_beta_stats(sim) -> dict[str, float | int] | None:
     }
 
 
+def _bonded_bonds(sim):
+    """(locked_count, (nodes, edges)) for the bonded virtual tets, or (count, None)."""
+    acc = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+    if acc is None:
+        return 0, None
+    locked = int(acc.locked_pair_count())
+    pts = np.asarray(acc.dump_locked_tet_world_positions(), dtype=np.float64)
+    if pts.ndim != 3 or pts.shape[0] == 0:
+        return locked, None
+    nodes = pts.reshape(-1, 3)
+    edges = []
+    for i in range(pts.shape[0]):
+        b = 4 * i
+        edges += [[b, b + 1], [b, b + 2], [b, b + 3],
+                  [b + 1, b + 2], [b + 2, b + 3], [b + 3, b + 1]]
+    return locked, (nodes, np.asarray(edges, dtype=np.int64))
+
+
+# Bonded-PT viewer config (kappa lowered for the FEM cloth; finite release
+# thresholds so the pull stretches the bond). See scripts/probe_rcc_bonded_pt_demos.py.
+def _build(state):
+    return build_demo(
+        state["adhesion_on"],
+        bonded=state["bonded"],
+        skip_ccd=state["bonded"],
+        beta_lock_threshold=0.85,
+        kappa=5.0e7,
+        release_strain=0.5,
+        release_gap=0.03,
+    )
+
+
 def run_demo():
-    state = {"adhesion_on": True}
-    sim = build_demo(state["adhesion_on"])
+    # Pass --bonded to enable bonded-PT acceleration + skip_ccd and draw the
+    # bonded virtual tets (red). Default is the plain (non-bonded) demo.
+    state = {"adhesion_on": True, "bonded": ("--bonded" in sys.argv)}
+    sim = _build(state)
 
     ps.init()
     ps.set_ground_plane_mode("none")
@@ -435,6 +469,15 @@ def run_demo():
         else:
             mesh.update_vertex_positions(verts)
 
+        if ps.has_curve_network("cube_cloth_bonds"):
+            ps.remove_curve_network("cube_cloth_bonds")
+        if state["bonded"]:
+            _, bonds = _bonded_bonds(sim)
+            if bonds is not None:
+                net = ps.register_curve_network("cube_cloth_bonds", bonds[0], bonds[1])
+                net.set_radius(0.003)
+                net.set_color((1.0, 0.15, 0.1))
+
     def step_once():
         if sim["world"].frame() >= TOTAL_FRAMES:
             ui["run"] = False
@@ -448,7 +491,7 @@ def run_demo():
 
     def reset():
         nonlocal sim
-        sim = build_demo(state["adhesion_on"])
+        sim = _build(state)
         update_visual()
 
     def on_update():
@@ -462,6 +505,10 @@ def run_demo():
         psim.SameLine()
         if psim.Button(f"adhesion: {'ON' if state['adhesion_on'] else 'OFF'}"):
             state["adhesion_on"] = not state["adhesion_on"]
+
+        psim.SameLine()
+        if psim.Button(f"bonded: {'ON' if state['bonded'] else 'OFF'}"):
+            state["bonded"] = not state["bonded"]
 
         psim.SameLine()
         if psim.Button("reset"):
@@ -501,6 +548,11 @@ def run_demo():
                 f"min={beta_stats['min']:.3f} "
                 f">0.9={100.0 * beta_stats['frac_09']:.1f}%"
             )
+        if state["bonded"]:
+            locked, _ = _bonded_bonds(sim)
+            psim.Text(f"Bonded PT (skip_ccd): ON  locked={locked} (red bonds)")
+        else:
+            psim.Text("Bonded PT: OFF  (toggle `bonded` + `reset`, or pass --bonded)")
         if frame >= TOTAL_FRAMES:
             psim.Text("Sim done. Hit `reset` to rebuild.")
 
