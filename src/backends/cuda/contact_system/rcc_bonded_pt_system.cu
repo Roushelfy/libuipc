@@ -582,6 +582,21 @@ const core::RCCBondedPTCounters& RCCBondedPTSystem::counters() const noexcept
     return m_impl.counters();
 }
 
+muda::CBufferView<Vector4i> RCCBondedPTSystem::locked_topos() const noexcept
+{
+    return m_impl.bridge().locked_topos();
+}
+
+muda::CBufferView<Matrix3x3> RCCBondedPTSystem::locked_dm_inv() const noexcept
+{
+    return m_impl.bridge().locked_dm_inv();
+}
+
+muda::CBufferView<Float> RCCBondedPTSystem::locked_rest_volume() const noexcept
+{
+    return m_impl.bridge().locked_rest_volume();
+}
+
 void RCCBondedPTSystem::feed_filter_keys() const noexcept
 {
     m_impl.feed_filter_keys();

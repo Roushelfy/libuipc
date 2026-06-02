@@ -52,7 +52,7 @@ Next detection/filtering
 
 Newton assembly
   -> normal contact/friction/RCC assemble only unlocked pairs
-  -> bonded virtual-tet reporter assembles complement energy for locked_topos
+  -> bonded virtual-tet reporter assembles complement energy for locked_topos, Dm_inv, and rest_volume
 
 Release/update
   -> release gate records reason flags
@@ -84,7 +84,7 @@ apps/tests/
   sim_case/
 ```
 
-The `apps/tests` locations are planned targets. Source scans are currently the only implemented project-specific gate.
+The `apps/tests` locations hold the current deterministic state, oracle, CUDA bridge, lookup, filter, owner, reporter, and scene gates. Source scans remain boundary checks, not numeric proof.
 
 ## Ownership And Boundaries
 
@@ -131,7 +131,7 @@ The dynamic reporter should numerically follow `SoftVertexTriangleStitch`:
 1. Build `Dm = [x1 - x0, x2 - x0, x3 - x0]` from rest positions.
 2. If point-plane rest distance is below `min_separate_distance`, offset the rest point along the triangle normal before computing `Dm_inv`.
 3. Store `Dm_inv` and `rest_volume`.
-4. Use Stable Neo-Hookean energy, gradient, and Hessian.
+4. Use Stable Neo-Hookean energy, gradient, and Hessian with `rcc_bonded_pt_mu` and `rcc_bonded_pt_lambda`.
 5. Apply SPD projection in the Hessian path.
 
 The dynamic reporter must not create or mutate frontend `SoftVertexTriangleStitch` geometry at runtime. That static constitution is the oracle and design reference, not the container for transient RCC locks.

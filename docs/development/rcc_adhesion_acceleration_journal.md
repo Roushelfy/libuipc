@@ -507,3 +507,35 @@ After the CUDA BVH regression fix, the state and bridge could safely carry `Dm_i
 ### Decision
 
 The live producer now has enough rest-shape data for the next implementation slice: a bonded virtual-tet complement reporter plus a GPU-vs-CPU E/G/H oracle. Remaining lock gates, release flags, scene counters, pre-CCD filtering, and benchmarks are still required before bonded mode can make correctness or performance claims.
+
+## 2026-06-02 Bonded Virtual-Tet Reporter Oracle
+
+### Context
+
+With live CUDA rest-shape construction in place, the next safe slice was to assemble a bonded PT virtual-tet complement energy from the existing owner buffers and compare the GPU math against the CPU virtual-tet E/G/H oracle.
+
+### Implemented
+
+- Added `RCCBondedPTVirtualTetReporter` as a `DyTopoEffectReporter` with `EnergyComponentFlags::Complement`.
+- Added a config-gated creator so the reporter is only instantiated when `rcc_bonded_pt_enabled` is set and a dynamic topology manager is available.
+- Added read-only locked-topology, `Dm_inv`, and rest-volume accessors on `RCCBondedPTSystem`.
+- Added global material config keys `rcc_bonded_pt_mu` and `rcc_bonded_pt_lambda`, both defaulting to `0.0` so bonded owner/filtering can remain enabled without silently adding virtual-tet stiffness.
+- Shared one CUDA evaluator between dense oracle buffers and production doublet/triplet assembly.
+- Added `[rcc_bonded_pt][reporter][oracle][cuda]` to compare GPU energy, gradient, and SPD-projected Hessian against the CPU oracle.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed CMake globs for the new CUDA reporter and backend test file. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` | Failed initially because the device evaluator guessed the internal muda viewer type. Fixed by templating the evaluator on the position viewer type. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` after the viewer fix | Passed. Built `libuipc_backend_cuda` and `uipc_test_backend_cuda`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][oracle][cuda]" -r compact` | Passed. Reported `All tests passed (5 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (129 assertions in 6 test cases)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8`, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs build all completed. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_sim_case -j8 && build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Passed. Reported `All tests passed (836 assertions in 2 test cases)`. |
+
+### Decision
+
+The bonded virtual-tet reporter math is now covered by a GPU-vs-CPU oracle, but the feature is still not correctness-complete. Release diagnostics, beta carry on release, live counter reporting, pre-CCD filtering, and bonded-mode scene/benchmark gates remain required before enabling or making performance claims.

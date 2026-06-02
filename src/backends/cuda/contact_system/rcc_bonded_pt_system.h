@@ -81,6 +81,9 @@ class RCCBondedPTSystem final : public SimSystem
     bool  empty() const noexcept;
     bool  enabled() const noexcept;
     const core::RCCBondedPTCounters& counters() const noexcept;
+    muda::CBufferView<Vector4i> locked_topos() const noexcept;
+    muda::CBufferView<Matrix3x3> locked_dm_inv() const noexcept;
+    muda::CBufferView<Float> locked_rest_volume() const noexcept;
 
     void feed_filter_keys() const noexcept;
     void clear_filter_keys() const noexcept;
