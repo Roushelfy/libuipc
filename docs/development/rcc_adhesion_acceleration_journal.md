@@ -858,3 +858,32 @@ The CCD Removal Precondition is satisfied for the cube fixture, but `rcc_bonded_
 | `uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]" -r compact` | Passed. `All tests passed (596 assertions in 1 test case)`. |
 | `uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Passed. `All tests passed (836 assertions in 2 test cases)` (legacy regression). |
 | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed after updating doc/source anchors for the scene gate. |
+
+## 2026-06-02 Python Bonded-PT Accessor And Viewer Demo
+
+### Context
+
+Bonded-PT state was readable only from C++ tests. To inspect and visualize the locked virtual tets interactively, the accessor needed Python bindings and a viewer demo. This also exercises the full press/hold/lift/pull lifecycle end-to-end in a real scene for the first time.
+
+### Implemented
+
+- Added `RCCBondedPTStateAccessorFeature::dump_locked_tet_world_positions()` (core feature + a non-pure overrider default so the test mock is unaffected). The CUDA overrider gathers the four world positions per locked tet from `GlobalVertexManager::positions()` indexed by `locked_topos`.
+- Bound `RCCBondedPTStateAccessorFeature` in pyuipc: `locked_pair_count()`, `counters()` (dict), and `dump_locked_tet_world_positions()` (`[M, 4, 3]` numpy).
+- Added bonded params to `rcc_adhesive_subdivided_cube_lift_release_demo.build_demo` (default-off) and a dedicated viewer `python/examples/rcc_bonded_pt_lift_pull_viewer.py` that enables bonded + skip_ccd + finite release thresholds, draws the bonded tets as a polyscope curve network, and shows live lock counts.
+
+### Observed Result (headless)
+
+End-to-end press/hold/lift/pull with `rcc_bonded_pt_skip_ccd` on, `release_gap = 0.04`, `release_strain = 0.6`:
+
+- HOLD (frame 240): 8 locks; dump returns shape `(8, 4, 3)`; contact-face gap min `+0.0193` (no penetration); bottom cube lifted to `0.581`.
+- PULL (frame 400): all 8 locks released (`released_count = 8`); contact gap `+0.73`; bottom cube fell to `0.170`; cube separation `gap_y = 1.030` — the bonds release on the hard pull and the cubes separate cleanly.
+
+This is the first end-to-end scene observation of the bonded lock -> hold -> release -> separate lifecycle (with CCD skipped during the locked phase). It is demo/inspection evidence, not yet a pass/fail assertion gate; the forced-pull release/separation C++ gate is still planned.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target core backend_cuda pyuipc -j8` | Passed; pyuipc auto-installed into the venv. |
+| headless `build_demo(bonded=True, skip_ccd=True, release_gap=0.04, release_strain=0.6)`, 400 frames | 8 locks at hold (gap_min `+0.019`), 8 released at pull (separated, gap_y `1.03`). |
+| `uipc_test_core "[rcc_bonded_pt]"` / `uipc_test_backend_cuda "[rcc_bonded_pt]"` | Passed (91/6, 230/13) — accessor change is regression-free. |

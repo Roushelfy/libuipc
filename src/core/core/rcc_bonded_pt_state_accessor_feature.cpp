@@ -26,6 +26,11 @@ RCCBondedPTState RCCBondedPTStateAccessorFeature::dump_state() const
     return m_impl->do_dump_state();
 }
 
+vector<Vector3> RCCBondedPTStateAccessorFeature::dump_locked_tet_world_positions() const
+{
+    return m_impl->do_dump_locked_tet_world_positions();
+}
+
 std::string_view RCCBondedPTStateAccessorFeature::get_name() const
 {
     return FeatureName;

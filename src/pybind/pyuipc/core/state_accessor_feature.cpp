@@ -2,6 +2,7 @@
 #include <uipc/core/finite_element_state_accessor_feature.h>
 #include <uipc/core/affine_body_state_accessor_feature.h>
 #include <uipc/core/rcc_adhesion_state_accessor_feature.h>
+#include <uipc/core/rcc_bonded_pt_state_accessor_feature.h>
 
 namespace pyuipc::core
 {
@@ -211,5 +212,58 @@ length (uint64 and float64 respectively).)");
 
     class_RCCAdhesionStateAccessorFeature.attr("FeatureName") =
         RCCAdhesionStateAccessorFeature::FeatureName;
+
+
+    auto class_RCCBondedPTStateAccessorFeature =
+        py::class_<RCCBondedPTStateAccessorFeature, IFeature, S<RCCBondedPTStateAccessorFeature>>(
+            m,
+            "RCCBondedPTStateAccessorFeature",
+            R"(Feature for inspecting bonded point-triangle (PT) acceleration state:
+the active locked-pair count, the bonded PT counters, and the world-space
+positions of each locked virtual tetrahedron (for visualization).)");
+
+    class_RCCBondedPTStateAccessorFeature.def(
+        "locked_pair_count",
+        &RCCBondedPTStateAccessorFeature::locked_pair_count,
+        R"(Number of active bonded PT locks.)");
+
+    class_RCCBondedPTStateAccessorFeature.def(
+        "counters",
+        [](const RCCBondedPTStateAccessorFeature& self)
+        {
+            auto    c = self.counters();
+            py::dict d;
+            d["candidate_count"]            = c.candidate_count;
+            d["locked_count"]               = c.locked_count;
+            d["released_count"]             = c.released_count;
+            d["degenerate_rejected_count"]  = c.degenerate_rejected_count;
+            d["filter_skipped_count"]       = c.filter_skipped_count;
+            d["duplicate_suppressed_count"] = c.duplicate_suppressed_count;
+            return d;
+        },
+        R"(Bonded PT counters as a dict: candidate_count, locked_count,
+released_count, degenerate_rejected_count, filter_skipped_count,
+duplicate_suppressed_count.)");
+
+    class_RCCBondedPTStateAccessorFeature.def(
+        "dump_locked_tet_world_positions",
+        [](const RCCBondedPTStateAccessorFeature& self)
+        {
+            uipc::vector<uipc::Vector3> pts =
+                self.dump_locked_tet_world_positions();
+            const py::ssize_t m = static_cast<py::ssize_t>(pts.size() / 4);
+            py::array_t<double> arr(
+                {m, py::ssize_t(4), py::ssize_t(3)});
+            if(!pts.empty())
+                std::memcpy(arr.mutable_data(),
+                            pts.data(),
+                            pts.size() * sizeof(uipc::Vector3));
+            return arr;
+        },
+        R"(World-space positions of each locked virtual tet's four vertices as
+an [M, 4, 3] float64 numpy array, ordered [point, tri0, tri1, tri2] per lock.)");
+
+    class_RCCBondedPTStateAccessorFeature.attr("FeatureName") =
+        RCCBondedPTStateAccessorFeature::FeatureName;
 }
 }  // namespace pyuipc::core
