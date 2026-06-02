@@ -926,3 +926,27 @@ Establishment, stability, and non-penetration **generalize** across fixtures (go
 | --- | --- |
 | `python/.venv/bin/python scripts/probe_rcc_bonded_pt_demos.py` | All 3 stable; locks 111/88/233; released 0/0/0; min_abs_sep 0.0016/0.021/0.003. |
 | tuning `release_strain=0.1, release_gap=0.01` on cube_cloth/cloth_peel | released 1/88 and 0/233 — release still largely suppressed (confirms the blind spot). |
+
+## 2026-06-02 Corner-Peel Release Threshold Sweep (Fixed kappa)
+
+### Context
+
+Follow-up to the cross-fixture finding: can the cube-cloth fixture be made to peel/separate by tuning the release threshold alone, without lowering `kappa`? Changed the cube-cloth demo pull target to a cloth **corner** (outside the cube footprint, so unbonded) to create a peel front at the bonded-patch edge, then swept release thresholds at fixed `kappa=5e7`.
+
+### Observed Result
+
+| release_strain / release_gap | released @240 (hold/lift) | released @400 (post-pull) | cloth_y @400 |
+| --- | --- | --- | --- |
+| 0.3 / 0.02 ... 0.05 / 0.001 | 0 | **0** | ~1.0 (rode up with cube) |
+| 0.02 / 0.0005 | 0 | 1 / 86 | 0.99 |
+| 0.01 / 0.0002 (0.2 mm) | 0 | 2 / 87 | 0.99 |
+
+Even at `release_gap=0.0002` (0.2 mm) only 1-2 of ~87 bonds released and the cloth still rode up with the cube — no separation. Below that, bonds would release from solver jitter during hold (no clean window).
+
+### Finding
+
+At fixed `kappa`, **no release threshold peels the cloth**, because geometric release (strain/gap) measures how far a bond has already *deformed/failed*, but a holding stiff bond keeps `curr_dist ~ rest_dist` (gap ~ 0) and `F ~ I` (strain ~ 0) by construction. The compliant cloth also absorbs the corner pull in its free region (`gap_max ~ 0.36-0.42` is the hanging corner) before it loads the bonded edge. This is the strongest evidence yet for phys-1: geometric release is the wrong tool for "stiff bond + compliant counterpart"; it needs a force/energy trigger (release when the bond restoring force, ~ `kappa * deformation`, exceeds a limit — which fires for a holding stiff bond), the RCC beta criterion on locked pairs, or a lower `kappa`.
+
+### Decision
+
+Keep the corner pull in the demo (cleaner peel test). Do not pursue threshold-only release on compliant fixtures; a force/energy-based release law is the right next design step if cloth release is required.

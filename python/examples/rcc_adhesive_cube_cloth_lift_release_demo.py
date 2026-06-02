@@ -84,8 +84,10 @@ CLOTH_N = 14
 CLOTH_SIZE = 0.44
 CLOTH_SPACING = CLOTH_SIZE / CLOTH_N
 CLOTH_INITIAL_Y = 0.30
-PULL_VERTEX_I = CLOTH_N // 2
-PULL_VERTEX_J = CLOTH_N // 2
+# Pull a cloth CORNER (outside the cube footprint, so it is unbonded) to create a
+# peel front at the edge of the bonded patch instead of yanking the center.
+PULL_VERTEX_I = 0
+PULL_VERTEX_J = 0
 
 PRESS_GAP = 0.010
 TOP_CONTACT_Y = CLOTH_INITIAL_Y + 0.5 * CUBE_SCALE + PRESS_GAP
