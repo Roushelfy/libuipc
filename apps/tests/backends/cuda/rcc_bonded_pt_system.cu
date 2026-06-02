@@ -5,6 +5,7 @@
 #include <contact_system/rcc_bonded_pt_lookup.h>
 #include <contact_system/rcc_bonded_pt_system.h>
 #include <muda/buffer/device_buffer.h>
+#include <uipc/core/rcc_bonded_pt_oracle.h>
 
 namespace
 {
@@ -94,6 +95,7 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
     const Vector4i carried{10, 6, 7, 8};
     const Vector4i fresh{12, 1, 2, 3};
     const Vector4i rejected{13, 1, 2, 3};
+    const Vector4i degenerate{14, 15, 16, 17};
     const Matrix3x3 refreshed_dm_inv = diag3(1.0, 2.0, 3.0);
     const Matrix3x3 carried_dm_inv = diag3(4.0, 5.0, 6.0);
 
@@ -116,23 +118,53 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
 
     RCCBondedPTSystem::Impl owner;
     owner.set_enabled(true);
+    owner.set_rest_shape_config(0.05, 1e-12);
     owner.upload(host);
 
-    std::vector<Vector4i> h_pairs = {refreshed, fresh, fresh, rejected};
-    std::vector<Float>    h_beta  = {0.98, 0.95, 0.95, 0.50};
+    std::vector<Vector4i> h_pairs = {refreshed, fresh, fresh, rejected, degenerate};
+    std::vector<Float>    h_beta  = {0.98, 0.95, 0.95, 0.50, 0.96};
+    std::vector<Vector3>  h_positions(18, Vector3::Zero());
+    h_positions[1] = Vector3{0.0, 0.0, 0.0};
+    h_positions[2] = Vector3{1.0, 0.0, 0.0};
+    h_positions[3] = Vector3{0.0, 1.0, 0.0};
+    h_positions[12] = Vector3{0.25, 0.25, 0.0};
+
+    h_positions[4] = Vector3{1.0, 1.0, 0.0};
+    h_positions[5] = Vector3{0.0, 2.0, 0.0};
+    h_positions[9] = Vector3{0.25, 1.25, 0.02};
+
+    h_positions[15] = Vector3{0.0, 0.0, 0.0};
+    h_positions[16] = Vector3{1.0, 0.0, 0.0};
+    h_positions[17] = Vector3{2.0, 0.0, 0.0};
+    h_positions[14] = Vector3{0.5, 0.0, 0.0};
 
     DeviceBuffer<Vector4i> d_pairs;
     DeviceBuffer<Float>    d_beta;
+    DeviceBuffer<Vector3>  d_positions;
     d_pairs.copy_from(h_pairs);
     d_beta.copy_from(h_beta);
+    d_positions.copy_from(h_positions);
 
-    owner.lock_from_rcc_pt_snapshot(d_pairs.view(), d_beta.view(), 0.90);
+    owner.lock_from_rcc_pt_snapshot(
+        d_pairs.view(), d_beta.view(), d_positions.view(), 0.90);
+
+    RCCBondedPTRestShapeInput fresh_input;
+    fresh_input.topo = fresh;
+    fresh_input.point = h_positions[fresh[0]];
+    fresh_input.tri0 = h_positions[fresh[1]];
+    fresh_input.tri1 = h_positions[fresh[2]];
+    fresh_input.tri2 = h_positions[fresh[3]];
+    fresh_input.min_separate_distance = 0.05;
+    fresh_input.triangle_degeneracy_tol = 1e-12;
+    const auto fresh_rest = build_rcc_bonded_pt_rest_shape_svts(fresh_input);
+    REQUIRE(fresh_rest.valid);
 
     auto locked = owner.download();
     REQUIRE(locked.size() == 3);
-    CHECK(locked.counters().candidate_count == 4);
+    CHECK(locked.counters().candidate_count == 5);
     CHECK(locked.counters().locked_count == 3);
     CHECK(locked.counters().duplicate_suppressed_count == 1);
+    CHECK(locked.counters().degenerate_rejected_count == 1);
 
     const auto refreshed_entry = entry_by_key(locked, rcc_bonded_pt_key(refreshed));
     CHECK(same_topo(refreshed_entry.topo, refreshed));
@@ -149,15 +181,16 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
     CHECK(carried_entry.rest_volume == Catch::Approx(0.3));
 
     const auto fresh_entry = entry_by_key(locked, rcc_bonded_pt_key(fresh));
-    CHECK(same_topo(fresh_entry.topo, fresh));
+    CHECK(same_topo(fresh_entry.topo, fresh_rest.oriented_topo));
     CHECK(fresh_entry.beta == Catch::Approx(0.95));
     CHECK(fresh_entry.age == 1);
-    CHECK(fresh_entry.Dm_inv.isApprox(Matrix3x3::Identity()));
-    CHECK(fresh_entry.rest_volume == Catch::Approx(0.0));
+    CHECK(fresh_entry.Dm_inv.isApprox(fresh_rest.Dm_inv, 1e-12));
+    CHECK(fresh_entry.rest_volume == Catch::Approx(fresh_rest.rest_volume));
 
     CHECK(locked.find_key(rcc_bonded_pt_key(rejected)) == RCCBondedPTState::npos);
+    CHECK(locked.find_key(rcc_bonded_pt_key(degenerate)) == RCCBondedPTState::npos);
 
-    std::vector<Vector4i> h_active = {refreshed, carried, fresh, rejected};
+    std::vector<Vector4i> h_active = {refreshed, carried, fresh, rejected, degenerate};
     DeviceBuffer<Vector4i> d_active;
     d_active.copy_from(h_active);
 
@@ -168,9 +201,10 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
     owner.sync_filter_skipped_count(filter);
 
     CHECK(owner.counters().filter_skipped_count == 3);
-    REQUIRE(filter.PTs.size() == 1);
+    REQUIRE(filter.PTs.size() == 2);
 
     std::vector<Vector4i> h_filtered(filter.PTs.size());
     filter.PTs.copy_to(h_filtered.data());
     CHECK(same_topo(h_filtered[0], rejected));
+    CHECK(same_topo(h_filtered[1], degenerate));
 }

@@ -21,6 +21,7 @@ class RCCBondedPTSystem final : public SimSystem
         void upload(const core::RCCBondedPTState& state);
         void lock_from_rcc_pt_snapshot(muda::CBufferView<Vector4i> pairs,
                                        muda::CBufferView<Float> beta,
+                                       muda::CBufferView<Vector3> positions,
                                        Float beta_lock_threshold);
         core::RCCBondedPTState download() const;
 
@@ -29,6 +30,8 @@ class RCCBondedPTSystem final : public SimSystem
 
         void set_enabled(bool enabled) noexcept;
         bool enabled() const noexcept;
+        void set_rest_shape_config(Float min_separate_distance,
+                                   Float det_dm_min) noexcept;
 
         void bind_filter(SimplexTrajectoryFilter* filter) noexcept;
         void feed_filter_keys() const noexcept;
@@ -50,13 +53,19 @@ class RCCBondedPTSystem final : public SimSystem
         core::RCCBondedPTCounters  m_counters;
         muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_candidate_entries;
         muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_new_locked_entries;
+        muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_valid_new_locked_entries;
         muda::DeviceBuffer<U64>                    m_new_locked_keys;
+        muda::DeviceBuffer<Matrix3x3>              m_new_locked_dm_inv;
+        muda::DeviceBuffer<Float>                  m_new_locked_rest_volume;
         muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_prev_entries;
         muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_carry_prev_entries;
         muda::DeviceBuffer<RCCBondedPTDeviceEntry> m_merged_entries;
         muda::DeviceBuffer<U64>                    m_merged_keys;
         muda::DeviceVar<IndexT>                    m_new_locked_count;
+        muda::DeviceVar<IndexT>                    m_valid_new_locked_count;
         muda::DeviceVar<IndexT>                    m_carry_prev_count;
+        Float                      m_min_separate_distance = 1e-6;
+        Float                      m_det_dm_min = 1e-12;
         bool                       m_enabled = false;
     };
 
@@ -64,6 +73,7 @@ class RCCBondedPTSystem final : public SimSystem
     void upload(const core::RCCBondedPTState& state);
     void lock_from_rcc_pt_snapshot(muda::CBufferView<Vector4i> pairs,
                                    muda::CBufferView<Float> beta,
+                                   muda::CBufferView<Vector3> positions,
                                    Float beta_lock_threshold);
     core::RCCBondedPTState download() const;
 

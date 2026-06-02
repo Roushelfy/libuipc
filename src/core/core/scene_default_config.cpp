@@ -44,6 +44,8 @@ geometry::AttributeCollection default_scene_config() noexcept
 
     config.create("rcc_bonded_pt_enabled", IndexT{0});
     config.create("rcc_bonded_pt_beta_lock_threshold", Float{1.0});
+    config.create("rcc_bonded_pt_min_separate_distance", Float{1e-6});
+    config.create("rcc_bonded_pt_det_dm_min", Float{1e-12});
     
     // default:
     //  - ipc

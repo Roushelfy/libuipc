@@ -1479,7 +1479,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
            && m_bonded_pt_system_for_phase_a->enabled())
         {
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
-                pairs, m_beta_PT.view(), m_bonded_pt_beta_lock_threshold);
+                pairs, m_beta_PT.view(), positions, m_bonded_pt_beta_lock_threshold);
         }
     }
 

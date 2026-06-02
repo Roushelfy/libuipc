@@ -48,8 +48,8 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_enabled` | Master switch | Implemented, default `false` |
 | `rcc_bonded_pt_beta_lock_threshold` | Minimum beta to consider locking | Implemented, default `1.0` |
 | `rcc_bonded_pt_min_lock_age` | Consecutive accepted steps before lock | Planned |
-| `rcc_bonded_pt_min_separate_distance` | Rest-shape thickness floor | Planned |
-| `rcc_bonded_pt_det_dm_min` | Minimum absolute rest determinant | Planned |
+| `rcc_bonded_pt_min_separate_distance` | Rest-shape thickness floor | Implemented, default `1e-6` |
+| `rcc_bonded_pt_det_dm_min` | Minimum absolute rest determinant | Implemented, default `1e-12` |
 | `rcc_bonded_pt_release_gap` | Normal release distance | Planned |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Planned |
 | `rcc_bonded_pt_release_strain` | Deformation release threshold | Planned |
@@ -82,7 +82,7 @@ Target config keys are not live API until implemented and tested.
 | Locked-key membership lookup matches RCC PT persistence semantics | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Implemented |
 | Locked PT is absent from common active/friction PT views when sorted keys are supplied | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Implemented |
 | CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
-| RCC Phase A high-beta PTs populate the CUDA owner without host roundtrip | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
+| RCC Phase A high-beta PTs populate the CUDA owner with live rest-shape construction | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
 | Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
 | Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |

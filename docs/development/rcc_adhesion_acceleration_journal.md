@@ -457,7 +457,7 @@ After adding rest-shape payloads to bonded PT state, the local tape-winding demo
 
 - Kept `RCCBondedPTDeviceEntry` compact: key, oriented topology, beta, age, and release flags only.
 - Kept `Dm_inv` and `rest_volume` in separate SoA buffers owned by `RCCBondedPTStateBridge`.
-- During bridge replacement, copied the previous sorted key/rest-shape buffers before resizing and recovered existing rest-shape payloads by key; fresh locks still default to identity `Dm_inv` and zero rest volume until live rest-shape construction lands.
+- During bridge replacement, copied the previous sorted key/rest-shape buffers before resizing and recovered existing rest-shape payloads by key; at this point fresh locks still defaulted to identity `Dm_inv` and zero rest volume until live rest-shape construction landed.
 - Added `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`, defaulting to `-j8`, to run the local RCC CUDA validation bundle.
 - Added a source/doc gate that rejects `Matrix3x3`, `Dm_inv`, or `rest_volume` inside `RCCBondedPTDeviceEntry`.
 - Promoted `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` to a current CUDA regression gate.
@@ -479,3 +479,31 @@ After adding rest-shape payloads to bonded PT state, the local tape-winding demo
 ### Decision
 
 Do not carry virtual-tet rest-shape matrices through sort values. Future bonded PT implementation should keep the hot classification/compact path key-centric and SoA-backed, then assemble/report virtual-tet energy from aligned SoA buffers after ownership is established. The bunny GPU sanity gate stays current because bonded PT CUDA changes can otherwise break unrelated CUB/BVH codegen paths.
+
+## 2026-06-02 Live Producer Rest Shapes
+
+### Context
+
+After the CUDA BVH regression fix, the state and bridge could safely carry `Dm_inv` and rest volume, but fresh locks created by the live RCC Phase A producer still received placeholder rest-shape payloads. That blocked the bonded virtual-tet reporter because there was no real reference shape to consume.
+
+### Implemented
+
+- Added default scene config keys `rcc_bonded_pt_min_separate_distance = 1e-6` and `rcc_bonded_pt_det_dm_min = 1e-12`.
+- Extended `RCCBondedPTSystem::lock_from_rcc_pt_snapshot()` to accept the current global positions from Phase A.
+- Built SVTS-compatible lock-time rest shapes on CUDA for fresh high-beta PT locks, including point-plane offset, positive-orientation topology swap, `Dm_inv`, and rest volume.
+- Rejected fresh high-beta candidates whose triangle/rest tet is degenerate and incremented `degenerate_rejected_count`.
+- Kept radix-sort values compact: rest-shape payloads stay in SoA buffers keyed by sorted membership key.
+- Preserved previous topology and rest-shape payloads for refreshed existing locks so a changed PT emission order cannot mismatch old `Dm_inv`.
+- Updated the producer CUDA fixture to compare fresh GPU rest-shape output against the CPU SVTS oracle and to assert degenerate rejects stay unlocked.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` | Passed. Built the CUDA backend and backend test binary. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Passed after updating the expected fresh topology to the CPU oracle's positive orientation. Reported `All tests passed (30 assertions in 1 test case)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8`, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. Backend bonded-PT reported `All tests passed (124 assertions in 5 test cases)`. |
+
+### Decision
+
+The live producer now has enough rest-shape data for the next implementation slice: a bonded virtual-tet complement reporter plus a GPU-vs-CPU E/G/H oracle. Remaining lock gates, release flags, scene counters, pre-CCD filtering, and benchmarks are still required before bonded mode can make correctness or performance claims.

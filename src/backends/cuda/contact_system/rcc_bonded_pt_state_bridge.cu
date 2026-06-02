@@ -54,21 +54,31 @@ void RCCBondedPTStateBridge::upload(const core::RCCBondedPTState& state)
 
 void RCCBondedPTStateBridge::replace_from_sorted_device_entries(
     muda::CBufferView<RCCBondedPTDeviceEntry> entries,
-    const core::RCCBondedPTCounters& counters)
+    const core::RCCBondedPTCounters& counters,
+    muda::CBufferView<U64> fresh_keys,
+    muda::CBufferView<Matrix3x3> fresh_dm_inv,
+    muda::CBufferView<Float> fresh_rest_volume)
 {
     using namespace muda;
+
+    UIPC_ASSERT(fresh_keys.size() == fresh_dm_inv.size()
+                    && fresh_keys.size() == fresh_rest_volume.size(),
+                "RCC bonded PT bridge received unzipped fresh rest-shape buffers.");
 
     const SizeT n = entries.size();
     const SizeT prev_n = m_locked_keys.size();
     DeviceBuffer<U64>      prev_keys;
+    DeviceBuffer<Vector4i> prev_topos;
     DeviceBuffer<Matrix3x3> prev_dm_inv;
     DeviceBuffer<Float>     prev_rest_volume;
     if(prev_n > 0)
     {
         prev_keys.resize(prev_n);
+        prev_topos.resize(prev_n);
         prev_dm_inv.resize(prev_n);
         prev_rest_volume.resize(prev_n);
         prev_keys.view().copy_from(m_locked_keys.view());
+        prev_topos.view().copy_from(m_locked_topos.view());
         prev_dm_inv.view().copy_from(m_locked_dm_inv.view());
         prev_rest_volume.view().copy_from(m_locked_rest_volume.view());
     }
@@ -94,14 +104,18 @@ void RCCBondedPTStateBridge::replace_from_sorted_device_entries(
                     flags = m_release_flags.view().viewer().name("release_flags"),
                     prev_keys_view = prev_keys.view(),
                     prev_keys = prev_keys.view().viewer().name("prev_keys"),
+                    prev_topos = prev_topos.view().viewer().name("prev_topos"),
                     prev_dm_inv = prev_dm_inv.view().viewer().name("prev_dm_inv"),
                     prev_rest_volume = prev_rest_volume.view().viewer().name("prev_rest_volume"),
+                    fresh_keys_view = fresh_keys,
+                    fresh_keys = fresh_keys.viewer().name("fresh_keys"),
+                    fresh_dm_inv = fresh_dm_inv.viewer().name("fresh_dm_inv"),
+                    fresh_rest_volume = fresh_rest_volume.viewer().name("fresh_rest_volume"),
                     dm_inv = m_locked_dm_inv.view().viewer().name("locked_dm_inv"),
                     rest_volume = m_locked_rest_volume.view().viewer().name("rest_volume")] __device__(int i) mutable
                    {
                        const auto entry = entries(i);
                        keys(i)         = entry.key;
-                       topos(i)        = entry.topo;
                        beta(i)         = entry.beta;
                        age(i)          = entry.age;
                        flags(i)        = entry.release_flags;
@@ -110,13 +124,26 @@ void RCCBondedPTStateBridge::replace_from_sorted_device_entries(
                        if(prev < static_cast<IndexT>(prev_keys_view.size())
                           && prev_keys(prev) == entry.key)
                        {
+                           topos(i)       = prev_topos(prev);
                            dm_inv(i)      = prev_dm_inv(prev);
                            rest_volume(i) = prev_rest_volume(prev);
                        }
                        else
                        {
-                           dm_inv(i)      = Matrix3x3::Identity();
-                           rest_volume(i) = 0.0;
+                           topos(i) = entry.topo;
+                           const IndexT fresh =
+                               rcc_bonded_pt_lower_bound(fresh_keys_view, entry.key);
+                           if(fresh < static_cast<IndexT>(fresh_keys_view.size())
+                              && fresh_keys(fresh) == entry.key)
+                           {
+                               dm_inv(i)      = fresh_dm_inv(fresh);
+                               rest_volume(i) = fresh_rest_volume(fresh);
+                           }
+                           else
+                           {
+                               dm_inv(i)      = Matrix3x3::Identity();
+                               rest_volume(i) = 0.0;
+                           }
                        }
                    });
     }

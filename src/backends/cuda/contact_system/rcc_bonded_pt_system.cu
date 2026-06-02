@@ -1,8 +1,10 @@
 #include <contact_system/rcc_bonded_pt_system.h>
 #include <contact_system/rcc_bonded_pt_lookup.h>
 #include <muda/cub/device/device_select.h>
+#include <muda/ext/eigen/eigen_core_cxx20.h>
 #include <muda/launch/parallel_for.h>
 #include <sim_engine.h>
+#include <cmath>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
 #include <thrust/unique.h>
@@ -11,13 +13,113 @@ namespace uipc::backend::cuda
 {
 REGISTER_SIM_SYSTEM(RCCBondedPTSystem);
 
+namespace
+{
+struct RCCBondedPTRestShapeBuild
+{
+    bool      valid = false;
+    Vector4i  topo = Vector4i::Zero();
+    Matrix3x3 Dm_inv = Matrix3x3::Identity();
+    Float     rest_volume = 0.0;
+};
+
+MUDA_GENERIC RCCBondedPTRestShapeBuild build_rest_shape(
+    const Vector4i& topo,
+    const Vector3& point,
+    const Vector3& tri0,
+    const Vector3& tri1,
+    const Vector3& tri2,
+    Float min_separate_distance,
+    Float det_dm_min)
+{
+    RCCBondedPTRestShapeBuild out;
+    out.topo = topo;
+
+    Vector3 x0 = point;
+    Vector3 x1 = tri0;
+    Vector3 x2 = tri1;
+    Vector3 x3 = tri2;
+
+    Vector3 normal = (x2 - x1).cross(x3 - x1);
+    const Float nrm = normal.norm();
+    if(nrm <= 0.0)
+        return out;
+    normal /= nrm;
+
+    const Float signed_dist = normal.dot(x0 - x1);
+    if(std::abs(signed_dist) < min_separate_distance)
+    {
+        const Float sign = signed_dist >= 0.0 ? 1.0 : -1.0;
+        x0 += (sign * min_separate_distance - signed_dist) * normal;
+    }
+
+    Vector3 a = x1 - x0;
+    Vector3 b = x2 - x0;
+    Vector3 c = x3 - x0;
+    Float det = a.dot(b.cross(c));
+    if(det < 0.0)
+    {
+        Vector3 tmp_x = x1;
+        x1 = x2;
+        x2 = tmp_x;
+        const IndexT tmp_i = out.topo[1];
+        out.topo[1] = out.topo[2];
+        out.topo[2] = tmp_i;
+        a = x1 - x0;
+        b = x2 - x0;
+        c = x3 - x0;
+        det = -det;
+    }
+
+    if(det <= det_dm_min)
+        return out;
+
+    const Vector3 r0 = b.cross(c) / det;
+    const Vector3 r1 = c.cross(a) / det;
+    const Vector3 r2 = a.cross(b) / det;
+    out.Dm_inv.row(0) = r0.transpose();
+    out.Dm_inv.row(1) = r1.transpose();
+    out.Dm_inv.row(2) = r2.transpose();
+    out.rest_volume = det / 6.0;
+    out.valid = true;
+    return out;
+}
+
+template <typename PositionViewer>
+MUDA_GENERIC bool rest_shape_is_valid(
+    const RCCBondedPTDeviceEntry& entry,
+    muda::CBufferView<Vector3> positions_view,
+    PositionViewer positions,
+    Float min_separate_distance,
+    Float det_dm_min)
+{
+    const Vector4i topo = entry.topo;
+    const IndexT n = static_cast<IndexT>(positions_view.size());
+    if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
+       || topo[0] >= n || topo[1] >= n || topo[2] >= n || topo[3] >= n)
+        return false;
+
+    const auto rest = build_rest_shape(topo,
+                                       positions(topo[0]),
+                                       positions(topo[1]),
+                                       positions(topo[2]),
+                                       positions(topo[3]),
+                                       min_separate_distance,
+                                       det_dm_min);
+    return rest.valid;
+}
+}  // namespace
+
 void RCCBondedPTSystem::Impl::clear()
 {
     m_bridge.clear();
     m_counters = {};
     m_candidate_entries.resize(0);
     m_new_locked_entries.resize(0);
+    m_valid_new_locked_entries.resize(0);
     m_new_locked_keys.resize(0);
+    m_new_locked_dm_inv.resize(0);
+    m_new_locked_rest_volume.resize(0);
     m_prev_entries.resize(0);
     m_carry_prev_entries.resize(0);
     m_merged_entries.resize(0);
@@ -34,6 +136,7 @@ void RCCBondedPTSystem::Impl::upload(const core::RCCBondedPTState& state)
 void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     muda::CBufferView<Vector4i> pairs,
     muda::CBufferView<Float> beta,
+    muda::CBufferView<Vector3> positions,
     Float beta_lock_threshold)
 {
     if(!m_enabled)
@@ -107,7 +210,55 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
 
     IndexT new_locked_count = m_new_locked_count;
     m_new_locked_entries.resize(new_locked_count);
+
+    m_valid_new_locked_entries.resize(new_locked_count);
+    if(new_locked_count > 0)
+    {
+        auto positions_view = positions;
+        auto positions_viewer = positions.viewer().name("positions");
+        const Float min_separate_distance = m_min_separate_distance;
+        const Float det_dm_min = m_det_dm_min;
+        DeviceSelect().If(
+            m_new_locked_entries.data(),
+            m_valid_new_locked_entries.data(),
+            m_valid_new_locked_count.data(),
+            new_locked_count,
+            [positions_view,
+             positions_viewer,
+             min_separate_distance,
+             det_dm_min] CUB_RUNTIME_FUNCTION(
+                const RCCBondedPTDeviceEntry& entry)
+            {
+                return rest_shape_is_valid(entry,
+                                           positions_view,
+                                           positions_viewer,
+                                           min_separate_distance,
+                                           det_dm_min);
+            });
+    }
+    else
+    {
+        m_valid_new_locked_count = 0;
+    }
+
+    const IndexT valid_new_locked_count = m_valid_new_locked_count;
+    m_counters.degenerate_rejected_count +=
+        static_cast<SizeT>(new_locked_count - valid_new_locked_count);
+    new_locked_count = valid_new_locked_count;
+    m_valid_new_locked_entries.resize(new_locked_count);
+    if(new_locked_count > 0)
+    {
+        m_new_locked_entries.resize(new_locked_count);
+        m_new_locked_entries.view().copy_from(m_valid_new_locked_entries.view());
+    }
+    else
+    {
+        m_new_locked_entries.resize(0);
+    }
+
     m_new_locked_keys.resize(new_locked_count);
+    m_new_locked_dm_inv.resize(new_locked_count);
+    m_new_locked_rest_volume.resize(new_locked_count);
 
     if(new_locked_count > 0)
     {
@@ -136,6 +287,49 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
         new_locked_count = unique_new_locked_count;
         m_new_locked_entries.resize(new_locked_count);
         m_new_locked_keys.resize(new_locked_count);
+        m_new_locked_dm_inv.resize(new_locked_count);
+        m_new_locked_rest_volume.resize(new_locked_count);
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(new_locked_count,
+                   [entries = m_new_locked_entries.view().viewer().name("new_entries"),
+                    positions_view = positions,
+                    positions = positions.viewer().name("positions"),
+                    dm_inv = m_new_locked_dm_inv.view().viewer().name("fresh_dm_inv"),
+                    rest_volume =
+                        m_new_locked_rest_volume.view().viewer().name("fresh_rest_volume"),
+                    min_separate_distance = m_min_separate_distance,
+                    det_dm_min = m_det_dm_min] __device__(int i) mutable
+                   {
+                       auto entry = entries(i);
+                       const bool valid = rest_shape_is_valid(entry,
+                                                              positions_view,
+                                                              positions,
+                                                              min_separate_distance,
+                                                              det_dm_min);
+                       if(valid)
+                       {
+                           const Vector4i topo = entry.topo;
+                           const auto rest =
+                               build_rest_shape(topo,
+                                                positions(topo[0]),
+                                                positions(topo[1]),
+                                                positions(topo[2]),
+                                                positions(topo[3]),
+                                                min_separate_distance,
+                                                det_dm_min);
+                           entry.topo = rest.topo;
+                           entries(i) = entry;
+                           dm_inv(i) = rest.Dm_inv;
+                           rest_volume(i) = rest.rest_volume;
+                       }
+                       else
+                       {
+                           dm_inv(i) = Matrix3x3::Identity();
+                           rest_volume(i) = 0.0;
+                       }
+                   });
     }
 
     m_prev_entries.resize(prev_n);
@@ -212,7 +406,11 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     }
 
     m_counters.locked_count = static_cast<SizeT>(merged_count);
-    m_bridge.replace_from_sorted_device_entries(m_merged_entries.view(), m_counters);
+    m_bridge.replace_from_sorted_device_entries(m_merged_entries.view(),
+                                                m_counters,
+                                                m_new_locked_keys.view(),
+                                                m_new_locked_dm_inv.view(),
+                                                m_new_locked_rest_volume.view());
     feed_filter_keys();
 }
 
@@ -241,6 +439,13 @@ void RCCBondedPTSystem::Impl::set_enabled(bool enabled) noexcept
 bool RCCBondedPTSystem::Impl::enabled() const noexcept
 {
     return m_enabled;
+}
+
+void RCCBondedPTSystem::Impl::set_rest_shape_config(Float min_separate_distance,
+                                                    Float det_dm_min) noexcept
+{
+    m_min_separate_distance = min_separate_distance;
+    m_det_dm_min = det_dm_min;
 }
 
 void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexcept
@@ -307,6 +512,11 @@ void RCCBondedPTSystem::do_build()
     auto& config = world().scene().config();
     auto  enabled_attr = config.find<IndexT>("rcc_bonded_pt_enabled");
     m_impl.set_enabled(enabled_attr && enabled_attr->view()[0] != 0);
+    auto min_sep_attr =
+        config.find<Float>("rcc_bonded_pt_min_separate_distance");
+    auto det_dm_min_attr = config.find<Float>("rcc_bonded_pt_det_dm_min");
+    m_impl.set_rest_shape_config(min_sep_attr ? min_sep_attr->view()[0] : 1e-6,
+                                 det_dm_min_attr ? det_dm_min_attr->view()[0] : 1e-12);
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
 
     on_init_scene(
@@ -341,9 +551,10 @@ void RCCBondedPTSystem::upload(const core::RCCBondedPTState& state)
 void RCCBondedPTSystem::lock_from_rcc_pt_snapshot(
     muda::CBufferView<Vector4i> pairs,
     muda::CBufferView<Float> beta,
+    muda::CBufferView<Vector3> positions,
     Float beta_lock_threshold)
 {
-    m_impl.lock_from_rcc_pt_snapshot(pairs, beta, beta_lock_threshold);
+    m_impl.lock_from_rcc_pt_snapshot(pairs, beta, positions, beta_lock_threshold);
 }
 
 core::RCCBondedPTState RCCBondedPTSystem::download() const

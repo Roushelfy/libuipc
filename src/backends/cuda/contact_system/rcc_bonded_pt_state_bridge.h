@@ -21,7 +21,10 @@ class RCCBondedPTStateBridge
     void upload(const core::RCCBondedPTState& state);
     void replace_from_sorted_device_entries(
         muda::CBufferView<RCCBondedPTDeviceEntry> entries,
-        const core::RCCBondedPTCounters& counters);
+        const core::RCCBondedPTCounters& counters,
+        muda::CBufferView<U64> fresh_keys,
+        muda::CBufferView<Matrix3x3> fresh_dm_inv,
+        muda::CBufferView<Float> fresh_rest_volume);
     core::RCCBondedPTState download() const;
 
     SizeT size() const noexcept;
