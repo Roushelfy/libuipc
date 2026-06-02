@@ -75,6 +75,10 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
 
         muda::CBufferView<Vector3> displacements() const noexcept;
 
+        // RCC bonded-PT pre-CCD filter inputs (see rcc_bonded_pt_system).
+        muda::CBufferView<U64> rcc_bonded_pt_locked_keys() const noexcept;
+        bool                   rcc_bonded_pt_skip_ccd() const noexcept;
+
       private:
         friend class SimplexTrajectoryFilter;
         Float m_alpha = 0.0;
@@ -155,6 +159,11 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         muda::DeviceVar<IndexT>      rcc_bonded_pt_unlocked_PT_count;
         SizeT                        rcc_bonded_pt_filter_skipped = 0;
         SizeT                        rcc_bonded_pt_filter_gen = 0;
+        // When true, locked PTs are skipped before PT CCD broadphase emission.
+        // Default false: removing locked pairs from CCD also removes the last
+        // non-penetration guard, so this stays off until the no-penetration
+        // scene gate passes (see docs/architecture.md CCD Removal Precondition).
+        bool                         rcc_bonded_pt_skip_ccd = false;
 
         Float reserve_ratio = 1.1;
 
@@ -186,6 +195,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
 
     void  set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
     void  clear_rcc_bonded_pt_locked_keys() noexcept;
+    void  set_rcc_bonded_pt_skip_ccd(bool enabled) noexcept;
     SizeT rcc_bonded_pt_filter_skipped_count() const noexcept;
     SizeT rcc_bonded_pt_filter_generation() const noexcept;
 

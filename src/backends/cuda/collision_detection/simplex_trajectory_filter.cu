@@ -313,6 +313,11 @@ void SimplexTrajectoryFilter::clear_rcc_bonded_pt_locked_keys() noexcept
     m_impl.clear_rcc_bonded_pt_locked_keys();
 }
 
+void SimplexTrajectoryFilter::set_rcc_bonded_pt_skip_ccd(bool enabled) noexcept
+{
+    m_impl.rcc_bonded_pt_skip_ccd = enabled;
+}
+
 SizeT SimplexTrajectoryFilter::rcc_bonded_pt_filter_skipped_count() const noexcept
 {
     return m_impl.rcc_bonded_pt_filter_skipped_count();
@@ -342,6 +347,16 @@ muda::CBufferView<Vector2i> SimplexTrajectoryFilter::friction_PPs() const noexce
 muda::CBufferView<Vector3> SimplexTrajectoryFilter::DetectInfo::displacements() const noexcept
 {
     return m_impl->global_vertex_manager->displacements();
+}
+
+muda::CBufferView<U64> SimplexTrajectoryFilter::DetectInfo::rcc_bonded_pt_locked_keys() const noexcept
+{
+    return m_impl->rcc_bonded_pt_locked_keys;
+}
+
+bool SimplexTrajectoryFilter::DetectInfo::rcc_bonded_pt_skip_ccd() const noexcept
+{
+    return m_impl->rcc_bonded_pt_skip_ccd;
 }
 
 void SimplexTrajectoryFilter::FilterActiveInfo::PTs(muda::CBufferView<Vector4i> PTs) noexcept

@@ -1,4 +1,5 @@
 #include <collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.h>
+#include <contact_system/rcc_bonded_pt_lookup.h>
 #include <muda/cub/device/device_select.h>
 #include <muda/ext/eigen/log_proxy.h>
 #include <sim_engine.h>
@@ -557,12 +558,20 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
              subscene_mask_tabular = info.subscene_mask_tabular().viewer().name("subscene_mask_tabular"),
              body_self_collision = info.body_self_collision().viewer().name("body_self_collision"),
              d_hats = info.d_hats().viewer().name("d_hats"),
-             alpha  = alpha] __device__(InfoStacklessBVH::LeafPredInfo info)
+             alpha  = alpha,
+             rcc_skip_ccd    = info.rcc_bonded_pt_skip_ccd(),
+             rcc_locked_keys = info.rcc_bonded_pt_locked_keys()] __device__(InfoStacklessBVH::LeafPredInfo info)
             {
                 auto i = info.i;
                 auto j = info.j;
                 auto V = Vs(i);
                 auto F = Fs(j);
+
+                // skip CCD for bonded PT pairs: a locked pair is owned by the
+                // ABD virtual-tet reporter and must not enter PT broadphase.
+                if(rcc_skip_ccd
+                   && rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
+                    return false;
 
                 Vector4i cids = {contact_element_ids(V),
                                  contact_element_ids(F[0]),

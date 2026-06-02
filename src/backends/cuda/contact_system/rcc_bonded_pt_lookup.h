@@ -50,4 +50,15 @@ rcc_bonded_pt_is_locked(muda::CBufferView<U64> sorted_keys, const Vector4i& pt) 
 {
     return rcc_bonded_pt_is_locked(sorted_keys, rcc_bonded_pt_key(pt));
 }
+
+// Decide whether a PT broadphase candidate, already resolved to its global
+// point id `V` and triangle global ids `F`, belongs to a bonded (locked) pair.
+// Used by every simplex filter backend's PT broadphase predicate so the
+// membership semantics cannot drift between backends.
+UIPC_GENERIC inline bool rcc_bonded_pt_candidate_is_locked(muda::CBufferView<U64> sorted_keys,
+                                                           IndexT V,
+                                                           const Vector3i& F) noexcept
+{
+    return rcc_bonded_pt_is_locked(sorted_keys, Vector4i{V, F(0), F(1), F(2)});
+}
 }  // namespace uipc::backend::cuda

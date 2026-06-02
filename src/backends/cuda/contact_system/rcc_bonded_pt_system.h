@@ -50,6 +50,7 @@ class RCCBondedPTSystem final : public SimSystem
 
         void set_enabled(bool enabled) noexcept;
         bool enabled() const noexcept;
+        void set_skip_ccd(bool enabled) noexcept;
         void set_rest_shape_config(Float min_separate_distance,
                                    Float det_dm_min) noexcept;
         void set_release_config(Float strain_threshold,
@@ -106,6 +107,7 @@ class RCCBondedPTSystem final : public SimSystem
         Float                      m_release_slip_threshold = 1e30;
         SizeT                      m_last_synced_filter_generation = 0;
         bool                       m_enabled = false;
+        bool                       m_skip_ccd = false;
     };
 
     void clear();

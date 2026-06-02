@@ -62,6 +62,7 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_release_gap` | Normal release distance | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 | `rcc_bonded_pt_release_strain` | ABD deformation release threshold | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
+| `rcc_bonded_pt_skip_ccd` | Reject locked PTs before PT CCD broadphase in the simplex filters | Implemented, default `false`; enabling requires the no-penetration scene gate (removing CCD removes the last non-penetration guard) |
 
 Retired prototype keys must not be reintroduced as production acceptance criteria:
 
@@ -119,7 +120,7 @@ ABD/SVTS boundary:
 | ABD-style bonded reporter E/G/H matches CPU reference at `kappa >= 1e8` | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Implemented |
 | Production path excludes retired SNH config and reporter functions | Source/doc gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Implemented |
 | Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
-| Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
+| Locked PT is rejected before PT CCD broadphase in every concrete simplex filter (membership decision) | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]" -r compact` | Implemented (unit-level membership shared by all four backend predicates); full scene candidate/TOI-absent integration coupled to the no-penetration gate |
 | PT lift/release scene locks, reuses, avoids penetration under ABD-style energy, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |
 | Stable scene improves hot-path timing without hiding setup cost | Benchmark gate | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Planned |
 | Locked-pair geometric release reproduces the unaccelerated beta-evolution debond timing within tolerance on a canonical purely-normal and purely-tangential example | Calibration gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][calibration][debond]"` | Planned |

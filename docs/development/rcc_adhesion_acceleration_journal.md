@@ -787,3 +787,37 @@ An adversarially-verified review (six dimensions: design fidelity, physics/math,
 | Command | Result |
 | --- | --- |
 | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed after updating doc anchors for the re-sequenced phases, the CCD-removal precondition, the beta-while-locked approximation, and the new producer/sentinel conventions. |
+
+## 2026-06-02 Pre-CCD Filter Implementation
+
+### Context
+
+The re-sequenced roadmap made the pre-CCD filter the gating deliverable for the CCD-cost lever. The mechanism removes locked PTs from PT CCD broadphase, TOI, and active-pair emission in one place, while staying default-off because removing CCD also removes the last non-penetration guard (architecture CCD Removal Precondition).
+
+### Source Observations
+
+- `QueryBuffer` (LBVH `AtomicCountingLBVH::QueryBuffer`, stackless `StacklessBVH::QueryBuffer`) exposes only a read-only `view()` with a private logical size, so compacting the PT candidate buffer after broadphase is not possible through its public interface.
+- Every backend's PT broadphase predicate already has the resolved global point id `V = Vs(i)` and triangle `F = Fs(j)`, so the locked-pair check belongs inside the predicate (before candidate emission) — which is exactly "before PT CCD broadphase".
+
+### Implemented
+
+- Added the shared device helper `rcc_bonded_pt_candidate_is_locked(locked_keys, V, F)` to `rcc_bonded_pt_lookup.h`, reusing the existing orientation-invariant membership lookup.
+- Rejected locked PTs inside the PT broadphase predicate of all four simplex filters (LBVH, stackless BVH, info stackless BVH, v0 info stackless BVH), gated by a captured `rcc_skip_ccd` flag and `rcc_locked_keys`.
+- Added `DetectInfo::rcc_bonded_pt_locked_keys()` / `rcc_bonded_pt_skip_ccd()` accessors and a base-Impl `rcc_bonded_pt_skip_ccd` flag with a public setter.
+- Plumbed `rcc_bonded_pt_skip_ccd` config (default `0`) through `RCCBondedPTSystem` into the filter (bind/feed paths).
+- Added the deterministic GPU fixture `[rcc_bonded_pt][filter][ccd]`: a locked pair recorded with a permuted triangle is rejected (orientation-invariant), unlocked candidates are kept, and an empty locked set keeps all.
+
+### Decisions
+
+- Keep `rcc_bonded_pt_skip_ccd` default-off until the `pt_lift_release` no-penetration scene gate passes. The mechanism is correct and tested at the membership level; the full scene-level candidate/TOI-absent assertion is coupled to that gate.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` | Passed. Only pre-existing `xi2`/nested-class warnings. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_core -j8` | Passed. |
+| `uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]" -r compact` | Passed. `All tests passed (6 assertions in 1 test case)`. |
+| `uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. `All tests passed (230 assertions in 13 test cases)`. |
+| `uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. `All tests passed (91 assertions in 6 test cases)`. |
+| `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Passed. BVH/radix regression unaffected. |

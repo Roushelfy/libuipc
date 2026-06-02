@@ -765,6 +765,11 @@ void RCCBondedPTSystem::Impl::set_enabled(bool enabled) noexcept
     m_enabled = enabled;
 }
 
+void RCCBondedPTSystem::Impl::set_skip_ccd(bool enabled) noexcept
+{
+    m_skip_ccd = enabled;
+}
+
 bool RCCBondedPTSystem::Impl::enabled() const noexcept
 {
     return m_enabled;
@@ -791,6 +796,8 @@ void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexc
     simplex_trajectory_filter = filter;
     m_last_synced_filter_generation =
         filter ? filter->rcc_bonded_pt_filter_generation() : 0;
+    if(filter)
+        filter->set_rcc_bonded_pt_skip_ccd(m_skip_ccd);
 }
 
 void RCCBondedPTSystem::Impl::feed_filter_keys() const noexcept
@@ -798,6 +805,7 @@ void RCCBondedPTSystem::Impl::feed_filter_keys() const noexcept
     if(!m_enabled || !simplex_trajectory_filter)
         return;
     simplex_trajectory_filter->set_rcc_bonded_pt_locked_keys(m_bridge.locked_keys());
+    simplex_trajectory_filter->set_rcc_bonded_pt_skip_ccd(m_skip_ccd);
 }
 
 void RCCBondedPTSystem::Impl::clear_filter_keys() const noexcept
@@ -826,6 +834,7 @@ void RCCBondedPTSystem::Impl::feed_filter_keys(
     if(!m_enabled)
         return;
     filter.set_rcc_bonded_pt_locked_keys(m_bridge.locked_keys());
+    filter.rcc_bonded_pt_skip_ccd = m_skip_ccd;
 }
 
 void RCCBondedPTSystem::Impl::sync_filter_skipped_count(
@@ -900,6 +909,8 @@ void RCCBondedPTSystem::do_build()
                               release_gap_attr ? release_gap_attr->view()[0] : 1e30,
                               release_slip_attr ? release_slip_attr->view()[0]
                                                 : 1e30);
+    auto skip_ccd_attr = config.find<IndexT>("rcc_bonded_pt_skip_ccd");
+    m_impl.set_skip_ccd(skip_ccd_attr && skip_ccd_attr->view()[0] != 0);
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
 
     on_init_scene(

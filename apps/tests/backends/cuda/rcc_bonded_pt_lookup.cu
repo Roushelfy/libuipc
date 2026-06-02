@@ -177,3 +177,78 @@ TEST_CASE("rcc_bonded_pt_filter_compacts_active_pts_before_friction_copy",
     CHECK(impl.rcc_bonded_pt_filter_skipped_count() == 0);
     CHECK(impl.PTs.size() == h_active.size());
 }
+
+TEST_CASE("rcc_bonded_pt_skip_ccd_excludes_locked_pt_candidates",
+          "[rcc_bonded_pt][filter][ccd][cuda]")
+{
+    using namespace muda;
+    using namespace uipc;
+    using namespace uipc::backend::cuda;
+    using namespace uipc::core;
+
+    // surf-vertex index -> global vertex id
+    std::vector<IndexT> h_surf_vertices = {10, 11, 12};
+    // surf-triangle index -> global vertex ids
+    std::vector<Vector3i> h_surf_triangles = {Vector3i{20, 21, 22},
+                                              Vector3i{30, 31, 32}};
+
+    // Lock the (point=10, triangle={20,21,22}) pair, recorded with a permuted
+    // triangle to prove the broadphase membership test is orientation-invariant.
+    const Vector4i locked{10, 20, 22, 21};
+    RCCBondedPTState host;
+    host.push_locked(RCCBondedPTEntry{rcc_bonded_pt_key(locked), locked, 0.95, 9});
+    host.sort_by_key();
+
+    RCCBondedPTStateBridge bridge;
+    bridge.upload(host);
+
+    DeviceBuffer<IndexT> d_surf_vertices;
+    d_surf_vertices.copy_from(h_surf_vertices);
+    DeviceBuffer<Vector3i> d_surf_triangles;
+    d_surf_triangles.copy_from(h_surf_triangles);
+
+    // PT broadphase candidates as {surf_vertex_idx, surf_triangle_idx}.
+    std::vector<Vector2i> h_candidates = {
+        Vector2i{0, 0},   // -> (10, {20,21,22}) : locked (permutation-invariant)
+        Vector2i{1, 0},   // -> (11, {20,21,22}) : unlocked
+        Vector2i{0, 1}};  // -> (10, {30,31,32}) : unlocked
+    DeviceBuffer<Vector2i> d_candidates;
+    d_candidates.copy_from(h_candidates);
+
+    DeviceBuffer<IndexT> d_locked_flags;
+    d_locked_flags.resize(h_candidates.size());
+
+    auto run = [&](muda::CBufferView<U64> keys)
+    {
+        ParallelFor()
+            .kernel_name("rcc_bonded_pt_skip_ccd_candidate_membership")
+            .apply(static_cast<int>(h_candidates.size()),
+                   [candidates     = d_candidates.viewer().name("candidates"),
+                    surf_vertices  = d_surf_vertices.viewer().name("surf_vertices"),
+                    surf_triangles = d_surf_triangles.viewer().name("surf_triangles"),
+                    locked_keys    = keys,
+                    flags = d_locked_flags.viewer().name("flags")] __device__(int i) mutable
+                   {
+                       const Vector2i c = candidates(i);
+                       const IndexT   V = surf_vertices(c(0));
+                       const Vector3i F = surf_triangles(c(1));
+                       flags(i) =
+                           rcc_bonded_pt_candidate_is_locked(locked_keys, V, F) ? 1 : 0;
+                   });
+    };
+
+    run(bridge.locked_keys());
+    std::vector<IndexT> h_flags(h_candidates.size());
+    d_locked_flags.view().copy_to(h_flags.data());
+    CHECK(h_flags[0] == 1);  // locked pair is skipped before broadphase
+    CHECK(h_flags[1] == 0);
+    CHECK(h_flags[2] == 0);
+
+    // With no locked keys every candidate must survive (no CCD skip).
+    RCCBondedPTStateBridge empty_bridge;
+    run(empty_bridge.locked_keys());
+    d_locked_flags.view().copy_to(h_flags.data());
+    CHECK(h_flags[0] == 0);
+    CHECK(h_flags[1] == 0);
+    CHECK(h_flags[2] == 0);
+}

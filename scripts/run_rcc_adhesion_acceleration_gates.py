@@ -59,7 +59,7 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Current focus: **Phase 2", "roadmap identifies current gating milestone"),
+                ("Current focus: **the no-penetration", "roadmap identifies current gating milestone"),
                 ("Phase 3: Bonded Virtual-Tet Reporter (Complete For ABD Ortho Scope)", "roadmap records completed ABD reporter scope"),
                 ("Phase 4: Release, Fallback, And Scene Gate (Backend Implemented; Downstream Of Pre-CCD Filter)", "roadmap tracks release/lifecycle work downstream of the pre-CCD filter"),
                 ("Blockers", "roadmap names current blockers"),
@@ -521,6 +521,11 @@ def main() -> int:
             "point_triangle_ccd_broadphase",
             "PT CCD broadphase integration point",
         )
+        expect_contains(
+            rel_path,
+            "rcc_bonded_pt_candidate_is_locked",
+            "PT broadphase predicate skips locked pairs before CCD",
+        )
 
     expect_contains(
         "src/backends/cuda/inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch.cu",
@@ -551,13 +556,13 @@ def main() -> int:
     # Re-sequencing and review-hardening anchors (P0-A/P0-B/P1-C/P1-D).
     expect_contains(
         "docs/roadmap.md",
-        "Current Gating Milestone",
-        "roadmap marks pre-CCD filter integration as the gating milestone",
+        "Pre-CCD Filter Implemented",
+        "roadmap marks the pre-CCD filter as implemented and default-off",
     )
     expect_contains(
         "docs/roadmap.md",
         "zero CCD savings",
-        "roadmap states plainly that no CCD savings exist until pre-CCD filtering lands",
+        "roadmap states plainly that there are no CCD savings while skip is default-off",
     )
     expect_contains(
         "docs/architecture.md",
@@ -588,6 +593,28 @@ def main() -> int:
         "docs/conventions.md",
         "rcc_bonded_pt_producer_ms",
         "benchmark protocol times the end-of-step producer",
+    )
+
+    # Pre-CCD filter implementation anchors (default-off skip mechanism).
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_lookup.h",
+        "rcc_bonded_pt_candidate_is_locked",
+        "shared pre-CCD broadphase membership helper exists",
+    )
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_skip_ccd",
+        "default config exposes the default-off pre-CCD skip flag",
+    )
+    expect_contains(
+        "src/backends/cuda/collision_detection/simplex_trajectory_filter.h",
+        "rcc_bonded_pt_skip_ccd",
+        "simplex filter carries the pre-CCD skip flag",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_lookup.cu",
+        "[rcc_bonded_pt][filter][ccd]",
+        "pre-CCD filter membership fixture exists",
     )
 
     print("RCC adhesion acceleration source/doc gate passed.")
