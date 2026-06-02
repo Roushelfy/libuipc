@@ -6,6 +6,7 @@
 #include <contact_system/rcc_bonded_pt_lookup.h>
 #include <contact_system/rcc_bonded_pt_system.h>
 #include <muda/buffer/device_buffer.h>
+#include <muda/buffer/device_buffer_2d.h>
 #include <uipc/core/rcc_bonded_pt_oracle.h>
 
 namespace
@@ -43,7 +44,9 @@ void check_two_lock_release_reason(MutateCurrentPositions mutate_current_positio
                                    uipc::Float strain_threshold,
                                    uipc::Float gap_threshold,
                                    uipc::Float slip_threshold,
-                                   uipc::U32 expected_flag)
+                                   uipc::U32 expected_flag,
+                                   uipc::backend::cuda::RCCBondedPTReleaseContext
+                                       release_context = {})
 {
     using namespace muda;
     using namespace uipc;
@@ -105,7 +108,7 @@ void check_two_lock_release_reason(MutateCurrentPositions mutate_current_positio
     d_positions.copy_from(h_current_positions);
 
     owner.lock_from_rcc_pt_snapshot(
-        d_pairs.view(), d_beta.view(), d_positions.view(), 0.90);
+        d_pairs.view(), d_beta.view(), d_positions.view(), 0.90, release_context);
 
     auto locked = owner.download();
     REQUIRE(locked.size() == 1);
@@ -454,6 +457,91 @@ TEST_CASE("rcc_bonded_pt_system_releases_large_tangential_slip",
         1e30,
         0.05,
         RCCBondedPTReleaseSlip);
+}
+
+TEST_CASE("rcc_bonded_pt_system_releases_sticky_side_failure",
+          "[rcc_bonded_pt][release][sticky][cuda]")
+{
+    using namespace muda;
+    using namespace uipc;
+    using namespace uipc::backend::cuda;
+    using namespace uipc::core;
+
+    std::vector<IndexT> h_sticky_sign(8, 0);
+    h_sticky_sign[1] = 1;
+    h_sticky_sign[2] = 1;
+    h_sticky_sign[3] = 1;
+    h_sticky_sign[5] = -1;
+    h_sticky_sign[6] = -1;
+    h_sticky_sign[7] = -1;
+
+    std::vector<Vector3> h_normals(8, Vector3::UnitZ());
+    DeviceBuffer<IndexT> d_sticky_sign;
+    DeviceBuffer<Vector3> d_normals;
+    d_sticky_sign.copy_from(h_sticky_sign);
+    d_normals.copy_from(h_normals);
+
+    RCCBondedPTReleaseContext context;
+    context.sticky_side_enabled = true;
+    context.sticky_sign = d_sticky_sign.view();
+    context.vertex_normal = d_normals.view();
+
+    check_two_lock_release_reason(
+        [](std::vector<Vector3>&) {},
+        1e30,
+        1e30,
+        1e30,
+        RCCBondedPTReleaseStickySide,
+        context);
+}
+
+TEST_CASE("rcc_bonded_pt_system_releases_disabled_contact_policy",
+          "[rcc_bonded_pt][release][policy][cuda]")
+{
+    using namespace muda;
+    using namespace uipc;
+    using namespace uipc::backend::cuda;
+    using namespace uipc::core;
+
+    std::vector<IndexT> h_contact_ids = {0, 1, 1, 1, 2, 3, 3, 3};
+    std::vector<IndexT> h_subscene_ids(8, 0);
+
+    constexpr IndexT cid_count = 4;
+    std::vector<IndexT> h_contact_mask(cid_count * cid_count, 1);
+    h_contact_mask[2 * cid_count + 3] = 0;
+    h_contact_mask[3 * cid_count + 2] = 0;
+
+    std::vector<IndexT> h_subscene_mask = {1};
+    std::vector<RCCAdhesiveCoeff> h_adhesive(cid_count * cid_count);
+    for(auto& coeff : h_adhesive)
+        coeff.enabled = 1;
+
+    DeviceBuffer<IndexT> d_contact_ids;
+    DeviceBuffer<IndexT> d_subscene_ids;
+    DeviceBuffer2D<IndexT> d_contact_mask(Extent2D{cid_count, cid_count});
+    DeviceBuffer2D<IndexT> d_subscene_mask(Extent2D{1, 1});
+    DeviceBuffer2D<RCCAdhesiveCoeff> d_adhesive(Extent2D{cid_count, cid_count});
+    d_contact_ids.copy_from(h_contact_ids);
+    d_subscene_ids.copy_from(h_subscene_ids);
+    d_contact_mask.view().copy_from(h_contact_mask.data());
+    d_subscene_mask.view().copy_from(h_subscene_mask.data());
+    d_adhesive.view().copy_from(h_adhesive.data());
+
+    RCCBondedPTReleaseContext context;
+    context.policy_enabled = true;
+    context.contact_element_ids = d_contact_ids.view();
+    context.subscene_element_ids = d_subscene_ids.view();
+    context.contact_mask_tabular = d_contact_mask.view();
+    context.subscene_mask_tabular = d_subscene_mask.view();
+    context.adhesive_tabular = d_adhesive.view();
+
+    check_two_lock_release_reason(
+        [](std::vector<Vector3>&) {},
+        1e30,
+        1e30,
+        1e30,
+        RCCBondedPTReleasePolicy,
+        context);
 }
 
 TEST_CASE("rcc_bonded_pt_beta_carry_merges_released_beta_without_overwrite",

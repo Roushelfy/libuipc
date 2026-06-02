@@ -565,7 +565,7 @@ Host state and CUDA owner counters existed, but scene gates still needed a front
 
 ### Decision
 
-Live counters and locked/release state snapshots are now accessible to frontend/native scene gates. The next missing correctness slice is a real release policy that sets release flags, carries beta back to RCC, and proves the lifecycle in a bonded-mode scene.
+Live counters and active locked-state snapshots are now accessible to frontend/native scene gates. Released history still needs its own diagnostics. The next missing correctness slice is a real release policy that sets release flags, carries beta back to RCC, and proves the lifecycle in a bonded-mode scene.
 
 ## 2026-06-02 ABD Energy Plan Correction
 
@@ -723,3 +723,35 @@ After the strain release slice, forced-pull scene gates still needed normal-gap 
 ### Decision
 
 Normal-gap and tangential-slip release are now covered as deterministic CUDA gates. The remaining release reasons are sticky-side failure and disabled contact policy, which require explicitly routing RCC sticky/policy inputs into the bonded owner rather than inferring them from geometry alone.
+
+## 2026-06-02 Sticky And Policy Release
+
+### Context
+
+After strain, gap, and slip release were implemented, the remaining backend release reasons were sticky-side failure and disabled contact policy. These reasons must use the same RCC sticky/policy inputs that the contact path uses; a geometry-only guess would not prove consistency with the current RCC discretization.
+
+This slice also exposed a documentation risk: release-side sticky/policy coverage is not the same as lock-side sticky/policy coverage. The live lock producer is still beta/rest-shape only, so the docs now keep release coverage, lock-gate parity, scene diagnostics, pre-CCD filtering, and benchmarks as separate gates.
+
+### Implemented
+
+- Added `RCCBondedPTReleaseContext` so the bonded owner can receive sticky signs, lagged vertex normals, contact element ids, subscene element ids, contact/subscene masks, and RCC adhesive enable tables without a host roundtrip.
+- Routed the release context from RCC Phase A in `ipc_simplex_rcc_adhesive_contact.cu`.
+- Added device release checks for sticky-side failure using RCC sticky-side semantics.
+- Added device release checks for disabled contact/subscene/RCC adhesive policy.
+- Added deterministic backend fixtures for one persistent lock plus one sticky-side release and one policy release.
+- Hardened roadmap, subsystem, architecture, conventions, and source/doc gate wording so future work cannot confuse implemented backend release reasons with planned live lock gates or scene-accessible diagnostics.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8 && build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Passed. Reported `All tests passed (92 assertions in 6 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (224 assertions in 12 test cases)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8` with no work to do, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. The bunny sanity case reported `All tests passed (4 assertions in 1 test case)`. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs/Doxygen informational warnings remained. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed after the documentation hardening. Source/doc gate accepted the lock-vs-release, scene diagnostics, and sticky/policy anchors. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed after the documentation hardening. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs/Doxygen informational warnings remained. |
+
+### Decision
+
+All backend device release reasons currently planned for the bonded owner are implemented and covered by deterministic CUDA fixtures. The path is still not production-complete: released topology/age/flags and per-reason counts need scene-accessible diagnostics, the live lock producer still needs age/sticky/gap/slip/policy lock gates and rejection counters, locked keys still need to be removed before PT CCD broadphase in every concrete filter backend, and the bonded-mode `pt_lift_release` scene plus benchmark matrix remain planned.

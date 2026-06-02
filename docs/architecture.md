@@ -66,6 +66,8 @@ Release/update
   -> still-locked pairs update age and diagnostics
 ```
 
+The classifier and release evaluator may consume overlapping data, but they are different contracts. A sticky-side, gap, slip, or policy input routed into release does not by itself prove that the live lock producer rejects a bad candidate before it becomes a lock.
+
 ## Project Structure
 
 ```text
@@ -101,7 +103,7 @@ The `apps/tests` locations hold the current deterministic state, oracle, CUDA br
 | `IPCSimplexRCCAdhesiveContact` | RCC beta evolution and persistence for active/unlocked PT pairs | Dynamic tet Hessian assembly, filter-specific skip logic |
 | Bonded virtual-tet reporter | High-kappa ABD-style complement energy, gradient, Hessian for locked topologies | RCC beta law, broadphase decisions, contact-component accounting |
 | Global dynamic topology manager | Aggregation and scattering of complement energy | Classification policy or release policy |
-| `RCCBondedPTStateAccessorFeature` | Frontend snapshots of locked state and counters | Physics decisions or implicit synchronization outside explicit query points |
+| `RCCBondedPTStateAccessorFeature` | Frontend snapshots of active locked state and counters | Physics decisions, implicit synchronization outside explicit query points, or release-history claims before released snapshots are exposed |
 | Bench/report layer | Timers and counters | Physics decisions |
 
 ## Runtime Data Model
@@ -124,12 +126,12 @@ The sorted membership key can match current RCC persistence behavior, but it is 
 
 | Stage | Locked Pair Requirement | Test Or Report |
 | --- | --- | --- |
-| Classification | Candidate accepted only after all lock gates pass | State fixture and candidate/rejected counters |
+| Classification | Candidate accepted only after all lock gates pass | State fixture and candidate/rejected counters; lock-gate parity fixture still planned |
 | DCD/PT emission | Locked PT is skipped before PT CCD broadphase | Filter contract and `filter_skip_count` |
 | Friction candidate recording | Locked PT cannot enter `friction_PTs()` | Contract test reading trajectory-filter views |
 | RCC Phase B | Released pairs can receive carried beta | Beta carry fixture |
 | Newton assembly | Locked PT appears only in the ABD-style bonded reporter | Duplicate-suppressed counter, E/G/H oracle, and scene no-penetration observation |
-| End-of-step update | Release reasons and beta state are recorded | Lifecycle scene gate |
+| End-of-step update | Release reasons and beta state are recorded | Backend release fixture now; scene-accessible released snapshots still planned |
 
 ## Virtual Tet Rest Shape And Energy
 
@@ -180,6 +182,8 @@ Required release data:
 | Release counters | Prove one-shot accounting and scene gate behavior |
 
 The first release fixture should be deterministic: one lock stays active, one lock releases by a controlled reason, active bonded buffers are compacted, released buffers preserve key/topology/beta/age/flags alignment, and the RCC previous-beta snapshot can observe the released beta.
+
+Scene gates need one more diagnostic layer: released topology, age, and flags must be available through an accessor/report path, not only through backend owner buffers used by CUDA tests and RCC beta carry.
 
 ## Relationship To Existing Systems
 

@@ -6,6 +6,7 @@
 #include <muda/launch/parallel_for.h>
 #include <sim_engine.h>
 #include <utils/friction_utils.h>
+#include <utils/simplex_contact_mask_utils.h>
 #include <cmath>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
@@ -111,7 +112,48 @@ MUDA_GENERIC bool rest_shape_is_valid(
     return rest.valid;
 }
 
-template <typename PositionViewer>
+MUDA_GENERIC bool rcc_bonded_pt_sticky_gate(IndexT sticky_P,
+                                            IndexT sticky_T,
+                                            const Vector3& n_P,
+                                            const Vector3& n_T,
+                                            const Vector3& P,
+                                            const Vector3& T0,
+                                            const Vector3& T1,
+                                            const Vector3& T2)
+{
+    if(sticky_P == 0 && sticky_T == 0)
+        return true;
+
+    using namespace friction;
+    Vector2 bary = Vector2::Zero();
+    point_triangle_closest_point(P, T0, T1, T2, bary);
+    const Vector3 closest = T0 + bary[0] * (T1 - T0) + bary[1] * (T2 - T0);
+    const Vector3 v_TP = P - closest;
+
+    if(sticky_P != 0 && v_TP.dot(Float(sticky_P) * n_P) < Float{0})
+        return true;
+    if(sticky_T != 0 && v_TP.dot(Float(sticky_T) * n_T) > Float{0})
+        return true;
+    return false;
+}
+
+MUDA_GENERIC bool rcc_bonded_pt_rcc_policy_enabled(
+    const muda::CDense2D<RCCAdhesiveCoeff>& table,
+    const Vector4i& cids)
+{
+    return table(cids[0], cids[1]).enabled
+           && table(cids[0], cids[2]).enabled
+           && table(cids[0], cids[3]).enabled;
+}
+
+template <typename PositionViewer,
+          typename StickyViewer,
+          typename NormalViewer,
+          typename ContactIdViewer,
+          typename SubsceneIdViewer,
+          typename ContactMaskViewer,
+          typename SubsceneMaskViewer,
+          typename AdhesiveViewer>
 MUDA_GENERIC U32 release_flags_from_current_shape(
     const Vector4i& topo,
     const Matrix3x3& dm_inv,
@@ -121,7 +163,19 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
     Float det_dm_min,
     Float strain_threshold,
     Float gap_threshold,
-    Float slip_threshold)
+    Float slip_threshold,
+    bool sticky_side_enabled,
+    muda::CBufferView<IndexT> sticky_sign_view,
+    StickyViewer sticky_sign,
+    NormalViewer vertex_normal,
+    bool policy_enabled,
+    muda::CBufferView<IndexT> contact_ids_view,
+    ContactIdViewer contact_ids,
+    muda::CBufferView<IndexT> subscene_ids_view,
+    SubsceneIdViewer subscene_ids,
+    ContactMaskViewer contact_mask_tabular,
+    SubsceneMaskViewer subscene_mask_tabular,
+    AdhesiveViewer adhesive_tabular)
 {
     const IndexT n = static_cast<IndexT>(positions_view.size());
     if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
@@ -155,6 +209,58 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
         flags |= core::RCCBondedPTReleaseDegenerate;
     else if(strain_threshold >= 0.0 && strain > strain_threshold)
         flags |= core::RCCBondedPTReleaseStrain;
+
+    if(sticky_side_enabled)
+    {
+        if(topo[0] >= static_cast<IndexT>(sticky_sign_view.size())
+           || topo[1] >= static_cast<IndexT>(sticky_sign_view.size()))
+        {
+            flags |= core::RCCBondedPTReleaseStickySide;
+        }
+        else if(!rcc_bonded_pt_sticky_gate(sticky_sign(topo[0]),
+                                           sticky_sign(topo[1]),
+                                           vertex_normal(topo[0]),
+                                           vertex_normal(topo[1]),
+                                           x0,
+                                           x1,
+                                           x2,
+                                           x3))
+        {
+            flags |= core::RCCBondedPTReleaseStickySide;
+        }
+    }
+
+    if(policy_enabled)
+    {
+        if(topo[0] >= static_cast<IndexT>(contact_ids_view.size())
+           || topo[1] >= static_cast<IndexT>(contact_ids_view.size())
+           || topo[2] >= static_cast<IndexT>(contact_ids_view.size())
+           || topo[3] >= static_cast<IndexT>(contact_ids_view.size())
+           || topo[0] >= static_cast<IndexT>(subscene_ids_view.size())
+           || topo[1] >= static_cast<IndexT>(subscene_ids_view.size())
+           || topo[2] >= static_cast<IndexT>(subscene_ids_view.size())
+           || topo[3] >= static_cast<IndexT>(subscene_ids_view.size()))
+        {
+            flags |= core::RCCBondedPTReleasePolicy;
+        }
+        else
+        {
+            const Vector4i cids{contact_ids(topo[0]),
+                                contact_ids(topo[1]),
+                                contact_ids(topo[2]),
+                                contact_ids(topo[3])};
+            const Vector4i scids{subscene_ids(topo[0]),
+                                 subscene_ids(topo[1]),
+                                 subscene_ids(topo[2]),
+                                 subscene_ids(topo[3])};
+            if(!allow_PT_contact(contact_mask_tabular, cids)
+               || !allow_PT_contact(subscene_mask_tabular, scids)
+               || !rcc_bonded_pt_rcc_policy_enabled(adhesive_tabular, cids))
+            {
+                flags |= core::RCCBondedPTReleasePolicy;
+            }
+        }
+    }
 
     if(gap_threshold >= 0.0 || slip_threshold >= 0.0)
     {
@@ -248,6 +354,17 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     muda::CBufferView<Vector3> positions,
     Float beta_lock_threshold)
 {
+    lock_from_rcc_pt_snapshot(
+        pairs, beta, positions, beta_lock_threshold, RCCBondedPTReleaseContext{});
+}
+
+void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
+    muda::CBufferView<Vector4i> pairs,
+    muda::CBufferView<Float> beta,
+    muda::CBufferView<Vector3> positions,
+    Float beta_lock_threshold,
+    const RCCBondedPTReleaseContext& release_context)
+{
     if(!m_enabled)
         return;
 
@@ -288,6 +405,24 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                     release_strain = m_release_strain_threshold,
                     release_gap = m_release_gap_threshold,
                     release_slip = m_release_slip_threshold,
+                    sticky_side_enabled = release_context.sticky_side_enabled,
+                    sticky_sign_view = release_context.sticky_sign,
+                    sticky_sign =
+                        release_context.sticky_sign.viewer().name("sticky_sign"),
+                    vertex_normal =
+                        release_context.vertex_normal.viewer().name("vertex_normal"),
+                    policy_enabled = release_context.policy_enabled,
+                    contact_ids_view = release_context.contact_element_ids,
+                    contact_ids = release_context.contact_element_ids.viewer().name("contact_ids"),
+                    subscene_ids_view = release_context.subscene_element_ids,
+                    subscene_ids =
+                        release_context.subscene_element_ids.viewer().name("subscene_ids"),
+                    contact_mask_tabular =
+                        release_context.contact_mask_tabular.viewer().name("contact_mask_tabular"),
+                    subscene_mask_tabular =
+                        release_context.subscene_mask_tabular.viewer().name("subscene_mask_tabular"),
+                    adhesive_tabular =
+                        release_context.adhesive_tabular.viewer().name("adhesive_tabular"),
                     entries = m_prev_entries.view().viewer().name("prev_entries")] __device__(int i) mutable
                    {
                        U32 release_flags = flags(i);
@@ -302,7 +437,19 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                                det_dm_min,
                                release_strain,
                                release_gap,
-                               release_slip);
+                               release_slip,
+                               sticky_side_enabled,
+                               sticky_sign_view,
+                               sticky_sign,
+                               vertex_normal,
+                               policy_enabled,
+                               contact_ids_view,
+                               contact_ids,
+                               subscene_ids_view,
+                               subscene_ids,
+                               contact_mask_tabular,
+                               subscene_mask_tabular,
+                               adhesive_tabular);
                        }
 
                        RCCBondedPTDeviceEntry entry;
@@ -791,6 +938,17 @@ void RCCBondedPTSystem::lock_from_rcc_pt_snapshot(
     Float beta_lock_threshold)
 {
     m_impl.lock_from_rcc_pt_snapshot(pairs, beta, positions, beta_lock_threshold);
+}
+
+void RCCBondedPTSystem::lock_from_rcc_pt_snapshot(
+    muda::CBufferView<Vector4i> pairs,
+    muda::CBufferView<Float> beta,
+    muda::CBufferView<Vector3> positions,
+    Float beta_lock_threshold,
+    const RCCBondedPTReleaseContext& release_context)
+{
+    m_impl.lock_from_rcc_pt_snapshot(
+        pairs, beta, positions, beta_lock_threshold, release_context);
 }
 
 core::RCCBondedPTState RCCBondedPTSystem::download() const

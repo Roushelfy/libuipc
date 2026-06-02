@@ -2,6 +2,7 @@
 
 #include <collision_detection/global_trajectory_filter.h>
 #include <collision_detection/simplex_trajectory_filter.h>
+#include <contact_system/rcc_adhesive_coeff.h>
 #include <contact_system/rcc_bonded_pt_state_bridge.h>
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/device_var.h>
@@ -9,6 +10,20 @@
 
 namespace uipc::backend::cuda
 {
+struct RCCBondedPTReleaseContext
+{
+    muda::CBufferView<IndexT>  sticky_sign;
+    muda::CBufferView<Vector3> vertex_normal;
+    bool                       sticky_side_enabled = false;
+
+    muda::CBufferView<IndexT> contact_element_ids;
+    muda::CBufferView<IndexT> subscene_element_ids;
+    muda::CBuffer2DView<IndexT> contact_mask_tabular;
+    muda::CBuffer2DView<IndexT> subscene_mask_tabular;
+    muda::CBuffer2DView<RCCAdhesiveCoeff> adhesive_tabular;
+    bool policy_enabled = false;
+};
+
 class RCCBondedPTSystem final : public SimSystem
 {
   public:
@@ -23,6 +38,11 @@ class RCCBondedPTSystem final : public SimSystem
                                        muda::CBufferView<Float> beta,
                                        muda::CBufferView<Vector3> positions,
                                        Float beta_lock_threshold);
+        void lock_from_rcc_pt_snapshot(muda::CBufferView<Vector4i> pairs,
+                                       muda::CBufferView<Float> beta,
+                                       muda::CBufferView<Vector3> positions,
+                                       Float beta_lock_threshold,
+                                       const RCCBondedPTReleaseContext& release_context);
         core::RCCBondedPTState download() const;
 
         SizeT size() const noexcept;
@@ -94,6 +114,11 @@ class RCCBondedPTSystem final : public SimSystem
                                    muda::CBufferView<Float> beta,
                                    muda::CBufferView<Vector3> positions,
                                    Float beta_lock_threshold);
+    void lock_from_rcc_pt_snapshot(muda::CBufferView<Vector4i> pairs,
+                                   muda::CBufferView<Float> beta,
+                                   muda::CBufferView<Vector3> positions,
+                                   Float beta_lock_threshold,
+                                   const RCCBondedPTReleaseContext& release_context);
     core::RCCBondedPTState download() const;
 
     SizeT size() const noexcept;

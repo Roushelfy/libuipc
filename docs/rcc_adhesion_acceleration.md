@@ -47,6 +47,20 @@ During assembly:
   bonded reporter assembles one high-kappa ABD-style complement energy per still-locked topology
 ```
 
+## Current Implementation Snapshot
+
+This table is the short handoff surface. It intentionally separates lock, release, filtering, energy, and scene proof so that one completed layer is not mistaken for another.
+
+| Area | Implemented And Gate-Backed | Still Required Before Production Claims |
+| --- | --- | --- |
+| Lock/classification | Feature switch, beta threshold, duplicate suppression, SVTS-compatible rest-shape construction, degenerate fresh-lock rejection, active-lock carry/age increment | Minimum-age gate, sticky-side lock gate, normal-gap lock band, tangential-slip lock band, contact/subscene policy lock gate, and their rejection counters |
+| Release/fallback | Backend CUDA release for strain, normal gap, tangential slip, sticky-side failure, disabled policy, flip, and degenerate current shape; same-step relock suppression; released beta carry | Scene-accessible released topology, age, flags, and per-reason release counters |
+| Filter ownership | Shared locked-key lookup and common active/friction PT compact | Lookup before PT CCD broadphase in every concrete simplex filter backend |
+| Bonded energy | ABD OrthoPotential reporter over `F = Ds Dm_inv`, `rcc_bonded_pt_kappa`, CPU E/G/H oracle, CUDA-vs-CPU reporter oracle | Scene no-penetration observation while CCD/contact/RCC is skipped |
+| Scene/benchmark | Legacy RCC cube-cube and cube-cloth lift/release baselines | Bonded-mode `pt_lift_release` gate, adhesion-off baseline, duplicate-ownership report, and benchmark timers |
+
+Release context is not a lock gate. Sticky-side signs, normals, contact masks, subscene masks, and adhesive enable flags are currently routed into the bonded owner for release decisions; the live producer still needs explicit lock-side use of those inputs before scene correctness claims.
+
 ## Pair Keys
 
 Use two representations:
@@ -73,19 +87,19 @@ A pair must not be both `Locked` and active in `PTs()` / `friction_PTs()` for th
 
 ## Lock Gate
 
-A candidate can lock only if every condition passes.
+A candidate can lock only if every condition passes. The target policy and the current implementation status are deliberately shown together because release-side coverage does not imply lock-side coverage.
 
-| Gate | Data Needed | Rejection Counter |
-| --- | --- | --- |
-| Feature enabled | Config | `rcc_bonded_pt_disabled_count` |
-| PT adhesion scope | Current RCC PT pair | `rcc_bonded_pt_rejected_type_count` |
-| Beta threshold | `beta >= rcc_bonded_pt_beta_lock_threshold` | `rcc_bonded_pt_rejected_beta_count` |
-| Minimum age | `locked_age` or candidate age | `rcc_bonded_pt_rejected_age_count` |
-| Sticky-side consistency | Lagged normals and `rcc_sticky_sign` | `rcc_bonded_pt_rejected_sticky_count` |
-| Normal gap band | End-of-step positions | `rcc_bonded_pt_rejected_gap_count` |
-| Tangential slip band | Lagged closest coordinates/basis | `rcc_bonded_pt_rejected_slip_count` |
-| Rest-shape quality | Triangle area, normal, `det(Dm)`, rest volume | `rcc_bonded_pt_rejected_degenerate_count` |
-| Contact policy | Contact tabular enable/disable | `rcc_bonded_pt_rejected_policy_count` |
+| Gate | Data Needed | Rejection Counter | Current Status |
+| --- | --- | --- | --- |
+| Feature enabled | Config | `rcc_bonded_pt_disabled_count` | Implemented as master switch; disabled-count reporting planned |
+| PT adhesion scope | Current RCC PT pair | `rcc_bonded_pt_rejected_type_count` | Implemented implicitly by consuming RCC PT snapshots only |
+| Beta threshold | `beta >= rcc_bonded_pt_beta_lock_threshold` | `rcc_bonded_pt_rejected_beta_count` | Implemented; low-beta rejected count planned |
+| Minimum age | `locked_age` or candidate age | `rcc_bonded_pt_rejected_age_count` | Planned |
+| Sticky-side consistency | Lagged normals and `rcc_sticky_sign` | `rcc_bonded_pt_rejected_sticky_count` | Planned for lock; implemented for release only |
+| Normal gap band | End-of-step positions | `rcc_bonded_pt_rejected_gap_count` | Planned for lock; implemented for release only |
+| Tangential slip band | Lagged closest coordinates/basis | `rcc_bonded_pt_rejected_slip_count` | Planned for lock; implemented for release only |
+| Rest-shape quality | Triangle area, normal, `det(Dm)`, rest volume | `rcc_bonded_pt_rejected_degenerate_count` | Implemented as degenerate fresh-lock rejection |
+| Contact policy | Contact tabular enable/disable | `rcc_bonded_pt_rejected_policy_count` | Planned for lock; implemented for release only |
 
 The conservative rule is: reject on missing data. A missing sticky-side normal, invalid triangle normal, or unavailable beta carry is not a reason to guess.
 
@@ -157,8 +171,9 @@ Current implementation status:
 | `strain` | Implemented on CUDA using `rcc_bonded_pt_release_strain` against `||F F^T - I||` |
 | `gap` | Implemented on CUDA using `rcc_bonded_pt_release_gap` against current normal distance growth from the lock-time rest gap reconstructed from `Dm_inv` |
 | `slip` | Implemented on CUDA using `rcc_bonded_pt_release_slip` against current closest-foot tangential displacement from the lock-time rest barycentric foot reconstructed from `Dm_inv` |
+| `sticky_side` | Implemented on CUDA by routing RCC sticky signs and lagged vertex normals into the bonded owner and reusing the RCC sticky-side gate semantics |
+| `policy` | Implemented on CUDA by routing RCC adhesive enable flags plus contact/subscene masks into the bonded owner |
 | `flip` / `degenerate` | Implemented on CUDA from current virtual-tet determinant/topology/rest-volume validity |
-| `sticky_side`, `policy` | Planned; required before forced-pull scene release can be considered complete |
 
 Release ordering matters:
 
@@ -192,12 +207,12 @@ The reporter must not:
 | --- | --- | --- |
 | Host state owner | `include/uipc/core/rcc_bonded_pt_state.h`, `src/core/core/rcc_bonded_pt_state.cpp` | Minimum host contract, counters, release flags, `Dm_inv`, rest volume, and deterministic fixtures |
 | CUDA state bridge | `src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.*` | Owns device buffers for locked keys, topologies, beta, age, release flags, `Dm_inv`, rest volume, and host counter snapshots; can be replaced from compact sorted device entries without host roundtrip while rest-shape payloads stay in SoA buffers |
-| CUDA owner | `src/backends/cuda/contact_system/rcc_bonded_pt_system.*` | Owns the bridge at runtime, honors `rcc_bonded_pt_enabled`, feeds sorted locked keys to `SimplexTrajectoryFilter`, syncs common active-filter skip counters, and compacts RCC Phase A high-beta PTs into locked state after live rest-shape construction and degeneracy rejection |
+| CUDA owner | `src/backends/cuda/contact_system/rcc_bonded_pt_system.*` | Owns the bridge at runtime, honors `rcc_bonded_pt_enabled`, feeds sorted locked keys to `SimplexTrajectoryFilter`, syncs common active-filter skip counters, compacts RCC Phase A high-beta PTs into locked state after live rest-shape construction and degeneracy rejection, and evaluates backend release reasons. Remaining live lock gates are still planned. |
 | Filter helper | `src/backends/cuda/contact_system/rcc_bonded_pt_lookup.h` | Shared device helper for RCC PT key construction, sorted membership lower-bound, and lock lookup |
 | Common active filter | `src/backends/cuda/collision_detection/simplex_trajectory_filter.*` | Can compact locked PTs out of active `PTs()` and `friction_PTs()` when supplied sorted locked keys; default is no-op |
 | Filter backends | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | Planned: skip before PT CCD broadphase |
 | Reporter | `src/backends/cuda/contact_system/rcc_bonded_pt_virtual_tet_reporter.*` | Dynamic ABD-style high-kappa complement reporter, no frontend geometry rebuild |
-| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; released snapshots preserve key/topology/beta/age/flags, and released key/beta pairs are merged back into RCC persistence through `RCCBondedPTBetaCarryScratch` |
+| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; sticky-side and policy inputs are routed as release context; released snapshots preserve key/topology/beta/age/flags inside the backend owner, and released key/beta pairs are merged back into RCC persistence through `RCCBondedPTBetaCarryScratch` |
 | Tests | `apps/tests/core`, `apps/tests/backends/cuda`, `apps/tests/sim_case` | Follow the test matrix in conventions |
 | Benchmarks | `scripts/bench_rcc_adhesion_acceleration.py` | Planned after timers/counters exist |
 
@@ -215,9 +230,10 @@ Required oracles before production use:
 | Common active-filter oracle | Synthetic active PT list with two locked and two unlocked pairs | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][filter]"`: locked pairs are compacted out of `SimplexTrajectoryFilter::PTs()` and stay absent after `record_friction_candidates()` copies to `friction_PTs()` |
 | CUDA owner oracle | Host locked state plus synthetic filter active view | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner]"`: owner uploads state, feeds sorted keys, syncs filter-skip counters, and downloads counters aligned with active locks |
 | Beta/rest producer oracle | Existing locks plus a RCC PT beta snapshot with one refresh, one carry, one new lock, one duplicate, one low-beta reject, and one degenerate high-beta reject | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]"`: device-side producer carries old locks and their rest-shape payloads, refreshes high-beta candidates, increments age, suppresses duplicate keys, builds SVTS-compatible `Dm_inv/rest_volume` for fresh locks, counts degenerate rejects, and leaves low-beta or degenerate candidates unlocked |
+| Lock-gate parity oracle | High-beta PT candidates with controlled age, sticky-side, normal-gap, tangential-slip, rest-shape, and policy inputs | Planned: only fully valid candidates become locks, missing data rejects conservatively, and lock rejection counters do not reuse release counters |
 | ABD-style reporter oracle | One locked pair with known rest shape and high stiffness | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]"`: proves CUDA E/G/H matches the ABD CPU oracle |
 | CUDA BVH/radix-sort regression | Bunny sanity mesh through the existing GPU sanity checker | Implemented by `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` and `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`: bonded-PT device layout changes must not destabilize `SimplicialSurfaceDistanceCheck` or `InfoStacklessBVH` |
-| Release/beta carry oracle | Locked PTs with controlled current deformation: one stays locked while another releases by strain, normal gap, or tangential slip | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][release]"`: released lock is absent from bonded state, released key/topology/beta/age/flag snapshots stay aligned, release reason/counter is recorded once, same-step relock is suppressed, and released beta is merged into RCC persistence without overwriting newer duplicate beta |
+| Release/beta carry oracle | Locked PTs with controlled current deformation/context: one stays locked while another releases by strain, normal gap, tangential slip, sticky-side failure, or disabled policy | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][release]"`: released lock is absent from bonded state, released key/topology/beta/age/flag snapshots stay aligned, release reason/counter is recorded once, same-step relock is suppressed, and released beta is merged into RCC persistence without overwriting newer duplicate beta |
 | Pre-CCD filter ownership oracle | One locked key and one unlocked key in every concrete filter fixture | Planned: locked absent from candidate/TOI/contact views, unlocked unchanged |
 | No-penetration scene observation | PT-rich bonded-mode press/hold/lift with CCD skipped for locked pairs | Planned: scene reports maximum penetration/gap or an equivalent fixture-specific bound while ABD-style energy is active |
 
@@ -246,22 +262,23 @@ The gate must read simulation state or report fields. Writing OBJ sequences is u
 
 ## Reports
 
-The host state contract, CUDA state bridge, CUDA owner, beta-threshold producer, and strain release path now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. Before bonded scene gates can claim full ownership correctness, the live CUDA pipeline must add the remaining release reasons, no-penetration observations, and report fields through scene-accessible features.
+The host state contract, CUDA state bridge, CUDA owner, beta-threshold producer, and device release path now carry matching `RCCBondedPTCounters` fields, and `SimplexTrajectoryFilter` has a local `rcc_bonded_pt_filter_skipped_count()` for the common active compact path. `RCCBondedPTStateAccessorFeature` can expose active locked state and counters. Released snapshots exist in owner device buffers and are used by backend fixtures and RCC beta carry, but scene-accessible diagnostics do not yet expose released topology, age, flags, or per-reason counts.
 
 Minimum backend report fields before scene gates:
 
-| Field | Meaning |
-| --- | --- |
-| `rcc_bonded_pt_candidate_count` | Candidate PT pairs considered for lock |
-| `rcc_bonded_pt_locked_count` | Active bonded PT locks |
-| `rcc_bonded_pt_released_count` | Locks released this step |
-| `rcc_bonded_pt_filter_skip_count` | PT candidates skipped before CCD/contact |
-| `rcc_bonded_pt_duplicate_suppressed_count` | Duplicate ownership prevented |
-| `rcc_bonded_pt_rejected_degenerate_count` | Rest-shape quality rejection |
-| `rcc_bonded_pt_release_flags` or per-reason counters | Reason a locked pair returned to RCC/contact |
-| `rcc_bonded_pt_energy_model` | Reported model, expected production value `abd_ortho` unless the test explicitly chooses another model |
-| `rcc_bonded_pt_kappa` | Reported ABD-style stiffness used by the bonded reporter |
-| `rcc_bonded_pt_assembly_ms` | Bonded virtual-tet assembly time |
+| Field | Meaning | Current Status |
+| --- | --- | --- |
+| `rcc_bonded_pt_candidate_count` | Candidate PT pairs considered for lock | Implemented in counters |
+| `rcc_bonded_pt_locked_count` | Active bonded PT locks | Implemented in counters/accessor |
+| `rcc_bonded_pt_released_count` | Locks released this step | Implemented in counters; reason detail still not scene-accessible |
+| `rcc_bonded_pt_filter_skip_count` | PT candidates skipped before CCD/contact | Implemented for the common active compact path; pre-CCD filter paths planned |
+| `rcc_bonded_pt_duplicate_suppressed_count` | Duplicate ownership prevented | Implemented in counters |
+| `rcc_bonded_pt_rejected_degenerate_count` | Rest-shape quality rejection | Implemented in counters |
+| `rcc_bonded_pt_rejected_age/sticky/gap/slip/policy_count` | Lock-gate rejection reasons | Planned |
+| `rcc_bonded_pt_release_flags` or per-reason counters | Reason a locked pair returned to RCC/contact | Planned for scene-accessible diagnostics; implemented only in backend owner/test buffers |
+| `rcc_bonded_pt_energy_model` | Reported model, expected production value `abd_ortho` unless the test explicitly chooses another model | Config implemented; scene report planned |
+| `rcc_bonded_pt_kappa` | Reported ABD-style stiffness used by the bonded reporter | Config implemented; scene report planned |
+| `rcc_bonded_pt_assembly_ms` | Bonded virtual-tet assembly time | Planned |
 
 Scene and benchmark gates must fail if these fields are missing.
 

@@ -109,6 +109,7 @@ def main() -> int:
             [
                 ("2026-05-30", "journal has a dated entry"),
                 ("2026-06-02 Strain Release And Beta Carry", "journal records the current release/beta-carry slice"),
+                ("2026-06-02 Sticky And Policy Release", "journal records the sticky/policy release slice"),
                 ("Source Observations", "journal records observed repository state"),
                 ("Decisions", "journal records decisions"),
                 ("Commands", "journal records command results"),
@@ -238,13 +239,23 @@ def main() -> int:
     )
     expect_contains(
         "docs/rcc_adhesion_acceleration.md",
+        "Current Implementation Snapshot",
+        "subsystem doc has a concise current handoff table",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Release context is not a lock gate",
+        "subsystem doc separates release context from lock-gate coverage",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
         "Release ordering matters",
         "subsystem doc defines release before bonded assembly",
     )
     expect_contains(
         "docs/rcc_adhesion_acceleration.md",
         "Current implementation status",
-        "subsystem doc separates implemented release reasons from planned reasons",
+        "subsystem doc records release reason implementation status",
     )
     expect_contains(
         "docs/rcc_adhesion_acceleration.md",
@@ -253,8 +264,33 @@ def main() -> int:
     )
     expect_contains(
         "docs/roadmap.md",
-        "Remaining release reasons",
-        "roadmap keeps sticky/policy release in planned work",
+        "Scene-level release diagnostics are incomplete",
+        "roadmap tracks release reporting as the next scene-facing gap",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "Lock-gate parity contract",
+        "roadmap keeps lock-gate parity as planned work",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "Scene diagnostics/accessor contract",
+        "roadmap keeps scene diagnostics as planned work",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "Lock-gate status and release-gate status are not conflated",
+        "conventions prevent release fixtures from being treated as lock proof",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "release evaluator may consume overlapping data",
+        "architecture separates classifier and release evaluator contracts",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "scene-accessible released snapshots still planned",
+        "architecture records the missing release diagnostic layer",
     )
     expect_contains(
         "src/core/core/scene_default_config.cpp",
@@ -343,6 +379,11 @@ def main() -> int:
         "RCC integration merges released beta back into PT persistence",
     )
     expect_contains(
+        "src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu",
+        "RCCBondedPTReleaseContext",
+        "RCC integration routes sticky/policy release context into bonded owner",
+    )
+    expect_contains(
         "include/uipc/core/rcc_bonded_pt_state.h",
         "set_counters",
         "host state counter restore anchor",
@@ -382,6 +423,16 @@ def main() -> int:
         "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
         "RCCBondedPTReleaseSlip",
         "CUDA owner evaluates tangential-slip release reason",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleaseStickySide",
+        "CUDA owner evaluates sticky-side release reason",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleasePolicy",
+        "CUDA owner evaluates disabled-policy release reason",
     )
     expect_contains(
         "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
@@ -432,6 +483,16 @@ def main() -> int:
         "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
         "[rcc_bonded_pt][release][slip][cuda]",
         "backend fixture covers tangential-slip release lifecycle",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][sticky][cuda]",
+        "backend fixture covers sticky-side release lifecycle",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][policy][cuda]",
+        "backend fixture covers disabled-policy release lifecycle",
     )
     expect_contains(
         "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",

@@ -1481,8 +1481,27 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         if(m_bonded_pt_system_for_phase_a
            && m_bonded_pt_system_for_phase_a->enabled())
         {
+            RCCBondedPTReleaseContext release_context;
+            release_context.sticky_side_enabled = m_has_sticky;
+            release_context.sticky_sign = m_sticky_sign;
+            release_context.vertex_normal = m_vertex_normal;
+            release_context.policy_enabled = true;
+            release_context.contact_element_ids =
+                m_gvm_for_phase_a->contact_element_ids();
+            release_context.subscene_element_ids =
+                m_gvm_for_phase_a->subscene_element_ids();
+            release_context.contact_mask_tabular =
+                m_gcm_for_phase_a->contact_mask_tabular();
+            release_context.subscene_mask_tabular =
+                m_gcm_for_phase_a->subscene_mask_tabular();
+            release_context.adhesive_tabular = m_adhesive_tabular;
+
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
-                pairs, m_beta_PT.view(), positions, m_bonded_pt_beta_lock_threshold);
+                pairs,
+                m_beta_PT.view(),
+                positions,
+                m_bonded_pt_beta_lock_threshold,
+                release_context);
             m_bonded_pt_beta_carry.merge_released_beta(
                 m_prev_keys_PT,
                 m_prev_beta_PT,

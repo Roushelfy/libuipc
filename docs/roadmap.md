@@ -2,7 +2,7 @@
 
 This roadmap is the current status surface for the RCC bonded point-triangle acceleration project. Historical observations and command logs belong in [the journal](./development/rcc_adhesion_acceleration_journal.md).
 
-Current phase: **Phase 4, release, fallback, and bonded-mode scene gates**. The production energy correction is complete for the current oracle/reporter scope; the next risks are the remaining release reasons and lifecycle scene correctness.
+Current phase: **Phase 4, release, fallback, and bonded-mode scene gates**. The production energy correction and backend device release reasons are complete for the current oracle/reporter scope. That does not make the bonded path production-ready: the live lock gate is still narrower than the target policy, released reason snapshots are not yet scene-accessible, concrete PT CCD broadphase paths are not all filtered, and lifecycle scene correctness is still unproven.
 
 ## Core Principle
 
@@ -40,12 +40,12 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 - [x] Implement `RCCBondedPTState` minimum host contract for locked keys, oriented topologies, beta, age, and release flags.
 - [x] Extend the state owner and CUDA bridge with rest-shape metrics (`Dm_inv`, `rest_volume`) once the SVTS oracle lands.
 - [x] Define feature-disabled default behavior, the `rcc_bonded_pt_enabled` master config key, and the beta lock threshold key.
-- [ ] Add remaining age/release config keys under the `rcc_bonded_pt` prefix. Rest-shape threshold keys, production ABD energy keys, and strain-release threshold are implemented.
+- [ ] Add remaining age and lock-gate config/report keys under the `rcc_bonded_pt` prefix. Rest-shape threshold keys, production ABD energy keys, and release threshold keys are implemented.
 - [x] Add minimum `RCCBondedPTCounters` fields for candidate, locked, released, degenerate-rejected, filter-skipped, and duplicate-suppressed pairs.
 - [x] Mirror the host state contract into a CUDA-owned `RCCBondedPTStateBridge` with device buffers and counter roundtrip.
 - [x] Add a CUDA `RCCBondedPTSystem` owner that holds the bridge, feeds sorted locked keys into `SimplexTrajectoryFilter`, and syncs common active-filter skip counts.
 - [x] Add a device-side RCC Phase A beta-threshold producer that compacts high-beta PTs into the CUDA owner, carries existing locks, increments age, suppresses duplicate candidate keys, builds SVTS-compatible rest shapes for new locks, and rejects degenerate fresh locks.
-- [x] Expose `RCCBondedPTCounters` and locked/release state through `RCCBondedPTStateAccessorFeature` after the CUDA bridge is wired into the live RCC pipeline.
+- [x] Expose `RCCBondedPTCounters` and active locked state through `RCCBondedPTStateAccessorFeature` after the CUDA bridge is wired into the live RCC pipeline.
 
 ### Oracles
 
@@ -83,12 +83,14 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 
 ## Phase 4: Release, Fallback, And Scene Gate (Current)
 
-- [x] Implement device release reason flags for strain, normal gap, tangential slip, flip, and degenerate current shape.
+- [x] Implement device release reason flags for strain, normal gap, tangential slip, sticky-side failure, disabled contact policy, flip, and degenerate current shape.
 - [x] Add `rcc_bonded_pt_release_strain`, `rcc_bonded_pt_release_gap`, and `rcc_bonded_pt_release_slip`, defaulting to large disabled thresholds until scenes choose values.
 - [x] Carry beta across lock/release transitions by merging released key/beta snapshots back into RCC PT persistence without overwriting newer RCC beta for duplicate keys.
-- [x] Compact released locks out of bonded state before bonded reporter assembly input is refreshed, expose released key/topology/beta/age/reason snapshots for assertions, and prevent same-step relock of released keys.
+- [x] Compact released locks out of bonded state before bonded reporter assembly input is refreshed, keep released key/topology/beta/age/reason snapshots in backend owner buffers for CUDA assertions and RCC beta carry, and prevent same-step relock of released keys.
 - [x] Add deterministic release fixtures before scene work: one locked PT stays active, one releases by controlled strain, released key/beta/flag snapshots remain aligned, counters update once, and beta is visible to RCC persistence.
-- [ ] Implement remaining device release reasons for sticky-side failure and disabled contact policy.
+- [x] Route sticky-side and policy release context from RCC Phase A into the bonded owner without host roundtrips.
+- [ ] Expose released topology, age, flags, and per-reason release counts through a scene-accessible accessor/report path; the current public owner path exposes only released key/beta for RCC beta carry.
+- [ ] Add live lock-gate parity for minimum age, sticky-side consistency, normal-gap band, tangential-slip band, and contact policy, with rejection counters distinct from release counters.
 - [ ] Add deterministic `pt_lift_release` scene gate: a PT-rich adhesion fixture under gravity press/hold locks, a sub-threshold lift carries the adhered body or patch, and a stronger pull releases and separates it.
 - [ ] Add adhesion-off baseline for the scene so follow-through cannot be explained by constraints, ground contact, or animator setup.
 - [ ] Add bonded-mode no-penetration observation during press/hold/lift with CCD skipped, such as maximum signed penetration or closest-point gap.
@@ -105,10 +107,10 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
-| Lock gate is still beta/rest-shape only | The live producer now builds SVTS-compatible rest shapes and rejects degenerate fresh locks, but age, sticky-side, normal-gap, tangential-slip, and policy gates are still planned | Add the remaining lock gates and their rejection counters before bonded-mode scene correctness claims |
+| Lock gate is still beta/rest-shape only | The live producer now builds SVTS-compatible rest shapes and rejects degenerate fresh locks. Sticky-side and policy data are routed for release only; they are not yet lock gates. Age, sticky-side, normal-gap, tangential-slip, and policy lock gates are still planned | Add the remaining lock gates and their rejection counters before bonded-mode scene correctness claims |
 | PT CCD broadphase still sees locked keys | The common active-view compact prevents locked PTs from reaching `friction_PTs()` when keys are supplied, but concrete filter `candidate_PTs()` and `toi_PTs()` are still generated before that compact | Move lookup into the PT candidate/TOI path for all simplex filter backends |
-| Release diagnostics are incomplete | Device strain/gap/slip/flip/degenerate release, released snapshots, same-step relock suppression, one-shot counters, and RCC beta carry are implemented; sticky-side failure and policy release are still missing | Add the remaining release kernels and their reason-specific fixtures before relying on forced-pull scene release |
-| No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions, no-penetration observation, and scene-level release reason fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` after remaining release reasons and no-penetration metrics exist |
+| Scene-level release diagnostics are incomplete | Device strain/gap/slip/sticky/policy/flip/degenerate release, released snapshots, same-step relock suppression, one-shot counters, and RCC beta carry are implemented, but released topology/age/flags and per-reason counts are not yet exposed through scene-accessible report fields | Add report/accessor fields that scene gates can assert before relying on forced-pull scene release |
+| No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions, no-penetration observation, complete lock gates, and scene-level release reason fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` after lock-gate parity, scene diagnostics, and no-penetration metrics exist |
 | No subsystem timers | Performance claims would collapse into total frame time | Add or expose timing fields before benchmarks |
 
 ## Playbook Compliance
@@ -118,7 +120,7 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 | Current roadmap names principle, phase, next tasks, blockers, and gates | Satisfied | This file is the current status surface |
 | Stable architecture and conventions are documented | Satisfied | [architecture](./architecture.md) and [conventions](./conventions.md) |
 | Runnable gates and planned gates are separated | Satisfied | Current gates are below; future commands are in planned gates |
-| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; local CUDA gates are wired through `run_rcc_adhesion_acceleration_cuda_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, rest-shape payload, counter, state accessor, CPU oracle, CUDA state bridge, CUDA lookup, common active-filter, CUDA owner, beta-threshold producer with live rest-shape rejection, strain release/beta carry, ABD GPU virtual-tet reporter oracle, and bunny BVH regression fixtures are implemented; remaining release reasons, pre-CCD filter, and scene/benchmark gates are still planned |
+| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; local CUDA gates are wired through `run_rcc_adhesion_acceleration_cuda_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, rest-shape payload, counter, state accessor, CPU oracle, CUDA state bridge, CUDA lookup, common active-filter, CUDA owner, beta-threshold producer with live rest-shape rejection, release/beta carry, ABD GPU virtual-tet reporter oracle, and bunny BVH regression fixtures are implemented; lock-gate parity, scene-accessible release diagnostics, pre-CCD filter, bonded lifecycle scene, and benchmark gates are still planned |
 | Numeric or algorithmic claims have CPU or legacy oracles | Satisfied for current scope | State, rest-shape, ABD-style high-kappa virtual-tet E/G/H, and ABD GPU reporter matching gates exist |
 | Benchmark claims split cold, cache-hot, churn, and end-to-end timing | Not yet implemented | Phase 5 requires benchmark script, timers, and correctness fields |
 | Journals record commands, observed results, and decisions | Satisfied | [journal](./development/rcc_adhesion_acceleration_journal.md) |
@@ -137,11 +139,11 @@ These commands are runnable today from the repository root and must pass before 
 | Bonded PT state and counters | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release/rest-shape fixture and counter fixture pass |
 | Bonded PT CPU oracles | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Rest-shape conditioning plus ABD-style high-kappa virtual-tet energy, gradient, and Hessian CPU oracles pass |
 | Bonded PT CUDA state bridge | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Host state, device buffers, rest-shape payloads, pending release flags, extract-release counters, and clear behavior roundtrip |
-| Bonded PT state accessor | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][accessor]" -r compact` | Frontend feature wrapper reports locked count, counters, and state snapshots through the overrider contract |
+| Bonded PT state accessor | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][accessor]" -r compact` | Frontend feature wrapper reports locked count, counters, and active locked-state snapshots through the overrider contract |
 | Bonded PT CUDA lookup helper | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | RCC PT key semantics, sorted membership lookup, miss handling, and empty locked-set behavior pass on CUDA |
 | Bonded PT common active-filter compact | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Locked PTs are removed from `SimplexTrajectoryFilter::PTs()` and therefore from `friction_PTs()` when sorted locked keys are supplied |
 | Bonded PT CUDA owner and beta/rest producer | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Owner uploads locked state, feeds sorted keys to the filter, syncs skip counters, and device-side producer carries existing locks, adds high-beta candidates, increments age, suppresses duplicate candidate keys, builds live rest shapes for fresh locks, and rejects degenerate fresh locks |
-| Bonded PT release and beta carry | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Device strain, gap, and slip release compact active locks, expose released key/topology/beta/age/flag snapshots, suppress same-step relock, increment release counters once, and merge released beta back into RCC persistence without overwriting newer duplicate beta |
+| Bonded PT release and beta carry | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Device strain, gap, slip, sticky-side, and policy release compact active locks, expose released key/topology/beta/age/flag snapshots, suppress same-step relock, increment release counters once, and merge released beta back into RCC persistence without overwriting newer duplicate beta |
 | Bonded PT GPU virtual-tet reporter oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | ABD-style reporter math matches the CPU virtual-tet energy, gradient, and Hessian oracle within tolerance at `kappa >= 1e8` |
 | CUDA bunny BVH/radix-sort regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Ensures bonded-PT CUDA payload/layout changes do not destabilize the existing `SimplicialSurfaceDistanceCheck` + `InfoStacklessBVH` path |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
@@ -153,11 +155,12 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 | Gate | Target Command | Required Result | Missing Piece |
 | --- | --- | --- | --- |
+| Lock-gate parity contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lock_gate]"` | High-beta candidates lock only when minimum age, sticky-side, normal-gap, tangential-slip, rest-shape, and contact-policy gates pass; each rejection counter is distinct from release counters | Add live lock-gate inputs/config and deterministic producer fixtures |
+| Scene diagnostics/accessor contract | `build/bin/uipc_test_core "[rcc_bonded_pt][accessor][release]"` | Scene-accessible diagnostics expose released topology, beta, age, flags, per-reason counts, active lock count, filter skip count, and duplicate suppression without double-counting | Extend core/backend accessor and pybind/native scene access as needed |
 | Pre-CCD filter contract | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Locked PT key is absent from PT candidate and TOI paths in every simplex filter backend | Wire the lookup helper before PT CCD broadphase in all simplex filters and add candidate/TOI instrumentation |
-| Remaining release reasons | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release][sticky][policy]"` | Sticky-side failure and contact-policy release each set the expected reason flag, compact active locks, and carry beta | Add remaining release policy inputs/kernels and fixtures |
-| PT lift/release scene | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | PT-rich fixture locks during press/hold, ABD-style high-kappa energy prevents visible penetration while CCD is skipped, adhered geometry follows during sub-threshold lift, forced pull releases and separates, adhesion-off baseline does not lift, beta carry and zero duplicate ownership are reported | Add release instrumentation, no-penetration metric, report fields, and assertion-based scene |
+| PT lift/release scene | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | PT-rich fixture locks during press/hold, ABD-style high-kappa energy prevents visible penetration while CCD is skipped, adhered geometry follows during sub-threshold lift, forced pull releases and separates, adhesion-off baseline does not lift, beta carry and zero duplicate ownership are reported | Add lock-gate parity, release diagnostics, no-penetration metric, report fields, and assertion-based scene |
 | Benchmark matrix | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Reports cold, cache-hot, churn, and end-to-end medians with correctness fields | Add benchmark script, timers, and report parser |
 
 ## Next Safe Task
 
-Implement the remaining release reasons, starting with sticky-side failure and disabled contact policy, then add the bonded-mode `pt_lift_release` no-penetration scene observation. Keep bonded mode default-off and avoid correctness/performance claims until release, scene, report counters, pre-CCD filtering, and benchmark gates all pass.
+Expose release reason snapshots through scene-accessible diagnostics, then add lock-gate parity and the bonded-mode `pt_lift_release` no-penetration scene observation. Keep bonded mode default-off and avoid correctness/performance claims until lock gates, scene diagnostics, pre-CCD filtering, and benchmark gates all pass.
