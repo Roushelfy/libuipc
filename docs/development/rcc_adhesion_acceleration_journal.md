@@ -539,3 +539,30 @@ With live CUDA rest-shape construction in place, the next safe slice was to asse
 ### Decision
 
 The bonded virtual-tet reporter math is now covered by a GPU-vs-CPU oracle, but the feature is still not correctness-complete. Release diagnostics, beta carry on release, live counter reporting, pre-CCD filtering, and bonded-mode scene/benchmark gates remain required before enabling or making performance claims.
+
+## 2026-06-02 Bonded PT State Accessor
+
+### Context
+
+Host state and CUDA owner counters existed, but scene gates still needed a frontend-readable way to inspect live bonded PT ownership. The common active-filter skip counter also needed idempotent synchronization so repeated diagnostics could not double-count the same filter pass.
+
+### Implemented
+
+- Added `RCCBondedPTStateAccessorFeature` to expose `locked_pair_count()`, `counters()`, and `dump_state()`.
+- Added a CUDA accessor SimSystem that inserts the feature and proxies to `RCCBondedPTSystem`.
+- Added a filter generation counter to `SimplexTrajectoryFilter` and made owner skip-counter sync consume each generation once.
+- Added a core accessor contract fixture and extended the CUDA owner fixture to assert repeated sync calls do not double-count filter skips.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake -S . -B build/cuda_mixed_fused_pcg` | Passed. Refreshed CMake globs for the new core and CUDA accessor sources. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_core uipc_test_backend_cuda -j8` | Passed after fixing the accessor fixture to query counters once. Built core and CUDA backend test binaries. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (89 assertions in 6 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (130 assertions in 6 test cases)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8`, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+
+### Decision
+
+Live counters and locked/release state snapshots are now accessible to frontend/native scene gates. The next missing correctness slice is a real release policy that sets release flags, carries beta back to RCC, and proves the lifecycle in a bonded-mode scene.

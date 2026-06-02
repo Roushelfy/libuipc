@@ -125,6 +125,7 @@ void RCCBondedPTSystem::Impl::clear()
     m_merged_entries.resize(0);
     m_merged_keys.resize(0);
     clear_filter_keys();
+    m_last_synced_filter_generation = 0;
 }
 
 void RCCBondedPTSystem::Impl::upload(const core::RCCBondedPTState& state)
@@ -451,6 +452,8 @@ void RCCBondedPTSystem::Impl::set_rest_shape_config(Float min_separate_distance,
 void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexcept
 {
     simplex_trajectory_filter = filter;
+    m_last_synced_filter_generation =
+        filter ? filter->rcc_bonded_pt_filter_generation() : 0;
 }
 
 void RCCBondedPTSystem::Impl::feed_filter_keys() const noexcept
@@ -470,8 +473,13 @@ void RCCBondedPTSystem::Impl::sync_filter_skipped_count() noexcept
 {
     if(!m_enabled || !simplex_trajectory_filter)
         return;
+    const SizeT generation =
+        simplex_trajectory_filter->rcc_bonded_pt_filter_generation();
+    if(generation == m_last_synced_filter_generation)
+        return;
     m_counters.filter_skipped_count +=
         simplex_trajectory_filter->rcc_bonded_pt_filter_skipped_count();
+    m_last_synced_filter_generation = generation;
     m_counters.locked_count = size();
 }
 
@@ -488,7 +496,11 @@ void RCCBondedPTSystem::Impl::sync_filter_skipped_count(
 {
     if(!m_enabled)
         return;
+    const SizeT generation = filter.rcc_bonded_pt_filter_generation();
+    if(generation == m_last_synced_filter_generation)
+        return;
     m_counters.filter_skipped_count += filter.rcc_bonded_pt_filter_skipped_count();
+    m_last_synced_filter_generation = generation;
     m_counters.locked_count = size();
 }
 

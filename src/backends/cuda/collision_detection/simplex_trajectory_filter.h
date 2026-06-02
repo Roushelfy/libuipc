@@ -124,6 +124,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         void set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
         void clear_rcc_bonded_pt_locked_keys() noexcept;
         SizeT rcc_bonded_pt_filter_skipped_count() const noexcept;
+        SizeT rcc_bonded_pt_filter_generation() const noexcept;
         bool dump(DumpInfo& info);
         bool try_recover(RecoverInfo& info);
         void apply_recover(RecoverInfo& info);
@@ -153,6 +154,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         muda::DeviceBuffer<Vector4i> rcc_bonded_pt_unlocked_PT;
         muda::DeviceVar<IndexT>      rcc_bonded_pt_unlocked_PT_count;
         SizeT                        rcc_bonded_pt_filter_skipped = 0;
+        SizeT                        rcc_bonded_pt_filter_gen = 0;
 
         Float reserve_ratio = 1.1;
 
@@ -185,6 +187,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
     void  set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
     void  clear_rcc_bonded_pt_locked_keys() noexcept;
     SizeT rcc_bonded_pt_filter_skipped_count() const noexcept;
+    SizeT rcc_bonded_pt_filter_generation() const noexcept;
 
     virtual muda::CBufferView<Vector2i> candidate_PTs() const noexcept = 0;
     virtual muda::CBufferView<Vector2i> candidate_EEs() const noexcept = 0;

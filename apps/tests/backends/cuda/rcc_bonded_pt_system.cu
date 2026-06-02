@@ -66,6 +66,8 @@ TEST_CASE("rcc_bonded_pt_system_feeds_locked_keys_and_syncs_filter_counters",
     owner.sync_filter_skipped_count(filter);
 
     CHECK(owner.counters().filter_skipped_count == 1);
+    owner.sync_filter_skipped_count(filter);
+    CHECK(owner.counters().filter_skipped_count == 1);
     CHECK(owner.counters().locked_count == 1);
     REQUIRE(filter.PTs.size() == 1);
 

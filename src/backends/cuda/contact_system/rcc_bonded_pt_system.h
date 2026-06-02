@@ -66,6 +66,7 @@ class RCCBondedPTSystem final : public SimSystem
         muda::DeviceVar<IndexT>                    m_carry_prev_count;
         Float                      m_min_separate_distance = 1e-6;
         Float                      m_det_dm_min = 1e-12;
+        SizeT                      m_last_synced_filter_generation = 0;
         bool                       m_enabled = false;
     };
 

@@ -115,6 +115,7 @@ void SimplexTrajectoryFilter::do_filter_toi(GlobalTrajectoryFilter::FilterTOIInf
 void SimplexTrajectoryFilter::Impl::filter_rcc_bonded_pt_locked_active_pairs()
 {
     rcc_bonded_pt_filter_skipped = 0;
+    ++rcc_bonded_pt_filter_gen;
 
     const SizeT original_count = PTs.size();
     if(original_count == 0 || rcc_bonded_pt_locked_keys.size() == 0)
@@ -152,6 +153,11 @@ void SimplexTrajectoryFilter::Impl::clear_rcc_bonded_pt_locked_keys() noexcept
 SizeT SimplexTrajectoryFilter::Impl::rcc_bonded_pt_filter_skipped_count() const noexcept
 {
     return rcc_bonded_pt_filter_skipped;
+}
+
+SizeT SimplexTrajectoryFilter::Impl::rcc_bonded_pt_filter_generation() const noexcept
+{
+    return rcc_bonded_pt_filter_gen;
 }
 
 void SimplexTrajectoryFilter::Impl::record_friction_candidates(
@@ -310,6 +316,11 @@ void SimplexTrajectoryFilter::clear_rcc_bonded_pt_locked_keys() noexcept
 SizeT SimplexTrajectoryFilter::rcc_bonded_pt_filter_skipped_count() const noexcept
 {
     return m_impl.rcc_bonded_pt_filter_skipped_count();
+}
+
+SizeT SimplexTrajectoryFilter::rcc_bonded_pt_filter_generation() const noexcept
+{
+    return m_impl.rcc_bonded_pt_filter_generation();
 }
 
 muda::CBufferView<Vector4i> SimplexTrajectoryFilter::friction_EEs() const noexcept

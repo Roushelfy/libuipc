@@ -95,6 +95,7 @@ The `apps/tests` locations hold the current deterministic state, oracle, CUDA br
 | `IPCSimplexRCCAdhesiveContact` | RCC beta evolution and persistence for active/unlocked PT pairs | Dynamic tet Hessian assembly, filter-specific skip logic |
 | Bonded virtual-tet reporter | Complement energy, gradient, Hessian for locked topologies | RCC beta law, broadphase decisions, contact-component accounting |
 | Global dynamic topology manager | Aggregation and scattering of complement energy | Classification policy or release policy |
+| `RCCBondedPTStateAccessorFeature` | Frontend snapshots of locked state and counters | Physics decisions or implicit synchronization outside explicit query points |
 | Bench/report layer | Timers and counters | Physics decisions |
 
 ## Runtime Data Model
