@@ -52,18 +52,18 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_min_lock_age` | Consecutive accepted steps before lock | Planned |
 | `rcc_bonded_pt_min_separate_distance` | Rest-shape thickness floor | Implemented, default `1e-6` |
 | `rcc_bonded_pt_det_dm_min` | Minimum absolute rest determinant | Implemented, default `1e-12` |
-| `rcc_bonded_pt_energy_model` | Production virtual-tet energy model, target `abd_ortho` with optional `abd_arap` | Planned |
-| `rcc_bonded_pt_kappa` | ABD-style virtual-tet stiffness; target scene gates start at `1e8` or higher | Planned |
+| `rcc_bonded_pt_energy_model` | Production virtual-tet energy model, currently `abd_ortho` | Implemented, default `abd_ortho` |
+| `rcc_bonded_pt_kappa` | ABD-style virtual-tet stiffness | Implemented, default `1e8` |
 | `rcc_bonded_pt_release_gap` | Normal release distance | Planned |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Planned |
 | `rcc_bonded_pt_release_strain` | Deformation release threshold | Planned |
 
-Prototype keys currently present in code must not be used as production acceptance criteria:
+Retired prototype keys must not be reintroduced as production acceptance criteria:
 
 | Key | Current Role | Required Follow-Up |
 | --- | --- | --- |
-| `rcc_bonded_pt_mu` | Stable Neo-Hookean prototype reporter parameter, default `0.0` | Retire from production path or fence behind an explicit `svts_snh_debug` model |
-| `rcc_bonded_pt_lambda` | Stable Neo-Hookean prototype reporter parameter, default `0.0` | Retire from production path or fence behind an explicit `svts_snh_debug` model |
+| `rcc_bonded_pt_mu` | Retired Stable Neo-Hookean prototype reporter parameter | Keep out of the production reporter |
+| `rcc_bonded_pt_lambda` | Retired Stable Neo-Hookean prototype reporter parameter | Keep out of the production reporter |
 
 ## Validation Rules
 
@@ -91,15 +91,13 @@ Prototype keys currently present in code must not be used as production acceptan
 | Candidate, lock, release, reject, filter-skip, and duplicate counters are observable in the state contract | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state][counters]" -r compact` | Implemented |
 | Frontend can read live bonded PT counters and state snapshots | Feature fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][accessor]" -r compact` | Implemented |
 | Rest-shape construction matches SVTS behavior | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]" -r compact` | Implemented |
-| Prototype SNH virtual tet E/G/H match CPU reference | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][energy]" -r compact` | Implemented, not production acceptance |
-| ABD-style high-kappa virtual tet E/G/H match CPU reference | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][abd_energy]" -r compact` | Planned |
+| ABD-style high-kappa virtual tet E/G/H match CPU reference | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][abd_energy]" -r compact` | Implemented |
 | Host bonded PT state and rest-shape payload roundtrip through CUDA device buffers | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Implemented |
 | Locked-key membership lookup matches RCC PT persistence semantics | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Implemented |
 | Locked PT is absent from common active/friction PT views when sorted keys are supplied | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Implemented |
 | CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
 | RCC Phase A high-beta PTs populate the CUDA owner with live rest-shape construction | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
-| Prototype SNH bonded virtual-tet reporter E/G/H matches CPU reference | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][oracle]" -r compact` | Implemented, not production acceptance |
-| ABD-style bonded reporter E/G/H matches CPU reference at `kappa >= 1e8` | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Planned |
+| ABD-style bonded reporter E/G/H matches CPU reference at `kappa >= 1e8` | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Implemented |
 | Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
 | Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |

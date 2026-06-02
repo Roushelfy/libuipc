@@ -31,6 +31,11 @@ struct UIPC_CORE_API RCCBondedPTRestShape
 UIPC_CORE_API RCCBondedPTRestShape
 build_rcc_bonded_pt_rest_shape_svts(const RCCBondedPTRestShapeInput& input);
 
+enum class RCCBondedPTVirtualTetEnergyModel
+{
+    ABDOrtho = 0
+};
+
 struct UIPC_CORE_API RCCBondedPTVirtualTetInput
 {
     Vector3   x0 = Vector3::Zero();
@@ -39,8 +44,9 @@ struct UIPC_CORE_API RCCBondedPTVirtualTetInput
     Vector3   x3 = Vector3::Zero();
     Matrix3x3 Dm_inv = Matrix3x3::Identity();
     Float     rest_volume = 0.0;
-    Float     mu = 0.0;
-    Float     lambda = 0.0;
+    RCCBondedPTVirtualTetEnergyModel energy_model =
+        RCCBondedPTVirtualTetEnergyModel::ABDOrtho;
+    Float     kappa = 1e8;
     Float     dt = 1.0;
     bool      project_hessian_to_spd = true;
 };

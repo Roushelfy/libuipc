@@ -5,6 +5,9 @@
 #include <muda/buffer/device_buffer.h>
 #include <uipc/core/rcc_bonded_pt_oracle.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace
 {
 uipc::Vector12 pack_positions(const uipc::Vector3& x0,
@@ -19,10 +22,42 @@ uipc::Vector12 pack_positions(const uipc::Vector3& x0,
     q.segment<3>(9) = x3;
     return q;
 }
+
+uipc::Float max_relative_error(const uipc::Vector12& actual,
+                               const uipc::Vector12& expected)
+{
+    uipc::Float max_error = 0.0;
+    for(uipc::IndexT i = 0; i < actual.size(); ++i)
+    {
+        const uipc::Float denom =
+            std::max<uipc::Float>(1.0, std::abs(expected[i]));
+        max_error = std::max(max_error,
+                             std::abs(actual[i] - expected[i]) / denom);
+    }
+    return max_error;
+}
+
+uipc::Float max_relative_error(const uipc::Matrix12x12& actual,
+                               const uipc::Matrix12x12& expected)
+{
+    uipc::Float max_error = 0.0;
+    for(uipc::IndexT i = 0; i < actual.rows(); ++i)
+    {
+        for(uipc::IndexT j = 0; j < actual.cols(); ++j)
+        {
+            const uipc::Float denom =
+                std::max<uipc::Float>(1.0, std::abs(expected(i, j)));
+            max_error = std::max(max_error,
+                                 std::abs(actual(i, j) - expected(i, j))
+                                     / denom);
+        }
+    }
+    return max_error;
+}
 }  // namespace
 
-TEST_CASE("rcc_bonded_pt_virtual_tet_reporter_matches_cpu_oracle",
-          "[rcc_bonded_pt][reporter][oracle][cuda]")
+TEST_CASE("rcc_bonded_pt_abd_virtual_tet_reporter_matches_cpu_oracle",
+          "[rcc_bonded_pt][reporter][abd_oracle][cuda]")
 {
     using namespace muda;
     using namespace uipc;
@@ -52,8 +87,7 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_reporter_matches_cpu_oracle",
                                       h_positions[rest.oriented_topo[2]],
                                       h_positions[rest.oriented_topo[3]]);
 
-    constexpr Float mu = 2.3;
-    constexpr Float lambda = 5.1;
+    constexpr Float kappa = 1e8;
     constexpr Float dt = 0.25;
 
     RCCBondedPTVirtualTetInput oracle_input;
@@ -63,8 +97,8 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_reporter_matches_cpu_oracle",
     oracle_input.x3 = q.segment<3>(9);
     oracle_input.Dm_inv = rest.Dm_inv;
     oracle_input.rest_volume = rest.rest_volume;
-    oracle_input.mu = mu;
-    oracle_input.lambda = lambda;
+    oracle_input.energy_model = RCCBondedPTVirtualTetEnergyModel::ABDOrtho;
+    oracle_input.kappa = kappa;
     oracle_input.dt = dt;
     oracle_input.project_hessian_to_spd = true;
     const auto oracle = build_rcc_bonded_pt_virtual_tet_oracle(oracle_input);
@@ -91,7 +125,7 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_reporter_matches_cpu_oracle",
     d_hessians.resize(1);
 
     RCCBondedPTVirtualTetReporter::Impl impl;
-    impl.set_material(mu, lambda);
+    impl.set_material(kappa);
     impl.compute_dense_energy_gradient_hessian(d_topos.view(),
                                                d_dm_inv.view(),
                                                d_rest_volume.view(),
@@ -109,8 +143,6 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_reporter_matches_cpu_oracle",
     d_hessians.view().copy_to(h_hessians.data());
 
     CHECK(h_energies[0] == Catch::Approx(oracle.energy).epsilon(1e-8).margin(1e-10));
-    CHECK((h_gradients[0] - oracle.gradient).cwiseAbs().maxCoeff()
-          == Catch::Approx(0.0).margin(1e-8));
-    CHECK((h_hessians[0] - oracle.hessian).cwiseAbs().maxCoeff()
-          == Catch::Approx(0.0).margin(1e-6));
+    CHECK(max_relative_error(h_gradients[0], oracle.gradient) < 1e-10);
+    CHECK(max_relative_error(h_hessians[0], oracle.hessian) < 1e-10);
 }

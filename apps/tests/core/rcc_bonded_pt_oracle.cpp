@@ -3,6 +3,8 @@
 
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -81,6 +83,7 @@ uipc::core::RCCBondedPTVirtualTetOracle eval_virtual_tet(
     const uipc::Vector12& q,
     const uipc::Matrix3x3& Dm_inv,
     uipc::Float rest_volume,
+    uipc::Float kappa,
     bool project_hessian_to_spd)
 {
     uipc::core::RCCBondedPTVirtualTetInput input;
@@ -90,16 +93,49 @@ uipc::core::RCCBondedPTVirtualTetOracle eval_virtual_tet(
     input.x3 = q.segment<3>(9);
     input.Dm_inv = Dm_inv;
     input.rest_volume = rest_volume;
-    input.mu = 2.3;
-    input.lambda = 5.1;
+    input.energy_model =
+        uipc::core::RCCBondedPTVirtualTetEnergyModel::ABDOrtho;
+    input.kappa = kappa;
     input.dt = 0.25;
     input.project_hessian_to_spd = project_hessian_to_spd;
     return uipc::core::build_rcc_bonded_pt_virtual_tet_oracle(input);
 }
+
+uipc::Float max_relative_error(const uipc::Matrix12x12& actual,
+                               const uipc::Matrix12x12& expected)
+{
+    uipc::Float max_error = 0.0;
+    for(uipc::IndexT i = 0; i < actual.rows(); ++i)
+    {
+        for(uipc::IndexT j = 0; j < actual.cols(); ++j)
+        {
+            const uipc::Float denom =
+                std::max<uipc::Float>(1.0, std::abs(expected(i, j)));
+            max_error = std::max(max_error,
+                                 std::abs(actual(i, j) - expected(i, j))
+                                     / denom);
+        }
+    }
+    return max_error;
+}
+
+uipc::Float max_relative_error(const uipc::Vector12& actual,
+                               const uipc::Vector12& expected)
+{
+    uipc::Float max_error = 0.0;
+    for(uipc::IndexT i = 0; i < actual.size(); ++i)
+    {
+        const uipc::Float denom =
+            std::max<uipc::Float>(1.0, std::abs(expected[i]));
+        max_error = std::max(max_error,
+                             std::abs(actual[i] - expected[i]) / denom);
+    }
+    return max_error;
+}
 }  // namespace
 
-TEST_CASE("rcc_bonded_pt_virtual_tet_oracle_matches_finite_difference",
-          "[rcc_bonded_pt][oracle][energy]")
+TEST_CASE("rcc_bonded_pt_abd_virtual_tet_oracle_matches_finite_difference",
+          "[rcc_bonded_pt][oracle][abd_energy]")
 {
     using namespace uipc;
     using namespace uipc::core;
@@ -119,7 +155,9 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_oracle_matches_finite_difference",
                                      rest_input.tri1,
                                      rest_input.tri0,
                                      rest_input.tri2);
-    auto at_rest = eval_virtual_tet(q_rest, rest.Dm_inv, rest.rest_volume, true);
+    constexpr Float kappa = 1e8;
+    auto at_rest =
+        eval_virtual_tet(q_rest, rest.Dm_inv, rest.rest_volume, kappa, true);
     REQUIRE(at_rest.valid);
     CHECK(at_rest.F.isApprox(Matrix3x3::Identity(), 1e-12));
     CHECK(at_rest.gradient.norm() == Catch::Approx(0.0).margin(1e-12));
@@ -131,8 +169,11 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_oracle_matches_finite_difference",
     q[6] += 0.017;
     q[10] += 0.015;
 
-    auto oracle = eval_virtual_tet(q, rest.Dm_inv, rest.rest_volume, false);
+    auto oracle =
+        eval_virtual_tet(q, rest.Dm_inv, rest.rest_volume, kappa, false);
     REQUIRE(oracle.valid);
+    CHECK(std::isfinite(oracle.energy));
+    CHECK(oracle.energy > 0.0);
 
     constexpr Float eps = 1e-6;
     Vector12 fd_gradient;
@@ -144,19 +185,22 @@ TEST_CASE("rcc_bonded_pt_virtual_tet_oracle_matches_finite_difference",
         q_plus[i] += eps;
         q_minus[i] -= eps;
 
-        auto plus  = eval_virtual_tet(q_plus, rest.Dm_inv, rest.rest_volume, false);
-        auto minus = eval_virtual_tet(q_minus, rest.Dm_inv, rest.rest_volume, false);
+        auto plus =
+            eval_virtual_tet(q_plus, rest.Dm_inv, rest.rest_volume, kappa, false);
+        auto minus =
+            eval_virtual_tet(q_minus, rest.Dm_inv, rest.rest_volume, kappa, false);
 
         fd_gradient[i] = (plus.energy - minus.energy) / (2.0 * eps);
         fd_hessian.col(i) = (plus.gradient - minus.gradient) / (2.0 * eps);
     }
 
-    CHECK((oracle.gradient - fd_gradient).cwiseAbs().maxCoeff() < 1e-7);
-    CHECK((oracle.hessian - fd_hessian).cwiseAbs().maxCoeff() < 1e-5);
+    CHECK(max_relative_error(oracle.gradient, fd_gradient) < 1e-7);
+    CHECK(max_relative_error(oracle.hessian, fd_hessian) < 1e-6);
 
-    auto projected = eval_virtual_tet(q, rest.Dm_inv, rest.rest_volume, true);
+    auto projected =
+        eval_virtual_tet(q, rest.Dm_inv, rest.rest_volume, kappa, true);
     REQUIRE(projected.valid);
     Eigen::SelfAdjointEigenSolver<Matrix12x12> solver(
         0.5 * (projected.hessian + projected.hessian.transpose()));
-    CHECK(solver.eigenvalues().minCoeff() >= -1e-10);
+    CHECK(solver.eigenvalues().minCoeff() >= -1e-5);
 }

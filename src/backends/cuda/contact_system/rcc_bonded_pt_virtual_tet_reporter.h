@@ -18,9 +18,8 @@ class RCCBondedPTVirtualTetReporter final : public DyTopoEffectReporter
     class Impl
     {
       public:
-        void set_material(Float mu, Float lambda) noexcept;
-        Float mu() const noexcept;
-        Float lambda() const noexcept;
+        void set_material(Float kappa) noexcept;
+        Float kappa() const noexcept;
         bool active() const noexcept;
 
         SizeT energy_count(muda::CBufferView<Vector4i> topos) const noexcept;
@@ -59,8 +58,7 @@ class RCCBondedPTVirtualTetReporter final : public DyTopoEffectReporter
         S<const geometry::AttributeSlot<Float>> dt_attr;
 
       private:
-        Float m_mu = 0.0;
-        Float m_lambda = 0.0;
+        Float m_kappa = 0.0;
     };
 
   private:

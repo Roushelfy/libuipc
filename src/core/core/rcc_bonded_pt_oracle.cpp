@@ -95,40 +95,6 @@ Matrix9x12 dFdx(const Matrix3x3& Dm_inv)
     return P;
 }
 
-Matrix3x3 dJdF(const Matrix3x3& F)
-{
-    Matrix3x3 G;
-    G.col(0) = F.col(1).cross(F.col(2));
-    G.col(1) = F.col(2).cross(F.col(0));
-    G.col(2) = F.col(0).cross(F.col(1));
-    return G;
-}
-
-Matrix3x3 skew(const Vector3& v)
-{
-    Matrix3x3 H;
-    H << 0, -v.z(), v.y(),
-         v.z(), 0, -v.x(),
-         -v.y(), v.x(), 0;
-    return H;
-}
-
-Matrix9x9 hessian_J(const Matrix3x3& F)
-{
-    const Matrix3x3 f0hat = skew(F.col(0));
-    const Matrix3x3 f1hat = skew(F.col(1));
-    const Matrix3x3 f2hat = skew(F.col(2));
-
-    Matrix9x9 H = Matrix9x9::Zero();
-    H.block<3, 3>(0, 3) = -f2hat;
-    H.block<3, 3>(0, 6) = f1hat;
-    H.block<3, 3>(3, 0) = f2hat;
-    H.block<3, 3>(3, 6) = -f0hat;
-    H.block<3, 3>(6, 0) = -f1hat;
-    H.block<3, 3>(6, 3) = f0hat;
-    return H;
-}
-
 Matrix9x9 project_spd(const Matrix9x9& H)
 {
     Matrix9x9 sym = 0.5 * (H + H.transpose());
@@ -137,6 +103,36 @@ Matrix9x9 project_spd(const Matrix9x9& H)
     for(IndexT i = 0; i < values.size(); ++i)
         values[i] = values[i] > 0.0 ? values[i] : 0.0;
     return solver.eigenvectors() * values.asDiagonal() * solver.eigenvectors().transpose();
+}
+
+Matrix3x3 abd_ortho_gradient_F(const Matrix3x3& F, Float kappa)
+{
+    const Matrix3x3 C = F * F.transpose() - Matrix3x3::Identity();
+    return 4.0 * kappa * C * F;
+}
+
+Matrix9x9 abd_ortho_hessian_F(const Matrix3x3& F, Float kappa)
+{
+    Matrix9x9 H = Matrix9x9::Zero();
+    const Matrix3x3 FFT = F * F.transpose();
+
+    for(IndexT col = 0; col < 3; ++col)
+    {
+        for(IndexT row = 0; row < 3; ++row)
+        {
+            Matrix3x3 dF = Matrix3x3::Zero();
+            dF(row, col) = 1.0;
+
+            const Matrix3x3 dG =
+                4.0 * kappa
+                * (dF * F.transpose() * F + F * dF.transpose() * F
+                   + FFT * dF - dF);
+
+            H.col(col * 3 + row) = flatten(dG);
+        }
+    }
+
+    return 0.5 * (H + H.transpose());
 }
 }  // namespace
 
@@ -200,29 +196,18 @@ RCCBondedPTVirtualTetOracle
 build_rcc_bonded_pt_virtual_tet_oracle(const RCCBondedPTVirtualTetInput& input)
 {
     RCCBondedPTVirtualTetOracle out;
-    if(input.rest_volume <= 0.0 || input.lambda == 0.0 || input.dt == 0.0)
+    if(input.rest_volume <= 0.0 || input.kappa <= 0.0 || input.dt == 0.0
+       || input.energy_model != RCCBondedPTVirtualTetEnergyModel::ABDOrtho)
         return out;
 
     out.F = deformation_gradient(input);
     const Matrix3x3& F = out.F;
-    const Float      J = F.determinant();
-    const Float      Jm1 = J - 1.0;
     const Float      Vdt2 = input.rest_volume * input.dt * input.dt;
 
-    const Matrix3x3 cof = dJdF(F);
-    const Vector9   gJ  = flatten(cof);
-
-    const Float psi = 0.5 * input.lambda * Jm1 * Jm1 - input.mu * Jm1
-                      + 0.5 * input.mu * (F.squaredNorm() - 3.0)
-                      + (input.mu * input.mu) / (input.lambda * input.lambda);
-
-    Matrix3x3 dpsi_dF_mat =
-        input.mu * F + (input.lambda * Jm1 - input.mu) * cof;
-
-    Matrix9x9 ddpsi_ddF =
-        input.mu * Matrix9x9::Identity()
-        + input.lambda * (gJ * gJ.transpose())
-        + (input.lambda * Jm1 - input.mu) * hessian_J(F);
+    const Matrix3x3 C = F * F.transpose() - Matrix3x3::Identity();
+    const Float psi = input.kappa * C.squaredNorm();
+    Matrix3x3 dpsi_dF_mat = abd_ortho_gradient_F(F, input.kappa);
+    Matrix9x9 ddpsi_ddF = abd_ortho_hessian_F(F, input.kappa);
 
     if(input.project_hessian_to_spd)
         ddpsi_ddF = project_spd(ddpsi_ddF);

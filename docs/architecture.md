@@ -157,7 +157,7 @@ Implementation rules:
 - Keep `rcc_bonded_pt_energy_model` explicit; default target model is `abd_ortho`.
 - Keep bonded PT acceleration default-off until high-kappa ABD oracle, no-penetration scene, release, and benchmark gates pass.
 - Apply SPD projection in the Hessian path.
-- Treat the current Stable Neo-Hookean `rcc_bonded_pt_mu/lambda` reporter as a prototype/regression path only; it is not the production energy model and does not justify skipping CCD.
+- Do not reintroduce the old Stable Neo-Hookean `rcc_bonded_pt_mu/lambda` reporter as a production path; it did not justify skipping CCD and has been replaced by ABD-style energy.
 
 ## Relationship To Existing Systems
 

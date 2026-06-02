@@ -198,6 +198,36 @@ def main() -> int:
         "subsystem doc names the target production energy model",
     )
     expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_energy_model",
+        "default config exposes production bonded energy model",
+    )
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_kappa",
+        "default config exposes production bonded stiffness",
+    )
+    expect_not_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_mu",
+        "retired SNH bonded reporter config must not be in defaults",
+    )
+    expect_not_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_lambda",
+        "retired SNH bonded reporter config must not be in defaults",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_virtual_tet_reporter.cu",
+        "ortho_potential_function",
+        "production bonded reporter uses ABD OrthoPotential",
+    )
+    expect_not_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_virtual_tet_reporter.cu",
+        "soft_vertex_triangle_stitch_function",
+        "production bonded reporter must not use the SVTS SNH function",
+    )
+    expect_contains(
         "docs/conventions.md",
         "adhesion-off baseline",
         "scene gate requires a baseline that prevents false positives",

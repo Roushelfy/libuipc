@@ -599,3 +599,37 @@ The bonded PT roadmap and implemented reporter had drifted toward using the `Sof
 ### Decision
 
 The next safe implementation task is to replace the prototype SNH virtual-tet oracle and reporter with ABD-style high-kappa energy, then rerun the CUDA and scene gates before continuing release or benchmark work.
+
+## 2026-06-02 ABD Virtual-Tet Oracle And Reporter
+
+### Context
+
+After the plan correction, the next implementation slice replaced the prototype SNH virtual-tet energy with ABD-style OrthoPotential over `F = Ds Dm_inv`. This is the production energy model required before a locked PT pair can skip CCD/contact/RCC.
+
+### Implemented
+
+- Replaced `RCCBondedPTVirtualTetInput` material parameters with `energy_model = ABDOrtho` and `kappa`, defaulting to `1e8`.
+- Replaced the CPU oracle energy with `kappa * ||F F^T - I||^2`, assembled through the existing `dF/dx` mapping into the 12 vertex DOFs.
+- Added a high-kappa CPU finite-difference gate under `[rcc_bonded_pt][oracle][abd_energy]`.
+- Replaced the CUDA bonded reporter's SVTS function call with ABD OrthoPotential, including explicit row-major ABD affine layout to column-major FEM `dFdx` permutation.
+- Replaced default config keys `rcc_bonded_pt_mu/lambda` with `rcc_bonded_pt_energy_model = "abd_ortho"` and `rcc_bonded_pt_kappa = 1e8`.
+- Added source/doc checks preventing the retired SNH config keys and SVTS reporter function from reappearing in the production path.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_core -j8 && build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Passed after switching high-kappa gradient comparison to relative error. Reported `All tests passed (22 assertions in 3 test cases)`. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_core uipc_test_backend_cuda -j8` | Passed. Built core and CUDA backend test binaries with existing CUDA warnings only. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (91 assertions in 6 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (130 assertions in 6 test cases)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][abd_energy]" -r compact` | Passed. Reported `All tests passed (11 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Passed. Reported `All tests passed (5 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Passed. Reported `All tests passed (4 assertions in 1 test case)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8`, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs nav/API warnings remained informational. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_sim_case -j8 && build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Passed. Reported `All tests passed (836 assertions in 2 test cases)`. |
+
+### Decision
+
+The bonded virtual-tet energy model now matches the original high-stiffness ABD requirement. Remaining correctness blockers are release/beta carry, no-penetration scene observation while CCD is skipped, pre-CCD filtering in every concrete simplex filter, and benchmark timing.

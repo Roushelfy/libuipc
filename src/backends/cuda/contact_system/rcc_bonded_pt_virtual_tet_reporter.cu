@@ -1,14 +1,16 @@
 #include <contact_system/rcc_bonded_pt_virtual_tet_reporter.h>
 
+#include <affine_body/constitutions/ortho_potential_function.h>
 #include <finite_element/fem_utils.h>
 #include <finite_element/matrix_utils.h>
-#include <inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch_function.h>
 #include <muda/ext/eigen/eigen_core_cxx20.h>
 #include <muda/launch/parallel_for.h>
 #include <sim_engine.h>
 #include <uipc/builtin/attribute_name.h>
 #include <utils/make_spd.h>
 #include <utils/matrix_assembler.h>
+
+#include <string>
 
 namespace uipc::backend
 {
@@ -51,6 +53,47 @@ struct RCCBondedPTVirtualTetEval
     Matrix12x12 hessian = Matrix12x12::Zero();
 };
 
+MUDA_GENERIC Vector12 abd_q_from_F(const Matrix3x3& F)
+{
+    Vector12 q = Vector12::Zero();
+    for(IndexT row = 0; row < 3; ++row)
+        for(IndexT col = 0; col < 3; ++col)
+            q[3 + row * 3 + col] = F(row, col);
+    return q;
+}
+
+MUDA_GENERIC Vector9 abd_row_gradient_to_column_gradient(const Vector9& row_g)
+{
+    Vector9 col_g;
+    for(IndexT row = 0; row < 3; ++row)
+        for(IndexT col = 0; col < 3; ++col)
+            col_g[col * 3 + row] = row_g[row * 3 + col];
+    return col_g;
+}
+
+MUDA_GENERIC Matrix9x9 abd_row_hessian_to_column_hessian(const Matrix9x9& row_H)
+{
+    Matrix9x9 col_H;
+    for(IndexT row_a = 0; row_a < 3; ++row_a)
+    {
+        for(IndexT col_a = 0; col_a < 3; ++col_a)
+        {
+            const IndexT a_col = col_a * 3 + row_a;
+            const IndexT a_row = row_a * 3 + col_a;
+            for(IndexT row_b = 0; row_b < 3; ++row_b)
+            {
+                for(IndexT col_b = 0; col_b < 3; ++col_b)
+                {
+                    const IndexT b_col = col_b * 3 + row_b;
+                    const IndexT b_row = row_b * 3 + col_b;
+                    col_H(a_col, b_col) = row_H(a_row, b_row);
+                }
+            }
+        }
+    }
+    return col_H;
+}
+
 template <typename PositionViewer>
 MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     const Vector4i& tet,
@@ -58,14 +101,13 @@ MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     PositionViewer positions,
     const Matrix3x3& Dm_inv,
     Float rest_volume,
-    Float mu,
-    Float lambda,
+    Float kappa,
     Float dt)
 {
-    namespace SVTS = sym::soft_vertex_triangle_stitch;
+    namespace AOP = sym::abd_ortho_potential;
 
     RCCBondedPTVirtualTetEval out;
-    if(rest_volume <= 0.0 || mu <= 0.0 || lambda <= 0.0)
+    if(rest_volume <= 0.0 || kappa <= 0.0)
         return out;
 
     const IndexT n = static_cast<IndexT>(positions_view.size());
@@ -79,22 +121,24 @@ MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     Vector3 x3 = positions(tet[3]);
 
     Matrix3x3 F = fem::F(x0, x1, x2, x3, Dm_inv);
-    Vector9   vec_F = flatten(F);
+    Vector12  q = abd_q_from_F(F);
     const Float Vdt2 = rest_volume * dt * dt;
 
     Float E_val = 0.0;
-    SVTS::E(E_val, mu, lambda, vec_F);
+    AOP::E(E_val, kappa, q);
     out.energy = E_val * Vdt2;
 
-    Vector9 dEdVecF;
-    SVTS::dEdVecF(dEdVecF, mu, lambda, vec_F);
+    Vector9 dEdVecF_row;
+    AOP::dEdq(dEdVecF_row, kappa, q);
+    Vector9 dEdVecF = abd_row_gradient_to_column_gradient(dEdVecF_row);
     dEdVecF *= Vdt2;
 
     Matrix9x12 dFdx = fem::dFdx(Dm_inv);
     out.gradient = dFdx.transpose() * dEdVecF;
 
-    Matrix9x9 ddEddVecF;
-    SVTS::ddEddVecF(ddEddVecF, mu, lambda, vec_F);
+    Matrix9x9 ddEddVecF_row;
+    AOP::ddEddq(ddEddVecF_row, kappa, q);
+    Matrix9x9 ddEddVecF = abd_row_hessian_to_column_hessian(ddEddVecF_row);
     ddEddVecF *= Vdt2;
     make_spd(ddEddVecF);
     out.hessian = dFdx.transpose() * ddEddVecF * dFdx;
@@ -103,26 +147,19 @@ MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
 }
 }  // namespace
 
-void RCCBondedPTVirtualTetReporter::Impl::set_material(Float mu,
-                                                       Float lambda) noexcept
+void RCCBondedPTVirtualTetReporter::Impl::set_material(Float kappa) noexcept
 {
-    m_mu = mu;
-    m_lambda = lambda;
+    m_kappa = kappa;
 }
 
-Float RCCBondedPTVirtualTetReporter::Impl::mu() const noexcept
+Float RCCBondedPTVirtualTetReporter::Impl::kappa() const noexcept
 {
-    return m_mu;
-}
-
-Float RCCBondedPTVirtualTetReporter::Impl::lambda() const noexcept
-{
-    return m_lambda;
+    return m_kappa;
 }
 
 bool RCCBondedPTVirtualTetReporter::Impl::active() const noexcept
 {
-    return m_mu > 0.0 && m_lambda > 0.0;
+    return m_kappa > 0.0;
 }
 
 SizeT RCCBondedPTVirtualTetReporter::Impl::energy_count(
@@ -166,8 +203,7 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_energy(
                 rest_volume =
                     rest_volume.viewer().name("rcc_bonded_pt_rest_volume"),
                 energies = energies.viewer().name("rcc_bonded_pt_Es"),
-                mu = m_mu,
-                lambda = m_lambda,
+                kappa = m_kappa,
                 dt] __device__(int I) mutable
                {
                    auto eval = eval_virtual_tet(topos(I),
@@ -175,8 +211,7 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_energy(
                                                 positions,
                                                 dm_inv(I),
                                                 rest_volume(I),
-                                                mu,
-                                                lambda,
+                                                kappa,
                                                 dt);
                    energies(I) = eval.energy;
                });
@@ -209,8 +244,7 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_dense_energy_gradient_hessian(
                 gradients =
                     gradients.viewer().name("rcc_bonded_pt_dense_Gs"),
                 hessians = hessians.viewer().name("rcc_bonded_pt_dense_Hs"),
-                mu = m_mu,
-                lambda = m_lambda,
+                kappa = m_kappa,
                 dt] __device__(int I) mutable
                {
                    auto eval = eval_virtual_tet(topos(I),
@@ -218,8 +252,7 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_dense_energy_gradient_hessian(
                                                 positions,
                                                 dm_inv(I),
                                                 rest_volume(I),
-                                                mu,
-                                                lambda,
+                                                kappa,
                                                 dt);
                    energies(I) = eval.energy;
                    gradients(I) = eval.gradient;
@@ -252,8 +285,7 @@ void RCCBondedPTVirtualTetReporter::Impl::assemble(
                     rest_volume.viewer().name("rcc_bonded_pt_rest_volume"),
                 G3s = gradients.viewer().name("rcc_bonded_pt_Gs"),
                 H3x3s = hessians.viewer().name("rcc_bonded_pt_H3x3s"),
-                mu = m_mu,
-                lambda = m_lambda,
+                kappa = m_kappa,
                 dt,
                 gradient_only] __device__(int I) mutable
                {
@@ -263,8 +295,7 @@ void RCCBondedPTVirtualTetReporter::Impl::assemble(
                                                 positions,
                                                 dm_inv(I),
                                                 rest_volume(I),
-                                                mu,
-                                                lambda,
+                                                kappa,
                                                 dt);
 
                    DoubletVectorAssembler VA{G3s};
@@ -287,11 +318,19 @@ void RCCBondedPTVirtualTetReporter::do_build(DyTopoEffectReporter::BuildInfo&)
     m_impl.dt_attr = world().scene().config().find<Float>("dt");
     UIPC_ASSERT(m_impl.dt_attr, "Scene config must have a 'dt' attribute.");
 
-    auto mu_attr = world().scene().config().find<Float>("rcc_bonded_pt_mu");
-    auto lambda_attr =
-        world().scene().config().find<Float>("rcc_bonded_pt_lambda");
-    m_impl.set_material(mu_attr ? mu_attr->view()[0] : 0.0,
-                        lambda_attr ? lambda_attr->view()[0] : 0.0);
+    auto model_attr =
+        world().scene().config().find<std::string>("rcc_bonded_pt_energy_model");
+    const std::string model =
+        model_attr ? model_attr->view()[0] : std::string{"abd_ortho"};
+    UIPC_ASSERT(model == "abd_ortho",
+                "Unsupported rcc_bonded_pt_energy_model '{}'. "
+                "The production bonded PT reporter currently supports only "
+                "'abd_ortho'.",
+                model);
+
+    auto kappa_attr =
+        world().scene().config().find<Float>("rcc_bonded_pt_kappa");
+    m_impl.set_material(kappa_attr ? kappa_attr->view()[0] : Float{1e8});
 }
 
 void RCCBondedPTVirtualTetReporter::do_report_energy_extent(
