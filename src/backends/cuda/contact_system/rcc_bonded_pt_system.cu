@@ -2,8 +2,10 @@
 #include <contact_system/rcc_bonded_pt_lookup.h>
 #include <muda/cub/device/device_select.h>
 #include <muda/ext/eigen/eigen_core_cxx20.h>
+#include <muda/ext/eigen/inverse.h>
 #include <muda/launch/parallel_for.h>
 #include <sim_engine.h>
+#include <utils/friction_utils.h>
 #include <cmath>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
@@ -117,7 +119,9 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
     muda::CBufferView<Vector3> positions_view,
     PositionViewer positions,
     Float det_dm_min,
-    Float strain_threshold)
+    Float strain_threshold,
+    Float gap_threshold,
+    Float slip_threshold)
 {
     const IndexT n = static_cast<IndexT>(positions_view.size());
     if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
@@ -151,6 +155,58 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
         flags |= core::RCCBondedPTReleaseDegenerate;
     else if(strain_threshold >= 0.0 && strain > strain_threshold)
         flags |= core::RCCBondedPTReleaseStrain;
+
+    if(gap_threshold >= 0.0 || slip_threshold >= 0.0)
+    {
+        using namespace friction;
+
+        const Matrix3x3 Dm = muda::eigen::inverse(dm_inv);
+        const Vector3 r0 = Vector3::Zero();
+        const Vector3 r1 = Dm.col(0);
+        const Vector3 r2 = Dm.col(1);
+        const Vector3 r3 = Dm.col(2);
+
+        const Vector3 rest_n = (r2 - r1).cross(r3 - r1);
+        const Vector3 curr_n = (x2 - x1).cross(x3 - x1);
+        const Float rest_nrm = rest_n.norm();
+        const Float curr_nrm = curr_n.norm();
+        if(rest_nrm <= det_dm_min || curr_nrm <= det_dm_min)
+        {
+            flags |= core::RCCBondedPTReleaseDegenerate;
+        }
+        else
+        {
+            const Float rest_dist = rest_n.dot(r0 - r1) / rest_nrm;
+            const Float curr_dist = curr_n.dot(x0 - x1) / curr_nrm;
+            if(!std::isfinite(rest_dist) || !std::isfinite(curr_dist))
+            {
+                flags |= core::RCCBondedPTReleaseDegenerate;
+            }
+            else if(gap_threshold >= 0.0)
+            {
+                const Float normal_gap =
+                    std::abs(curr_dist) - std::abs(rest_dist);
+                if(normal_gap > gap_threshold)
+                    flags |= core::RCCBondedPTReleaseGap;
+            }
+
+            if(slip_threshold >= 0.0)
+            {
+                Vector2 rest_bary = Vector2::Zero();
+                Vector2 curr_bary = Vector2::Zero();
+                point_triangle_closest_point(r0, r1, r2, r3, rest_bary);
+                point_triangle_closest_point(x0, x1, x2, x3, curr_bary);
+                const Vector2 delta = curr_bary - rest_bary;
+                const Vector3 slip =
+                    delta[0] * (x2 - x1) + delta[1] * (x3 - x1);
+                const Float slip_norm = slip.norm();
+                if(!std::isfinite(slip_norm))
+                    flags |= core::RCCBondedPTReleaseDegenerate;
+                else if(slip_norm > slip_threshold)
+                    flags |= core::RCCBondedPTReleaseSlip;
+            }
+        }
+    }
 
     return flags;
 }
@@ -230,6 +286,8 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                     positions = positions.viewer().name("positions"),
                     det_dm_min = m_det_dm_min,
                     release_strain = m_release_strain_threshold,
+                    release_gap = m_release_gap_threshold,
+                    release_slip = m_release_slip_threshold,
                     entries = m_prev_entries.view().viewer().name("prev_entries")] __device__(int i) mutable
                    {
                        U32 release_flags = flags(i);
@@ -242,7 +300,9 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                                positions_view,
                                positions,
                                det_dm_min,
-                               release_strain);
+                               release_strain,
+                               release_gap,
+                               release_slip);
                        }
 
                        RCCBondedPTDeviceEntry entry;
@@ -570,9 +630,13 @@ void RCCBondedPTSystem::Impl::set_rest_shape_config(Float min_separate_distance,
     m_det_dm_min = det_dm_min;
 }
 
-void RCCBondedPTSystem::Impl::set_release_config(Float strain_threshold) noexcept
+void RCCBondedPTSystem::Impl::set_release_config(Float strain_threshold,
+                                                 Float gap_threshold,
+                                                 Float slip_threshold) noexcept
 {
     m_release_strain_threshold = strain_threshold;
+    m_release_gap_threshold = gap_threshold;
+    m_release_slip_threshold = slip_threshold;
 }
 
 void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexcept
@@ -682,8 +746,13 @@ void RCCBondedPTSystem::do_build()
                                  det_dm_min_attr ? det_dm_min_attr->view()[0] : 1e-12);
     auto release_strain_attr =
         config.find<Float>("rcc_bonded_pt_release_strain");
+    auto release_gap_attr = config.find<Float>("rcc_bonded_pt_release_gap");
+    auto release_slip_attr = config.find<Float>("rcc_bonded_pt_release_slip");
     m_impl.set_release_config(release_strain_attr ? release_strain_attr->view()[0]
-                                                  : 1e30);
+                                                  : 1e30,
+                              release_gap_attr ? release_gap_attr->view()[0] : 1e30,
+                              release_slip_attr ? release_slip_attr->view()[0]
+                                                : 1e30);
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
 
     on_init_scene(

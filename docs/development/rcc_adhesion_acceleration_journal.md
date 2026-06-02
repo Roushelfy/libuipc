@@ -692,3 +692,34 @@ After ABD OrthoPotential became the production bonded virtual-tet energy, the ne
 ### Decision
 
 The first release policy slice is implemented and covered: strain/flip/degenerate release, active-lock compaction, released snapshot alignment, same-step relock suppression, one-shot release counters, and released beta carry. Remaining release reasons are normal gap, tangential slip, sticky-side failure, and disabled contact policy. Scene-level no-penetration observation, pre-CCD filtering in all concrete filters, and benchmarks are still required before bonded PT acceleration can claim full production correctness or speedup.
+
+## 2026-06-02 Gap And Slip Release
+
+### Context
+
+After the strain release slice, forced-pull scene gates still needed normal-gap and tangential-slip release reasons. These reasons can be evaluated from the current locked payload without adding new fat state: `Dm_inv` reconstructs the lock-time virtual tet rest `Dm`, which provides the rest point-plane gap and rest closest-foot barycentric coordinates.
+
+### Implemented
+
+- Added `rcc_bonded_pt_release_gap` and `rcc_bonded_pt_release_slip`, both defaulting to `1e30` so release stays disabled unless a test or scene selects thresholds.
+- Extended the device release evaluator to reconstruct rest `Dm` from `Dm_inv`.
+- Added normal-gap release as growth of current point-triangle normal distance beyond the lock-time rest gap.
+- Added tangential-slip release as current closest-foot barycentric displacement from the lock-time rest foot, measured in the current triangle tangent metric.
+- Kept the evaluator device-only and SoA-based; no host roundtrip or extra sorted payload was added.
+- Added independent backend fixtures for gap and slip release while keeping the stay/release two-lock lifecycle checks.
+- Updated roadmap, subsystem docs, conventions, and source/doc gates to mark gap/slip release implemented while leaving sticky-side and policy release planned.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` | Passed. Built the CUDA backend test binary; existing CUDA warnings remained. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]" -r compact` | Passed. Reported `All tests passed (58 assertions in 4 test cases)`. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed. Source/doc gate accepted gap/slip config, implementation, and fixture anchors. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (190 assertions in 10 test cases)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8`, then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs nav/API informational warnings remained. |
+
+### Decision
+
+Normal-gap and tangential-slip release are now covered as deterministic CUDA gates. The remaining release reasons are sticky-side failure and disabled contact policy, which require explicitly routing RCC sticky/policy inputs into the bonded owner rather than inferring them from geometry alone.

@@ -32,7 +32,9 @@ class RCCBondedPTSystem final : public SimSystem
         bool enabled() const noexcept;
         void set_rest_shape_config(Float min_separate_distance,
                                    Float det_dm_min) noexcept;
-        void set_release_config(Float strain_threshold) noexcept;
+        void set_release_config(Float strain_threshold,
+                                Float gap_threshold,
+                                Float slip_threshold) noexcept;
 
         void bind_filter(SimplexTrajectoryFilter* filter) noexcept;
         void feed_filter_keys() const noexcept;
@@ -80,6 +82,8 @@ class RCCBondedPTSystem final : public SimSystem
         Float                      m_min_separate_distance = 1e-6;
         Float                      m_det_dm_min = 1e-12;
         Float                      m_release_strain_threshold = 1e30;
+        Float                      m_release_gap_threshold = 1e30;
+        Float                      m_release_slip_threshold = 1e30;
         SizeT                      m_last_synced_filter_generation = 0;
         bool                       m_enabled = false;
     };

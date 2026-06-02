@@ -254,7 +254,7 @@ def main() -> int:
     expect_contains(
         "docs/roadmap.md",
         "Remaining release reasons",
-        "roadmap keeps gap/slip/sticky/policy release in planned work",
+        "roadmap keeps sticky/policy release in planned work",
     )
     expect_contains(
         "src/core/core/scene_default_config.cpp",
@@ -270,6 +270,16 @@ def main() -> int:
         "src/core/core/scene_default_config.cpp",
         "rcc_bonded_pt_release_strain",
         "default config exposes strain-release threshold",
+    )
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_release_gap",
+        "default config exposes normal-gap release threshold",
+    )
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_release_slip",
+        "default config exposes tangential-slip release threshold",
     )
     expect_not_contains(
         "src/core/core/scene_default_config.cpp",
@@ -365,8 +375,28 @@ def main() -> int:
     )
     expect_contains(
         "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleaseGap",
+        "CUDA owner evaluates normal-gap release reason",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleaseSlip",
+        "CUDA owner evaluates tangential-slip release reason",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
         "rcc_bonded_pt_release_strain",
         "CUDA owner reads strain-release config",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "rcc_bonded_pt_release_gap",
+        "CUDA owner reads normal-gap release config",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "rcc_bonded_pt_release_slip",
+        "CUDA owner reads tangential-slip release config",
     )
     expect_contains(
         "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
@@ -392,6 +422,16 @@ def main() -> int:
         "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
         "[rcc_bonded_pt][release][cuda]",
         "backend fixture covers strain release lifecycle",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][gap][cuda]",
+        "backend fixture covers normal-gap release lifecycle",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][slip][cuda]",
+        "backend fixture covers tangential-slip release lifecycle",
     )
     expect_contains(
         "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",

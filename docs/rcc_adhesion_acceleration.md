@@ -155,8 +155,10 @@ Current implementation status:
 | Reason | Status |
 | --- | --- |
 | `strain` | Implemented on CUDA using `rcc_bonded_pt_release_strain` against `||F F^T - I||` |
+| `gap` | Implemented on CUDA using `rcc_bonded_pt_release_gap` against current normal distance growth from the lock-time rest gap reconstructed from `Dm_inv` |
+| `slip` | Implemented on CUDA using `rcc_bonded_pt_release_slip` against current closest-foot tangential displacement from the lock-time rest barycentric foot reconstructed from `Dm_inv` |
 | `flip` / `degenerate` | Implemented on CUDA from current virtual-tet determinant/topology/rest-volume validity |
-| `gap`, `slip`, `sticky_side`, `policy` | Planned; required before forced-pull scene release can be considered complete |
+| `sticky_side`, `policy` | Planned; required before forced-pull scene release can be considered complete |
 
 Release ordering matters:
 
@@ -215,7 +217,7 @@ Required oracles before production use:
 | Beta/rest producer oracle | Existing locks plus a RCC PT beta snapshot with one refresh, one carry, one new lock, one duplicate, one low-beta reject, and one degenerate high-beta reject | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]"`: device-side producer carries old locks and their rest-shape payloads, refreshes high-beta candidates, increments age, suppresses duplicate keys, builds SVTS-compatible `Dm_inv/rest_volume` for fresh locks, counts degenerate rejects, and leaves low-beta or degenerate candidates unlocked |
 | ABD-style reporter oracle | One locked pair with known rest shape and high stiffness | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]"`: proves CUDA E/G/H matches the ABD CPU oracle |
 | CUDA BVH/radix-sort regression | Bunny sanity mesh through the existing GPU sanity checker | Implemented by `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` and `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`: bonded-PT device layout changes must not destabilize `SimplicialSurfaceDistanceCheck` or `InfoStacklessBVH` |
-| Release/beta carry oracle | Two locked PTs with controlled current deformation: one stays locked, one releases by strain | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][release]"`: released lock is absent from bonded state, released key/topology/beta/age/flag snapshots stay aligned, release reason/counter is recorded once, same-step relock is suppressed, and released beta is merged into RCC persistence without overwriting newer duplicate beta |
+| Release/beta carry oracle | Locked PTs with controlled current deformation: one stays locked while another releases by strain, normal gap, or tangential slip | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][release]"`: released lock is absent from bonded state, released key/topology/beta/age/flag snapshots stay aligned, release reason/counter is recorded once, same-step relock is suppressed, and released beta is merged into RCC persistence without overwriting newer duplicate beta |
 | Pre-CCD filter ownership oracle | One locked key and one unlocked key in every concrete filter fixture | Planned: locked absent from candidate/TOI/contact views, unlocked unchanged |
 | No-penetration scene observation | PT-rich bonded-mode press/hold/lift with CCD skipped for locked pairs | Planned: scene reports maximum penetration/gap or an equivalent fixture-specific bound while ABD-style energy is active |
 
