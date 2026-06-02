@@ -12,6 +12,8 @@ The performance thesis is to classify stable RCC PT pairs, remove them from the 
 
 Stable adhesive contact should become a complement energy with explicit ownership, not a hidden modification of contact detection. The design is valid only if the locked pair is absent from contact/RCC views and present in exactly one bonded virtual-tet reporter for the same step.
 
+For production bonded PT acceleration, a skipped pair must be backed in the same step by high-kappa ABD-style energy over the same four vertex position DOFs. A locked PT that skips CCD/contact/RCC but does not receive the ABD-style virtual-tet energy in that step is an invalid production state, even if beta history says the pair is stable.
+
 ## Baseline Data Flow
 
 ```text
@@ -57,8 +59,10 @@ Newton assembly
   -> bonded virtual-tet reporter assembles high-kappa ABD-style complement energy for locked_topos, Dm_inv, and rest_volume
 
 Release/update
+  -> release gate evaluates active locks before reporter ownership is finalized
   -> release gate records reason flags
   -> released pairs carry beta back into RCC persistence
+  -> released pairs are removed from bonded reporter input for that step
   -> still-locked pairs update age and diagnostics
 ```
 
@@ -95,7 +99,7 @@ The `apps/tests` locations hold the current deterministic state, oracle, CUDA br
 | `RCCBondedPTState` | Locked membership keys, oriented topologies, beta, age, release flags, rest-shape metrics | Contact force assembly, BVH traversal, frontend geometry objects |
 | Simplex trajectory filters | Candidate generation, PT CCD broadphase, active-pair output | Beta evolution, material parameters, virtual-tet energy |
 | `IPCSimplexRCCAdhesiveContact` | RCC beta evolution and persistence for active/unlocked PT pairs | Dynamic tet Hessian assembly, filter-specific skip logic |
-| Bonded virtual-tet reporter | Complement energy, gradient, Hessian for locked topologies | RCC beta law, broadphase decisions, contact-component accounting |
+| Bonded virtual-tet reporter | High-kappa ABD-style complement energy, gradient, Hessian for locked topologies | RCC beta law, broadphase decisions, contact-component accounting |
 | Global dynamic topology manager | Aggregation and scattering of complement energy | Classification policy or release policy |
 | `RCCBondedPTStateAccessorFeature` | Frontend snapshots of locked state and counters | Physics decisions or implicit synchronization outside explicit query points |
 | Bench/report layer | Timers and counters | Physics decisions |
@@ -124,7 +128,7 @@ The sorted membership key can match current RCC persistence behavior, but it is 
 | DCD/PT emission | Locked PT is skipped before PT CCD broadphase | Filter contract and `filter_skip_count` |
 | Friction candidate recording | Locked PT cannot enter `friction_PTs()` | Contract test reading trajectory-filter views |
 | RCC Phase B | Released pairs can receive carried beta | Beta carry fixture |
-| Newton assembly | Locked PT appears only in bonded reporter | Duplicate-suppressed counter and E/G/H oracle |
+| Newton assembly | Locked PT appears only in the ABD-style bonded reporter | Duplicate-suppressed counter, E/G/H oracle, and scene no-penetration observation |
 | End-of-step update | Release reasons and beta state are recorded | Lifecycle scene gate |
 
 ## Virtual Tet Rest Shape And Energy
@@ -135,7 +139,7 @@ The dynamic reporter uses `SoftVertexTriangleStitch` only for the PT rest-shape 
 2. If point-plane rest distance is below `min_separate_distance`, offset the rest point along the triangle normal before computing `Dm_inv`.
 3. Store `Dm_inv` and positive `rest_volume`.
 
-The production bonded energy must be ABD-style, not Stable Neo-Hookean. A locked pair is removed from CCD/contact/RCC, so the replacement energy is responsible for making the four vertices behave like a stiff bonded patch during that step.
+The production bonded energy must be ABD-style, not Stable Neo-Hookean. A locked pair is removed from CCD/contact/RCC, so the replacement energy is responsible for making the four vertices behave like a stiff bonded patch during that step. The ABD energy is a replacement for the skipped geometric/contact work, not the RCC adhesion law itself; beta remains RCC state and must be restored on release.
 
 For the same four real vertex positions, build:
 
@@ -149,15 +153,33 @@ $$
 E = \kappa \, V_0 \, \Delta t^2 \, \|F F^T - I\|_F^2,
 $$
 
-where `V0 = rest_volume` and `kappa = rcc_bonded_pt_kappa`. `abd_arap` may be supported as an alternate model only if it has the same CPU and GPU E/G/H oracle coverage. The initial target stiffness is `kappa >= 1e8` in scene units, with higher values allowed when solver conditioning gates pass.
+where `V0 = rest_volume` and `kappa = rcc_bonded_pt_kappa`. `abd_arap` may be supported as an alternate model only if it has the same CPU and GPU E/G/H oracle coverage. The default production gate value is `kappa >= 1e8` in scene units, with higher values allowed when solver conditioning gates pass.
 
 Implementation rules:
 
 - Do not instantiate a real frontend ABD body for each lock; assemble the ABD-style energy directly into the same four vertex DOFs through `dF/dx`.
 - Keep `rcc_bonded_pt_energy_model` explicit; default target model is `abd_ortho`.
+- Treat missing, zero, negative, or unsupported production energy settings as a hard diagnostic failure when bonded PT acceleration is asked to skip CCD/contact/RCC.
 - Keep bonded PT acceleration default-off until high-kappa ABD oracle, no-penetration scene, release, and benchmark gates pass.
 - Apply SPD projection in the Hessian path.
 - Do not reintroduce the old Stable Neo-Hookean `rcc_bonded_pt_mu/lambda` reporter as a production path; it did not justify skipping CCD and has been replaced by ABD-style energy.
+
+## Release And Beta Carry Contract
+
+Release is the normal exit path for a bonded approximation. It is evaluated from the live locked state, current or predicted positions, and scene policy. If any release condition fires, the pair must stop being reporter input for that step and must re-enter RCC persistence with its last locked beta.
+
+Required release data:
+
+| Data | Purpose |
+| --- | --- |
+| Released key | Reconnect to RCC PT beta persistence |
+| Released oriented topology | Debug ownership and scene assertions |
+| Released beta | Avoid adhesion history reset on fallback |
+| Released age | Distinguish early churn from long-lived locks |
+| Release flags | Explain strain/gap/slip/flip/sticky-side/policy fallback |
+| Release counters | Prove one-shot accounting and scene gate behavior |
+
+The first release fixture should be deterministic: one lock stays active, one lock releases by a controlled reason, active bonded buffers are compacted, released buffers preserve key/topology/beta/age/flags alignment, and the RCC previous-beta snapshot can observe the released beta.
 
 ## Relationship To Existing Systems
 

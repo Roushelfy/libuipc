@@ -14,6 +14,8 @@ These conventions are enforceable rules for RCC bonded point-triangle accelerati
 8. Do not put `Matrix3x3`, rest volume, or other fat payloads in a CUB radix-sort value type; keep sorted device entries small and store rest-shape payloads in SoA buffers.
 9. Do not use the SVTS Stable Neo-Hookean prototype energy as the production replacement for a locked PT pair that skips CCD.
 10. Do not allow a locked PT pair to skip CCD/contact/RCC unless one high-kappa ABD-style virtual-tet energy is assembled for the same four vertex DOFs in that step, or an explicit debug mode records that non-penetration is not being claimed.
+11. Do not treat zero or missing bonded stiffness as a harmless default in production mode. If bonded PT acceleration skips CCD/contact/RCC, `rcc_bonded_pt_energy_model` and `rcc_bonded_pt_kappa` must be reported and valid.
+12. Do not assemble a released pair in the bonded reporter for the same step in which its release flag is produced.
 
 ## Data Layout Rules
 
@@ -28,6 +30,7 @@ Runtime state uses structure-of-arrays device buffers.
 | `Dm_inv` | `DeviceBuffer<Matrix3x3>` | Built only after rest-shape conditioning passes |
 | `rest_volume` | `DeviceBuffer<Float>` | Positive and above minimum volume |
 | `release_flags` | `DeviceBuffer<U32>` | Bit mask or enum, stable enough for tests and reports |
+| released snapshots | SoA buffers or host state vectors | Key, topology, beta, age, and flags zipped after release extraction |
 
 Sorting keys alone is forbidden. Any sort of `locked_keys` must carry or recover the permutation for `locked_topos`, `locked_beta`, `locked_age`, `Dm_inv`, `rest_volume`, and release metadata. The current CUDA producer sorts a compact `RCCBondedPTDeviceEntry` value containing only key/topology/beta/age/release flags, then recovers rest-shape payloads by sorted key in the bridge.
 
@@ -52,8 +55,8 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_min_lock_age` | Consecutive accepted steps before lock | Planned |
 | `rcc_bonded_pt_min_separate_distance` | Rest-shape thickness floor | Implemented, default `1e-6` |
 | `rcc_bonded_pt_det_dm_min` | Minimum absolute rest determinant | Implemented, default `1e-12` |
-| `rcc_bonded_pt_energy_model` | Production virtual-tet energy model, currently `abd_ortho` | Implemented, default `abd_ortho` |
-| `rcc_bonded_pt_kappa` | ABD-style virtual-tet stiffness | Implemented, default `1e8` |
+| `rcc_bonded_pt_energy_model` | Production virtual-tet energy model, currently `abd_ortho` | Implemented, default `abd_ortho`; required when locked pairs skip CCD/contact/RCC |
+| `rcc_bonded_pt_kappa` | ABD-style virtual-tet stiffness | Implemented, default `1e8`; scene correctness gates require `>= 1e8` unless they explicitly test failure/diagnostic behavior |
 | `rcc_bonded_pt_release_gap` | Normal release distance | Planned |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Planned |
 | `rcc_bonded_pt_release_strain` | Deformation release threshold | Planned |
@@ -65,12 +68,22 @@ Retired prototype keys must not be reintroduced as production acceptance criteri
 | `rcc_bonded_pt_mu` | Retired Stable Neo-Hookean prototype reporter parameter | Keep out of the production reporter |
 | `rcc_bonded_pt_lambda` | Retired Stable Neo-Hookean prototype reporter parameter | Keep out of the production reporter |
 
+ABD/SVTS boundary:
+
+| Allowed | Forbidden In Production |
+| --- | --- |
+| Use SVTS logic to condition point-triangle rest shape, `min_separate_distance`, `Dm_inv`, and positive `rest_volume` | Use SVTS Stable Neo-Hookean energy as the replacement for skipped CCD/contact/RCC |
+| Use ABD OrthoPotential over `F = Ds Dm_inv` and scatter through `dF/dx` to four vertex-position DOFs | Create transient frontend ABD or SVTS geometries for per-frame locks |
+| Add alternate ABD models after CPU and GPU E/G/H oracle coverage | Accept alternate energy models without a named report field and oracle |
+
 ## Validation Rules
 
 - Source scans enforce documentation structure and dependency boundaries only.
 - Unit and contract tests must use deterministic synthetic fixtures.
 - Numeric energy, gradient, and Hessian claims require a CPU or legacy oracle.
 - Energy oracles must name the model they validate. A Stable Neo-Hookean oracle is only proof for the debug/prototype path; production requires an ABD-style high-kappa oracle.
+- E/G/H oracle success does not by itself prove non-penetration after CCD is skipped. A bonded-mode scene gate must observe penetration/gap or an equivalent fixture-specific geometric bound.
+- Release tests must assert both sides of the lifecycle: active locks stay zipped after compaction, and released snapshots carry key/topology/beta/age/flags back toward RCC persistence.
 - Scene gates must report pair counts and ownership fields, not just "simulation ran".
 - Current legacy RCC scene gates are behavior baselines only: they prove adhesion lift/hold/release still works in the existing pipeline, but they do not prove bonded-PT pair ownership until `rcc_bonded_pt_*` counters exist.
 - The first lifecycle scene is `pt_lift_release`: a PT-rich fixture under gravity must lock during press/hold, adhered geometry must follow during sub-threshold lift with ABD-style bonded energy active, a stronger pull must release and separate it, and an adhesion-off baseline must not lift the adhered geometry. A subdivided contact-face cube, patch-on-cube, or cloth patch is acceptable; the original 8-corner cube is too sparse for this gate.
@@ -98,9 +111,10 @@ Retired prototype keys must not be reintroduced as production acceptance criteri
 | CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
 | RCC Phase A high-beta PTs populate the CUDA owner with live rest-shape construction | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
 | ABD-style bonded reporter E/G/H matches CPU reference at `kappa >= 1e8` | Backend CUDA oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]" -r compact` | Implemented |
+| Production path excludes retired SNH config and reporter functions | Source/doc gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Implemented |
 | Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
-| Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
+| Released pair carries beta back to RCC and is absent from bonded assembly | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
 | PT lift/release scene locks, reuses, avoids penetration under ABD-style energy, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |
 | Stable scene improves hot-path timing without hiding setup cost | Benchmark gate | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Planned |
 

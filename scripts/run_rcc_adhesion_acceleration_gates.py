@@ -59,7 +59,9 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Phase 3: Bonded Virtual-Tet Reporter (Current: Correct Energy Model)", "roadmap identifies current phase"),
+                ("Current phase: **Phase 4", "roadmap identifies current phase"),
+                ("Phase 3: Bonded Virtual-Tet Reporter (Complete For ABD Ortho Scope)", "roadmap records completed ABD reporter scope"),
+                ("Phase 4: Release, Fallback, And Scene Gate (Current)", "roadmap tracks current release/lifecycle work"),
                 ("Blockers", "roadmap names current blockers"),
                 ("Validation Gates", "roadmap lists runnable current gates"),
                 ("Planned Gates", "roadmap separates future gates from current proof"),
@@ -95,6 +97,7 @@ def main() -> int:
             [
                 ("Scope", "subsystem doc defines scope"),
                 ("Algorithm Summary", "subsystem doc gives executable shape"),
+                ("Lifecycle State Machine", "subsystem doc defines lock/release states"),
                 ("Lock Gate", "subsystem doc defines lock policy"),
                 ("Release Gate", "subsystem doc defines release policy"),
                 ("Oracles", "subsystem doc defines numeric proof path"),
@@ -183,9 +186,29 @@ def main() -> int:
         "architecture requires ABD-style bonded virtual-tet energy",
     )
     expect_contains(
+        "docs/architecture.md",
+        "same step by high-kappa ABD-style",
+        "architecture makes ABD energy a same-step replacement contract",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "Release And Beta Carry Contract",
+        "architecture defines release/beta handoff contract",
+    )
+    expect_contains(
         "docs/roadmap.md",
         "rcc_bonded_pt_kappa",
         "roadmap tracks production bonded stiffness configuration",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "kappa` must be positive",
+        "roadmap rejects zero-stiffness bonded production mode",
+    )
+    expect_not_contains(
+        "docs/roadmap.md",
+        "production ABD material keys are still planned",
+        "roadmap must not present implemented ABD config as future work",
     )
     expect_contains(
         "docs/conventions.md",
@@ -193,9 +216,29 @@ def main() -> int:
         "conventions distinguish prototype SNH from production ABD energy",
     )
     expect_contains(
+        "docs/conventions.md",
+        "ABD/SVTS boundary",
+        "conventions lock down the SVTS rest-shape versus ABD energy boundary",
+    )
+    expect_contains(
         "docs/rcc_adhesion_acceleration.md",
         "abd_ortho",
         "subsystem doc names the target production energy model",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Hard production contract",
+        "subsystem doc makes ABD energy a production precondition",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "rcc_bonded_pt_kappa >= 1e8",
+        "subsystem doc records the initial high-stiffness gate value",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Release ordering matters",
+        "subsystem doc defines release before bonded assembly",
     )
     expect_contains(
         "src/core/core/scene_default_config.cpp",
@@ -231,6 +274,11 @@ def main() -> int:
         "docs/conventions.md",
         "adhesion-off baseline",
         "scene gate requires a baseline that prevents false positives",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "E/G/H oracle success does not by itself prove non-penetration",
+        "conventions require scene-level no-penetration observation",
     )
 
     expect_contains(

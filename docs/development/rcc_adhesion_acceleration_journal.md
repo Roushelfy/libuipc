@@ -633,3 +633,30 @@ After the plan correction, the next implementation slice replaced the prototype 
 ### Decision
 
 The bonded virtual-tet energy model now matches the original high-stiffness ABD requirement. Remaining correctness blockers are release/beta carry, no-penetration scene observation while CCD is skipped, pre-CCD filtering in every concrete simplex filter, and benchmark timing.
+
+## 2026-06-02 ABD Contract Documentation Hardening
+
+### Context
+
+After correcting the implementation from the prototype SNH virtual-tet energy to ABD OrthoPotential, the stable docs still needed a stricter handoff contract. The important risk is future drift: an agent could read old SVTS/SNH history, treat it as a valid replacement energy, and then skip CCD/contact/RCC without the high-stiffness ABD energy originally required by the design.
+
+### Implemented
+
+- Updated the roadmap current phase to Phase 4: release, fallback, and bonded-mode scene gates.
+- Tightened the core rule: any locked PT pair that skips CCD/contact/RCC must be backed in the same step by high-kappa ABD-style virtual-tet energy over `F = Ds Dm_inv`, with production/default gates requiring `kappa >= 1e8`.
+- Clarified that `SoftVertexTriangleStitch` is only the rest-shape and thickness reference. Its Stable Neo-Hookean energy is historical/prototype evidence only and must not re-enter the production reporter path.
+- Added a lifecycle state machine and release ordering contract: released pairs must be removed from bonded reporter input, must carry beta back to RCC persistence, and must be counted once.
+- Added a release/beta-carry planned gate before the bonded-mode scene gate.
+- Clarified that E/G/H oracle success is necessary but not sufficient for non-penetration; the bonded-mode scene gate must observe penetration/gap or an equivalent fixture-specific bound.
+- Strengthened the source/doc gate so it checks the ABD/SVTS boundary, high-kappa requirement, current Phase 4 status, release ordering, and absence of the obsolete "ABD material keys are still planned" wording.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed. Source/doc gate accepted the hardened ABD, release, and Phase 4 anchors. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Ran source/doc checks, Python syntax checks, and docs build. Existing MkDocs nav/API informational warnings remained. |
+
+### Decision
+
+The docs now treat the ABD virtual-tet energy as a non-negotiable production precondition rather than one possible material choice. The next implementation slice remains release/beta carry, followed by no-penetration scene observation and pre-CCD filtering.
