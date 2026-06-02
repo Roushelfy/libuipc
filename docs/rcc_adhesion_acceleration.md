@@ -38,7 +38,7 @@ For each next-step PT candidate in simplex filters:
 
 During assembly:
   contact/RCC sees only unlocked pairs
-  bonded reporter assembles one complement energy per locked topology
+  bonded reporter assembles one high-kappa ABD-style complement energy per locked topology
 
 During release/update:
   evaluate release gate
@@ -88,6 +88,32 @@ The rest-shape construction follows the existing `SoftVertexTriangleStitch` conv
 
 `min_separate_distance` is a numerical thickness, not a cosmetic gap. It must scale with scene/mesh units and should not be set arbitrarily close to zero.
 
+## Energy Model
+
+The runtime bonded energy is not the same thing as `SoftVertexTriangleStitch` energy. SVTS supplies the PT rest-shape convention above; production bonded PT acceleration must use an ABD-style high-stiffness shape energy.
+
+For one locked topology `(x0, x1, x2, x3)`:
+
+$$
+D_s = [x_1 - x_0, x_2 - x_0, x_3 - x_0], \qquad F = D_s D_m^{-1}.
+$$
+
+`F` is treated as the affine transform of a virtual tetrahedron whose DOFs are still the four real vertex positions. The target default model is ABD OrthoPotential:
+
+$$
+E_{\text{abd\_ortho}} = \kappa \, V_0 \, \Delta t^2 \, \|F F^T - I\|_F^2.
+$$
+
+`V0` is `rest_volume`, and `kappa` comes from `rcc_bonded_pt_kappa`. The first production gates should use `kappa >= 1e8` in scene units. `abd_arap` may be added as an alternate model:
+
+$$
+E_{\text{abd\_arap}} = \kappa \, V_0 \, \Delta t^2 \, \|F - R\|_F^2,
+$$
+
+where `R` is the rotation from the polar decomposition of `F`.
+
+The reporter should assemble this ABD-style energy directly into the 12 vertex-position DOFs through `dF/dx`. It should not create transient frontend ABD objects or extra affine DOFs. The current Stable Neo-Hookean reporter/oracle is a prototype path only; it proves GPU/CPU consistency of that prototype but does not satisfy the production requirement for skipping CCD.
+
 ## Release Gate
 
 A locked pair releases when any condition fails.
@@ -109,7 +135,8 @@ The bonded virtual-tet reporter:
 
 - Reports complement energy, not contact energy.
 - Assembles energy, gradient, and Hessian over global vertex ids.
-- Uses Stable Neo-Hookean formulas compatible with the SVTS reference.
+- Uses ABD-style high-kappa shape energy over `F = Ds Dm_inv`; default target model is `abd_ortho`.
+- Scales by `rest_volume * dt^2`, matching the backend reporter convention.
 - Applies SPD projection in the Hessian path.
 - Emits report fields for assembled count and timing.
 
@@ -130,8 +157,8 @@ The reporter must not:
 | Filter helper | `src/backends/cuda/contact_system/rcc_bonded_pt_lookup.h` | Shared device helper for RCC PT key construction, sorted membership lower-bound, and lock lookup |
 | Common active filter | `src/backends/cuda/collision_detection/simplex_trajectory_filter.*` | Can compact locked PTs out of active `PTs()` and `friction_PTs()` when supplied sorted locked keys; default is no-op |
 | Filter backends | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | Planned: skip before PT CCD broadphase |
-| Reporter | `src/backends/cuda/inter_primitive_effect_system/...` or contact-adjacent complement reporter | Dynamic, no frontend geometry rebuild |
-| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; release and virtual-tet assembly remain planned |
+| Reporter | `src/backends/cuda/inter_primitive_effect_system/...` or contact-adjacent complement reporter | Dynamic, no frontend geometry rebuild; current SNH implementation is prototype and must be replaced by ABD-style high-kappa math |
+| RCC integration | `ipc_simplex_rcc_adhesive_contact.cu` | Phase A beta evolution now optionally calls the bonded-PT producer with current positions for lock-time rest-shape construction; release and production ABD virtual-tet assembly remain planned |
 | Tests | `apps/tests/core`, `apps/tests/backends/cuda`, `apps/tests/sim_case` | Follow the test matrix in conventions |
 | Benchmarks | `scripts/bench_rcc_adhesion_acceleration.py` | Planned after timers/counters exist |
 
@@ -143,12 +170,14 @@ Required oracles before production use:
 | --- | --- | --- |
 | State oracle | Two PT pairs with deterministic beta/age/release flags and rest-shape payloads | Implemented by `uipc_test_core "[rcc_bonded_pt][state]"`: one lock stays active, one release is extracted, stable key/topology/beta/age/release/rest-shape permutation is preserved |
 | Rest-shape oracle | Point near triangle plane with known `min_separate_distance` | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]"`: `Dm_inv`, positive rest volume, point offset, orientation swap, and degenerate-triangle rejection match SVTS rules |
-| Energy oracle | Single virtual tet with deterministic deformation | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][energy]"`: CPU energy, gradient, and Hessian match center-difference checks; GPU reporter matching remains planned |
+| Prototype SNH energy oracle | Single virtual tet with deterministic deformation | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][energy]"`: CPU energy, gradient, and Hessian match center-difference checks for the prototype only |
+| ABD-style production energy oracle | Single virtual tet with deterministic deformation and high stiffness | Planned: `uipc_test_core "[rcc_bonded_pt][oracle][abd_energy]"` proves `abd_ortho` E/G/H, finite differences, SPD projection, and `kappa >= 1e8` conditioning |
 | CUDA state bridge oracle | Host state with pending and extracted release paths | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]"`: device buffers preserve key/topology/beta/age/release/rest-shape alignment and counters roundtrip through upload/download |
 | CUDA lookup oracle | One locked key, one triangle permutation, two misses, and an empty locked set | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][lookup]"`: lookup uses the existing RCC PT key, treats triangle permutations as the same membership key, keeps the point id distinct, and misses cleanly |
 | Common active-filter oracle | Synthetic active PT list with two locked and two unlocked pairs | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][filter]"`: locked pairs are compacted out of `SimplexTrajectoryFilter::PTs()` and stay absent after `record_friction_candidates()` copies to `friction_PTs()` |
 | CUDA owner oracle | Host locked state plus synthetic filter active view | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner]"`: owner uploads state, feeds sorted keys, syncs filter-skip counters, and downloads counters aligned with active locks |
 | Beta/rest producer oracle | Existing locks plus a RCC PT beta snapshot with one refresh, one carry, one new lock, one duplicate, one low-beta reject, and one degenerate high-beta reject | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]"`: device-side producer carries old locks and their rest-shape payloads, refreshes high-beta candidates, increments age, suppresses duplicate keys, builds SVTS-compatible `Dm_inv/rest_volume` for fresh locks, counts degenerate rejects, and leaves low-beta or degenerate candidates unlocked |
+| ABD-style reporter oracle | One locked pair with known rest shape and high stiffness | Planned: `uipc_test_backend_cuda "[rcc_bonded_pt][reporter][abd_oracle]"` proves CUDA E/G/H matches the ABD CPU oracle |
 | CUDA BVH/radix-sort regression | Bunny sanity mesh through the existing GPU sanity checker | Implemented by `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` and `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`: bonded-PT device layout changes must not destabilize `SimplicialSurfaceDistanceCheck` or `InfoStacklessBVH` |
 | Pre-CCD filter ownership oracle | One locked key and one unlocked key in every concrete filter fixture | Planned: locked absent from candidate/TOI/contact views, unlocked unchanged |
 
@@ -170,7 +199,7 @@ These gates are legacy behavior baselines, not bonded-PT proof. They do not obse
 | Adhesion-off baseline | Disable RCC adhesive contact while keeping the driver, constraints, and gravity identical | The adhered body or patch does not follow the driver beyond the declared tolerance |
 | Legacy RCC baseline | Run current RCC adhesion with bonded PT disabled, including the current Python and C++ legacy scene gates | The fixture shows the reference lift/release behavior for comparison |
 | Press/hold | In bonded mode, bring the driver into a PT-rich contact patch under gravity | At least one PT lock is reported, no duplicate ownership is reported |
-| Lift | Raise the driver below release thresholds | Adhered geometry follows the legacy RCC baseline within the declared tolerance and locks are reused |
+| Lift | Raise the driver below release thresholds | Adhered geometry follows the legacy RCC baseline within the declared tolerance, locks are reused, and the ABD-style energy prevents visible penetration while CCD is skipped |
 | Forced pull | Increase normal gap or tangential slip past release threshold | Release counter and reason flag are reported, beta is carried back, and the adhered geometry separates or falls |
 
 The gate must read simulation state or report fields. Writing OBJ sequences is useful for debugging, but it is not sufficient evidence.
@@ -189,6 +218,8 @@ Minimum backend report fields before scene gates:
 | `rcc_bonded_pt_filter_skip_count` | PT candidates skipped before CCD/contact |
 | `rcc_bonded_pt_duplicate_suppressed_count` | Duplicate ownership prevented |
 | `rcc_bonded_pt_rejected_degenerate_count` | Rest-shape quality rejection |
+| `rcc_bonded_pt_energy_model` | Reported model, expected production value `abd_ortho` unless the test explicitly chooses another model |
+| `rcc_bonded_pt_kappa` | Reported ABD-style stiffness used by the bonded reporter |
 | `rcc_bonded_pt_assembly_ms` | Bonded virtual-tet assembly time |
 
 Scene and benchmark gates must fail if these fields are missing.

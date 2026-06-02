@@ -34,7 +34,9 @@ Relevant current anchors:
 | `src/backends/cuda/collision_detection/simplex_trajectory_filter.cu` | `record_friction_candidates()` copies active PTs to friction PTs |
 | `src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu` | RCC PT beta buffers, Phase A/Phase B, beta persistence |
 | `src/backends/cuda/collision_detection/filters/*simplex_trajectory_filter.cu` | PT CCD broadphase and active-pair emission |
-| `src/backends/cuda/inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch.cu` | Existing static vertex-triangle virtual-tet energy reference |
+| `src/backends/cuda/inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch.cu` | Existing static vertex-triangle rest-shape and thickness reference |
+| `src/backends/cuda/affine_body/constitutions/ortho_potential.cu` | Existing ABD OrthoPotential energy reference |
+| `src/backends/cuda/affine_body/constitutions/arap.cu` | Existing ABD ARAP energy reference |
 
 ## Target Data Flow
 
@@ -52,7 +54,7 @@ Next detection/filtering
 
 Newton assembly
   -> normal contact/friction/RCC assemble only unlocked pairs
-  -> bonded virtual-tet reporter assembles complement energy for locked_topos, Dm_inv, and rest_volume
+  -> bonded virtual-tet reporter assembles high-kappa ABD-style complement energy for locked_topos, Dm_inv, and rest_volume
 
 Release/update
   -> release gate records reason flags
@@ -109,7 +111,7 @@ Use two keys for different jobs:
 | `locked_beta` | Carry adhesion state through lock/release | Matched to RCC beta convention |
 | `locked_age` | Enforce minimum stable lifetime before lock/reuse | Incremented only after accepted steps |
 | `Dm_inv` | Virtual-tet rest-shape inverse | Finite, conditioned, derived from rest positions |
-| `rest_volume` | Stable Neo-Hookean volume scale | Positive and above configured minimum |
+| `rest_volume` | ABD-style virtual-tet volume scale | Positive and above configured minimum |
 | `release_flags` | Device-generated release reasons | Stable enum or bit mask for reports/tests |
 
 The sorted membership key can match current RCC persistence behavior, but it is not enough for energy. Energy must use oriented topology because orientation controls `Dm`, normal direction, and rest volume sign handling.
@@ -125,23 +127,44 @@ The sorted membership key can match current RCC persistence behavior, but it is 
 | Newton assembly | Locked PT appears only in bonded reporter | Duplicate-suppressed counter and E/G/H oracle |
 | End-of-step update | Release reasons and beta state are recorded | Lifecycle scene gate |
 
-## Virtual Tet Energy Reference
+## Virtual Tet Rest Shape And Energy
 
-The dynamic reporter should numerically follow `SoftVertexTriangleStitch`:
+The dynamic reporter uses `SoftVertexTriangleStitch` only for the PT rest-shape convention:
 
 1. Build `Dm = [x1 - x0, x2 - x0, x3 - x0]` from rest positions.
 2. If point-plane rest distance is below `min_separate_distance`, offset the rest point along the triangle normal before computing `Dm_inv`.
-3. Store `Dm_inv` and `rest_volume`.
-4. Use Stable Neo-Hookean energy, gradient, and Hessian with `rcc_bonded_pt_mu` and `rcc_bonded_pt_lambda`.
-5. Apply SPD projection in the Hessian path.
+3. Store `Dm_inv` and positive `rest_volume`.
 
-The dynamic reporter must not create or mutate frontend `SoftVertexTriangleStitch` geometry at runtime. That static constitution is the oracle and design reference, not the container for transient RCC locks.
+The production bonded energy must be ABD-style, not Stable Neo-Hookean. A locked pair is removed from CCD/contact/RCC, so the replacement energy is responsible for making the four vertices behave like a stiff bonded patch during that step.
+
+For the same four real vertex positions, build:
+
+$$
+D_s = [x_1 - x_0, x_2 - x_0, x_3 - x_0], \qquad F = D_s D_m^{-1}.
+$$
+
+Treat `F` as the virtual affine transform. The default target model is ABD OrthoPotential:
+
+$$
+E = \kappa \, V_0 \, \Delta t^2 \, \|F F^T - I\|_F^2,
+$$
+
+where `V0 = rest_volume` and `kappa = rcc_bonded_pt_kappa`. `abd_arap` may be supported as an alternate model only if it has the same CPU and GPU E/G/H oracle coverage. The initial target stiffness is `kappa >= 1e8` in scene units, with higher values allowed when solver conditioning gates pass.
+
+Implementation rules:
+
+- Do not instantiate a real frontend ABD body for each lock; assemble the ABD-style energy directly into the same four vertex DOFs through `dF/dx`.
+- Keep `rcc_bonded_pt_energy_model` explicit; default target model is `abd_ortho`.
+- Keep bonded PT acceleration default-off until high-kappa ABD oracle, no-penetration scene, release, and benchmark gates pass.
+- Apply SPD projection in the Hessian path.
+- Treat the current Stable Neo-Hookean `rcc_bonded_pt_mu/lambda` reporter as a prototype/regression path only; it is not the production energy model and does not justify skipping CCD.
 
 ## Relationship To Existing Systems
 
 - RCC adhesion: provides beta evolution, sticky-side semantics, PT-only adhesion scope, and persistence keys.
 - Simplex trajectory filters: provide the only high-performance place to skip locked PT work before CCD broadphase.
-- Inter-primitive constitutions: provide complement-energy ownership and an existing virtual-tet implementation reference.
+- Inter-primitive constitutions: provide complement-energy ownership and the existing SVTS rest-shape/thickness convention.
+- Affine body constitutions: provide the ABD-style high-stiffness shape energy formulas that the bonded virtual tet should mirror over `F = Ds Dm_inv`.
 - Dynamic topology manager: aggregates complement reporter output into global energy, gradient, and Hessian.
 - Contact adaptive strategies: should not count bonded virtual tets as contact unless an explicit diagnostic adds comparison accounting.
 
@@ -153,6 +176,7 @@ The dynamic reporter must not create or mutate frontend `SoftVertexTriangleStitc
 | Duplicate ownership | Pair is both contact/RCC and bonded tet | Duplicate counter and contract failure |
 | Key/topology mismatch | Wrong four vertices or wrong orientation assembled | State fixture with key/topology permutation check |
 | Singular rest shape | Large `Dm_inv`, unstable Hessian, solver spikes | Determinant, area, volume, and normal validity gates |
+| Wrong replacement energy | Locked pair skips CCD but uses soft SNH/prototype energy | ABD-style high-kappa oracle and no-penetration scene gate |
 | Release beta pop | Released pair behaves like a new contact | Beta carry fixture and scene report |
 | False speed claim | Total frame time hides moved cost | Benchmark protocol requires subsystem timers |
 
@@ -160,4 +184,5 @@ The dynamic reporter must not create or mutate frontend `SoftVertexTriangleStitc
 
 - [RCC Adhesion specification](./specification/contact_models/rcc_adhesion.md)
 - [Soft Vertex Triangle Stitch specification](./specification/constitutions/soft_vertex_triangle_stitch.md)
+- [Affine Body specification](./specification/constitutions/affine_body.md)
 - [CUDA backend development notes](./development/backend_cuda/index.md)

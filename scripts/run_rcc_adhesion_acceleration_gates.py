@@ -59,7 +59,7 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Phase 1: State Contract, CPU Oracle, And CUDA State Bridge (Current)", "roadmap identifies current phase"),
+                ("Phase 3: Bonded Virtual-Tet Reporter (Current: Correct Energy Model)", "roadmap identifies current phase"),
                 ("Blockers", "roadmap names current blockers"),
                 ("Validation Gates", "roadmap lists runnable current gates"),
                 ("Planned Gates", "roadmap separates future gates from current proof"),
@@ -178,6 +178,26 @@ def main() -> int:
         "scene gate separates adhesion-off checks from bonded-vs-legacy comparison",
     )
     expect_contains(
+        "docs/architecture.md",
+        "ABD-style",
+        "architecture requires ABD-style bonded virtual-tet energy",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "rcc_bonded_pt_kappa",
+        "roadmap tracks production bonded stiffness configuration",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "Stable Neo-Hookean prototype",
+        "conventions distinguish prototype SNH from production ABD energy",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "abd_ortho",
+        "subsystem doc names the target production energy model",
+    )
+    expect_contains(
         "docs/conventions.md",
         "adhesion-off baseline",
         "scene gate requires a baseline that prevents false positives",
@@ -250,7 +270,7 @@ def main() -> int:
     expect_contains(
         "src/backends/cuda/inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch.cu",
         "SoftVertexTriangleStitch",
-        "virtual tet reference implementation",
+        "rest-shape reference implementation",
     )
     expect_contains(
         "src/backends/cuda/inter_primitive_effect_system/constitutions/soft_vertex_triangle_stitch.cu",

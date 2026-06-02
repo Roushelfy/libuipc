@@ -14,12 +14,12 @@ The design target is to accelerate stable RCC adhesion pairs by removing long-li
 - `RCCBetaEvolutionTimeIntegrator` is the existing end-of-step hook for beta evolution.
 - `SimplexTrajectoryFilter::record_friction_candidates()` copies active `PTs()` into `friction_PTs()`, so locked pairs must be removed before this copy.
 - PT CCD broadphase calls exist in the stackless, info-stackless, v0 info-stackless, and LBVH simplex trajectory filters.
-- `SoftVertexTriangleStitch` already builds vertex-triangle tetrahedra, applies `min_separate_distance`, stores `Dm_inv` and rest volume, and uses SPD-projected Stable Neo-Hookean Hessians.
+- `SoftVertexTriangleStitch` already builds vertex-triangle tetrahedra, applies `min_separate_distance`, stores `Dm_inv` and rest volume, and uses SPD-projected Stable Neo-Hookean Hessians. The rest-shape convention remains useful; the energy-model choice was later corrected to ABD-style high stiffness.
 - Inter-primitive constitutions report complement energy, which is the right ownership model for a bonded virtual tet that replaces contact/RCC work but is not contact itself.
 
 ### Decisions
 
-- Treat `SoftVertexTriangleStitch` as the numerical reference, not as the runtime container. Dynamic adhesion pairs should not rebuild frontend geometry.
+- Treat `SoftVertexTriangleStitch` as the rest-shape/thickness reference, not as the runtime container. Dynamic adhesion pairs should not rebuild frontend geometry. Its Stable Neo-Hookean energy is not the final bonded-PT replacement model.
 - Store sorted membership keys for filtering and oriented topologies for tet energy.
 - Make early filter skip a production requirement because late removal does not save the expensive PT CCD/contact path.
 - Keep the first executable gate lightweight and always runnable: source/doc anchors only. Numeric and performance gates are planned separately.
@@ -195,7 +195,7 @@ The visual Python adhesive demos were promoted into assertion-based fixtures bef
 
 ### Decision
 
-Treat these as current legacy RCC behavior gates, not as proof of bonded PT acceleration. At this point the bonded path still needed `RCCBondedPTState`, key/topology/beta/age/release fixtures, SVTS-compatible rest-shape and virtual tet E/G/H oracles, `rcc_bonded_pt_*` counters, and release reason fields before the final `pt_lift_release` gate could claim pair ownership correctness.
+Treat these as current legacy RCC behavior gates, not as proof of bonded PT acceleration. At this point the bonded path still needed `RCCBondedPTState`, key/topology/beta/age/release fixtures, SVTS-compatible rest-shape oracles, high-kappa ABD-style virtual tet E/G/H oracles, `rcc_bonded_pt_*` counters, and release reason fields before the final `pt_lift_release` gate could claim pair ownership correctness.
 
 ## 2026-06-01 Minimal Bonded PT State Contract
 
@@ -219,7 +219,7 @@ The first bonded PT implementation step needs a small state owner before any CUD
 
 ### Decision
 
-Keep this as a host-side contract for now. The next step is the SVTS-compatible rest-shape CPU oracle; CUDA device buffers and filter/reporter integration should wait until state, rest-shape, and E/G/H oracles are all executable.
+Keep this as a host-side contract for now. The next step is the SVTS-compatible rest-shape CPU oracle; CUDA device buffers and filter/reporter integration should wait until state, rest-shape, and production ABD-style E/G/H oracles are all executable.
 
 ## 2026-06-01 SVTS Rest-Shape CPU Oracle
 
@@ -243,13 +243,13 @@ The bonded PT virtual tet must build the same rest shape as `SoftVertexTriangleS
 
 ### Decision
 
-Use this rest-shape oracle as the reference for future dynamic bonded PT lock construction. The next implementation step is the virtual tet Stable Neo-Hookean energy, gradient, and Hessian CPU oracle.
+Use this rest-shape oracle as the reference for future dynamic bonded PT lock construction. The next historical implementation step used a Stable Neo-Hookean virtual-tet oracle, but the production plan was later corrected to require ABD-style high-kappa energy.
 
-## 2026-06-01 Virtual Tet E/G/H CPU Oracle
+## 2026-06-01 Prototype Stable Neo-Hookean Virtual Tet E/G/H CPU Oracle
 
 ### Context
 
-After rest-shape construction is deterministic, the bonded PT reporter needs a CPU reference for the virtual tet complement energy. This oracle should match the `SoftVertexTriangleStitch` Stable Neo-Hookean path, including `F = Ds * Dm_inv`, `dFdx`, `rest_volume * dt^2` scaling, and SPD projection of the F-space Hessian for the default Hessian path.
+After rest-shape construction is deterministic, the bonded PT reporter needs a CPU reference for the virtual tet complement energy. This historical slice matched the `SoftVertexTriangleStitch` Stable Neo-Hookean path, including `F = Ds * Dm_inv`, `dFdx`, `rest_volume * dt^2` scaling, and SPD projection of the F-space Hessian for the default Hessian path. It is now classified as a prototype oracle, not the production acceptance oracle.
 
 ### Implemented
 
@@ -268,7 +268,7 @@ After rest-shape construction is deterministic, the bonded PT reporter needs a C
 
 ### Decision
 
-The CPU oracle layer is now sufficient for the next implementation step. Before touching filter kernels, add observable `rcc_bonded_pt_*` counters and release flag plumbing so later scene and benchmark gates can prove pair ownership.
+The CPU oracle layer was sufficient for the next prototype implementation step. After the 2026-06-02 ABD correction, it is no longer sufficient for production bonded-mode claims; an ABD-style high-kappa oracle must replace or supersede it.
 
 ## 2026-06-01 Minimum Bonded PT Counters
 
@@ -441,7 +441,7 @@ The CUDA owner could hold bonded PT state, but live RCC still did not populate i
 
 ### Decision
 
-The live owner now has a device-side beta producer, but bonded mode is still not a correctness-complete acceleration. Existing locks are intentionally carried until release logic lands; the next safe steps are rest-shape storage/quality gates, release reason accounting, and the bonded virtual-tet reporter.
+The live owner now has a device-side beta producer, but bonded mode is still not a correctness-complete acceleration. Existing locks are intentionally carried until release logic lands; the next safe steps are rest-shape storage/quality gates, release reason accounting, and an ABD-style bonded virtual-tet reporter.
 
 ## 2026-06-02 CUDA BVH Regression Gate
 
@@ -506,13 +506,13 @@ After the CUDA BVH regression fix, the state and bridge could safely carry `Dm_i
 
 ### Decision
 
-The live producer now has enough rest-shape data for the next implementation slice: a bonded virtual-tet complement reporter plus a GPU-vs-CPU E/G/H oracle. Remaining lock gates, release flags, scene counters, pre-CCD filtering, and benchmarks are still required before bonded mode can make correctness or performance claims.
+The live producer now has enough rest-shape data for the next implementation slice: a bonded virtual-tet complement reporter plus a GPU-vs-CPU E/G/H oracle. The first implemented reporter used the SNH prototype path; production still requires ABD-style high-kappa energy. Remaining lock gates, release flags, scene counters, pre-CCD filtering, and benchmarks are still required before bonded mode can make correctness or performance claims.
 
-## 2026-06-02 Bonded Virtual-Tet Reporter Oracle
+## 2026-06-02 Prototype SNH Bonded Virtual-Tet Reporter Oracle
 
 ### Context
 
-With live CUDA rest-shape construction in place, the next safe slice was to assemble a bonded PT virtual-tet complement energy from the existing owner buffers and compare the GPU math against the CPU virtual-tet E/G/H oracle.
+With live CUDA rest-shape construction in place, the next safe slice was to assemble a bonded PT virtual-tet complement energy from the existing owner buffers and compare the GPU math against the CPU virtual-tet E/G/H oracle. This implemented and validated the SNH prototype path; it does not satisfy the high-kappa ABD replacement requirement for CCD-skipped locked pairs.
 
 ### Implemented
 
@@ -520,7 +520,7 @@ With live CUDA rest-shape construction in place, the next safe slice was to asse
 - Added a config-gated creator so the reporter is only instantiated when `rcc_bonded_pt_enabled` is set and a dynamic topology manager is available.
 - Added read-only locked-topology, `Dm_inv`, and rest-volume accessors on `RCCBondedPTSystem`.
 - Added global material config keys `rcc_bonded_pt_mu` and `rcc_bonded_pt_lambda`, both defaulting to `0.0` so bonded owner/filtering can remain enabled without silently adding virtual-tet stiffness.
-- Shared one CUDA evaluator between dense oracle buffers and production doublet/triplet assembly.
+- Shared one CUDA evaluator between dense oracle buffers and runtime prototype doublet/triplet assembly.
 - Added `[rcc_bonded_pt][reporter][oracle][cuda]` to compare GPU energy, gradient, and SPD-projected Hessian against the CPU oracle.
 
 ### Commands
@@ -538,7 +538,7 @@ With live CUDA rest-shape construction in place, the next safe slice was to asse
 
 ### Decision
 
-The bonded virtual-tet reporter math is now covered by a GPU-vs-CPU oracle, but the feature is still not correctness-complete. Release diagnostics, beta carry on release, live counter reporting, pre-CCD filtering, and bonded-mode scene/benchmark gates remain required before enabling or making performance claims.
+The prototype bonded virtual-tet reporter math is covered by a GPU-vs-CPU oracle, but the feature is still not correctness-complete and the energy model is not the production target. ABD-style high-kappa energy, release diagnostics, beta carry on release, live counter reporting, pre-CCD filtering, and bonded-mode scene/benchmark gates remain required before enabling or making performance claims.
 
 ## 2026-06-02 Bonded PT State Accessor
 
@@ -566,3 +566,36 @@ Host state and CUDA owner counters existed, but scene gates still needed a front
 ### Decision
 
 Live counters and locked/release state snapshots are now accessible to frontend/native scene gates. The next missing correctness slice is a real release policy that sets release flags, carries beta back to RCC, and proves the lifecycle in a bonded-mode scene.
+
+## 2026-06-02 ABD Energy Plan Correction
+
+### Context
+
+The bonded PT roadmap and implemented reporter had drifted toward using the `SoftVertexTriangleStitch` Stable Neo-Hookean formulas as the runtime replacement energy. That contradicts the original design requirement: once a locked PT pair skips CCD/contact/RCC, the four involved vertex DOFs must be held by a high-stiffness ABD-style bonded energy, with an initial target stiffness of `1e8` or higher in scene units.
+
+### Findings
+
+- The SVTS rest-shape convention is still useful for `min_separate_distance`, positive orientation, `Dm_inv`, and `rest_volume`.
+- The current `rcc_bonded_pt_mu/lambda` reporter and oracle are only a prototype/regression path. They do not justify skipping CCD in a production bonded mode.
+- The production energy should be assembled over `F = Ds Dm_inv` as an ABD-style virtual affine transform, preferably defaulting to `abd_ortho` with optional `abd_arap`.
+- The implementation should assemble the ABD-style energy directly into the same four vertex-position DOFs through `dF/dx`; it should not create transient frontend ABD bodies or extra affine DOFs.
+
+### Implemented
+
+- Rewrote the architecture energy section to separate SVTS rest-shape construction from ABD-style runtime energy.
+- Updated conventions with target config keys `rcc_bonded_pt_energy_model` and `rcc_bonded_pt_kappa`, and marked `rcc_bonded_pt_mu/lambda` as prototype-only.
+- Moved the roadmap current task to correcting the bonded virtual-tet energy model.
+- Added planned gates for ABD CPU E/G/H, ABD CUDA reporter E/G/H, and a bonded-mode no-penetration scene observation.
+- Updated the source/doc gate so future document checks require the ABD-style energy plan.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed. Source/doc gate accepted the corrected ABD-style roadmap anchors. |
+| `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/run_rcc_adhesion_acceleration_cuda_gates.py scripts/build_docs.py` | Passed. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc checks, Python syntax checks, and docs site build completed; existing MkDocs nav/API warnings remained informational. |
+
+### Decision
+
+The next safe implementation task is to replace the prototype SNH virtual-tet oracle and reporter with ABD-style high-kappa energy, then rerun the CUDA and scene gates before continuing release or benchmark work.
