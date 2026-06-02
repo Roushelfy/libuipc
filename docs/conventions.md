@@ -11,6 +11,7 @@ These conventions are enforceable rules for RCC bonded point-triangle accelerati
 5. Do not implement backend-specific locked-key semantics; all simplex filters must call one shared lookup helper.
 6. Do not benchmark a path that removes locked PTs after contact/RCC assembly as if it were the production path.
 7. Do not enable bonded PT acceleration by default until state, oracle, filter, scene, and benchmark planned gates pass.
+8. Do not put `Matrix3x3`, rest volume, or other fat payloads in a CUB radix-sort value type; keep sorted device entries small and store rest-shape payloads in SoA buffers.
 
 ## Data Layout Rules
 
@@ -26,7 +27,7 @@ Runtime state uses structure-of-arrays device buffers.
 | `rest_volume` | `DeviceBuffer<Float>` | Positive and above minimum volume |
 | `release_flags` | `DeviceBuffer<U32>` | Bit mask or enum, stable enough for tests and reports |
 
-Sorting keys alone is forbidden. Any sort of `locked_keys` must carry the permutation for `locked_topos`, `locked_beta`, `locked_age`, `Dm_inv`, `rest_volume`, and release metadata.
+Sorting keys alone is forbidden. Any sort of `locked_keys` must carry or recover the permutation for `locked_topos`, `locked_beta`, `locked_age`, `Dm_inv`, `rest_volume`, and release metadata. The current CUDA producer sorts a compact `RCCBondedPTDeviceEntry` value containing only key/topology/beta/age/release flags, then recovers rest-shape payloads by sorted key in the bridge.
 
 ## Naming Rules
 
@@ -70,17 +71,19 @@ Target config keys are not live API until implemented and tested.
 | --- | --- | --- | --- |
 | Playbook docs exist and point at current source anchors | Source/doc gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Implemented |
 | Portable docs/source gates have one entry point | Default gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Implemented |
+| Local CUDA gates have one entry point and include the bunny BVH regression case | Local CUDA gate | `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py --no-build` | Implemented |
 | Existing RCC subdivided cube and cube-cloth adhesion lift/hold/release behavior is stable | Legacy scene gate | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Implemented |
 | Native sim-case RCC lift/hold/release behavior is stable | Legacy scene gate | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Implemented |
-| Locked key and oriented topology stay zipped through sort | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Implemented |
+| Locked key, oriented topology, beta, age, release flags, and rest-shape payload stay zipped through sort | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Implemented |
 | Candidate, lock, release, reject, filter-skip, and duplicate counters are observable in the state contract | Unit fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state][counters]" -r compact` | Implemented |
 | Rest-shape construction matches SVTS behavior | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]" -r compact` | Implemented |
 | Bonded virtual tet E/G/H match CPU reference | CPU oracle | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle][energy]" -r compact` | Implemented |
-| Host bonded PT state roundtrips through CUDA device buffers | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Implemented |
+| Host bonded PT state and rest-shape payload roundtrip through CUDA device buffers | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Implemented |
 | Locked-key membership lookup matches RCC PT persistence semantics | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | Implemented |
 | Locked PT is absent from common active/friction PT views when sorted keys are supplied | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Implemented |
 | CUDA owner feeds locked keys and syncs filter-skip counters | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Implemented |
 | RCC Phase A high-beta PTs populate the CUDA owner without host roundtrip | Backend CUDA fixture | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner][producer]" -r compact` | Implemented |
+| Bonded PT device payloads do not corrupt unrelated BVH/radix-sort CUDA paths | Backend CUDA regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Implemented |
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
 | Released pair carries beta back to RCC | Integration test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][release]"` | Planned |
 | PT lift/release scene locks, reuses, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |

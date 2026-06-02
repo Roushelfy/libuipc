@@ -13,6 +13,15 @@ bool same_topo(const uipc::Vector4i& lhs, const uipc::Vector4i& rhs)
     return (lhs.array() == rhs.array()).all();
 }
 
+uipc::Matrix3x3 diag3(uipc::Float x, uipc::Float y, uipc::Float z)
+{
+    uipc::Matrix3x3 m = uipc::Matrix3x3::Zero();
+    m(0, 0) = x;
+    m(1, 1) = y;
+    m(2, 2) = z;
+    return m;
+}
+
 uipc::core::RCCBondedPTEntry entry_by_key(const uipc::core::RCCBondedPTState& state,
                                           uipc::U64 key)
 {
@@ -85,12 +94,24 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
     const Vector4i carried{10, 6, 7, 8};
     const Vector4i fresh{12, 1, 2, 3};
     const Vector4i rejected{13, 1, 2, 3};
+    const Matrix3x3 refreshed_dm_inv = diag3(1.0, 2.0, 3.0);
+    const Matrix3x3 carried_dm_inv = diag3(4.0, 5.0, 6.0);
 
     RCCBondedPTState host;
-    host.push_locked(
-        RCCBondedPTEntry{rcc_bonded_pt_key(refreshed), refreshed, 0.91, 4});
-    host.push_locked(
-        RCCBondedPTEntry{rcc_bonded_pt_key(carried), carried, 0.93, 2});
+    host.push_locked(RCCBondedPTEntry{rcc_bonded_pt_key(refreshed),
+                                      refreshed,
+                                      0.91,
+                                      4,
+                                      RCCBondedPTReleaseNone,
+                                      refreshed_dm_inv,
+                                      0.2});
+    host.push_locked(RCCBondedPTEntry{rcc_bonded_pt_key(carried),
+                                      carried,
+                                      0.93,
+                                      2,
+                                      RCCBondedPTReleaseNone,
+                                      carried_dm_inv,
+                                      0.3});
     host.sort_by_key();
 
     RCCBondedPTSystem::Impl owner;
@@ -117,16 +138,22 @@ TEST_CASE("rcc_bonded_pt_system_locks_from_rcc_beta_snapshot_on_device",
     CHECK(same_topo(refreshed_entry.topo, refreshed));
     CHECK(refreshed_entry.beta == Catch::Approx(0.98));
     CHECK(refreshed_entry.age == 5);
+    CHECK(refreshed_entry.Dm_inv.isApprox(refreshed_dm_inv));
+    CHECK(refreshed_entry.rest_volume == Catch::Approx(0.2));
 
     const auto carried_entry = entry_by_key(locked, rcc_bonded_pt_key(carried));
     CHECK(same_topo(carried_entry.topo, carried));
     CHECK(carried_entry.beta == Catch::Approx(0.93));
     CHECK(carried_entry.age == 3);
+    CHECK(carried_entry.Dm_inv.isApprox(carried_dm_inv));
+    CHECK(carried_entry.rest_volume == Catch::Approx(0.3));
 
     const auto fresh_entry = entry_by_key(locked, rcc_bonded_pt_key(fresh));
     CHECK(same_topo(fresh_entry.topo, fresh));
     CHECK(fresh_entry.beta == Catch::Approx(0.95));
     CHECK(fresh_entry.age == 1);
+    CHECK(fresh_entry.Dm_inv.isApprox(Matrix3x3::Identity()));
+    CHECK(fresh_entry.rest_volume == Catch::Approx(0.0));
 
     CHECK(locked.find_key(rcc_bonded_pt_key(rejected)) == RCCBondedPTState::npos);
 

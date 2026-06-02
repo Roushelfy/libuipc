@@ -442,3 +442,40 @@ The CUDA owner could hold bonded PT state, but live RCC still did not populate i
 ### Decision
 
 The live owner now has a device-side beta producer, but bonded mode is still not a correctness-complete acceleration. Existing locks are intentionally carried until release logic lands; the next safe steps are rest-shape storage/quality gates, release reason accounting, and the bonded virtual-tet reporter.
+
+## 2026-06-02 CUDA BVH Regression Gate
+
+### Context
+
+After adding rest-shape payloads to bonded PT state, the local tape-winding demo aborted with `cudaErrorIllegalAddress` during a later GPU sanity/BVH path. The failing stack pointed at `SimplicialSurfaceDistanceCheck` and `InfoStacklessBVH`, but the known-good commit `f6985e2729ebc79f94087648871f70a7bb4ecbf7` and committed branch head both passed the bunny sanity check in a clean temporary worktree. The regression was introduced by the uncommitted bonded-PT payload changes, not by the old BVH implementation.
+
+### Root Cause
+
+`RCCBondedPTDeviceEntry` had grown to include `Matrix3x3 Dm_inv` and `rest_volume`. The CUDA producer sorts bonded PT candidates with `thrust::sort_by_key`, so CUB treated the entire entry as the radix-sort value. In a clean repro this failed device link with a CUB onesweep radix-sort kernel exceeding the shared-memory limit; in the current build it surfaced later as an illegal address in the BVH sanity path.
+
+### Implemented
+
+- Kept `RCCBondedPTDeviceEntry` compact: key, oriented topology, beta, age, and release flags only.
+- Kept `Dm_inv` and `rest_volume` in separate SoA buffers owned by `RCCBondedPTStateBridge`.
+- During bridge replacement, copied the previous sorted key/rest-shape buffers before resizing and recovered existing rest-shape payloads by key; fresh locks still default to identity `Dm_inv` and zero rest volume until live rest-shape construction lands.
+- Added `scripts/run_rcc_adhesion_acceleration_cuda_gates.py`, defaulting to `-j8`, to run the local RCC CUDA validation bundle.
+- Added a source/doc gate that rejects `Matrix3x3`, `Dm_inv`, or `rest_volume` inside `RCCBondedPTDeviceEntry`.
+- Promoted `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny"` to a current CUDA regression gate.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `/tmp/libuipc-f698-build-nosync/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` at `f6985e2729ebc79f94087648871f70a7bb4ecbf7` | Passed. Baseline reported `All tests passed (4 assertions in 1 test case)`. |
+| Same bunny gate at committed branch head `777323b0` in the clean temporary worktree | Passed. This isolated the regression to current uncommitted changes or local build products. |
+| Temporary build with the uncommitted fat `RCCBondedPTDeviceEntry` patch applied | Failed at CUDA device link: CUB radix-sort value type used too much shared data. |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_backend_cuda -j8` after compacting the device entry | Passed. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Passed. Reported `Distance(PT): CPU=0, GPU=275` and `All tests passed (4 assertions in 1 test case)`. |
+| `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. Reported `All tests passed (120 assertions in 5 test cases)`. |
+| `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py` | Passed. Built with `-j8` (`ninja: no work to do`), then passed core bonded-PT, backend bonded-PT, and bunny GPU sanity gates. |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Passed. Source/doc gate, Python syntax gate, and docs build all completed. |
+| `python/.venv/bin/python` import smoke for `rcc_adhesive_tape_winding_demo.py --set SOLVER_PROFILE=quick` followed by `build_demo(True)` | Passed. Built the CUDA demo world at frame 0 with `valid=True`, confirming the startup crash path is gone. |
+
+### Decision
+
+Do not carry virtual-tet rest-shape matrices through sort values. Future bonded PT implementation should keep the hot classification/compact path key-centric and SoA-backed, then assemble/report virtual-tet energy from aligned SoA buffers after ownership is established. The bunny GPU sanity gate stays current because bonded PT CUDA changes can otherwise break unrelated CUB/BVH codegen paths.

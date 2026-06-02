@@ -33,7 +33,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 ### State Owner
 
 - [x] Implement `RCCBondedPTState` minimum host contract for locked keys, oriented topologies, beta, age, and release flags.
-- [ ] Extend the state owner with rest-shape metrics once the SVTS oracle lands.
+- [x] Extend the state owner and CUDA bridge with rest-shape metrics (`Dm_inv`, `rest_volume`) once the SVTS oracle lands.
 - [x] Define feature-disabled default behavior, the `rcc_bonded_pt_enabled` master config key, and the beta lock threshold key.
 - [ ] Add remaining age/release/material config keys under the `rcc_bonded_pt` prefix.
 - [x] Add minimum `RCCBondedPTCounters` fields for candidate, locked, released, degenerate-rejected, filter-skipped, and duplicate-suppressed pairs.
@@ -68,7 +68,8 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 ## Phase 3: Bonded Virtual-Tet Reporter
 
 - [ ] Implement dynamic complement-energy reporter for bonded PT virtual tets.
-- [ ] Store `Dm_inv`, rest volume, material parameters, and oriented topology in device buffers.
+- [x] Store oriented topology, `Dm_inv`, and rest volume in host/CUDA bonded-state buffers.
+- [ ] Store material parameters for bonded virtual-tet assembly.
 - [ ] Match CPU oracle energy, gradient, and Hessian within declared tolerances.
 - [ ] Keep the reporter out of contact-component accounting unless an explicit diagnostic requests comparison.
 
@@ -91,7 +92,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
-| Producer is beta-only | `RCCBondedPTSystem` can be populated from RCC Phase A without host roundtrip, but the producer currently gates only on beta and preserves existing locks until release code exists | Add rest-shape quality, age policy, sticky-side/release checks, and release-flag accounting |
+| Producer lacks live rest-shape construction | `RCCBondedPTState` and the CUDA bridge can carry `Dm_inv` and rest volume, but the live producer still assigns new beta-only locks an empty rest shape | Build SVTS-compatible rest shapes on lock and reject invalid/degenerate pairs |
 | PT CCD broadphase still sees locked keys | The common active-view compact prevents locked PTs from reaching `friction_PTs()` when keys are supplied, but concrete filter `candidate_PTs()` and `toi_PTs()` are still generated before that compact | Move lookup into the PT candidate/TOI path for all simplex filter backends |
 | No GPU reporter oracle | CPU rest-shape and E/G/H oracles exist, but GPU bonded-tet reporter has not been compared against them | Add reporter and GPU-vs-CPU oracle fixture |
 | No backend-reported bonded-PT counters | Host counters, CUDA bridge counters, and owner-local skip counters exist, but current legacy RCC scene gates still cannot read them through reports | Expose `rcc_bonded_pt_*` counters from the live CUDA owner/reporting path |
@@ -105,7 +106,7 @@ Exception: a late post-detection split may be used for a throwaway prototype, bu
 | Current roadmap names principle, phase, next tasks, blockers, and gates | Satisfied | This file is the current status surface |
 | Stable architecture and conventions are documented | Satisfied | [architecture](./architecture.md) and [conventions](./conventions.md) |
 | Runnable gates and planned gates are separated | Satisfied | Current gates are below; future commands are in planned gates |
-| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, counter, CPU oracle, CUDA state bridge, CUDA lookup, common active-filter, CUDA owner, and beta-threshold producer fixtures are implemented; bonded-PT release, pre-CCD filter, and reporter gates are still planned |
+| New tests are wired into a default validation path | Partially satisfied | Portable docs/source gates are wired through `run_rcc_adhesion_acceleration_all_gates.py`; local CUDA gates are wired through `run_rcc_adhesion_acceleration_cuda_gates.py`; legacy RCC scene gates are wired into pytest and `sim_case`; bonded-PT state, rest-shape payload, counter, CPU oracle, CUDA state bridge, CUDA lookup, common active-filter, CUDA owner, beta-threshold producer, and bunny BVH regression fixtures are implemented; bonded-PT release, pre-CCD filter, and reporter gates are still planned |
 | Numeric or algorithmic claims have CPU or legacy oracles | Satisfied for current scope | State, rest-shape, and virtual-tet E/G/H CPU gates exist; GPU reporter matching is still planned |
 | Benchmark claims split cold, cache-hot, churn, and end-to-end timing | Not yet implemented | Phase 5 requires benchmark script, timers, and correctness fields |
 | Journals record commands, observed results, and decisions | Satisfied | [journal](./development/rcc_adhesion_acceleration_journal.md) |
@@ -118,14 +119,16 @@ These commands are runnable today from the repository root and must pass before 
 | --- | --- | --- |
 | Portable docs/source gates | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_all_gates.py` | Runs source/doc checks, Python syntax checks, and docs build; exits 0 |
 | Source/doc boundary gate | `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Confirms doc skeleton, nav link, all-gates entry, and current source anchors |
-| Python syntax gate | `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/build_docs.py` | Exits 0 |
+| Python syntax gate | `uv run --no-sync python -m py_compile scripts/run_rcc_adhesion_acceleration_gates.py scripts/run_rcc_adhesion_acceleration_all_gates.py scripts/run_rcc_adhesion_acceleration_cuda_gates.py scripts/build_docs.py` | Exits 0 |
 | Docs site build | `uv run --no-sync python scripts/build_docs.py -o /tmp/libuipc-docs-check` | MkDocs and MkDoxy build the docs and API pages |
-| Bonded PT state and counters | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release fixture and counter fixture pass |
+| Local RCC CUDA gate bundle | `python3 scripts/run_rcc_adhesion_acceleration_cuda_gates.py --no-build` | Runs bonded-PT core/backend tests and the bunny GPU sanity regression against an existing CUDA build |
+| Bonded PT state and counters | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][state]" -r compact` | Deterministic zipped key/topology/beta/age/release/rest-shape fixture and counter fixture pass |
 | Bonded PT CPU oracles | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_core "[rcc_bonded_pt][oracle]" -r compact` | Rest-shape conditioning plus virtual-tet energy, gradient, and Hessian CPU oracles pass |
-| Bonded PT CUDA state bridge | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Host state, device buffers, pending release flags, extract-release counters, and clear behavior roundtrip |
+| Bonded PT CUDA state bridge | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]" -r compact` | Host state, device buffers, rest-shape payloads, pending release flags, extract-release counters, and clear behavior roundtrip |
 | Bonded PT CUDA lookup helper | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][lookup]" -r compact` | RCC PT key semantics, sorted membership lookup, miss handling, and empty locked-set behavior pass on CUDA |
 | Bonded PT common active-filter compact | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter]" -r compact` | Locked PTs are removed from `SimplexTrajectoryFilter::PTs()` and therefore from `friction_PTs()` when sorted locked keys are supplied |
 | Bonded PT CUDA owner and beta producer | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "[rcc_bonded_pt][owner]" -r compact` | Owner uploads locked state, feeds sorted keys to the filter, syncs skip counters, and device-side producer carries existing locks, adds high-beta candidates, increments age, and suppresses duplicate candidate keys |
+| CUDA bunny BVH/radix-sort regression | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Ensures bonded-PT CUDA payload/layout changes do not destabilize the existing `SimplicialSurfaceDistanceCheck` + `InfoStacklessBVH` path |
 | Legacy RCC Python lift/release scenes | `python/.venv/bin/python -m pytest python/tests/sim_case/test_rcc_adhesive_lift_release.py -q` | Subdivided cube-cube and cube-cloth lift/hold/release fixtures pass |
 | Legacy RCC C++ lift/release scenes | `build/cuda_mixed_fused_pcg/RelWithDebInfo/bin/uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Two native scene gates pass after the sim case target is built |
 
@@ -142,4 +145,4 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 ## Next Safe Task
 
-Add rest-shape quality data and release accounting to the live producer, then add the bonded virtual-tet reporter that consumes the locked state. Keep production skipping disabled for correctness claims until release, reporter, scene, report counters, and pre-CCD filtering all have gates.
+Build SVTS-compatible rest shapes inside the live producer for new locks, including degeneracy rejection and `rcc_bonded_pt_min_separate_distance`, then add the bonded virtual-tet reporter that consumes `Dm_inv` and rest volume. Keep production skipping disabled for correctness claims until release, reporter, scene, report counters, and pre-CCD filtering all have gates.

@@ -34,10 +34,14 @@ class RCCBondedPTStateBridge
     muda::CBufferView<Float>    locked_beta() const noexcept;
     muda::CBufferView<IndexT>   locked_age() const noexcept;
     muda::CBufferView<U32>      release_flags() const noexcept;
+    muda::CBufferView<Matrix3x3> locked_dm_inv() const noexcept;
+    muda::CBufferView<Float>     locked_rest_volume() const noexcept;
 
     muda::BufferView<Float>  locked_beta() noexcept;
     muda::BufferView<IndexT> locked_age() noexcept;
     muda::BufferView<U32>    release_flags() noexcept;
+    muda::BufferView<Matrix3x3> locked_dm_inv() noexcept;
+    muda::BufferView<Float>     locked_rest_volume() noexcept;
 
   private:
     muda::DeviceBuffer<U64>      m_locked_keys;
@@ -45,6 +49,8 @@ class RCCBondedPTStateBridge
     muda::DeviceBuffer<Float>    m_locked_beta;
     muda::DeviceBuffer<IndexT>   m_locked_age;
     muda::DeviceBuffer<U32>      m_release_flags;
+    muda::DeviceBuffer<Matrix3x3> m_locked_dm_inv;
+    muda::DeviceBuffer<Float>     m_locked_rest_volume;
     core::RCCBondedPTCounters    m_counters;
 };
 }  // namespace uipc::backend::cuda

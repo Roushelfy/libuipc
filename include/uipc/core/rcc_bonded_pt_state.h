@@ -27,6 +27,8 @@ struct UIPC_CORE_API RCCBondedPTEntry
     Float    beta = 0.0;
     IndexT   age  = 0;
     U32      release_flags = RCCBondedPTReleaseNone;
+    Matrix3x3 Dm_inv = Matrix3x3::Identity();
+    Float     rest_volume = 0.0;
 };
 
 struct UIPC_CORE_API RCCBondedPTCounters
@@ -58,6 +60,8 @@ class UIPC_CORE_API RCCBondedPTState
     span<const Float>    locked_beta() const;
     span<const IndexT>   locked_age() const;
     span<const U32>      release_flags() const;
+    span<const Matrix3x3> locked_dm_inv() const;
+    span<const Float>     locked_rest_volume() const;
 
     RCCBondedPTEntry entry(SizeT index) const;
 
@@ -81,6 +85,8 @@ class UIPC_CORE_API RCCBondedPTState
     vector<Float>    m_locked_beta;
     vector<IndexT>   m_locked_age;
     vector<U32>      m_release_flags;
+    vector<Matrix3x3> m_locked_dm_inv;
+    vector<Float>     m_locked_rest_volume;
     RCCBondedPTCounters m_counters;
 };
 }  // namespace uipc::core

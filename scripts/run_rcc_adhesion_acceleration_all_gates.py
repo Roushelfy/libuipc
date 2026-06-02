@@ -29,6 +29,7 @@ def main() -> int:
             "py_compile",
             "scripts/run_rcc_adhesion_acceleration_gates.py",
             "scripts/run_rcc_adhesion_acceleration_all_gates.py",
+            "scripts/run_rcc_adhesion_acceleration_cuda_gates.py",
             "scripts/build_docs.py",
         ]
     )

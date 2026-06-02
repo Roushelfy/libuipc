@@ -34,6 +34,25 @@ def expect_not_contains(rel_path: str, needle: str, reason: str) -> None:
         raise AssertionError(f"{rel_path}: contains forbidden {needle!r} ({reason})")
 
 
+def expect_device_entry_stays_small() -> None:
+    rel_path = "src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.h"
+    text = read_text(rel_path)
+    match = re.search(
+        r"struct\s+RCCBondedPTDeviceEntry\s*\{(?P<body>.*?)\};",
+        text,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"{rel_path}: missing RCCBondedPTDeviceEntry")
+    body = match.group("body")
+    for forbidden in ["Matrix3x3", "Dm_inv", "rest_volume"]:
+        if forbidden in body:
+            raise AssertionError(
+                f"{rel_path}: RCCBondedPTDeviceEntry contains {forbidden!r}; "
+                "keep radix-sort values small and store rest-shape payloads in SoA buffers"
+            )
+
+
 def main() -> int:
     checks = [
         (
@@ -124,6 +143,21 @@ def main() -> int:
         "all-gates entry runs docs build now that doxygen is available",
     )
     expect_contains(
+        "scripts/run_rcc_adhesion_acceleration_all_gates.py",
+        "scripts/run_rcc_adhesion_acceleration_cuda_gates.py",
+        "all-gates entry syntax-checks the local CUDA gate runner",
+    )
+    expect_contains(
+        "scripts/run_rcc_adhesion_acceleration_cuda_gates.py",
+        "gpu_sanity_check",
+        "local CUDA gates include the GPU sanity regression test",
+    )
+    expect_contains(
+        "scripts/run_rcc_adhesion_acceleration_cuda_gates.py",
+        "bunny",
+        "local CUDA gates include the bunny BVH regression case",
+    )
+    expect_contains(
         "docs/roadmap.md",
         "pt_lift_release",
         "planned scene gate names the PT-rich lifecycle scenario",
@@ -179,6 +213,7 @@ def main() -> int:
         "muda::DeviceBuffer<U64>",
         "CUDA locked-key bridge anchor",
     )
+    expect_device_entry_stays_small()
     expect_contains(
         "src/backends/cuda/contact_system/rcc_bonded_pt_state_bridge.cu",
         "copy_span_to_device",

@@ -12,6 +12,8 @@ void RCCBondedPTState::clear()
     m_locked_beta.clear();
     m_locked_age.clear();
     m_release_flags.clear();
+    m_locked_dm_inv.clear();
+    m_locked_rest_volume.clear();
     sync_locked_count();
 }
 
@@ -22,6 +24,8 @@ void RCCBondedPTState::reserve(SizeT size)
     m_locked_beta.reserve(size);
     m_locked_age.reserve(size);
     m_release_flags.reserve(size);
+    m_locked_dm_inv.reserve(size);
+    m_locked_rest_volume.reserve(size);
 }
 
 void RCCBondedPTState::push_locked(const RCCBondedPTEntry& entry)
@@ -31,6 +35,8 @@ void RCCBondedPTState::push_locked(const RCCBondedPTEntry& entry)
     m_locked_beta.push_back(entry.beta);
     m_locked_age.push_back(entry.age);
     m_release_flags.push_back(entry.release_flags);
+    m_locked_dm_inv.push_back(entry.Dm_inv);
+    m_locked_rest_volume.push_back(entry.rest_volume);
     sync_locked_count();
 }
 
@@ -48,7 +54,8 @@ bool RCCBondedPTState::validate() const
 {
     const SizeT n = m_locked_keys.size();
     return m_locked_topos.size() == n && m_locked_beta.size() == n
-           && m_locked_age.size() == n && m_release_flags.size() == n;
+           && m_locked_age.size() == n && m_release_flags.size() == n
+           && m_locked_dm_inv.size() == n && m_locked_rest_volume.size() == n;
 }
 
 const RCCBondedPTCounters& RCCBondedPTState::counters() const
@@ -81,13 +88,25 @@ span<const U32> RCCBondedPTState::release_flags() const
     return m_release_flags;
 }
 
+span<const Matrix3x3> RCCBondedPTState::locked_dm_inv() const
+{
+    return m_locked_dm_inv;
+}
+
+span<const Float> RCCBondedPTState::locked_rest_volume() const
+{
+    return m_locked_rest_volume;
+}
+
 RCCBondedPTEntry RCCBondedPTState::entry(SizeT index) const
 {
     return RCCBondedPTEntry{m_locked_keys[index],
                             m_locked_topos[index],
                             m_locked_beta[index],
                             m_locked_age[index],
-                            m_release_flags[index]};
+                            m_release_flags[index],
+                            m_locked_dm_inv[index],
+                            m_locked_rest_volume[index]};
 }
 
 SizeT RCCBondedPTState::find_key(U64 key) const
@@ -112,11 +131,15 @@ void RCCBondedPTState::sort_by_key()
     vector<Float>    beta;
     vector<IndexT>   age;
     vector<U32>      flags;
+    vector<Matrix3x3> dm_inv;
+    vector<Float>     rest_volume;
     keys.reserve(order.size());
     topos.reserve(order.size());
     beta.reserve(order.size());
     age.reserve(order.size());
     flags.reserve(order.size());
+    dm_inv.reserve(order.size());
+    rest_volume.reserve(order.size());
 
     for(SizeT i : order)
     {
@@ -125,13 +148,17 @@ void RCCBondedPTState::sort_by_key()
         beta.push_back(m_locked_beta[i]);
         age.push_back(m_locked_age[i]);
         flags.push_back(m_release_flags[i]);
+        dm_inv.push_back(m_locked_dm_inv[i]);
+        rest_volume.push_back(m_locked_rest_volume[i]);
     }
 
-    m_locked_keys   = std::move(keys);
-    m_locked_topos  = std::move(topos);
-    m_locked_beta   = std::move(beta);
-    m_locked_age    = std::move(age);
-    m_release_flags = std::move(flags);
+    m_locked_keys        = std::move(keys);
+    m_locked_topos       = std::move(topos);
+    m_locked_beta        = std::move(beta);
+    m_locked_age         = std::move(age);
+    m_release_flags      = std::move(flags);
+    m_locked_dm_inv      = std::move(dm_inv);
+    m_locked_rest_volume = std::move(rest_volume);
     sync_locked_count();
 }
 
@@ -152,6 +179,8 @@ vector<RCCBondedPTEntry> RCCBondedPTState::extract_released()
     vector<Float>            keep_beta;
     vector<IndexT>           keep_age;
     vector<U32>              keep_flags;
+    vector<Matrix3x3>        keep_dm_inv;
+    vector<Float>            keep_rest_volume;
 
     released.reserve(size());
     keep_keys.reserve(size());
@@ -159,6 +188,8 @@ vector<RCCBondedPTEntry> RCCBondedPTState::extract_released()
     keep_beta.reserve(size());
     keep_age.reserve(size());
     keep_flags.reserve(size());
+    keep_dm_inv.reserve(size());
+    keep_rest_volume.reserve(size());
 
     for(SizeT i = 0; i < size(); ++i)
     {
@@ -174,14 +205,18 @@ vector<RCCBondedPTEntry> RCCBondedPTState::extract_released()
             keep_beta.push_back(e.beta);
             keep_age.push_back(e.age);
             keep_flags.push_back(e.release_flags);
+            keep_dm_inv.push_back(e.Dm_inv);
+            keep_rest_volume.push_back(e.rest_volume);
         }
     }
 
-    m_locked_keys   = std::move(keep_keys);
-    m_locked_topos  = std::move(keep_topos);
-    m_locked_beta   = std::move(keep_beta);
-    m_locked_age    = std::move(keep_age);
-    m_release_flags = std::move(keep_flags);
+    m_locked_keys        = std::move(keep_keys);
+    m_locked_topos       = std::move(keep_topos);
+    m_locked_beta        = std::move(keep_beta);
+    m_locked_age         = std::move(keep_age);
+    m_release_flags      = std::move(keep_flags);
+    m_locked_dm_inv      = std::move(keep_dm_inv);
+    m_locked_rest_volume = std::move(keep_rest_volume);
     m_counters.released_count += released.size();
     sync_locked_count();
     return released;
