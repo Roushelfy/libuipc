@@ -190,6 +190,7 @@ def build_demo(
     release_strain: float = 1.0e30,
     release_gap: float = 1.0e30,
     release_slip: float = 1.0e30,
+    release_force: float = 1.0e30,
 ):
     Logger.set_level(Logger.Level.Warn)
 
@@ -214,6 +215,7 @@ def build_demo(
         config["rcc_bonded_pt_release_strain"] = release_strain
         config["rcc_bonded_pt_release_gap"] = release_gap
         config["rcc_bonded_pt_release_slip"] = release_slip
+        config["rcc_bonded_pt_release_force"] = release_force
     scene = Scene(config)
 
     abd = AffineBodyConstitution()
@@ -429,8 +431,12 @@ def _build(state):
         skip_ccd=state["bonded"],
         beta_lock_threshold=0.85,
         kappa=5.0e7,
-        release_strain=0.5,
-        release_gap=0.03,
+        # Geometric release (strain/gap) cannot peel a stiff bond on compliant
+        # cloth at this kappa; the force/energy criterion can. It holds through
+        # press/hold/lift then peels the corner pull (~all bonds release).
+        release_strain=1.0e30,
+        release_gap=1.0e30,
+        release_force=1.0e-4,
     )
 
 

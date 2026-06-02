@@ -161,6 +161,7 @@ A locked pair releases when any condition fails.
 | `gap` | Predicted normal gap exceeds release distance | Carry beta and emit release counter |
 | `slip` | Tangential slip exceeds release distance | Carry beta and let RCC tangential adhesion handle sliding |
 | `flip` | Triangle orientation or virtual tet quality becomes invalid | Release before assembly if detected early |
+| `force` | Bond restoring force (`~ kappa * deformation`) exceeds threshold | Carry beta; the criterion that peels a stiff bond on a compliant counterpart |
 | `sticky_side` | Sticky-side gate no longer passes | Return to normal contact/RCC policy |
 | `policy` | Contact tabular or scene policy disables the pair | Remove lock and report policy release |
 
@@ -175,6 +176,7 @@ Current implementation status:
 | `slip` | Implemented on CUDA using `rcc_bonded_pt_release_slip` against current closest-foot tangential displacement from the lock-time rest barycentric foot reconstructed from `Dm_inv` |
 | `sticky_side` | Implemented on CUDA by routing RCC sticky signs and lagged vertex normals into the bonded owner and reusing the RCC sticky-side gate semantics |
 | `policy` | Implemented on CUDA by routing RCC adhesive enable flags plus contact/subscene masks into the bonded owner |
+| `force` | Implemented on CUDA using `rcc_bonded_pt_release_force` against the F-space restoring force `4 * kappa * V0 * dt^2 * \|\|C F\|\|` (`C = F F^T - I`). Unlike strain/gap, it is scaled by `kappa`, so it fires on a holding stiff bond and peels compliant-counterpart fixtures (cube-cloth corner pull separates at `release_force=1e-4`, `kappa=5e7`, while holding through press/hold/lift) |
 | `flip` / `degenerate` | Implemented on CUDA from current virtual-tet determinant/topology/rest-volume validity |
 
 Release ordering matters:
@@ -192,6 +194,8 @@ While a pair is locked it is removed from `friction_PTs()`, so Phase A does not 
 Known blind spot (2026-06-02 cross-fixture probe, see journal): geometric release (strain/gap) can be self-defeating. A stiff bonded tet (`kappa` 5e7-1e8) absorbs the imposed motion, so the per-tet strain/gap never exceeds threshold when the counterpart is compliant (e.g. FEM cloth bonded to an ABD cube) — the bond holds and the soft side just follows it, so the pair never releases (the cloth-peel and cube-cloth fixtures did not separate even at `release_strain=0.1, release_gap=0.01`). The all-ABD cube-cube case separates only because two stiff actuators force enough gap/strain across the bond.
 
 This is fundamental, not a tuning issue: at fixed `kappa=5e7` with a corner-peel pull, lowering `release_gap` all the way to `0.0002` (0.2 mm) released only 1-2 of ~87 bonds and the cloth still rode up with the cube — and below that the bonds release from solver jitter during hold. The reason is that geometric release measures how far a bond has already *deformed/failed*, but a bond that is doing its job keeps `curr_dist ~ rest_dist` (gap ~ 0) and `F ~ I` (strain ~ 0) by construction, so no threshold above numerical jitter distinguishes "holding well" from "should release"; the compliant cloth also absorbs the pull in its free region before it reaches the bonded edge. A robust release law on compliant counterparts therefore needs a *force/energy* trigger (release when the bond's restoring force, proportional to `kappa * deformation`, exceeds a limit — which fires for a holding stiff bond), the RCC beta criterion evaluated on locked pairs, a lower `kappa`, or a lock gate that excludes soft counterparts.
+
+This force/energy trigger is now implemented as the `force` release reason (`rcc_bonded_pt_release_force`): at fixed `kappa=5e7` the cube-cloth corner pull separates at `release_force=1e-4` (all ~94 bonds peel, cloth drops from y~1.0 to ~0.4) while holding cleanly through press/hold/lift (zero premature release), where geometric release at any threshold could not (gap down to 0.2 mm released only 1-2 of ~87).
 
 ## Assembly Contract
 

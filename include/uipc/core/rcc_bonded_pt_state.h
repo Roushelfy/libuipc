@@ -18,6 +18,7 @@ enum RCCBondedPTReleaseFlag : U32
     RCCBondedPTReleaseStickySide  = 1u << 4,
     RCCBondedPTReleasePolicy      = 1u << 5,
     RCCBondedPTReleaseDegenerate  = 1u << 6,
+    RCCBondedPTReleaseForce       = 1u << 7,
 };
 
 struct UIPC_CORE_API RCCBondedPTEntry

@@ -950,3 +950,34 @@ At fixed `kappa`, **no release threshold peels the cloth**, because geometric re
 ### Decision
 
 Keep the corner pull in the demo (cleaner peel test). Do not pursue threshold-only release on compliant fixtures; a force/energy-based release law is the right next design step if cloth release is required.
+
+## 2026-06-02 Force/Energy Release Criterion
+
+### Context
+
+The corner-peel sweep showed geometric release (strain/gap) cannot peel a stiff bond on a compliant counterpart at any threshold, because a holding bond has ~0 deformation by construction. The fix is a force/energy trigger: `force ~ kappa * deformation` is appreciable for a holding stiff bond (tiny deformation amplified by `kappa`) where strain/gap are not.
+
+### Implemented
+
+- Added release reason `RCCBondedPTReleaseForce` (`1u << 7`) and config `rcc_bonded_pt_release_force` (default `1e30` = disabled).
+- In `release_flags_from_current_shape`, compute the F-space restoring force `4 * kappa * rest_volume * dt^2 * ||C F||` (`C = F F^T - I`, reusing the strain block's `C`/`F`) and flag `force` when it exceeds the threshold.
+- Threaded `kappa`/`dt`/force threshold into the producer via `set_release_force_config` (read from `rcc_bonded_pt_release_force`, `rcc_bonded_pt_kappa`, `dt` in `do_build`).
+- Added unit test `[rcc_bonded_pt][release][force]`; exposed `release_force` in the cube-cloth `build_demo`; the cube-cloth viewer uses `release_force=1e-4` (geometric release disabled) for the corner pull.
+
+### Observed Result (cube-cloth corner pull, kappa=5e7 fixed)
+
+| release_force | @240 hold/lift | @400 pull | cloth_y | result |
+| --- | --- | --- | --- | --- |
+| 1.0 / 0.1 / 0.01 | rel=0 | rel=0 | 1.01 | stuck (rode up) |
+| 0.001 | rel=0 | rel=17 | 0.95 | partial peel |
+| 1e-4 | rel=0 | **rel=94 (all)** | **0.40** | **fully separated** |
+
+`rel@240=0` for every threshold (no premature release during hold/lift) — a clean release window that geometric release at any threshold could not provide.
+
+### Validation
+
+`[rcc_bonded_pt][release][force]` passes (17 assertions); full release suite 109/7; backend `[rcc_bonded_pt]` 247/14; core 91/6; bunny BVH regression OK.
+
+### Decision
+
+The force/energy criterion resolves the compliant-counterpart release blind spot (phys-1) and is the recommended release trigger for stiff bonds; geometric strain/gap remain available. The threshold is scene-dependent (scales with `kappa`, `V0`, `dt`) and stays default-off (`1e30`).

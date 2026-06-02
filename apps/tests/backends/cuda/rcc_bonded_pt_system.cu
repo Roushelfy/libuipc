@@ -46,7 +46,10 @@ void check_two_lock_release_reason(MutateCurrentPositions mutate_current_positio
                                    uipc::Float slip_threshold,
                                    uipc::U32 expected_flag,
                                    uipc::backend::cuda::RCCBondedPTReleaseContext
-                                       release_context = {})
+                                       release_context = {},
+                                   uipc::Float force_threshold = 1e30,
+                                   uipc::Float kappa = 1e8,
+                                   uipc::Float dt = 0.01)
 {
     using namespace muda;
     using namespace uipc;
@@ -93,6 +96,7 @@ void check_two_lock_release_reason(MutateCurrentPositions mutate_current_positio
     owner.set_enabled(true);
     owner.set_rest_shape_config(0.05, 1e-12);
     owner.set_release_config(strain_threshold, gap_threshold, slip_threshold);
+    owner.set_release_force_config(force_threshold, kappa, dt);
     owner.upload(host);
 
     auto h_current_positions = h_rest_positions;
@@ -423,6 +427,31 @@ TEST_CASE("rcc_bonded_pt_system_releases_strained_locks_without_relocking",
     CHECK(released_beta[0] == Catch::Approx(0.88));
     CHECK(released_age[0] == 8);
     CHECK((released_flags[0] & RCCBondedPTReleaseStrain) != 0);
+}
+
+TEST_CASE("rcc_bonded_pt_system_releases_locked_pt_by_force",
+          "[rcc_bonded_pt][release][force][cuda]")
+{
+    using namespace uipc;
+    using namespace uipc::backend::cuda;
+    using namespace uipc::core;
+
+    // strain/gap/slip disabled (1e30); a modest deformation is amplified by
+    // kappa into a restoring force above the force threshold, so the
+    // force/energy criterion releases the bond where the geometric criteria
+    // cannot. This is the trigger that peels a stiff bond on a compliant
+    // counterpart (see the cube-cloth fixture / journal).
+    check_two_lock_release_reason(
+        [](std::vector<Vector3>& positions)
+        { positions[4] = Vector3{2.25, 0.25, 0.30}; },
+        1e30,
+        1e30,
+        1e30,
+        RCCBondedPTReleaseForce,
+        RCCBondedPTReleaseContext{},
+        /*force_threshold*/ 1.0,
+        /*kappa*/ 1.0e8,
+        /*dt*/ 0.01);
 }
 
 TEST_CASE("rcc_bonded_pt_system_releases_large_normal_gap",

@@ -164,6 +164,9 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
     Float strain_threshold,
     Float gap_threshold,
     Float slip_threshold,
+    Float kappa,
+    Float dt,
+    Float force_threshold,
     bool sticky_side_enabled,
     muda::CBufferView<IndexT> sticky_sign_view,
     StickyViewer sticky_sign,
@@ -209,6 +212,17 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
         flags |= core::RCCBondedPTReleaseDegenerate;
     else if(strain_threshold >= 0.0 && strain > strain_threshold)
         flags |= core::RCCBondedPTReleaseStrain;
+
+    if(force_threshold >= 0.0)
+    {
+        // F-space restoring force of the ABD ortho bond:
+        //   E = kappa * V0 * dt^2 * ||F F^T - I||^2,  dE/dF = 4 kappa V0 dt^2 C F.
+        // Scaled by kappa, so it fires when the bond is overloaded even though
+        // a stiff bond's own deformation (strain/gap) stays below threshold.
+        const Float force = 4.0 * kappa * rest_volume * dt * dt * (C * F).norm();
+        if(std::isfinite(force) && force > force_threshold)
+            flags |= core::RCCBondedPTReleaseForce;
+    }
 
     if(sticky_side_enabled)
     {
@@ -405,6 +419,9 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                     release_strain = m_release_strain_threshold,
                     release_gap = m_release_gap_threshold,
                     release_slip = m_release_slip_threshold,
+                    kappa = m_kappa,
+                    dt = m_dt,
+                    release_force = m_release_force_threshold,
                     sticky_side_enabled = release_context.sticky_side_enabled,
                     sticky_sign_view = release_context.sticky_sign,
                     sticky_sign =
@@ -438,6 +455,9 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                                release_strain,
                                release_gap,
                                release_slip,
+                               kappa,
+                               dt,
+                               release_force,
                                sticky_side_enabled,
                                sticky_sign_view,
                                sticky_sign,
@@ -791,6 +811,15 @@ void RCCBondedPTSystem::Impl::set_release_config(Float strain_threshold,
     m_release_slip_threshold = slip_threshold;
 }
 
+void RCCBondedPTSystem::Impl::set_release_force_config(Float force_threshold,
+                                                       Float kappa,
+                                                       Float dt) noexcept
+{
+    m_release_force_threshold = force_threshold;
+    m_kappa = kappa;
+    m_dt = dt;
+}
+
 void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexcept
 {
     simplex_trajectory_filter = filter;
@@ -909,6 +938,13 @@ void RCCBondedPTSystem::do_build()
                               release_gap_attr ? release_gap_attr->view()[0] : 1e30,
                               release_slip_attr ? release_slip_attr->view()[0]
                                                 : 1e30);
+    auto release_force_attr = config.find<Float>("rcc_bonded_pt_release_force");
+    auto kappa_attr         = config.find<Float>("rcc_bonded_pt_kappa");
+    auto dt_attr            = config.find<Float>("dt");
+    m_impl.set_release_force_config(
+        release_force_attr ? release_force_attr->view()[0] : 1e30,
+        kappa_attr ? kappa_attr->view()[0] : 1e8,
+        dt_attr ? dt_attr->view()[0] : 0.01);
     auto skip_ccd_attr = config.find<IndexT>("rcc_bonded_pt_skip_ccd");
     m_impl.set_skip_ccd(skip_ccd_attr && skip_ccd_attr->view()[0] != 0);
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();

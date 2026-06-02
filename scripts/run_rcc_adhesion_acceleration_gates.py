@@ -626,6 +626,22 @@ def main() -> int:
         "rcc_bonded_pt_skip_ccd",
         "scene gate enables the pre-CCD skip it is validating",
     )
+    # Force/energy release criterion anchors.
+    expect_contains(
+        "src/core/core/scene_default_config.cpp",
+        "rcc_bonded_pt_release_force",
+        "default config exposes the force/energy release threshold",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/rcc_bonded_pt_system.cu",
+        "RCCBondedPTReleaseForce",
+        "CUDA owner evaluates the force/energy release reason",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_bonded_pt_system.cu",
+        "[rcc_bonded_pt][release][force][cuda]",
+        "backend fixture covers force/energy release",
+    )
 
     print("RCC adhesion acceleration source/doc gate passed.")
     print("Checked playbook skeleton, nav links, all-gates entry, and current source anchors.")

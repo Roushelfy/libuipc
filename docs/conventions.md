@@ -62,6 +62,7 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_release_gap` | Normal release distance | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 | `rcc_bonded_pt_release_slip` | Tangential release distance | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 | `rcc_bonded_pt_release_strain` | ABD deformation release threshold | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
+| `rcc_bonded_pt_release_force` | Bond restoring-force release threshold (`~ kappa * deformation`) | Implemented, default `1e30` (disabled); the trigger that peels a stiff bond on a compliant counterpart, where strain/gap cannot |
 | `rcc_bonded_pt_skip_ccd` | Reject locked PTs before PT CCD broadphase in the simplex filters | Implemented, default `false`; enabling requires the no-penetration scene gate (removing CCD removes the last non-penetration guard) |
 
 Retired prototype keys must not be reintroduced as production acceptance criteria:

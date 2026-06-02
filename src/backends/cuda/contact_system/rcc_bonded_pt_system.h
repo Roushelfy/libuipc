@@ -56,6 +56,11 @@ class RCCBondedPTSystem final : public SimSystem
         void set_release_config(Float strain_threshold,
                                 Float gap_threshold,
                                 Float slip_threshold) noexcept;
+        // Force/energy release: fires when the bond's restoring force exceeds
+        // the threshold. Needs kappa and dt to scale the F-space gradient.
+        void set_release_force_config(Float force_threshold,
+                                      Float kappa,
+                                      Float dt) noexcept;
 
         void bind_filter(SimplexTrajectoryFilter* filter) noexcept;
         void feed_filter_keys() const noexcept;
@@ -105,6 +110,9 @@ class RCCBondedPTSystem final : public SimSystem
         Float                      m_release_strain_threshold = 1e30;
         Float                      m_release_gap_threshold = 1e30;
         Float                      m_release_slip_threshold = 1e30;
+        Float                      m_release_force_threshold = 1e30;
+        Float                      m_kappa = 1e8;
+        Float                      m_dt = 0.01;
         SizeT                      m_last_synced_filter_generation = 0;
         bool                       m_enabled = false;
         bool                       m_skip_ccd = false;
