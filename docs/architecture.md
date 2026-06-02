@@ -141,7 +141,7 @@ The dynamic reporter uses `SoftVertexTriangleStitch` only for the PT rest-shape 
 2. If point-plane rest distance is below `min_separate_distance`, offset the rest point along the triangle normal before computing `Dm_inv`.
 3. Store `Dm_inv` and positive `rest_volume`.
 
-The production bonded energy must be ABD-style, not Stable Neo-Hookean. A locked pair is removed from CCD/contact/RCC, so the replacement energy is responsible for making the four vertices behave like a stiff bonded patch during that step. The ABD energy is a replacement for the skipped geometric/contact work, not the RCC adhesion law itself; beta remains RCC state and must be restored on release.
+The production bonded energy must be ABD-style, not Stable Neo-Hookean. A locked pair is removed from CCD/contact/RCC, so the replacement energy is responsible for making the four vertices behave like a stiff bonded patch during that step. The ABD energy is a replacement for the skipped geometric/contact work, not the RCC adhesion law itself; beta remains RCC state and must be restored on release. While a pair is locked it is removed from `friction_PTs()`, so its beta does not evolve: the lock-time beta is frozen and carried until release, and the spec's energy-driven debonding law is replaced for that pair by the geometric release gates (strain/gap/slip) plus sticky-side/policy. This is a deliberate approximation and must be calibrated against the unaccelerated beta evolution before any correctness claim (see the conventions Test Matrix).
 
 For the same four real vertex positions, build:
 
@@ -165,6 +165,19 @@ Implementation rules:
 - Keep bonded PT acceleration default-off until high-kappa ABD oracle, no-penetration scene, release, and benchmark gates pass.
 - Apply SPD projection in the Hessian path.
 - Do not reintroduce the old Stable Neo-Hookean `rcc_bonded_pt_mu/lambda` reporter as a production path; it did not justify skipping CCD and has been replaced by ABD-style energy.
+
+## CCD Removal Precondition
+
+Skipping CCD for a locked pair is one source of speedup (the per-iteration CCD broadphase/TOI cost; the assembly and linear-system-conditioning wins are independent of it and already active), but it is also the only step that removes the engine's penetration guarantee. The current code does not yet skip CCD: locked PTs are removed only from the DCD active-pair view in `do_filter_active`, while PT CCD broadphase and the `do_filter_toi` TOI line search still process them. That accidental retention is currently the only thing preventing a locked point from tunneling through its triangle, because the bonded ABD energy cannot prevent it on its own.
+
+Invariant (testable): `E = kappa * V0 * dt^2 * ||F F^T - I||^2` depends only on `F F^T`, so it is invariant to the sign of `det(F)`. An inverted configuration where the point has crossed to the mirror side of the triangle has the same energy and gradient as the correct side. The bonded energy is therefore a shape-preservation term, not a non-penetration barrier, and gives no restoring force toward the correct side once inverted.
+
+Consequence: locked PTs may be removed from PT CCD broadphase and `do_filter_toi` only after both of the following pass.
+
+1. The `pt_lift_release` no-penetration scene gate observes no penetration during press/hold/lift with CCD skipped for locked pairs.
+2. Inversion/tunneling is handled without CCD, e.g. the flip release reason is evaluated before the bonded reporter consumes its input (not only at end-of-step), or a separated point-triangle barrier is retained for locked pairs.
+
+Until both hold, keep CCD active for locked pairs and do not claim a CCD speedup.
 
 ## Release And Beta Carry Contract
 

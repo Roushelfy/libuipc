@@ -16,6 +16,8 @@ These conventions are enforceable rules for RCC bonded point-triangle accelerati
 10. Do not allow a locked PT pair to skip CCD/contact/RCC unless one high-kappa ABD-style virtual-tet energy is assembled for the same four vertex DOFs in that step, or an explicit debug mode records that non-penetration is not being claimed.
 11. Do not treat zero or missing bonded stiffness as a harmless default in production mode. If bonded PT acceleration skips CCD/contact/RCC, `rcc_bonded_pt_energy_model` and `rcc_bonded_pt_kappa` must be reported and valid.
 12. Do not assemble a released pair in the bonded reporter for the same step in which its release flag is produced.
+13. Give the end-of-step bonded producer a steady-state early-out: when no pair is released and no new pair locks (no membership change), do not re-sort, re-merge, or rebuild the bridge — keep the existing locked buffers. A stable locked set must not pay O(locked) sorts/scans every step.
+14. Disable release reasons with a negative threshold sentinel so the `>= 0.0` guards short-circuit, not with a large positive value such as `1e30` (which still runs the per-lock 3x3 inverse and closest-point work every step). Keep the degeneracy and finiteness guards unconditional even when release thresholds are disabled.
 
 ## Data Layout Rules
 
@@ -120,6 +122,8 @@ ABD/SVTS boundary:
 | Locked PT is absent before PT CCD broadphase in every concrete simplex filter | Contract test | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][filter][ccd]"` | Planned |
 | PT lift/release scene locks, reuses, avoids penetration under ABD-style energy, releases, separates, and reports no duplicates | Scene gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"` | Planned |
 | Stable scene improves hot-path timing without hiding setup cost | Benchmark gate | `uv run --no-sync python scripts/bench_rcc_adhesion_acceleration.py --scene stable_cloth_peel --frames 40 --warmup 5 --runs 10` | Planned |
+| Locked-pair geometric release reproduces the unaccelerated beta-evolution debond timing within tolerance on a canonical purely-normal and purely-tangential example | Calibration gate | `build/bin/uipc_test_sim_case "[rcc_bonded_pt][calibration][debond]"` | Planned |
+| Bonded producer skips sort/merge/bridge-rebuild on a no-membership-change step | Backend CUDA fixture | `build/bin/uipc_test_backend_cuda "[rcc_bonded_pt][producer][steady_state]"` | Planned |
 
 ## Benchmark Protocol
 
@@ -138,7 +142,9 @@ No speedup is accepted unless the benchmark record includes:
 | Cache-hot | Stable locked set, no symbolic churn |
 | Churn | Controlled lock/release turnover |
 | End-to-end | Fixed frame range and solver settings |
-| Timers | DCD, FilterTOI, contact/RCC assembly, bonded-tet assembly, solver, frame |
+| Timers | DCD, FilterTOI, contact/RCC assembly, bonded-tet assembly, producer, solver, frame |
+| Solver iterations | Newton iteration count and total/average PCG iterations per step; the primary expected win is fewer iterations from replacing stiff near-contact log-barrier Hessian blocks with the smooth high-kappa ABD block |
+| Kappa sweep | Report metrics across `rcc_bonded_pt_kappa` values; kappa trades bond rigidity (correctness) against conditioning (iteration count), and too-high kappa can worsen conditioning |
 | Correctness | Pair accounting and scene invariant after timing |
 
 Minimum reported timer names:
@@ -151,6 +157,7 @@ Minimum reported timer names:
 | `rcc_bonded_pt_assembly_ms` | Bonded virtual-tet assembly |
 | `solver_ms` | Solver time |
 | `frame_ms` | End-to-end frame time |
+| `rcc_bonded_pt_producer_ms` | End-of-step lock/release classification, compaction, sort, and bridge rebuild |
 
 ## Review Checklist
 

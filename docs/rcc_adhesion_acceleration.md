@@ -103,6 +103,8 @@ A candidate can lock only if every condition passes. The target policy and the c
 
 The conservative rule is: reject on missing data. A missing sticky-side normal, invalid triangle normal, or unavailable beta carry is not a reason to guess.
 
+`rcc_bonded_pt_min_lock_age` is not yet a live config key, so a freshly formed PT pair can lock on its first step where beta crosses the threshold. "Likely to stay bonded" — the user-facing justification for skipping CCD/contact — currently means only `beta >= rcc_bonded_pt_beta_lock_threshold`; the age/sticky/gap/slip/policy lock gates that make that judgment real are still planned (release-side coverage does not imply lock-side coverage).
+
 ## Rest Shape
 
 The rest-shape construction follows the existing `SoftVertexTriangleStitch` convention:
@@ -182,6 +184,10 @@ Release ordering matters:
 3. Compact active locked buffers so the released pair is absent from ABD reporter assembly.
 4. Merge released beta into RCC PT persistence before the pair is treated as a fresh contact candidate.
 5. Count release once; repeated accessor queries or repeated filter-sync calls must not double-count it.
+
+### Beta While Locked
+
+While a pair is locked it is removed from `friction_PTs()`, so Phase A does not evolve its beta: the lock-time beta is frozen and carried until release. This replaces the spec's energy-driven debonding law (beta evolution from accumulated normal/tangential adhesion energy and pressure, see the RCC adhesion spec) with the geometric release gates (strain/gap/slip) plus sticky-side/policy. This is a deliberate approximation: a pair the RCC energy criterion would gradually debond stays rigidly bonded until a geometric threshold trips. Before any correctness claim the geometric release thresholds must be calibrated so the locked-then-released trajectory matches the unaccelerated beta-evolution debond timing within tolerance on a canonical purely-normal and purely-tangential example (conventions Test Matrix `[rcc_bonded_pt][calibration][debond]`).
 
 ## Assembly Contract
 
@@ -293,4 +299,4 @@ A valid speed claim must compare:
 5. Churn timing for controlled lock/release turnover.
 6. End-to-end timing plus subsystem timers.
 
-The expected first win should appear in PT CCD/filter and contact/RCC assembly time. If only total frame time moves, the benchmark is not diagnostic enough.
+The expected first win should appear in solver iteration count — fewer Newton/PCG iterations from replacing the stiff near-contact log-barrier Hessian of stable adhesive pairs (whose curvature grows as the gap shrinks) with a smooth, SPD-projected high-kappa ABD block — and in contact/RCC assembly time. This conditioning/iteration win is independent of the CCD skip and is active as soon as locked pairs leave the contact assembly; it is not guaranteed, because a too-high `rcc_bonded_pt_kappa` relative to surrounding material stiffness or a preconditioner that does not capture it can worsen conditioning, so iteration counts must be measured and `kappa` swept. PT CCD/filter time only improves once the pre-CCD filter lands. If only total frame time moves, the benchmark is not diagnostic enough.

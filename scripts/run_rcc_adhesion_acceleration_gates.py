@@ -59,9 +59,9 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Current phase: **Phase 4", "roadmap identifies current phase"),
+                ("Current focus: **Phase 2", "roadmap identifies current gating milestone"),
                 ("Phase 3: Bonded Virtual-Tet Reporter (Complete For ABD Ortho Scope)", "roadmap records completed ABD reporter scope"),
-                ("Phase 4: Release, Fallback, And Scene Gate (Current)", "roadmap tracks current release/lifecycle work"),
+                ("Phase 4: Release, Fallback, And Scene Gate (Backend Implemented; Downstream Of Pre-CCD Filter)", "roadmap tracks release/lifecycle work downstream of the pre-CCD filter"),
                 ("Blockers", "roadmap names current blockers"),
                 ("Validation Gates", "roadmap lists runnable current gates"),
                 ("Planned Gates", "roadmap separates future gates from current proof"),
@@ -546,6 +546,48 @@ def main() -> int:
         "src/backends/cuda/inter_primitive_effect_system/inter_primitive_constitution_manager.h",
         "EnergyComponentFlags::Complement",
         "complement energy ownership anchor",
+    )
+
+    # Re-sequencing and review-hardening anchors (P0-A/P0-B/P1-C/P1-D).
+    expect_contains(
+        "docs/roadmap.md",
+        "Current Gating Milestone",
+        "roadmap marks pre-CCD filter integration as the gating milestone",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "zero CCD savings",
+        "roadmap states plainly that no CCD savings exist until pre-CCD filtering lands",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "CCD Removal Precondition",
+        "architecture defines the precondition for removing locked PTs from CCD",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "shape-preservation term, not a non-penetration barrier",
+        "architecture states the reflection-invariance / no-barrier invariant",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Beta While Locked",
+        "subsystem doc documents the beta-freeze-while-locked approximation",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "steady-state early-out",
+        "conventions require a producer steady-state early-out",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "negative threshold sentinel",
+        "conventions require a negative disabled-release sentinel, not 1e30",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "rcc_bonded_pt_producer_ms",
+        "benchmark protocol times the end-of-step producer",
     )
 
     print("RCC adhesion acceleration source/doc gate passed.")

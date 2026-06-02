@@ -755,3 +755,35 @@ This slice also exposed a documentation risk: release-side sticky/policy coverag
 ### Decision
 
 All backend device release reasons currently planned for the bonded owner are implemented and covered by deterministic CUDA fixtures. The path is still not production-complete: released topology/age/flags and per-reason counts need scene-accessible diagnostics, the live lock producer still needs age/sticky/gap/slip/policy lock gates and rejection counters, locked keys still need to be removed before PT CCD broadphase in every concrete filter backend, and the bonded-mode `pt_lift_release` scene plus benchmark matrix remain planned.
+
+## 2026-06-02 Review Findings And Roadmap Re-Sequencing
+
+### Context
+
+An adversarially-verified review (six dimensions: design fidelity, physics/math, GPU performance, code-vs-plan conformance, test-gate integrity, commit discipline) was run against the branch to check whether following the existing roadmap to the end would actually deliver the original intent: skip CCD, skip contact/adhesion force, and replace each stable PT pair with a high-kappa ABD virtual-tet energy.
+
+### Source Observations
+
+- The ABD energy is mathematically correct: `sym::abd_ortho_potential::E` expands to `kappa * ||F F^T - I||^2`, matching the doc form and the independent CPU oracle (`build_rcc_bonded_pt_virtual_tet_oracle`), which is cross-checked against the GPU reporter. Row-major(ABD `q`) to column-major(FEM `vec(F)`) gradient/Hessian permutations and `make_spd` placement are correct.
+- The "skip CCD" leg of the intent does not exist in code. `filter_rcc_bonded_pt_locked_active_pairs()` runs in `do_filter_active` and mutates only the DCD active `PTs`; `do_filter_toi` and the concrete BVH `candidate_AllP_AllT_pairs` are never filtered, so locked pairs still pay full CCD broadphase and TOI every Newton iteration. The contact/RCC-assembly skip is realized (via `friction_PTs()`); more importantly, removing the locked pairs' stiff near-contact log-barrier and adhesion Hessian blocks from the linear system can improve conditioning and cut Newton/PCG iteration counts — likely the dominant win, active now, and independent of the (still-unrealized) CCD skip. The earlier "CCD is the headline/only win" framing was wrong; CCD-broadphase/TOI cost is one lever among at least three (assembly, conditioning/iterations, CCD).
+- The fresh-lock predicate is `beta >= threshold` only; age/sticky/gap/slip/policy are evaluated only as release reasons against already-locked entries, never as lock gates. `rcc_bonded_pt_min_lock_age` is not a live config key.
+- Locking freezes beta (the locked pair leaves `friction_PTs()`, so Phase A does not evolve it) and substitutes geometric release proxies for the spec's energy-driven debonding law.
+- The bonded ABD energy is reflection-invariant (depends only on `F F^T`), so it is not a non-penetration barrier; CCD TOI being still active is currently the only tunneling guard.
+- Latent issues confirmed against code: (1) on a zero-PT-candidate step, `m_prev_keys_PT` is not rebuilt but released beta is still merged into it, so a re-bond can seed from a stale beta for one step; (2) the membership key is a 64-bit hash with no topology re-check on match, so a hash collision can silently drop a real contact pair (~1e-8 across ~1e6 pairs, noted in code); (3) `replace_from_sorted_device_entries` silently falls back to identity `Dm_inv`/zero rest volume on a key miss, which is unreachable by construction but oracle-invisible if key derivation ever drifts.
+- The only always-runnable gate is a source/doc string scan plus a syntax check; it proves no runtime behavior. The producer's real manager-sourced release context (sticky/policy/normals) is fed only by synthetic test contexts, never end-to-end.
+
+### Decisions
+
+- Keep the doc-based methodology; it is the project's strongest asset and the review confirmed docs track code accurately.
+- Re-sequence the roadmap: pre-CCD filter integration (Phase 2 remaining item) is now the current gating milestone, because it is the only source of CCD savings. Release/scene/benchmark work is downstream of it. The current-focus line and Next Safe Task were rewritten; Phase 4 heading re-labelled "Backend Implemented; Downstream Of Pre-CCD Filter".
+- Add a CCD-removal precondition to the architecture: CCD may be skipped for locked pairs only after the `pt_lift_release` no-penetration gate passes and inversion/tunneling is handled without CCD; the reflection-invariance of the ABD energy is stated as a testable invariant.
+- Document beta-freeze-while-locked as a deliberate approximation and require a calibration gate (`[rcc_bonded_pt][calibration][debond]`) against the unaccelerated beta-evolution debond timing before any correctness claim.
+- Add conventions hot-path rules for a producer steady-state early-out and a negative disabled-release sentinel (instead of `1e30`), plus a `rcc_bonded_pt_producer_ms` benchmark timer, so the steady-state producer cost is measured rather than hidden.
+- Record the stale-snapshot lifecycle bug as a roadmap blocker with an `n==0`+release fixture requirement; record the hash-collision and silent-fallback items as known robustness hardening.
+- Reframe the performance story as three independent levers — assembly skip, linear-system conditioning / iteration count, and CCD-broadphase/TOI cost — not "CCD is the only/headline win". The conditioning lever (replacing stable adhesive pairs' stiff near-contact log-barrier Hessian with a smooth high-kappa ABD block) is likely dominant and active now. The benchmark must therefore measure Newton/PCG iteration counts (already available via the per-iter solver telemetry, commit `05644f78`), not just CCD/assembly time, and sweep `rcc_bonded_pt_kappa`, since kappa trades bond rigidity against conditioning and too-high kappa can worsen it.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed after updating doc anchors for the re-sequenced phases, the CCD-removal precondition, the beta-while-locked approximation, and the new producer/sentinel conventions. |

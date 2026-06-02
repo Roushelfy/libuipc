@@ -2,7 +2,7 @@
 
 This roadmap is the current status surface for the RCC bonded point-triangle acceleration project. Historical observations and command logs belong in [the journal](./development/rcc_adhesion_acceleration_journal.md).
 
-Current phase: **Phase 4, release, fallback, and bonded-mode scene gates**. The production energy correction and backend device release reasons are complete for the current oracle/reporter scope. That does not make the bonded path production-ready: the live lock gate is still narrower than the target policy, released reason snapshots are not yet scene-accessible, concrete PT CCD broadphase paths are not all filtered, and lifecycle scene correctness is still unproven.
+Current focus: **Phase 2 pre-CCD filter integration** — the gating milestone for the CCD-cost lever. The bonded reporter (Phase 3) and the release/fallback machinery (Phase 4) are implemented for the current oracle/reporter scope. There are three independent performance levers, not one: (1) locked pairs are removed from barrier/friction/RCC assembly — realized now; (2) replacing their stiff near-contact log-barrier Hessian with a smooth high-kappa ABD block can improve linear-system conditioning and cut Newton/PCG iteration counts — realized now and likely the dominant win; (3) PT CCD broadphase/TOI cost — **zero CCD savings** today, because locked PTs are removed only from the DCD active-pair view in `do_filter_active` while `do_filter_toi` still processes them. Lever (3) needs the pre-CCD filter; levers (1) and (2) are measurable now. No performance claim until measured (Newton/PCG iteration counts plus per-stage timing, swept over `rcc_bonded_pt_kappa`). The live lock gate is also still beta/rest-shape only, released reason snapshots are not yet scene-accessible, and lifecycle scene correctness is unproven.
 
 ## Core Principle
 
@@ -61,13 +61,15 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 - [x] Wire the CUDA state bridge roundtrip into the backend CUDA validation path.
 - [ ] Keep source scans as boundary checks only; do not use them as proof of math.
 
-## Phase 2: Filter Integration
+## Phase 2: Filter Integration (Current Gating Milestone)
+
+The remaining pre-CCD item below is the next deliverable and the only source of CCD-broadphase/TOI savings. Until it lands, the active-view compact removes locked PTs from contact/RCC assembly only, not from CCD — so the realized wins are reduced assembly cost and (likely larger) improved solver conditioning / fewer iterations, not reduced CCD cost.
 
 - [x] Add one shared device helper for locked PT membership lookup.
 - [x] Add a CUDA deterministic lookup fixture for RCC PT key semantics, sorted membership search, misses, and empty locked sets.
 - [x] Use the helper in the common `SimplexTrajectoryFilter` active-PT compact path, defaulting to no-op when no locked-key owner is connected.
 - [x] Prove locked PTs are absent before `record_friction_candidates()` copies `PTs()` into `friction_PTs()` for the common active-view path.
-- [ ] Use the helper before PT CCD broadphase in stackless BVH, info stackless BVH, v0 info stackless BVH, and LBVH simplex filters.
+- [ ] **Next (gating deliverable):** Use the helper before PT CCD broadphase and before the `do_filter_toi` TOI line search in stackless BVH, info stackless BVH, v0 info stackless BVH, and LBVH simplex filters. This is the only place CCD-broadphase/TOI cost is removed (the assembly and solver-conditioning wins are independent of it and already active). It may be enabled for locked pairs only after the non-penetration scene gate passes (see the architecture CCD-removal precondition).
 - [ ] Add duplicate-accounting diagnostics for pair ownership.
 
 ## Phase 3: Bonded Virtual-Tet Reporter (Complete For ABD Ortho Scope)
@@ -81,7 +83,7 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 - [ ] Add a no-penetration scene observation for CCD-skipped locked pairs before bonded-mode correctness claims. This is a scene/lifecycle gate, not proof supplied by the E/G/H oracle alone.
 - [x] Keep the reporter out of contact-component accounting unless an explicit diagnostic requests comparison.
 
-## Phase 4: Release, Fallback, And Scene Gate (Current)
+## Phase 4: Release, Fallback, And Scene Gate (Backend Implemented; Downstream Of Pre-CCD Filter)
 
 - [x] Implement device release reason flags for strain, normal gap, tangential slip, sticky-side failure, disabled contact policy, flip, and degenerate current shape.
 - [x] Add `rcc_bonded_pt_release_strain`, `rcc_bonded_pt_release_gap`, and `rcc_bonded_pt_release_slip`, defaulting to large disabled thresholds until scenes choose values.
@@ -108,7 +110,8 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 | Blocker | Current Impact | Unblock Condition |
 | --- | --- | --- |
 | Lock gate is still beta/rest-shape only | The live producer now builds SVTS-compatible rest shapes and rejects degenerate fresh locks. Sticky-side and policy data are routed for release only; they are not yet lock gates. Age, sticky-side, normal-gap, tangential-slip, and policy lock gates are still planned | Add the remaining lock gates and their rejection counters before bonded-mode scene correctness claims |
-| PT CCD broadphase still sees locked keys | The common active-view compact prevents locked PTs from reaching `friction_PTs()` when keys are supplied, but concrete filter `candidate_PTs()` and `toi_PTs()` are still generated before that compact | Move lookup into the PT candidate/TOI path for all simplex filter backends |
+| PT CCD broadphase still sees locked keys | **No CCD-cost savings exist today.** The common active-view compact removes locked PTs from contact/RCC assembly only; concrete filter `candidate_PTs()`/`toi_PTs()` and the `do_filter_toi` line search still process every locked pair. The CCD-cost lever is unrealized; the assembly and solver-conditioning levers are independent and already active | Move lookup before PT CCD broadphase and the TOI line search in all simplex filter backends, gated behind the non-penetration scene observation |
+| Released-beta merge can read a stale PT key snapshot | On a step with zero PT candidates `m_prev_keys_PT` is not rebuilt, but the producer still merges released beta into it, so a re-bond can seed from an older beta for one step | Rebuild/maintain `m_prev_keys_PT` on every Phase A step including `n==0`, and add an `n==0`+release fixture |
 | Scene-level release diagnostics are incomplete | Device strain/gap/slip/sticky/policy/flip/degenerate release, released snapshots, same-step relock suppression, one-shot counters, and RCC beta carry are implemented, but released topology/age/flags and per-reason counts are not yet exposed through scene-accessible report fields | Add report/accessor fields that scene gates can assert before relying on forced-pull scene release |
 | No bonded-PT PT lifecycle scene | Legacy RCC lift/hold/release fixtures are automated; bonded mode still lacks lock/reuse/release assertions, no-penetration observation, complete lock gates, and scene-level release reason fields | Extend the current subdivided-cube and cube-cloth fixtures into `pt_lift_release` after lock-gate parity, scene diagnostics, and no-penetration metrics exist |
 | No subsystem timers | Performance claims would collapse into total frame time | Add or expose timing fields before benchmarks |
@@ -127,7 +130,7 @@ ABD note: `SoftVertexTriangleStitch` is a rest-shape/thickness reference only. I
 
 ## Validation Gates
 
-These commands are runnable today from the repository root and must pass before changing the roadmap status.
+These commands are runnable today from the repository root and must pass before changing the roadmap status. Note: the portable source/doc gates prove documentation structure and source anchors only — not runtime behavior. Behavioral proof requires the CUDA gate bundle and the listed `uipc_test_*` binaries below.
 
 | Gate | Command | Required Result |
 | --- | --- | --- |
@@ -163,4 +166,4 @@ These commands are target gates for missing code, missing tests, or missing syst
 
 ## Next Safe Task
 
-Expose release reason snapshots through scene-accessible diagnostics, then add lock-gate parity and the bonded-mode `pt_lift_release` no-penetration scene observation. Keep bonded mode default-off and avoid correctness/performance claims until lock gates, scene diagnostics, pre-CCD filtering, and benchmark gates all pass.
+Move locked-key lookup before PT CCD broadphase and the `do_filter_toi` TOI line search in every simplex filter — this is the only change that produces CCD-cost savings; the assembly and solver-conditioning/iteration-count wins are independent of it and measurable now. Couple it with the `pt_lift_release` no-penetration scene observation (see the architecture CCD-removal precondition): CCD may be skipped for a locked pair only once that gate proves the bonded ABD energy prevents tunneling. Then expose release-reason scene diagnostics, add lock-gate parity, and only then benchmark. Keep bonded mode default-off and make no correctness/performance claims until pre-CCD filtering, the no-penetration gate, lock gates, scene diagnostics, and benchmark gates all pass.
