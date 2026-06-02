@@ -7,6 +7,7 @@
 #include <uipc/constitution/soft_position_constraint.h>
 #include <uipc/constitution/soft_transform_constraint.h>
 #include <uipc/core/rcc_adhesion_state_accessor_feature.h>
+#include <uipc/core/rcc_bonded_pt_state_accessor_feature.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -50,6 +51,23 @@ BetaStats beta_stats(const World& world)
         Float(std::count_if(betas.begin(), betas.end(), [](Float b) { return b > 0.9; }))
         / Float(betas.size());
     return stats;
+}
+
+struct BondedStats
+{
+    SizeT               locked = 0;
+    RCCBondedPTCounters counters;
+};
+
+BondedStats bonded_stats(const World& world)
+{
+    auto acc = world.features().find<RCCBondedPTStateAccessorFeature>();
+    REQUIRE(acc != nullptr);
+
+    BondedStats s;
+    s.locked   = acc->locked_pair_count();
+    s.counters = acc->counters();
+    return s;
 }
 
 Float smooth_lerp(Float a, Float b, Float t)
@@ -830,4 +848,92 @@ TEST_CASE("rcc_adhesion_cube_cloth_lift_hold_release_gate",
     REQUIRE(pull_beta.frac_09 == Catch::Approx(0.0));
 
     advance_to(world, cloth_gate::TotalFrames);
+}
+
+// pt_lift_release no-penetration gate: enable bonded-PT acceleration AND the
+// pre-CCD skip, so locked PT pairs are removed from CCD broadphase and the ABD
+// virtual-tet energy is the ONLY thing preventing penetration. The gate proves
+// (1) bonded locks form, (2) no visible penetration during press/hold/lift while
+// CCD is skipped, and (3) the lower cube is still lifted through the bonded
+// energy. See docs/architecture.md "CCD Removal Precondition".
+TEST_CASE("rcc_bonded_pt_cube_lift_hold_no_penetration_gate",
+          "[rcc_bonded_pt][scene][pt_lift_release][cuda]")
+{
+    using namespace uipc;
+    using namespace uipc::core;
+
+    logger::set_level(spdlog::level::err);
+
+    auto out_path = fmt::format("{}bonded_cube/",
+                                AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE));
+    Engine engine{"cuda", out_path};
+    World  world{engine};
+
+    auto config                               = test::Scene::default_config();
+    config["dt"]                              = 0.01;
+    config["gravity"]                         = Vector3{0.0, -9.8, 0.0};
+    config["contact"]["enable"]               = true;
+    config["contact"]["friction"]["enable"]   = true;
+    config["contact"]["d_hat"]                = 0.02;
+    config["linear_system"]["tol_rate"]       = 1.0e-3;
+    config["extras"]["strict_mode"]["enable"] = false;
+    // Bonded-PT acceleration with the pre-CCD skip enabled.
+    config["rcc_bonded_pt_enabled"]             = 1;
+    config["rcc_bonded_pt_skip_ccd"]            = 1;
+    config["rcc_bonded_pt_beta_lock_threshold"] = 0.9;
+    config["rcc_bonded_pt_energy_model"]        = "abd_ortho";
+    config["rcc_bonded_pt_kappa"]               = 1.0e8;  // production gate value
+    test::Scene::dump_config(config, out_path);
+
+    Scene scene{config};
+    auto  cube_slot = cube_gate::build_scene(scene, true);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    // PenTol < d_hat (0.02): a larger interpenetration would be "visible".
+    constexpr Float PenTol = 0.01;
+
+    SizeT max_locked      = 0;
+    Float min_gap         = std::numeric_limits<Float>::infinity();
+    Float worst_pen_frame = -1.0;
+
+    // Press -> contact -> hold -> lift. Sample the contact-face gap every frame
+    // (host-side) and the bonded locked count periodically (device download).
+    for(int f = cube_gate::ContactAt; f <= cube_gate::PrePullHoldUntil; ++f)
+    {
+        advance_to(world, SizeT(f));
+        auto cg = cube_gate::contact_gap_stats(cube_slot);
+        if(cg.min < min_gap)
+        {
+            min_gap         = cg.min;
+            worst_pen_frame = Float(f);
+        }
+        if(f % 20 == 0)
+            max_locked = std::max(max_locked, bonded_stats(world).locked);
+    }
+
+    auto end_bonded  = bonded_stats(world);
+    max_locked       = std::max(max_locked, end_bonded.locked);
+    auto hold_height = cube_gate::height_stats(cube_slot);
+
+    CAPTURE(max_locked,
+            end_bonded.counters.candidate_count,
+            end_bonded.counters.locked_count,
+            end_bonded.counters.filter_skipped_count,
+            end_bonded.counters.duplicate_suppressed_count,
+            end_bonded.counters.degenerate_rejected_count,
+            min_gap,
+            worst_pen_frame,
+            hold_height.bottom_y,
+            hold_height.gap_y);
+
+    // (1) Bonded locks actually formed: the pre-CCD path engaged.
+    REQUIRE(max_locked >= 1);
+    // (2) No visible penetration while CCD is skipped for locked pairs.
+    REQUIRE(min_gap >= -PenTol);
+    // (3) Adhesion still lifts the lower cube through the bonded energy.
+    REQUIRE(hold_height.bottom_y > cube_gate::BottomLiftY - 0.06);
+
+    advance_to(world, cube_gate::TotalFrames);
 }

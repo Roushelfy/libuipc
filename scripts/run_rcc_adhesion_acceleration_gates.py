@@ -59,7 +59,7 @@ def main() -> int:
             "docs/roadmap.md",
             [
                 ("Core Principle", "roadmap declares the governing tradeoff"),
-                ("Current focus: **the no-penetration", "roadmap identifies current gating milestone"),
+                ("Current focus: **the benchmark", "roadmap identifies current gating milestone"),
                 ("Phase 3: Bonded Virtual-Tet Reporter (Complete For ABD Ortho Scope)", "roadmap records completed ABD reporter scope"),
                 ("Phase 4: Release, Fallback, And Scene Gate (Backend Implemented; Downstream Of Pre-CCD Filter)", "roadmap tracks release/lifecycle work downstream of the pre-CCD filter"),
                 ("Blockers", "roadmap names current blockers"),
@@ -615,6 +615,16 @@ def main() -> int:
         "apps/tests/backends/cuda/rcc_bonded_pt_lookup.cu",
         "[rcc_bonded_pt][filter][ccd]",
         "pre-CCD filter membership fixture exists",
+    )
+    expect_contains(
+        "apps/tests/sim_case/rcc_adhesion_lift_release_gate.cpp",
+        "[rcc_bonded_pt][scene][pt_lift_release]",
+        "bonded-mode no-penetration scene gate exists",
+    )
+    expect_contains(
+        "apps/tests/sim_case/rcc_adhesion_lift_release_gate.cpp",
+        "rcc_bonded_pt_skip_ccd",
+        "scene gate enables the pre-CCD skip it is validating",
     )
 
     print("RCC adhesion acceleration source/doc gate passed.")

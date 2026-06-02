@@ -821,3 +821,40 @@ The re-sequenced roadmap made the pre-CCD filter the gating deliverable for the 
 | `uipc_test_backend_cuda "[rcc_bonded_pt]" -r compact` | Passed. `All tests passed (230 assertions in 13 test cases)`. |
 | `uipc_test_core "[rcc_bonded_pt]" -r compact` | Passed. `All tests passed (91 assertions in 6 test cases)`. |
 | `uipc_test_backend_cuda "gpu_sanity_check" -c "bunny" -r compact` | Passed. BVH/radix regression unaffected. |
+
+## 2026-06-02 Pre-CCD No-Penetration Scene Gate
+
+### Context
+
+The pre-CCD skip is implemented but default-off because removing CCD removes the last non-penetration guard for locked pairs, and the ABD virtual-tet energy is reflection-invariant (it cannot by itself prevent tunneling). The architecture CCD Removal Precondition requires a scene gate that observes no penetration with `rcc_bonded_pt_skip_ccd` on before the skip can be enabled safely. This is also a genuine experiment: it could have shown that the ABD energy alone is insufficient.
+
+### Implemented
+
+- Added `[rcc_bonded_pt][scene][pt_lift_release]` to `apps/tests/sim_case/rcc_adhesion_lift_release_gate.cpp`, reusing the proven `cube_gate::build_scene` PT-rich subdivided cube-cube fixture.
+- Enabled `rcc_bonded_pt_enabled=1`, `rcc_bonded_pt_skip_ccd=1`, `rcc_bonded_pt_beta_lock_threshold=0.9`, `rcc_bonded_pt_kappa=1e8`.
+- Read bonded state through `RCCBondedPTStateAccessorFeature` and measured the contact-face gap each frame from contact through the lift hold.
+- Asserts: at least one bonded lock forms; the contact-face gap stays `>= -0.01` (no visible penetration, `PenTol < d_hat`); the lower cube is lifted (`bottom_y > BottomLiftY - 0.06`) through the bonded energy.
+
+### Observed Result
+
+The gate passes (596 assertions). Captured diagnostics at the lift hold:
+
+- `locked_count = 8` (from `candidate_count = 16`), `duplicate_suppressed = 0`, `degenerate_rejected = 0` — 8 bonded locks, no duplicate ownership.
+- `min_gap = +0.0188` at frame 63 (just after contact) — the contact-face gap never went negative, i.e. zero penetration with a comfortable margin (the `-0.01` tolerance was never approached). The faces settle near `d_hat` (0.02).
+- `filter_skipped = 0` — corroborates the pre-CCD path: with `skip_ccd` on, locked pairs are removed at the broadphase predicate and never reach the active-view compact (which would otherwise report ~8).
+- `bottom_y = 0.581` (target lift `BottomLiftY = 0.60`) — the lower cube was carried to within 0.02 of the full lift purely through the bonded ABD energy, with CCD skipped for the locked pairs.
+
+So for this fixture the ABD virtual-tet energy holds the bond non-penetrating once CCD is skipped. The legacy `[rcc_adhesion][gate]` (836 assertions, 2 cases) still passes, confirming no regression.
+
+### Decision
+
+The CCD Removal Precondition is satisfied for the cube fixture, but `rcc_bonded_pt_skip_ccd` stays default-off: one fixture is evidence, not a license to flip a default. Next is the benchmark (to measure whether the conditioning/iteration lever is a net win) and broader fixtures (cloth/patch) plus the forced-pull release/separation and adhesion-off baseline in the scene gate.
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cmake --build build/cuda_mixed_fused_pcg --target uipc_test_sim_case -j8` | Passed. |
+| `uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]" -r compact` | Passed. `All tests passed (596 assertions in 1 test case)`. |
+| `uipc_test_sim_case "[rcc_adhesion][gate]" -r compact` | Passed. `All tests passed (836 assertions in 2 test cases)` (legacy regression). |
+| `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` | Passed after updating doc/source anchors for the scene gate. |
