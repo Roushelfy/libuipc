@@ -45,7 +45,9 @@ from uipc import (
     builtin,
 )
 from uipc.geometry import trimesh, label_surface, mesh_partition
-from uipc.core import RCCAdhesionStateAccessorFeature, FiniteElementStateAccessorFeature
+from uipc.core import (RCCAdhesionStateAccessorFeature,
+                       FiniteElementStateAccessorFeature,
+                       RCCBondedPTStateAccessorFeature)
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
@@ -261,6 +263,9 @@ def _save_asset_impl(sim, state):
     # plus derived TAPE_NX. Asset becomes self-describing.
     params = L.filter_cfg_for_save(_CFG)
     params["TAPE_NX"] = TAPE_NX
+    # Persist whether bonded-PT was enabled at wind time so a downstream
+    # load (drop/unwind) auto-enables bonded — no `--set BONDED=1` needed.
+    params["BONDED"] = 1 if state.get("bonded") else 0
     # Snapshot the RCC adhesion β state for downstream demos.
     pair_state = None
     if state["adhesion_on"]:
@@ -363,7 +368,11 @@ def _hub_axis_to_z() -> Matrix4x4:
     return _mat4_to_uipc(Rx)
 
 
-def build_demo(adhesion_on: bool = True):
+def build_demo(adhesion_on: bool = True,
+               bonded: bool = False,
+               beta_lock_threshold: float = 0.9,
+               kappa: float = 1.0e8,
+               skip_ccd: bool = False):
     # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
     L.apply_log_level(_CFG, default="warn")
 
@@ -379,6 +388,16 @@ def build_demo(adhesion_on: bool = True):
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    if bonded:
+        # RCC bonded-PT acceleration: stable high-beta face-interior tape
+        # contacts are replaced by a stiff ABD virtual tet (point-plane).
+        config["rcc_bonded_pt_enabled"] = 1
+        config["rcc_bonded_pt_skip_ccd"] = 1 if skip_ccd else 0
+        config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
+        config["rcc_bonded_pt_energy_model"] = "abd_ortho"
+        config["rcc_bonded_pt_kappa"] = kappa
+        # Release thresholds left at their disabled defaults (1e30): once a
+        # tape contact bonds it stays bonded (the wound tape does not peel).
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
@@ -559,9 +578,34 @@ def build_demo(adhesion_on: bool = True):
 # ----------------------------------------------------------------------
 # Polyscope viewer
 # ----------------------------------------------------------------------
+def _bonded_bonds(sim):
+    """(locked_count, (nodes, edges)) for the bonded virtual tets, or (count, None).
+
+    Each locked PT is drawn as the 6 edges of its (point, t0, t1, t2) tet.
+    """
+    acc = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+    if acc is None:
+        return 0, None
+    locked = int(acc.locked_pair_count())
+    pts = np.asarray(acc.dump_locked_tet_world_positions(), dtype=np.float64)
+    if pts.ndim != 3 or pts.shape[0] == 0:
+        return locked, None
+    nodes = pts.reshape(-1, 3)
+    edges = []
+    for i in range(pts.shape[0]):
+        b = 4 * i
+        edges += [[b, b + 1], [b, b + 2], [b, b + 3],
+                  [b + 1, b + 2], [b + 2, b + 3], [b + 3, b + 1]]
+    return locked, (nodes, np.asarray(edges, dtype=np.int64))
+
+
 def run_demo():
-    state = {"adhesion_on": True, "saved": False}
-    sim = build_demo(state["adhesion_on"])
+    # Bonded-PT acceleration enabled with beta lock threshold 0.9 (pass
+    # `--set BONDED=0` to disable for an A/B comparison).
+    state = {"adhesion_on": True, "saved": False,
+             "bonded": L.cfg_flag(_CFG, "BONDED", default=True)}
+    sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
+                     beta_lock_threshold=0.9)
 
     # Trajectory sanity check — print free-end positions at sampled angles.
     print(f"tape mesh: NX={TAPE_NX}, NZ={TAPE_NZ}  "
@@ -631,7 +675,34 @@ def run_demo():
     )
     mesh.set_edge_width(0.3)
 
-    ui = {"run": False}
+    ui = {"run": False, "show_bonds": True}
+    bonds_net = [None]
+
+    def update_bonds():
+        # Draw the bonded virtual tets (red curve network). Re-register when
+        # the lock count changes (bonds form / release); otherwise just move
+        # the nodes. Removed entirely when the toggle is off or no locks.
+        if not ui["show_bonds"]:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+                bonds_net[0] = None
+            return
+        _, data = _bonded_bonds(sim)
+        if data is None:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+                bonds_net[0] = None
+            return
+        nodes, edges = data
+        if bonds_net[0] is None or bonds_net[0].n_nodes() != nodes.shape[0]:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+            net = ps.register_curve_network("bonds", nodes, edges)
+            net.set_radius(0.004)
+            net.set_color((1.0, 0.15, 0.1))
+            bonds_net[0] = net
+        else:
+            bonds_net[0].update_node_positions(nodes)
 
     def update_visual():
         nonlocal mesh
@@ -644,6 +715,7 @@ def run_demo():
             mesh.set_edge_width(0.3)
         else:
             mesh.update_vertex_positions(v)
+        update_bonds()
 
     def step_once():
         if sim["world"].frame() >= TOTAL_FRAMES:
@@ -664,7 +736,8 @@ def run_demo():
 
     def reset():
         nonlocal sim
-        sim = build_demo(state["adhesion_on"])
+        sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
+                         beta_lock_threshold=0.9)
         update_visual()
         state["saved"] = False
 
@@ -683,6 +756,11 @@ def run_demo():
         psim.SameLine()
         if psim.Button("save asset"):
             save_asset()
+        if state["bonded"]:
+            psim.SameLine()
+            if psim.Button(f"bonds: {'ON' if ui['show_bonds'] else 'OFF'}"):
+                ui["show_bonds"] = not ui["show_bonds"]
+                update_bonds()
 
         if ui["run"]:
             step_once()
@@ -693,6 +771,9 @@ def run_demo():
         psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
         psim.Text(f"θ = {theta:.2f} rad   ({theta/(2*np.pi):.2f} turns)")
         psim.Text(f"L_wound = {L_wound(theta):.3f} / {TAPE_LENGTH} m")
+        if state["bonded"]:
+            locked, _ = _bonded_bonds(sim)
+            psim.Text(f"bonded locks: {locked}  (red tets; toggle above)")
         # Release-phase progress: SPC strength multiplier on every
         # constrained vertex. 100% during settle1 → 0% at release end.
         if _SETTLE1_END <= f < _RELEASE_END:

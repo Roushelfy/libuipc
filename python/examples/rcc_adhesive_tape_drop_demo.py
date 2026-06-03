@@ -58,7 +58,7 @@ from uipc import (
     builtin,
 )
 from uipc.geometry import trimesh, label_surface, mesh_partition, ground
-from uipc.core import RCCAdhesionStateAccessorFeature
+from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
@@ -291,7 +291,11 @@ def _stand_on_ground(tape_pos: np.ndarray,
 
 
 # ----------------------------------------------------------------------
-def build_demo(adhesion_on: bool = True):
+def build_demo(adhesion_on: bool = True,
+               bonded: bool = False,
+               beta_lock_threshold: float = 0.9,
+               kappa: float = 1.0e8,
+               skip_ccd: bool = False):
     # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
     L.apply_log_level(_CFG, default="warn")
 
@@ -368,6 +372,14 @@ def build_demo(adhesion_on: bool = True):
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    if bonded:
+        # RCC bonded-PT acceleration: stable high-beta face-interior tape
+        # contacts are replaced by a stiff ABD virtual tet (point-plane).
+        config["rcc_bonded_pt_enabled"] = 1
+        config["rcc_bonded_pt_skip_ccd"] = 1 if skip_ccd else 0
+        config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
+        config["rcc_bonded_pt_energy_model"] = "abd_ortho"
+        config["rcc_bonded_pt_kappa"] = kappa
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
@@ -592,9 +604,38 @@ def build_demo(adhesion_on: bool = True):
     }
 
 
+def _bonded_bonds(sim):
+    """(locked_count, (nodes, edges)) for the bonded virtual tets, or (count, None).
+
+    Each locked PT is drawn as the 6 edges of its (point, t0, t1, t2) tet.
+    """
+    acc = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+    if acc is None:
+        return 0, None
+    locked = int(acc.locked_pair_count())
+    pts = np.asarray(acc.dump_locked_tet_world_positions(), dtype=np.float64)
+    if pts.ndim != 3 or pts.shape[0] == 0:
+        return locked, None
+    nodes = pts.reshape(-1, 3)
+    edges = []
+    for i in range(pts.shape[0]):
+        b = 4 * i
+        edges += [[b, b + 1], [b, b + 2], [b, b + 3],
+                  [b + 1, b + 2], [b + 2, b + 3], [b + 3, b + 1]]
+    return locked, (nodes, np.asarray(edges, dtype=np.int64))
+
+
 def run_demo():
-    state = {"adhesion_on": True}
-    sim = build_demo(state["adhesion_on"])
+    # Bonded-PT acceleration. Precedence: `--set BONDED=...` wins; else the
+    # loaded asset's saved BONDED flag (a tape wound WITH bonded auto-enables
+    # it on load); else OFF. Defaults OFF because a tightly wound tape can
+    # destabilize the stiff ABD bonds at the default kappa (face contacts
+    # over-compress to a zero gap -> trajectory-filter thickness assert).
+    bonded_on = L.resolve_flag(_CFG, L.peek_asset_params(ASSET_IN_PATH),
+                               "BONDED", default=False)
+    state = {"adhesion_on": True, "bonded": bonded_on}
+    sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
+                     beta_lock_threshold=0.9)
 
     # Ground quad shared between interactive and headless paths.
     ground_quad_verts = np.array([
@@ -671,7 +712,33 @@ def run_demo():
     )
     mesh.set_edge_width(0.3)
 
-    ui = {"run": False}
+    ui = {"run": False, "show_bonds": True}
+    bonds_net = [None]
+
+    def update_bonds():
+        # Bonded virtual tets as a red curve network; re-register on lock-count
+        # change, else move nodes; removed when toggled off or no locks.
+        if not ui["show_bonds"]:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+                bonds_net[0] = None
+            return
+        _, data = _bonded_bonds(sim)
+        if data is None:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+                bonds_net[0] = None
+            return
+        nodes, edges = data
+        if bonds_net[0] is None or bonds_net[0].n_nodes() != nodes.shape[0]:
+            if bonds_net[0] is not None:
+                ps.remove_curve_network("bonds")
+            net = ps.register_curve_network("bonds", nodes, edges)
+            net.set_radius(0.004)
+            net.set_color((1.0, 0.15, 0.1))
+            bonds_net[0] = net
+        else:
+            bonds_net[0].update_node_positions(nodes)
 
     def update_visual():
         nonlocal mesh
@@ -684,6 +751,7 @@ def run_demo():
             mesh.set_edge_width(0.3)
         else:
             mesh.update_vertex_positions(v)
+        update_bonds()
 
     def step_once():
         if sim["world"].frame() >= TOTAL_FRAMES:
@@ -698,7 +766,8 @@ def run_demo():
 
     def reset():
         nonlocal sim
-        sim = build_demo(state["adhesion_on"])
+        sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
+                         beta_lock_threshold=0.9)
         update_visual()
 
     # phase_at is now module-level (see above), reused by the
@@ -722,6 +791,11 @@ def run_demo():
         psim.SameLine()
         if psim.Button("reset"):
             reset()
+        if state["bonded"]:
+            psim.SameLine()
+            if psim.Button(f"bonds: {'ON' if ui['show_bonds'] else 'OFF'}"):
+                ui["show_bonds"] = not ui["show_bonds"]
+                update_bonds()
 
         if ui["run"]:
             step_once()
@@ -729,6 +803,9 @@ def run_demo():
         f = min(sim["world"].frame(), TOTAL_FRAMES)
         psim.Separator()
         psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
+        if state["bonded"]:
+            locked, _ = _bonded_bonds(sim)
+            psim.Text(f"bonded locks: {locked}  (red tets; toggle above)")
 
         # Pull progress + lift height in mm
         f1 = max(f - 1, 0)

@@ -44,72 +44,77 @@ def make_ring_hub(R_outer: float,
                   R_inner: float,
                   height: float,
                   n_radial: int = 48,
+                  n_axial: int = 10,
                   center: tuple = (0.0, 0.0, 0.0)) -> SimplicialComplex:
     """Build a closed trimesh ring (donut prism) with its axis along +y.
 
     Geometry:
         Top + bottom annular faces (each n_radial wedges, 2 tris/wedge)
-      + outer cylindrical side + inner cylindrical side
-        (each n_radial faces, 2 tris/face)
-        → 8 · n_radial triangles, 4 · n_radial vertices.
+      + outer & inner cylindrical sides, each subdivided into `n_axial`
+        axial bands (n_radial * n_axial faces per side, 2 tris/face)
+        → 4·n_radial·(1 + n_axial) triangles, 2·n_radial·(n_axial+1) verts.
 
-    Triangle windings are chosen so face normals point OUT of the body
-    on every face. `is_trimesh_closed` will pass, so ABD's automatic
-    mass computation works.
+    The axial subdivision keeps the side triangles roughly square instead
+    of tall thin strips. Defaults to 10 bands; pass ``n_axial <= 0`` to
+    auto-pick the band count so an axial band height ≈ the circumferential
+    segment width (uniform mesh), clamped to [1, 16].
+
+    Triangle windings are chosen so face normals point OUT of the body on
+    every face. `is_trimesh_closed` will pass, so ABD's automatic mass
+    computation works.
     """
     assert R_outer > R_inner > 0.0, "need 0 < R_inner < R_outer"
     assert height > 0.0
+
+    if n_axial <= 0:
+        circ_seg = 2.0 * np.pi * R_outer / n_radial
+        n_axial = int(round(height / circ_seg)) if circ_seg > 0.0 else 1
+        n_axial = max(1, min(n_axial, 16))
+
     cx, cy, cz = center
     y_top = cy + 0.5 * height
-    y_bot = cy - 0.5 * height
 
     theta = np.linspace(0.0, 2.0 * np.pi, n_radial, endpoint=False)
     cos_t = np.cos(theta)
     sin_t = np.sin(theta)
 
-    # vertex layout:
-    #   [0 .. n)              outer top   (y = y_top)
-    #   [n .. 2n)             inner top   (y = y_top)
-    #   [2n .. 3n)            outer bot   (y = y_bot)
-    #   [3n .. 4n)            inner bot   (y = y_bot)
     n = n_radial
-    verts = np.empty((4 * n, 3), dtype=np.float64)
-    verts[0:n, 0] = cx + R_outer * cos_t
-    verts[0:n, 1] = y_top
-    verts[0:n, 2] = cz + R_outer * sin_t
+    nlev = n_axial + 1  # rings along the axis: level 0 = top ... n_axial = bot
 
-    verts[n:2*n, 0] = cx + R_inner * cos_t
-    verts[n:2*n, 1] = y_top
-    verts[n:2*n, 2] = cz + R_inner * sin_t
+    # vertex layout: level k holds [outer(n), inner(n)] at base = k * 2n.
+    verts = np.empty((nlev * 2 * n, 3), dtype=np.float64)
+    for k in range(nlev):
+        y_k = y_top - k * (height / n_axial)
+        b = k * 2 * n
+        verts[b:b + n, 0]         = cx + R_outer * cos_t
+        verts[b:b + n, 1]         = y_k
+        verts[b:b + n, 2]         = cz + R_outer * sin_t
+        verts[b + n:b + 2*n, 0]   = cx + R_inner * cos_t
+        verts[b + n:b + 2*n, 1]   = y_k
+        verts[b + n:b + 2*n, 2]   = cz + R_inner * sin_t
 
-    verts[2*n:3*n, 0] = cx + R_outer * cos_t
-    verts[2*n:3*n, 1] = y_bot
-    verts[2*n:3*n, 2] = cz + R_outer * sin_t
+    def O(k, i): return k * 2 * n + (i % n)          # outer at axial level k
+    def I(k, i): return k * 2 * n + n + (i % n)      # inner at axial level k
 
-    verts[3*n:4*n, 0] = cx + R_inner * cos_t
-    verts[3*n:4*n, 1] = y_bot
-    verts[3*n:4*n, 2] = cz + R_inner * sin_t
-
-    def OT(i): return i % n               # outer top
-    def IT(i): return n + (i % n)         # inner top
-    def OB(i): return 2*n + (i % n)       # outer bot
-    def IB(i): return 3*n + (i % n)       # inner bot
-
+    K = n_axial
     tris = []
     for i in range(n):
         j = (i + 1) % n
-        # top annulus — normal +y. wedge (OT_i, IT_i, IT_j, OT_j)
-        tris.append([OT(i), IT(i), IT(j)])
-        tris.append([OT(i), IT(j), OT(j)])
-        # bottom annulus — normal -y. opposite winding.
-        tris.append([OB(i), OB(j), IB(j)])
-        tris.append([OB(i), IB(j), IB(i)])
-        # outer cylinder — normal +radial.  wedge (OT_i, OT_j, OB_j, OB_i)
-        tris.append([OT(i), OT(j), OB(i)])
-        tris.append([OT(j), OB(j), OB(i)])
-        # inner cylinder — normal -radial (points into the hole, OUT of body).
-        tris.append([IT(i), IB(i), IT(j)])
-        tris.append([IT(j), IB(i), IB(j)])
+        # top annulus (level 0) — normal +y. wedge (OT_i, IT_i, IT_j, OT_j)
+        tris.append([O(0, i), I(0, i), I(0, j)])
+        tris.append([O(0, i), I(0, j), O(0, j)])
+        # bottom annulus (level K) — normal -y. opposite winding.
+        tris.append([O(K, i), O(K, j), I(K, j)])
+        tris.append([O(K, i), I(K, j), I(K, i)])
+    for k in range(n_axial):  # axial band between level k (upper) and k+1 (lower)
+        for i in range(n):
+            j = (i + 1) % n
+            # outer cylinder — normal +radial.
+            tris.append([O(k, i), O(k, j), O(k + 1, i)])
+            tris.append([O(k, j), O(k + 1, j), O(k + 1, i)])
+            # inner cylinder — normal -radial (points into the hole, OUT of body).
+            tris.append([I(k, i), I(k + 1, i), I(k, j)])
+            tris.append([I(k, j), I(k + 1, i), I(k + 1, j)])
 
     sc = trimesh(verts, np.asarray(tris, dtype=np.int32))
     label_surface(sc)
@@ -475,6 +480,16 @@ SOLVER_PROFILES = {
         LIN_TOL_RATE=1e-4,
         NEWTON_VELOCITY_TOL=5e-3,
         NEWTON_TRANSRATE_TOL=1e-2,
+        NEWTON_MAX_ITER=1024,
+        LINE_SEARCH_MAX_ITER=8,
+    ),
+    # Tape-specific relaxed convergence used for soft tape wind/drop
+    # sweeps: ABD dof tolerance = 0.02/s, nodal displacement tolerance
+    # = 0.02 * 19mm tape width at dt=0.01s -> velocity_tol = 0.038m/s.
+    "tape_abd002_nodal002w": dict(
+        LIN_TOL_RATE=1e-4,
+        NEWTON_VELOCITY_TOL=3.8e-2,
+        NEWTON_TRANSRATE_TOL=2.0e-2,
         NEWTON_MAX_ITER=1024,
         LINE_SEARCH_MAX_ITER=8,
     ),
@@ -850,6 +865,22 @@ def load_tape_asset(npz_path: str):
             tape_velocity)
 
 
+def peek_asset_params(npz_path: str) -> dict:
+    """Read just the saved ``params`` dict from an asset .npz, skipping the
+    heavy geometry / β arrays.
+
+    Loaders use this to consult asset-saved *settings* (e.g. whether bonded-PT
+    was enabled at wind time) BEFORE the full ``load_tape_asset``. Returns an
+    empty dict if the file is missing or carries no params (legacy assets).
+    """
+    if not os.path.isfile(npz_path):
+        return {}
+    with np.load(npz_path, allow_pickle=True) as data:
+        if "params" in data.files:
+            return dict(data["params"][0])
+    return {}
+
+
 # ----------------------------------------------------------------------
 # Parameter presets — split by demo
 # ----------------------------------------------------------------------
@@ -941,7 +972,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "default",
     },
     # ===== 3M Temflex 175 vinyl electrical tape =====
     # Geometry from 3M's official datasheet:
@@ -1275,6 +1306,65 @@ WIND_PRESETS = {
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
         "SOLVER_PROFILE":    "high",
     },
+    "temflex175-2turn-e5e7-dhat2-cnct1": {
+        # Soft 2-turn wind/drop preset:
+        #   E = 5e7 Pa, d_hat = 2 * TAPE_THICKNESS, ABD tol = 0.02/s,
+        #   nodal displacement tol = 0.02 * 19mm tape width.
+        # Adhesion matches temflex175 wind except Cn and Ct are both 1.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       5.0e7,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       2.0,
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
+        "ADH_CN":            1.0,
+        "ADH_CT":            1.0,
+        "ADH_W":             1.0,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  20.0,
+        "ADH_INITIAL_BETA":  0.0,
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    2000,
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
+    },
+    "temflex175-2turn-e5e7-dhat2-cnct5": {
+        # Same soft 2-turn preset as cnct1, with Cn and Ct both 5.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       5.0e7,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       2.0,
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.04,
+        "ADH_CN":            5.0,
+        "ADH_CT":            5.0,
+        "ADH_W":             1.0,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  20.0,
+        "ADH_INITIAL_BETA":  0.0,
+        "SPC_STRENGTH":      1000.0,
+        "SETTLE1_FRAMES":    1500,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    2000,
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
+    },
 }
 
 
@@ -1395,6 +1485,50 @@ UNWIND_PRESETS = {
 }
 
 
+def cfg_flag(cfg: dict, key: str, default: bool = False) -> bool:
+    """Interpret a ``--set KEY=VALUE`` entry as a boolean flag.
+
+    Robust to ``parse_tape_cli``'s numeric coercion: an unknown key like
+    ``--set BONDED=0`` is stored as the *float* ``0.0``, so a naive
+    ``str(v) == "0"`` check sees ``"0.0"`` and silently misses it (the bug
+    that left ``--set BONDED=0`` still enabling bonded). Accepts ints,
+    floats, and the usual 0/1/true/false/yes/no/on/off spellings.
+    """
+    if key not in cfg:
+        return default
+    v = cfg[key]
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off", ""):
+        return False
+    try:
+        return float(s) != 0.0
+    except ValueError:
+        return default
+
+
+def resolve_flag(cfg: dict, params: dict, key: str, default: bool = False) -> bool:
+    """Boolean parameter with ``--set KEY=... > asset value > default`` precedence.
+
+    The bool analogue of ``resolve_param``: an explicit CLI override wins;
+    otherwise an asset that recorded the flag (e.g. a tape wound WITH bonded)
+    supplies it; otherwise the demo default applies. Unlike ``resolve_param``
+    it tolerates the key being absent everywhere (falls back to ``default``
+    instead of raising) and coerces via ``cfg_flag`` so the numeric/string
+    spellings all work.
+    """
+    if key in cfg.get("__explicit__", set()):
+        return cfg_flag(cfg, key, default)
+    if params and key in params and params[key] is not None:
+        return cfg_flag(params, key, default)
+    return cfg_flag(cfg, key, default)
+
+
 def parse_tape_cli(presets: dict, argv=None) -> dict:
     """Parse --preset / --set / --list / --asset / --list-assets.
 
@@ -1418,6 +1552,12 @@ def parse_tape_cli(presets: dict, argv=None) -> dict:
     p.add_argument("--set", action="append", default=[], dest="overrides",
                    metavar="KEY=VALUE",
                    help="override any preset key (repeatable)")
+    p.add_argument("--bonded", nargs="?", const="1", default=None,
+                   metavar="0|1",
+                   help="enable/disable bonded-PT acceleration (convenience "
+                        "alias for `--set BONDED=...`). `--bonded` or "
+                        "`--bonded 1` enables; `--bonded 0` disables. If "
+                        "omitted, the demo's own default applies.")
     p.add_argument("--asset", default=None, metavar="NAME_OR_PATH",
                    help="wind demo: save target; unwind demo: load source. "
                         "Bare name (e.g. 'my_trial') → ASSET_DIR/my_trial.npz; "
