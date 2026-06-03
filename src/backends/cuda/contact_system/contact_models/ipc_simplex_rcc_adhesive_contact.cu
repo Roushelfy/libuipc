@@ -64,13 +64,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // is active this step. Name kept as `m_beta_PT` for persistence/anchor
     // continuity; it now spans the full VT list, not just face-interior PT.
     muda::DeviceBuffer<Float> m_beta_PT;
-    // Step 5: Vector4i topologies extracted from friction_VTs(), fed to the
-    // bonded producer together with m_beta_PT so the lock decision is made on
-    // the full VT primitive (corner/edge contacts can bond, not just
-    // face-interior PT). The bonded ABD virtual tet stays point-plane; the
-    // producer's rest-shape conditioning + det_dm_min accept well-conditioned
-    // pairs and reject degenerate ones.
+    // Step 5: Vector4i topologies extracted from friction_VTs() (aligned 1:1
+    // with m_beta_PT), fed to the bonded producer. The bonded ABD virtual tet
+    // is a point-PLANE bond, which is only geometrically sound when the point
+    // projects INSIDE the triangle (closest-feature dim==4 / face-interior).
+    // For edge/corner VTs the point projects outside the triangle footprint,
+    // so a point-plane tet would be a skewed sliver — those pairs ADHERE
+    // (full-feature adhesion) but must NOT bond. We therefore feed the
+    // producer a beta masked to zero on non-face VTs (`m_vt_lock_beta`), so
+    // only flag==4 pairs cross the lock threshold; the real per-VT m_beta_PT
+    // (used for adhesion on all features) is untouched.
     muda::DeviceBuffer<Vector4i> m_vt_topos;
+    muda::DeviceBuffer<Float>    m_vt_lock_beta;
 
     // ---- v2 state ----
     // β + sorted keys snapshotted at end of last step (Phase A output;
@@ -1147,32 +1152,45 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                 m_gcm_for_phase_a->subscene_mask_tabular();
             release_context.adhesive_tabular = m_adhesive_tabular;
 
-            // Step 5: bond on the full VT primitive. Extract the Vector4i
-            // topologies from friction_VTs (aligned 1:1 with m_beta_PT) and
-            // hand them to the producer with the per-VT beta. The producer
-            // matches existing locks by key (PT_pair_key(topo), identical for
-            // any VT), adds high-beta candidates, conditions/rejects rest
-            // shapes (edge/corner pairs are near-coplanar -> offset along the
-            // normal by min_separate_distance, or rejected by det_dm_min). The
-            // bonded ABD tet remains point-plane over F = Ds Dm_inv. Locked VTs
-            // are removed from friction_VTs by the filter's locked-key compact,
-            // so no pair is both adhered and bonded.
+            // Step 5: bond on the VT primitive. Extract the Vector4i topology
+            // of each friction_VT (aligned 1:1 with m_beta_PT) and a lock-beta
+            // that is m_beta_PT for face-interior (flag dim==4) pairs and 0
+            // otherwise. The producer then locks only pairs that project inside
+            // their triangle (a sound point-plane ABD tet); edge/corner VTs
+            // (projection outside the triangle) keep their adhesion but never
+            // bond, which would otherwise produce skewed sliver tets. The
+            // producer matches existing locks by key, adds high-beta
+            // candidates, and conditions/rejects rest shapes; the ABD tet
+            // stays point-plane over F = Ds Dm_inv. Locked VTs are removed from
+            // friction_VTs by the filter's locked-key compact (no double-count).
             auto   vt_pairs = m_stf_for_phase_a->friction_VTs();
             IndexT vt_n     = (IndexT)vt_pairs.size();
             m_vt_topos.resize(vt_n);
+            m_vt_lock_beta.resize(vt_n);
             if(vt_n > 0)
             {
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
                     .apply(vt_n,
-                           [VTs   = vt_pairs.viewer().name("VTs"),
-                            topos = m_vt_topos.view().viewer().name("vt_topos")] __device__(int i) mutable
-                           { topos(i) = VTs(i).topo; });
+                           [VTs      = vt_pairs.viewer().name("VTs"),
+                            beta     = m_beta_PT.cviewer().name("beta_VT"),
+                            topos    = m_vt_topos.view().viewer().name("vt_topos"),
+                            lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta")] __device__(int i) mutable
+                           {
+                               const auto& vt = VTs(i);
+                               topos(i)       = vt.topo;
+                               Vector4i off;
+                               IndexT   dim =
+                                   distance::degenerate_point_triangle(vt.flag, off);
+                               // Only face-interior (dim==4) pairs are eligible
+                               // to bond; others keep adhesion but get lock-beta 0.
+                               lockbeta(i) = (dim == 4) ? beta(i) : Float{0};
+                           });
             }
 
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
                 m_vt_topos.view(),
-                m_beta_PT.view(),
+                m_vt_lock_beta.view(),
                 positions,
                 m_bonded_pt_beta_lock_threshold,
                 release_context);

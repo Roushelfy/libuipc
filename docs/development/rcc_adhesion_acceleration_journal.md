@@ -1171,3 +1171,30 @@ Step 5 complete. Bonding now decides on the VT primitive; the ABD tet stays poin
 
 - `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda uipc_test_sim_case`; cp `libuipc_backend_cuda.so` -> venv.
 - `uipc_test_backend_cuda "[rcc_bonded_pt]"/"[rcc_adhesion][oracle]"/"gpu_sanity_check -c bunny"`; `uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"/"[rcc_adhesion][gate]"`; headless cube probe; `run_rcc_adhesion_acceleration_gates.py`.
+
+## 2026-06-03 Step 5 Fix — Bond Only Face-Interior VTs (Spurious Skewed Tets)
+
+### Context
+
+Running `python/examples/rcc_bonded_pt_lift_pull_viewer.py` showed many spurious bonded tets — apexes sticking out to the side, looking detached from their triangle.
+
+### Source Observations (headless probe)
+
+Dumped `dump_locked_tet_world_positions()` and measured, per locked tet, the point's perpendicular distance to the triangle plane AND whether the point's projection lands inside the triangle (barycentric). At hold: 96 locks, but only **8 had the projection inside** the triangle; **88 were outside** (projection laterally beyond the triangle footprint). Perpendicular distance was small (<= 0.019). So the artifact is not large perpendicular distance — it is the point projecting OUTSIDE the triangle, making the point-plane tet a skewed sliver whose apex sticks out sideways.
+
+### Root Cause
+
+Step 5 fed the producer the full `friction_VTs` with the real per-VT beta, so every VT primitive with beta>=threshold bonded. A point near a shared edge/vertex generates VT candidates against EVERY nearby triangle (one it is over = face-interior, plus several it is only edge/vertex-adjacent to). The bonded ABD tet is a point-PLANE bond, which is geometrically sound only when the point projects inside the triangle. For the edge/vertex-adjacent triangles the point projects outside -> 88 skewed sliver tets. `build_rest_shape`/`det_dm_min` did not reject them: a point offset to `min_separate_distance` above the plane but laterally outside still forms a non-degenerate (just skewed) tet.
+
+### Fix
+
+Mask the producer's lock-beta to 0 on non-face-interior VTs: in the topo-extraction kernel compute `dim = degenerate_point_triangle(vt.flag, off)` and feed `lockbeta = (dim==4) ? m_beta_PT : 0` (new `m_vt_lock_beta`). Only face-interior (projection-inside) VTs cross the lock threshold. The real per-VT `m_beta_PT` (adhesion on all features) is untouched, so edge/corner VTs keep their adhesion. Edge/corner contacts therefore adhere but do not bond — correct, since a point-plane stiff tet cannot soundly replace a point-near-edge/vertex contact.
+
+### Observed Result / Validation
+
+- Headless probe: 8 locks, all projection-inside (`inside=8/8, outside=0`), no tets with point-plane dist > 0.05; 88 edge/corner VTs adhere at beta=1.0 (removed-from-friction count: 96 total = 8 bonded + 88 adhered); lower cube carried through the lift; no NaN. Adhesion-off separates.
+- All gates green: backend `[rcc_bonded_pt]` 247/14, `[rcc_adhesion][oracle]` 12/4, bunny 4/1, `[rcc_bonded_pt][scene][pt_lift_release]` 596/1, legacy `[rcc_adhesion][gate]` 836/2, source/doc gate.
+
+### Decision
+
+The bonded ABD tet is a point-plane bond and only face-interior (closest-feature dim==4) VTs may bond; edge/corner VTs adhere only. This is the geometrically-correct reading of "bond on the VT primitive, ABD tet stays point-plane".
