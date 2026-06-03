@@ -398,6 +398,10 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_kappa"] = kappa
         # Release thresholds left at their disabled defaults (1e30): once a
         # tape contact bonds it stays bonded (the wound tape does not peel).
+        # The preset's RCC_RELEASE_FORCE is NOT applied here on purpose — it is
+        # consumed downstream by the drop/unwind demos (the replay/peel), where
+        # the bond should release like the non-bonded adhesion would. It is
+        # still saved into the asset as a record of the intended release load.
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so

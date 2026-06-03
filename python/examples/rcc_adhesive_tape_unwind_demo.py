@@ -194,6 +194,7 @@ def build_demo(adhesion_on: bool = True,
                bonded: bool = False,
                beta_lock_threshold: float = 0.9,
                kappa: float = 1.0e8,
+               release_force: float = 1.0e30,
                skip_ccd: bool = False):
     # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
     L.apply_log_level(_CFG, default="warn")
@@ -266,6 +267,10 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = kappa
+        # Release threshold (1e30 = never release). Per-preset RCC_RELEASE_FORCE
+        # energy-matches the non-bonded debonding load; see the note in
+        # tape_asset_lib.py above WIND_PRESETS.
+        config["rcc_bonded_pt_release_force"] = release_force
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
@@ -569,11 +574,16 @@ def run_demo():
     # it on load); else OFF. Defaults OFF because a tightly wound tape can
     # destabilize the stiff ABD bonds at the default kappa (face contacts
     # over-compress to a zero gap -> trajectory-filter thickness assert).
-    bonded_on = L.resolve_flag(_CFG, L.peek_asset_params(ASSET_IN_PATH),
-                               "BONDED", default=False)
-    state = {"adhesion_on": True, "bonded": bonded_on}
+    _asset_params = L.peek_asset_params(ASSET_IN_PATH)
+    bonded_on = L.resolve_flag(_CFG, _asset_params, "BONDED", default=False)
+    # asset > preset (same precedence as Cn/W/D_HAT) so a bonded asset keeps the
+    # release load it was wound with; falls back to the preset for legacy assets
+    # that predate RCC_RELEASE_FORCE.
+    release_force = float(L.resolve_param(_CFG, _asset_params, "RCC_RELEASE_FORCE"))
+    state = {"adhesion_on": True, "bonded": bonded_on,
+             "release_force": release_force}
     sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                     beta_lock_threshold=0.9)
+                     beta_lock_threshold=0.9, release_force=state["release_force"])
 
     # Headless record mode (EGL). Must branch BEFORE any `ps.init()`
     # because the interactive init tries the display backend and
@@ -661,7 +671,7 @@ def run_demo():
     def reset():
         nonlocal sim
         sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                         beta_lock_threshold=0.9)
+                         beta_lock_threshold=0.9, release_force=state["release_force"])
         update_visual()
 
     def save_asset():

@@ -909,6 +909,28 @@ def peek_asset_params(npz_path: str) -> dict:
 #   wind   saves to ASSET_DIR/{preset_name}.npz by default
 #   unwind loads ASSET_DIR/{--asset NAME}.npz; if --asset not given,
 #   defaults to ASSET_DIR/{preset_name}.npz (often wrong — use --asset).
+# ---- RCC_RELEASE_FORCE note ----------------------------------------
+# Per-preset bonded-PT release threshold (config key
+# `rcc_bonded_pt_release_force`). The bonded virtual tet releases when its
+# F-space restoring metric  4·kappa·V0·dt²·‖C·F‖  exceeds this value
+# (C = F Fᵀ − I; see rcc_bonded_pt_system.cu release_flags_from_current_shape).
+#
+# Picked by ENERGY-equivalence with the non-bonded RCC adhesion: the debonding
+# rule lets β decay once the stored normal adhesion energy reaches
+# E* = dt²·β·W/2 — independent of Cn (Cn only sets the gap at which E* is hit;
+# see codim_..._function.h PT_beta_evolve_existing). Matching the bond's stored
+# energy to E* and using the small-strain bridge ‖∂E/∂F‖ ≈ 4·√(kappa·V0·dt²·E*):
+#
+#     release_force ≈ 4·dt²·√(kappa·V0·W/2),
+#       V0 ≈ ⅓·A_tri·(2t),  A_tri ≈ ½·(TAPE_WIDTH/TAPE_NZ)²  (point-plane tet)
+#
+# With kappa=1e8 (demo default), dt=0.01, the tape geometry gives V0~1e-10 m³,
+# so the value is ~3e-5 for W=1, scaling as √W (→ 2e-5 at W=0.5, 4e-5 at W=2).
+# ORDER-OF-MAGNITUDE only: the O(1) prefactor, V0, and the F-space→load bridge
+# carry ~3-5× uncertainty; and because the bond is far stiffer than the
+# adhesion this energy-match corresponds to large bond strain (‖CF‖~7) — the
+# bond holds firm then releases, not a gentle force-match. Tune empirically
+# (`--set RCC_RELEASE_FORCE=…`) for earlier/later release.
 WIND_PRESETS = {
     "default": {
         # Wind-demo defaults — the working config from before the
@@ -951,6 +973,7 @@ WIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1009,6 +1032,7 @@ WIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1056,6 +1080,7 @@ WIND_PRESETS = {
         "ADH_CN":            10,
         "ADH_CT":             10,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1102,6 +1127,7 @@ WIND_PRESETS = {
         "ADH_CN":            10,
         "ADH_CT":            10,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1148,6 +1174,7 @@ WIND_PRESETS = {
         "ADH_CN":            1,
         "ADH_CT":            1,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1192,6 +1219,7 @@ WIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1239,6 +1267,7 @@ WIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1283,6 +1312,7 @@ WIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1328,6 +1358,7 @@ WIND_PRESETS = {
         "ADH_CN":            1.0,
         "ADH_CT":            1.0,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1356,6 +1387,7 @@ WIND_PRESETS = {
         "ADH_CN":            5.0,
         "ADH_CT":            5.0,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1396,6 +1428,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            5e1,
         "ADH_CT":            2e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  5.0,
         "ADH_INITIAL_BETA":  0.0,
@@ -1413,6 +1446,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            1.0e1,
         "ADH_CT":            1.0e2,
         "ADH_W":             0.5,
+        "RCC_RELEASE_FORCE": 2.0e-5,   # bonded release: energy-match to non-bond (W=0.5); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  1.0,
@@ -1428,6 +1462,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  1.0,
@@ -1444,6 +1479,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            1.0e3,
         "ADH_CT":            1.0e4,
         "ADH_W":             2.0,
+        "RCC_RELEASE_FORCE": 4.0e-5,   # bonded release: energy-match to non-bond (W=2); see RCC_RELEASE_FORCE note
         "ADH_ETA":           50.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  1.0,
@@ -1461,6 +1497,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  1.0,
@@ -1477,6 +1514,7 @@ UNWIND_PRESETS = {
         "ADH_CN":            1.0e2,
         "ADH_CT":            1.0e3,
         "ADH_W":             1.0,
+        "RCC_RELEASE_FORCE": 3.0e-5,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  1.0,

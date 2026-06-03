@@ -149,14 +149,14 @@ LIFT_HEIGHT        = float(_CFG.get("LIFT_HEIGHT", 0.10))
 
 # Initial drop height of the assembly above the IPC active band. The
 # `_stand_on_ground` shift puts the lowest geometry vertex at
-# `(t + 0.5·d_hat) + DROP_HEIGHT` above y=0. With `DROP_HEIGHT=0`
-# the roll starts essentially touching the ground (IPC barrier
-# immediately active). A small positive value (default 1 cm) gives
-# gravity a brief free-fall window before contact engages — visually
-# clearer "drop onto ground" motion, and a more honest test of the
-# barrier's response to incoming velocity. Override with `--set
-# DROP_HEIGHT=0` to recover the old "place on the band" behaviour.
-DROP_HEIGHT        = float(_CFG.get("DROP_HEIGHT", 0.01))
+# `(t + 0.5·d_hat) + DROP_HEIGHT` above y=0. Default 0 starts the roll
+# as low as possible — essentially touching the ground, with only the
+# `(t + 0.5·d_hat)` IPC band clearance needed to keep the barrier
+# well-defined (the barrier is immediately active). Set e.g. `--set
+# DROP_HEIGHT=0.01` for a brief free-fall window before contact engages:
+# visually clearer "drop onto ground" motion, and a test of the
+# barrier's response to incoming velocity.
+DROP_HEIGHT        = float(_CFG.get("DROP_HEIGHT", 0.0))
 
 SPC_STRENGTH       = float(_CFG.get("SPC_STRENGTH", 1.0e9))
 
@@ -295,6 +295,7 @@ def build_demo(adhesion_on: bool = True,
                bonded: bool = False,
                beta_lock_threshold: float = 0.9,
                kappa: float = 1.0e8,
+               release_force: float = 1.0e30,
                skip_ccd: bool = False):
     # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
     L.apply_log_level(_CFG, default="warn")
@@ -347,9 +348,9 @@ def build_demo(adhesion_on: bool = True,
     # ---- stand the roll on the ground (axis +y). Lowest geometry
     # vertex ends up at (TAPE_THICKNESS + 0.5·D_HAT) + DROP_HEIGHT
     # above y=0. The first summand keeps it inside the IPC active band
-    # so the barrier is well-defined; DROP_HEIGHT (default 1 cm) adds
-    # a free-fall margin so gravity has a visible drop phase before
-    # ground contact engages.
+    # so the barrier is well-defined; DROP_HEIGHT (default 0) adds an
+    # optional free-fall margin so gravity has a visible drop phase
+    # before ground contact engages.
     GROUND_CLEARANCE = TAPE_THICKNESS + 0.5 * D_HAT + DROP_HEIGHT
     tape_pos_lay, hub_T_lay = _stand_on_ground(
         tape_pos, hub_T, HUB_HEIGHT, GROUND_CLEARANCE)
@@ -380,6 +381,10 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = kappa
+        # Release threshold (1e30 = never release). Per-preset RCC_RELEASE_FORCE
+        # energy-matches the non-bonded debonding load; see the note in
+        # tape_asset_lib.py above WIND_PRESETS.
+        config["rcc_bonded_pt_release_force"] = release_force
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
@@ -631,11 +636,16 @@ def run_demo():
     # it on load); else OFF. Defaults OFF because a tightly wound tape can
     # destabilize the stiff ABD bonds at the default kappa (face contacts
     # over-compress to a zero gap -> trajectory-filter thickness assert).
-    bonded_on = L.resolve_flag(_CFG, L.peek_asset_params(ASSET_IN_PATH),
-                               "BONDED", default=False)
-    state = {"adhesion_on": True, "bonded": bonded_on}
+    _asset_params = L.peek_asset_params(ASSET_IN_PATH)
+    bonded_on = L.resolve_flag(_CFG, _asset_params, "BONDED", default=False)
+    # asset > preset (same precedence as Cn/W/D_HAT) so a bonded asset keeps the
+    # release load it was wound with; falls back to the preset for legacy assets
+    # that predate RCC_RELEASE_FORCE.
+    release_force = float(L.resolve_param(_CFG, _asset_params, "RCC_RELEASE_FORCE"))
+    state = {"adhesion_on": True, "bonded": bonded_on,
+             "release_force": release_force}
     sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                     beta_lock_threshold=0.9)
+                     beta_lock_threshold=0.9, release_force=state["release_force"])
 
     # Ground quad shared between interactive and headless paths.
     ground_quad_verts = np.array([
@@ -767,7 +777,7 @@ def run_demo():
     def reset():
         nonlocal sim
         sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                         beta_lock_threshold=0.9)
+                         beta_lock_threshold=0.9, release_force=state["release_force"])
         update_visual()
 
     # phase_at is now module-level (see above), reused by the
