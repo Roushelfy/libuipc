@@ -27,6 +27,7 @@
 #include <global_geometry/global_vertex_manager.h>
 #include <contact_system/global_contact_manager.h>
 #include <vector>
+#include <algorithm>
 
 namespace uipc::backend::cuda
 {
@@ -1229,10 +1230,41 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         const SizeT n = m_prev_keys_PT.size();
         out_keys.resize(n);
         out_betas.resize(n);
-        if(n == 0)
-            return;
-        m_prev_keys_PT.view().copy_to(out_keys.data());
-        m_prev_beta_PT.view().copy_to(out_betas.data());
+        if(n > 0)
+        {
+            m_prev_keys_PT.view().copy_to(out_keys.data());
+            m_prev_beta_PT.view().copy_to(out_betas.data());
+        }
+
+        // (a) Bonded (locked) pairs were compacted out of friction_VTs while
+        // locked, so their beta is NOT captured in m_prev. Append the bonded
+        // system's locked (key, beta) here so a saved asset records the FULL
+        // adhesion state: on a bonded reload Phase B restores the high beta and
+        // the producer re-locks the same face-interior pairs (the bonded lock
+        // state itself is not serialized). out_keys[0..n) stays sorted (Phase A
+        // sort-by-key), so we dedup freshly-locked pairs — which are present in
+        // BOTH m_prev and the locked set — via binary_search against it.
+        if(m_bonded_pt_system_for_phase_a && m_bonded_pt_system_for_phase_a->enabled())
+        {
+            auto        lk = m_bonded_pt_system_for_phase_a->locked_keys();
+            auto        lb = m_bonded_pt_system_for_phase_a->locked_beta();
+            const SizeT m  = lk.size();
+            if(m > 0)
+            {
+                vector<U64>   hk(m);
+                vector<Float> hb(m);
+                lk.copy_to(hk.data());
+                lb.copy_to(hb.data());
+                for(SizeT i = 0; i < m; ++i)
+                {
+                    if(!std::binary_search(out_keys.begin(), out_keys.begin() + n, hk[i]))
+                    {
+                        out_keys.push_back(hk[i]);
+                        out_betas.push_back(hb[i]);
+                    }
+                }
+            }
+        }
     }
 
     void set_prev_pt_state(span<const U64>   keys,

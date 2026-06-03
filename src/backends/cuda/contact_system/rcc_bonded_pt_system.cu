@@ -1038,6 +1038,16 @@ muda::CBufferView<Float> RCCBondedPTSystem::locked_rest_volume() const noexcept
     return m_impl.bridge().locked_rest_volume();
 }
 
+muda::CBufferView<U64> RCCBondedPTSystem::locked_keys() const noexcept
+{
+    return m_impl.bridge().locked_keys();
+}
+
+muda::CBufferView<Float> RCCBondedPTSystem::locked_beta() const noexcept
+{
+    return m_impl.bridge().locked_beta();
+}
+
 muda::CBufferView<U64> RCCBondedPTSystem::released_keys() const noexcept
 {
     return m_impl.released_keys();

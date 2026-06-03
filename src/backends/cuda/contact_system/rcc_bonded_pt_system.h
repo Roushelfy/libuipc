@@ -138,6 +138,8 @@ class RCCBondedPTSystem final : public SimSystem
     muda::CBufferView<Vector4i> locked_topos() const noexcept;
     muda::CBufferView<Matrix3x3> locked_dm_inv() const noexcept;
     muda::CBufferView<Float> locked_rest_volume() const noexcept;
+    muda::CBufferView<U64> locked_keys() const noexcept;
+    muda::CBufferView<Float> locked_beta() const noexcept;
     muda::CBufferView<U64> released_keys() const noexcept;
     muda::CBufferView<Float> released_beta() const noexcept;
 
