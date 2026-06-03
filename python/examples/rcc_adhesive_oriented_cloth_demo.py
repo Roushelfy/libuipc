@@ -187,6 +187,8 @@ def build_demo(
     release_strain: float = 1.0e30,
     release_gap: float = 1.0e30,
     release_slip: float = 1.0e30,
+    youngs: float = 1.0e7,
+    cloth_cn: float = 1.0e4,
 ):
     Logger.set_level(Logger.Level.Warn)
 
@@ -236,7 +238,7 @@ def build_demo(
         )
         adhesive.set(
             tabular, cloth_contact, cube_contact,
-            Cn=1.0e4, Ct=1.0e5, W=1.0, eta=2.0,
+            Cn=cloth_cn, Ct=1.0e5, W=1.0, eta=2.0,
             bonding_rate=1.0, p0=0.0, initial_beta=1.0,
             enabled=True,
         )
@@ -275,7 +277,7 @@ def build_demo(
     ground_obj.geometries().create(ground(0.0))
 
     # ---- cloth ----
-    moduli = ElasticModuli2D.youngs_poisson(1.0e7, 0.4)
+    moduli = ElasticModuli2D.youngs_poisson(youngs, 0.4)
     cloth_obj = scene.objects().create("cloth")
     cloth = make_cloth_mesh(CLOTH_Y)
     nhs.apply_to(cloth, moduli)
