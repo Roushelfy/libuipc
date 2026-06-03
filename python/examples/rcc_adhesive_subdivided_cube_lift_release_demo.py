@@ -199,6 +199,8 @@ def build_demo(
     adhesion_on: bool,
     bonded: bool = False,
     skip_ccd: bool = False,
+    lock_face_interior_only: bool = False,
+    lock_face_margin: float = 0.5,
     beta_lock_threshold: float = 0.9,
     kappa: float = 1.0e8,
     release_strain: float = 1.0e30,
@@ -224,6 +226,9 @@ def build_demo(
         config["rcc_bonded_pt_enabled"] = 1
         config["rcc_bonded_pt_skip_ccd"] = 1 if skip_ccd else 0
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
+        config["rcc_bonded_pt_lock_face_interior_only"] = (
+            1 if lock_face_interior_only else 0)
+        config["rcc_bonded_pt_lock_face_margin"] = lock_face_margin
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = kappa
         # Release thresholds (default 1e30 = disabled). Finite values let a

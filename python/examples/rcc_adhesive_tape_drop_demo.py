@@ -385,7 +385,10 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_lock_face_interior_only"] = (
             1 if L.cfg_flag(_CFG, "LOCK_FACE_INTERIOR_ONLY", default=False) else 0)
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
-        config["rcc_bonded_pt_kappa"] = kappa
+        # Bond stiffness. `--set RCC_KAPPA=1e7` softens the ABD bond (better
+        # Hessian conditioning / fewer line-search blowups on thin sliver tets,
+        # at the cost of softer bonds). Default = the build_demo kwarg (1e8).
+        config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
         # Release threshold (1e30 = never release). Per-preset RCC_RELEASE_FORCE
         # energy-matches the non-bonded debonding load; see the note in
         # tape_asset_lib.py above WIND_PRESETS.
@@ -647,6 +650,54 @@ def _bonded_bonds(sim):
     return locked, (nodes, np.asarray(edges, dtype=np.int64))
 
 
+def _print_stage_breakdown(timer_frames, top=16):
+    """Aggregate the top-level timer stages (direct children of each frame's
+    root node) across the profiled frames and print a per-stage breakdown.
+    Timer `duration` is in seconds; printed as ms. The full nested tree is in
+    the saved report/."""
+    from collections import defaultdict
+    tot, cnt = defaultdict(float), defaultdict(int)
+    frames = [f for f in (timer_frames or []) if f]
+
+    def stage_children(node):
+        # Descend through wrapper nodes (single-child, e.g. root->"Pipeline", or
+        # a single dominant child holding ~all the time, e.g. "Simulation") to
+        # the first level where the time actually splits across stages.
+        cur, hops = node, 0
+        while hops < 12:
+            kids = cur.get("children") or []
+            if not kids:
+                return []
+            if len(kids) == 1:
+                cur, hops = kids[0], hops + 1
+                continue
+            durs = sorted(((k, float(k.get("duration", 0.0) or 0.0)) for k in kids),
+                          key=lambda kd: -kd[1])
+            total = sum(d for _, d in durs) or 1.0
+            if durs[0][1] / total > 0.9:          # one child dominates -> descend
+                cur, hops = durs[0][0], hops + 1
+                continue
+            return kids
+        return cur.get("children") or []
+
+    for fr in frames:
+        for r in (fr if isinstance(fr, list) else [fr]):
+            for c in stage_children(r):
+                tot[c.get("name", "?")] += float(c.get("duration", 0.0) or 0.0)
+                cnt[c.get("name", "?")] += int(c.get("count", 0) or 0)
+    if not tot:
+        print("[profile] (no top-level timer stages captured)")
+        return
+    nf = max(len(frames), 1)
+    grand = sum(tot.values())
+    print(f"[profile] per-stage (top level), {nf} frames, "
+          f"{grand * 1000:.1f} ms total  ({grand / nf * 1000:.2f} ms/frame):")
+    for name, sec in sorted(tot.items(), key=lambda kv: -kv[1])[:top]:
+        print(f"    {name:40s} {sec * 1000:10.1f} ms  "
+              f"{sec / nf * 1000:8.3f} ms/frame  {sec / grand * 100:5.1f}%  "
+              f"(n={cnt[name]})")
+
+
 def run_demo():
     # Bonded-PT acceleration. Precedence: `--set BONDED=...` wins; else the
     # loaded asset's saved BONDED flag (a tape wound WITH bonded auto-enables
@@ -712,6 +763,34 @@ def run_demo():
                               setup_extras_fn=_setup_extras,
                               zoom=zoom, on_progress=_on_progress,
                               bbox_extent_override=full_extent)
+        return
+
+    # Headless profiling: `--set PROFILE=1` runs the drop headlessly, collects
+    # per-stage timer stats via uipc.profile, prints a breakdown, and saves
+    # benchmark.json / timer_frames.json / a report/ under PROFILE_DIR. Knobs:
+    # `--set PROFILE_FRAMES=N` (default = TOTAL_FRAMES), `--set PROFILE_WARMUP=N`
+    # (frames advanced before stats start), `--set PROFILE_DIR=path`. Like
+    # RECORD_DIR, must branch BEFORE ps.init() so it stays headless.
+    if L.cfg_flag(_CFG, "PROFILE", default=False):
+        from uipc import profile as _uprofile
+        n_frames = int(_CFG.get("PROFILE_FRAMES", TOTAL_FRAMES))
+        warmup   = int(_CFG.get("PROFILE_WARMUP", 0))
+        out_dir  = _CFG.get("PROFILE_DIR") or os.path.join(
+            AssetDir.output_path(__file__), "profile_drop")
+        name = (os.path.splitext(os.path.basename(ASSET_IN_PATH))[0]
+                + ("_bonded" if state["bonded"] else "_nobond"))
+        print(f"[profile] {name}: warmup={warmup}, profile={n_frames} frames "
+              f"(bonded={state['bonded']}, kappa via --set RCC_KAPPA) -> "
+              f"{os.path.join(out_dir, name)}")
+        with _uprofile.session(sim["world"], name=name, output_dir=out_dir) as s:
+            if warmup > 0:
+                s.advance(warmup)
+            s.profile(n_frames)
+        res = s.result
+        print("[profile] " + res["summary"])
+        _print_stage_breakdown(res["timer_frames"])
+        print(f"[profile] saved -> {os.path.join(out_dir, name)}/ "
+              f"(benchmark.json, timer_frames.json, report/)")
         return
 
     # Interactive path: needs a display.

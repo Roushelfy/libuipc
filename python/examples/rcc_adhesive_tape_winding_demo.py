@@ -400,7 +400,10 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_lock_face_interior_only"] = (
             1 if L.cfg_flag(_CFG, "LOCK_FACE_INTERIOR_ONLY", default=False) else 0)
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
-        config["rcc_bonded_pt_kappa"] = kappa
+        # Bond stiffness. `--set RCC_KAPPA=1e7` softens the ABD bond (better
+        # Hessian conditioning / fewer line-search blowups on thin sliver tets,
+        # at the cost of softer bonds). Default = the build_demo kwarg (1e8).
+        config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
         # Release thresholds left at their disabled defaults (1e30): once a
         # tape contact bonds it stays bonded (the wound tape does not peel).
         # The preset's RCC_RELEASE_FORCE is NOT applied here on purpose — it is
