@@ -1026,9 +1026,16 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     SimSystemSlot<RCCBondedPTSystem>         m_bonded_pt_system_for_phase_a;
     RCCBondedPTBetaCarryScratch              m_bonded_pt_beta_carry;
     Float                                    m_bonded_pt_beta_lock_threshold = 1.0;
-    // false (default): all VTs eligible to bond; true: only face-interior
-    // (closest-feature dim==4) VTs (config rcc_bonded_pt_lock_face_interior_only).
+    // false (default): all VTs eligible to bond. true: only VTs whose point's
+    // perpendicular foot lies inside the triangle, or on / within
+    // m_bonded_pt_lock_face_margin of its boundary (face/edge/corner); feet far
+    // outside ("face-exterior") are excluded. config
+    // rcc_bonded_pt_lock_face_interior_only.
     bool                                     m_bonded_pt_lock_face_interior_only = false;
+    // Barycentric margin for the gate above: how far outside the triangle the
+    // foot may be (barycentric units) and still bond. 0 = strictly
+    // inside/on-boundary. config rcc_bonded_pt_lock_face_margin.
+    Float                                    m_bonded_pt_lock_face_margin = 0.5;
 
     void _evolve_beta_step_at_end(Float dt)
     {
@@ -1210,20 +1217,46 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                             beta     = m_beta_PT.cviewer().name("beta_VT"),
                             topos    = m_vt_topos.view().viewer().name("vt_topos"),
                             lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta"),
-                            face_interior_only = m_bonded_pt_lock_face_interior_only] __device__(int i) mutable
+                            Ps       = positions.viewer().name("Ps_lock"),
+                            face_interior_only = m_bonded_pt_lock_face_interior_only,
+                            margin   = m_bonded_pt_lock_face_margin] __device__(int i) mutable
                            {
-                               const auto& vt = VTs(i);
-                               topos(i)       = vt.topo;
-                               Vector4i off;
-                               IndexT   dim =
-                                   distance::degenerate_point_triangle(vt.flag, off);
-                               // Face-interior (dim==4) pairs are a sound point-
-                               // plane ABD tet. When face_interior_only is set,
-                               // edge/corner VTs keep adhesion but get lock-beta 0
-                               // (no skewed sliver tets); otherwise all VTs are
-                               // eligible (rest-shape builder still drops degenerates).
-                               lockbeta(i) =
-                                   (!face_interior_only || dim == 4) ? beta(i) : Float{0};
+                               const auto&     vt = VTs(i);
+                               const Vector4i& T  = vt.topo;
+                               topos(i)           = T;
+
+                               bool eligible = true;
+                               if(face_interior_only)
+                               {
+                                   // Lock when P's perpendicular foot lies INSIDE
+                                   // the triangle, or on / within `margin`
+                                   // (barycentric units) of its boundary — i.e. on
+                                   // the face, an edge, or a corner. Exclude only
+                                   // "face-exterior": the foot far outside
+                                   // (min bary < -margin), where the point-plane ABD
+                                   // tet would be a skewed sliver. margin==0 ->
+                                   // strictly inside/on-boundary; the rest-shape
+                                   // builder still drops degenerate tets downstream.
+                                   const Vector3 P = Ps(T[0]);
+                                   const Vector3 A = Ps(T[1]);
+                                   const Vector3 B = Ps(T[2]);
+                                   const Vector3 C = Ps(T[3]);
+                                   const Vector3 e0 = B - A, e1 = C - A, ep = P - A;
+                                   const Float d00 = e0.dot(e0), d01 = e0.dot(e1),
+                                               d11 = e1.dot(e1);
+                                   const Float d20 = ep.dot(e0), d21 = ep.dot(e1);
+                                   const Float den = d00 * d11 - d01 * d01;
+                                   Float min_bary = -1e30;  // degenerate -> exterior
+                                   if(den > Float{0})
+                                   {
+                                       const Float v = (d11 * d20 - d01 * d21) / den;
+                                       const Float w = (d00 * d21 - d01 * d20) / den;
+                                       const Float u = Float{1} - v - w;
+                                       min_bary = fmin(u, fmin(v, w));
+                                   }
+                                   eligible = (min_bary >= -margin);
+                               }
+                               lockbeta(i) = eligible ? beta(i) : Float{0};
                            });
             }
 
@@ -1371,6 +1404,10 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
         if(lock_face_only)
             rcc->m_bonded_pt_lock_face_interior_only =
                 lock_face_only->view()[0] != 0;
+        auto lock_face_margin =
+            config.find<Float>("rcc_bonded_pt_lock_face_margin");
+        if(lock_face_margin)
+            rcc->m_bonded_pt_lock_face_margin = lock_face_margin->view()[0];
 
         on_init_scene(
             [this]

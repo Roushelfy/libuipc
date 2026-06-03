@@ -56,11 +56,16 @@ geometry::AttributeCollection default_scene_config() noexcept
     // is enabled (a locked pair is owned by the ABD virtual tet, so that check
     // is redundant and aborts on over-compression). 0/1 = explicit override.
     config.create("rcc_bonded_pt_skip_ccd", IndexT{-1});
-    // 0 (default) = ALL VTs (incl. edge/corner PE/PP) may bond; the rest-shape
-    // builder still drops degenerate tets, but expect some skewed slivers.
-    // 1 = restrict to face-interior VTs (point projects inside the triangle,
-    // closest-feature dim==4) — a sound point-plane ABD tet, but fewer locks.
+    // 0 (default) = ALL VTs may bond; the rest-shape builder still drops
+    // degenerate tets, but expect some skewed slivers.
+    // 1 = bond only when the point's perpendicular foot lies inside the triangle
+    // OR on / within `rcc_bonded_pt_lock_face_margin` of its boundary (so face,
+    // edge, and corner projections all qualify); exclude only "face-exterior"
+    // feet far outside (skewed slivers).
     config.create("rcc_bonded_pt_lock_face_interior_only", IndexT{0});
+    // Barycentric margin for the face gate above: how far outside the triangle
+    // the foot may be and still bond. 0 = strictly inside/on-boundary.
+    config.create("rcc_bonded_pt_lock_face_margin", Float{0.5});
 
     // default:
     //  - ipc
