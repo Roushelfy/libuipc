@@ -477,7 +477,22 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            Vector3 N    = (T1 - T0).cross(T2 - T0);
                            Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
                            Vector3 sdir = P - Cen;
-                           if(N.dot(sdir) > Float{0})
+                           // Fire the occlusion ray-cast for BOTH orientations in
+                           // which adhesion can engage (mirror PT_sticky_gate): T's
+                           // sticky face toward P, OR P's sticky face toward T. The
+                           // old `N.dot(sdir) > 0` only covered T-front-toward-P, so
+                           // a P-sticky-driven pair reaching a triangle through an
+                           // intervening layer leaked (beta grew unblocked). O(1)
+                           // guard; the loop still skips sticky-failing pairs (they
+                           // returned early above).
+                           const IndexT  sP = sticky_sign(PT[0]);
+                           const IndexT  sT = sticky_sign(PT[1]);
+                           const Vector3 nP = vert_normal(PT[0]);
+                           const bool engage =
+                               (sP == 0 && sT == 0)
+                               || (sT != 0 && Float(sT) * N.dot(sdir) > Float{0})
+                               || (sP != 0 && Float(sP) * nP.dot(sdir) < Float{0});
+                           if(engage)
                            {
                                constexpr Float TMIN = Float{1e-5};
                                constexpr Float TMAX = Float{1} - Float{1e-5};
@@ -609,7 +624,22 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            Vector3 N    = (T1 - T0).cross(T2 - T0);
                            Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
                            Vector3 sdir = P - Cen;
-                           if(N.dot(sdir) > Float{0})
+                           // Fire the occlusion ray-cast for BOTH orientations in
+                           // which adhesion can engage (mirror PT_sticky_gate): T's
+                           // sticky face toward P, OR P's sticky face toward T. The
+                           // old `N.dot(sdir) > 0` only covered T-front-toward-P, so
+                           // a P-sticky-driven pair reaching a triangle through an
+                           // intervening layer leaked (beta grew unblocked). O(1)
+                           // guard; the loop still skips sticky-failing pairs (they
+                           // returned early above).
+                           const IndexT  sP = sticky_sign(PT[0]);
+                           const IndexT  sT = sticky_sign(PT[1]);
+                           const Vector3 nP = vert_normal(PT[0]);
+                           const bool engage =
+                               (sP == 0 && sT == 0)
+                               || (sT != 0 && Float(sT) * N.dot(sdir) > Float{0})
+                               || (sP != 0 && Float(sP) * nP.dot(sdir) < Float{0});
+                           if(engage)
                            {
                                constexpr Float TMIN = Float{1e-5};
                                constexpr Float TMAX = Float{1} - Float{1e-5};
@@ -996,6 +1026,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     SimSystemSlot<RCCBondedPTSystem>         m_bonded_pt_system_for_phase_a;
     RCCBondedPTBetaCarryScratch              m_bonded_pt_beta_carry;
     Float                                    m_bonded_pt_beta_lock_threshold = 1.0;
+    // false (default): all VTs eligible to bond; true: only face-interior
+    // (closest-feature dim==4) VTs (config rcc_bonded_pt_lock_face_interior_only).
+    bool                                     m_bonded_pt_lock_face_interior_only = false;
 
     void _evolve_beta_step_at_end(Float dt)
     {
@@ -1176,16 +1209,21 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            [VTs      = vt_pairs.viewer().name("VTs"),
                             beta     = m_beta_PT.cviewer().name("beta_VT"),
                             topos    = m_vt_topos.view().viewer().name("vt_topos"),
-                            lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta")] __device__(int i) mutable
+                            lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta"),
+                            face_interior_only = m_bonded_pt_lock_face_interior_only] __device__(int i) mutable
                            {
                                const auto& vt = VTs(i);
                                topos(i)       = vt.topo;
                                Vector4i off;
                                IndexT   dim =
                                    distance::degenerate_point_triangle(vt.flag, off);
-                               // Only face-interior (dim==4) pairs are eligible
-                               // to bond; others keep adhesion but get lock-beta 0.
-                               lockbeta(i) = (dim == 4) ? beta(i) : Float{0};
+                               // Face-interior (dim==4) pairs are a sound point-
+                               // plane ABD tet. When face_interior_only is set,
+                               // edge/corner VTs keep adhesion but get lock-beta 0
+                               // (no skewed sliver tets); otherwise all VTs are
+                               // eligible (rest-shape builder still drops degenerates).
+                               lockbeta(i) =
+                                   (!face_interior_only || dim == 4) ? beta(i) : Float{0};
                            });
             }
 
@@ -1328,6 +1366,11 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
         if(beta_lock_threshold)
             rcc->m_bonded_pt_beta_lock_threshold =
                 beta_lock_threshold->view()[0];
+        auto lock_face_only =
+            config.find<IndexT>("rcc_bonded_pt_lock_face_interior_only");
+        if(lock_face_only)
+            rcc->m_bonded_pt_lock_face_interior_only =
+                lock_face_only->view()[0] != 0;
 
         on_init_scene(
             [this]

@@ -66,6 +66,7 @@ Target config keys are not live API until implemented and tested.
 | `rcc_bonded_pt_release_strain` | ABD deformation release threshold | Implemented, default `1e30` to leave release disabled until a scene/test selects a threshold |
 | `rcc_bonded_pt_release_force` | Bond restoring-force release threshold (`~ kappa * deformation`) | Implemented, default `1e30` (disabled); the trigger that peels a stiff bond on a compliant counterpart, where strain/gap cannot |
 | `rcc_bonded_pt_skip_ccd` | Reject locked PTs before PT CCD broadphase in the simplex filters | Implemented; default `-1` = auto (skip whenever bonded is enabled — a locked pair is owned by the ABD virtual tet, so the CCD thickness check is redundant and aborts on over-compression). `0`/`1` explicitly override. Trade-off: skipping removes the last non-penetration guard for locked pairs (the ABD energy is reflection-invariant and cannot prevent tunneling), so set `0` if a scene needs CCD kept on bonded pairs |
+| `rcc_bonded_pt_lock_face_interior_only` | Restrict bonding to face-interior VTs | Implemented; default `0` = ALL VTs (incl. edge/corner PE/PP) may bond (the rest-shape builder still drops degenerate tets, but expect some skewed slivers). `1` = restrict to VTs whose point projects inside the triangle (closest-feature dim==4) — a sound point-plane ABD tet, but fewer locks (capped at the face-interior fraction) |
 
 Retired prototype keys must not be reintroduced as production acceptance criteria:
 
