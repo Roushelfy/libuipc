@@ -379,6 +379,11 @@ def build_demo(adhesion_on: bool = True,
         # skip_ccd is auto-on for locked pairs in the backend (config default
         # rcc_bonded_pt_skip_ccd=-1 -> skip when bonded); no need to set it here.
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
+        # Default: ALL VTs may bond (incl. edge/corner) — maximizes the locked
+        # fraction but risks skewed sliver tets. `--set LOCK_FACE_INTERIOR_ONLY=1`
+        # restricts to face-interior VTs (sound point-plane tets, fewer locks).
+        config["rcc_bonded_pt_lock_face_interior_only"] = (
+            1 if L.cfg_flag(_CFG, "LOCK_FACE_INTERIOR_ONLY", default=False) else 0)
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = kappa
         # Release threshold (1e30 = never release). Per-preset RCC_RELEASE_FORCE
@@ -609,6 +614,18 @@ def build_demo(adhesion_on: bool = True,
     }
 
 
+def _adhesion_pt_counts(sim):
+    """(soft, locked): # of soft-adhesion PT pairs (evolving beta, excludes
+    locked) and # of bonded/locked PT pairs. Either is None if its accessor is
+    absent (e.g. bonded disabled). soft + locked = all PTs in the RCC system."""
+    feats = sim["world"].features()
+    rcc = feats.find(RCCAdhesionStateAccessorFeature)
+    bpt = feats.find(RCCBondedPTStateAccessorFeature)
+    soft = int(rcc.pt_pair_count()) if rcc is not None else None
+    locked = int(bpt.locked_pair_count()) if bpt is not None else None
+    return soft, locked
+
+
 def _bonded_bonds(sim):
     """(locked_count, (nodes, edges)) for the bonded virtual tets, or (count, None).
 
@@ -642,10 +659,11 @@ def run_demo():
     # release load it was wound with; falls back to the preset for legacy assets
     # that predate RCC_RELEASE_FORCE.
     release_force = float(L.resolve_param(_CFG, _asset_params, "RCC_RELEASE_FORCE"))
+    beta_lock = float(L.resolve_param(_CFG, _asset_params, "RCC_BETA_LOCK_THRESHOLD"))
     state = {"adhesion_on": True, "bonded": bonded_on,
-             "release_force": release_force}
+             "release_force": release_force, "beta_lock": beta_lock}
     sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                     beta_lock_threshold=0.9, release_force=state["release_force"])
+                     beta_lock_threshold=state["beta_lock"], release_force=state["release_force"])
 
     # Ground quad shared between interactive and headless paths.
     ground_quad_verts = np.array([
@@ -777,7 +795,7 @@ def run_demo():
     def reset():
         nonlocal sim
         sim = build_demo(state["adhesion_on"], bonded=state["bonded"],
-                         beta_lock_threshold=0.9, release_force=state["release_force"])
+                         beta_lock_threshold=state["beta_lock"], release_force=state["release_force"])
         update_visual()
 
     # phase_at is now module-level (see above), reused by the
@@ -813,6 +831,13 @@ def run_demo():
         f = min(sim["world"].frame(), TOTAL_FRAMES)
         psim.Separator()
         psim.Text(f"Frame: {f} / {TOTAL_FRAMES}    Phase: {phase_at(f)}")
+        soft_pt, locked_pt = _adhesion_pt_counts(sim)
+        if soft_pt is not None:
+            if locked_pt:
+                psim.Text(f"adhesion PTs: {soft_pt + locked_pt}  "
+                          f"({soft_pt} soft + {locked_pt} locked)")
+            else:
+                psim.Text(f"adhesion PTs: {soft_pt}")
         if state["bonded"]:
             locked, _ = _bonded_bonds(sim)
             psim.Text(f"bonded locks: {locked}  (red tets; toggle above)")
