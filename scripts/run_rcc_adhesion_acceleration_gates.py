@@ -643,6 +643,85 @@ def main() -> int:
         "backend fixture covers force/energy release",
     )
 
+    # Phase 6: full-feature adhesion and per-primitive beta anchors.
+    expect_contains(
+        "docs/architecture.md",
+        "Full-Feature Adhesion And Per-Primitive Beta",
+        "architecture documents the per-primitive-beta full-feature adhesion design",
+    )
+    expect_contains(
+        "docs/architecture.md",
+        "Primitive, not closest-feature, is the unit",
+        "architecture states the VT primitive is the adhesion unit",
+    )
+    expect_contains(
+        "docs/roadmap.md",
+        "Phase 6: Full-Feature Adhesion And Per-Primitive Beta",
+        "roadmap tracks the full-feature adhesion workstream",
+    )
+    expect_contains(
+        "docs/conventions.md",
+        "per VT primitive",
+        "conventions require per-VT-primitive beta storage/evolution",
+    )
+    expect_contains(
+        "docs/rcc_adhesion_acceleration.md",
+        "Full-Feature Adhesion And Per-Primitive Beta",
+        "subsystem doc carries the full-feature adhesion checklist",
+    )
+    expect_contains(
+        "docs/development/rcc_adhesion_acceleration_journal.md",
+        "2026-06-02 Full-Feature Adhesion Plan",
+        "journal records the full-feature adhesion plan and PE/PP formula slice",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h",
+        "point_edge_distance2",
+        "PE adhesion uses the true point-edge feature distance (Step 1)",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h",
+        "point_point_distance2",
+        "PP adhesion uses the true point-point feature distance (Step 1)",
+    )
+    expect_contains(
+        "apps/tests/backends/cuda/rcc_adhesion_oracle.cu",
+        "[rcc_adhesion][oracle][feature_adhesion][cuda]",
+        "PE/PP adhesion E/G/H finite-difference oracle exists (Step 0)",
+    )
+    expect_contains(
+        "scripts/run_rcc_adhesion_acceleration_cuda_gates.py",
+        "[rcc_adhesion][oracle][feature_adhesion]",
+        "CUDA gate runs the PE/PP adhesion oracle",
+    )
+    # Step 1: additive active_VTs / friction_VTs plumbing (VT primitive list).
+    expect_contains(
+        "src/backends/cuda/collision_detection/simplex_trajectory_filter.h",
+        "struct ActiveVT",
+        "VT-primitive carrier (full topo + feature flag) is declared (Step 1)",
+    )
+    expect_contains(
+        "src/backends/cuda/collision_detection/simplex_trajectory_filter.h",
+        "friction_VTs",
+        "trajectory filter exposes the lagged VT-primitive list (Step 1)",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/simplex_frictional_contact.cu",
+        "friction_VTs",
+        "RCC reporter base info forwards friction_VTs (Step 1)",
+    )
+    for rel_path in [
+        "src/backends/cuda/collision_detection/filters/stackless_bvh_simplex_trajectory_filter.cu",
+        "src/backends/cuda/collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.cu",
+        "src/backends/cuda/collision_detection/filters/info_stackless_bvh_v0_simplex_trajectory_filter.cu",
+        "src/backends/cuda/collision_detection/filters/lbvh_simplex_trajectory_filter.cu",
+    ]:
+        expect_contains(
+            rel_path,
+            "info.VTs(active_VTs)",
+            "filter emits the additive active_VTs list (Step 1)",
+        )
+
     print("RCC adhesion acceleration source/doc gate passed.")
     print("Checked playbook skeleton, nav links, all-gates entry, and current source anchors.")
     return 0

@@ -458,17 +458,14 @@ namespace sym::codim_ipc_rcc_adhesive
     }
 
     // EE
-    // ----- V1 NOTE: EE adhesion is DISABLED. -----
-    // The libuipc trajectory filter (and XBow's too) emits PE/PP/EE pairs
-    // alongside PT pairs for the same geometric contact when a point/edge
-    // projects near a triangle edge or vertex. The flagged feature-based
-    // gradient then pulls cloth verts toward those edges/vertices, producing
-    // a visible diagonal-bias artifact on faceted meshes (cube top face split
-    // by a diagonal, for example). Until we add proper deduplication or a
-    // smooth-distance formulation, v1 keeps only the PT contribution, which
-    // (with the unflagged plane-projection gradient above) pulls perpendicular
-    // to each triangle's plane regardless of where the projection foot lands
-    // — direction-consistent and bias-free for face-aligned cloth contact.
+    // ----- NOTE: EE adhesion is still DISABLED (Step 1 enables PE/PP only). -----
+    // PE/PP adhesion is now implemented above with the TRUE point-edge /
+    // point-point feature distance and per-primitive beta — the full-feature
+    // model (see docs/architecture.md "Full-Feature Adhesion And Per-Primitive
+    // Beta"). EE stays disabled until its edge-edge true-feature distance and
+    // per-primitive beta land. Behaviour is unchanged until m_beta_{EE,PE,PP}
+    // evolve per primitive: every assembly call site early-outs on beta <= 0,
+    // and EE beta stays zero-filled (PE/PP beta is wired in a later step).
     inline __device__ Float EE_normal_adhesion_energy(
         Float, Float, Float, Float,
         const Vector3&, const Vector3&, const Vector3&, const Vector3&)
@@ -494,56 +491,116 @@ namespace sym::codim_ipc_rcc_adhesive
         G = Vector12::Zero();
     }
 
-    // PE  (V1 DISABLED — see EE note above)
-    inline __device__ Float PE_normal_adhesion_energy(
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&)
+    // PE normal adhesion (per VT/EE-primitive full-feature adhesion, Step 1).
+    // Mirrors PT_normal_adhesion_* but uses the TRUE point-edge feature distance
+    // (point_edge_distance2) instead of the plane projection, matching the XBow
+    // RCCAdhesionEnergy classified-feature model. Behaviour-neutral until
+    // m_beta_PE is evolved per primitive: the assembly call sites early-out on
+    // beta <= 0 and m_beta_PE is currently zero-filled. P = point, E0/E1 = edge.
+    inline __device__ Float PE_normal_adhesion_energy(Float          Cn,
+                                                      Float          beta,
+                                                      Float          d_hat,
+                                                      Float          dt,
+                                                      const Vector3& P,
+                                                      const Vector3& E0,
+                                                      const Vector3& E1)
     {
-        return Float{0};
+        using namespace distance;
+        Float D;
+        point_edge_distance2(P, E0, E1, D);  // true point-edge feature distance
+        return (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta * D;
     }
 
-    inline __device__ void PE_normal_adhesion_gradient_hessian(
-        Vector9&       G,
-        Matrix9x9&     H,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&)
+    inline __device__ void
+    PE_normal_adhesion_gradient_hessian(Vector9&       G,
+                                        Matrix9x9&     H,
+                                        Float          Cn,
+                                        Float          beta,
+                                        Float          d_hat,
+                                        Float          dt,
+                                        const Vector3& P,
+                                        const Vector3& E0,
+                                        const Vector3& E1)
     {
-        G = Vector9::Zero();
-        H = Matrix9x9::Zero();
+        using namespace distance;
+        Vector9 GradD;
+        point_edge_distance2_gradient(P, E0, E1, GradD);
+        Matrix9x9 HessD;
+        point_edge_distance2_hessian(P, E0, E1, HessD);
+
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
+        H           = coeff * HessD;  // caller SPD-projects the normal block
     }
 
-    inline __device__ void PE_normal_adhesion_gradient(
-        Vector9&       G,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&)
+    inline __device__ void PE_normal_adhesion_gradient(Vector9&       G,
+                                                       Float          Cn,
+                                                       Float          beta,
+                                                       Float          d_hat,
+                                                       Float          dt,
+                                                       const Vector3& P,
+                                                       const Vector3& E0,
+                                                       const Vector3& E1)
     {
-        G = Vector9::Zero();
+        using namespace distance;
+        Vector9 GradD;
+        point_edge_distance2_gradient(P, E0, E1, GradD);
+
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
     }
 
-    // PP  (V1 DISABLED — see EE note above)
-    inline __device__ Float PP_normal_adhesion_energy(
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&)
+    // PP normal adhesion (Step 1). Mirrors PT/PE but uses the TRUE point-point
+    // feature distance (point_point_distance2). P = point, Q = closest triangle
+    // vertex. Behaviour-neutral until m_beta_PP is evolved per primitive.
+    inline __device__ Float PP_normal_adhesion_energy(Float          Cn,
+                                                      Float          beta,
+                                                      Float          d_hat,
+                                                      Float          dt,
+                                                      const Vector3& P,
+                                                      const Vector3& Q)
     {
-        return Float{0};
+        using namespace distance;
+        Float D;
+        point_point_distance2(P, Q, D);  // true point-point feature distance
+        return (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta * D;
     }
 
-    inline __device__ void PP_normal_adhesion_gradient_hessian(
-        Vector6&       G,
-        Matrix6x6&     H,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&)
+    inline __device__ void
+    PP_normal_adhesion_gradient_hessian(Vector6&       G,
+                                        Matrix6x6&     H,
+                                        Float          Cn,
+                                        Float          beta,
+                                        Float          d_hat,
+                                        Float          dt,
+                                        const Vector3& P,
+                                        const Vector3& Q)
     {
-        G = Vector6::Zero();
-        H = Matrix6x6::Zero();
+        using namespace distance;
+        Vector6 GradD;
+        point_point_distance2_gradient(P, Q, GradD);
+        Matrix6x6 HessD;
+        point_point_distance2_hessian(P, Q, HessD);
+
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
+        H           = coeff * HessD;  // point-point distance Hessian is PSD
     }
 
-    inline __device__ void PP_normal_adhesion_gradient(
-        Vector6&       G,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&)
+    inline __device__ void PP_normal_adhesion_gradient(Vector6&       G,
+                                                       Float          Cn,
+                                                       Float          beta,
+                                                       Float          d_hat,
+                                                       Float          dt,
+                                                       const Vector3& P,
+                                                       const Vector3& Q)
     {
-        G = Vector6::Zero();
+        using namespace distance;
+        Vector6 GradD;
+        point_point_distance2_gradient(P, Q, GradD);
+
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
     }
 
     // ---------------------------------------------------------------------
@@ -671,11 +728,11 @@ namespace sym::codim_ipc_rcc_adhesive
         G           = J.transpose() * (coeff * u);
     }
 
-    // ----- V1 NOTE: EE/PE/PP tangential adhesion is DISABLED too. -----
-    // Same rationale as the EE/PE/PP normal-adhesion disable above: the
-    // pair-list redundancy (multiple feature-classified pairs per geometric
-    // contact) plus the feature-direction inconsistency would create
-    // spurious tangential pulls toward edges/vertices.
+    // ----- NOTE: EE tangential adhesion is still DISABLED (PE/PP enabled below). -----
+    // PE/PP tangential adhesion is implemented below, mirroring PT with the
+    // point-edge / point-point friction basis (basis/closest-foot/jacobi). EE
+    // tangential stays disabled until the edge-edge feature path and
+    // per-primitive beta are added.
 
     inline __device__ Float EE_tangential_adhesion_energy(
         Float, Float, Float, Float,
@@ -705,60 +762,188 @@ namespace sym::codim_ipc_rcc_adhesive
         G = Vector12::Zero();
     }
 
-    inline __device__ Float PE_tangential_adhesion_energy(
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&, const Vector3&)
+    // PE tangential adhesion (Step 1): coeff * |u|^2, where u is the lagged
+    // point-edge tangential relative displacement. Mirrors PT_tangential_* with
+    // the point-edge basis/closest-foot/jacobi helpers. (prev_*) lagged,
+    // (P,E0,E1) current; J^T J is PSD so no SPD projection is needed.
+    inline __device__ Float PE_tangential_adhesion_energy(Float          Ct,
+                                                          Float          beta,
+                                                          Float          d_hat,
+                                                          Float          dt,
+                                                          const Vector3& prev_P,
+                                                          const Vector3& prev_E0,
+                                                          const Vector3& prev_E1,
+                                                          const Vector3& P,
+                                                          const Vector3& E0,
+                                                          const Vector3& E1)
     {
-        return Float{0};
+        using namespace distance;
+        using namespace friction;
+        Float               eta;
+        Matrix<Float, 3, 2> basis;
+        point_edge_closest_point(prev_P, prev_E0, prev_E1, eta);
+        point_edge_tangent_basis(prev_P, prev_E0, prev_E1, basis);
+
+        Vector3 dP  = P - prev_P;
+        Vector3 dE0 = E0 - prev_E0;
+        Vector3 dE1 = E1 - prev_E1;
+        Vector2 u;
+        point_edge_tan_rel_dx(dP, dE0, dE1, basis, eta, u);
+
+        Float coeff = (dt * dt) * (Ct / (2.0 * d_hat)) * beta * beta;
+        return coeff * u.squaredNorm();
     }
 
-    inline __device__ void PE_tangential_adhesion_gradient_hessian(
-        Vector9&       G,
-        Matrix9x9&     H,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&, const Vector3&)
+    inline __device__ void
+    PE_tangential_adhesion_gradient_hessian(Vector9&       G,
+                                            Matrix9x9&     H,
+                                            Float          Ct,
+                                            Float          beta,
+                                            Float          d_hat,
+                                            Float          dt,
+                                            const Vector3& prev_P,
+                                            const Vector3& prev_E0,
+                                            const Vector3& prev_E1,
+                                            const Vector3& P,
+                                            const Vector3& E0,
+                                            const Vector3& E1)
     {
-        G = Vector9::Zero();
-        H = Matrix9x9::Zero();
+        using namespace distance;
+        using namespace friction;
+        Float               eta;
+        Matrix<Float, 3, 2> basis;
+        point_edge_closest_point(prev_P, prev_E0, prev_E1, eta);
+        point_edge_tangent_basis(prev_P, prev_E0, prev_E1, basis);
+
+        Vector3 dP  = P - prev_P;
+        Vector3 dE0 = E0 - prev_E0;
+        Vector3 dE1 = E1 - prev_E1;
+        Vector2 u;
+        point_edge_tan_rel_dx(dP, dE0, dE1, basis, eta, u);
+
+        Matrix<Float, 2, 9> J;
+        point_edge_jacobi(basis, eta, J);
+
+        Float coeff = (dt * dt) * (Ct / d_hat) * beta * beta;  // 2*(1/2) cancels
+        G           = J.transpose() * (coeff * u);
+        H           = (coeff)*J.transpose() * J;
     }
 
-    inline __device__ void PE_tangential_adhesion_gradient(
-        Vector9&       G,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&, const Vector3&)
+    inline __device__ void
+    PE_tangential_adhesion_gradient(Vector9&       G,
+                                    Float          Ct,
+                                    Float          beta,
+                                    Float          d_hat,
+                                    Float          dt,
+                                    const Vector3& prev_P,
+                                    const Vector3& prev_E0,
+                                    const Vector3& prev_E1,
+                                    const Vector3& P,
+                                    const Vector3& E0,
+                                    const Vector3& E1)
     {
-        G = Vector9::Zero();
+        using namespace distance;
+        using namespace friction;
+        Float               eta;
+        Matrix<Float, 3, 2> basis;
+        point_edge_closest_point(prev_P, prev_E0, prev_E1, eta);
+        point_edge_tangent_basis(prev_P, prev_E0, prev_E1, basis);
+
+        Vector3 dP  = P - prev_P;
+        Vector3 dE0 = E0 - prev_E0;
+        Vector3 dE1 = E1 - prev_E1;
+        Vector2 u;
+        point_edge_tan_rel_dx(dP, dE0, dE1, basis, eta, u);
+
+        Matrix<Float, 2, 9> J;
+        point_edge_jacobi(basis, eta, J);
+
+        Float coeff = (dt * dt) * (Ct / d_hat) * beta * beta;
+        G           = J.transpose() * (coeff * u);
     }
 
-    inline __device__ Float PP_tangential_adhesion_energy(
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&)
+    // PP tangential adhesion (Step 1). Mirrors PT/PE with the point-point
+    // basis; no closest-foot parameter (the two points are the stencil).
+    // (prev_P0, prev_P1) lagged, (P0, P1) current; J^T J is PSD.
+    inline __device__ Float PP_tangential_adhesion_energy(Float          Ct,
+                                                          Float          beta,
+                                                          Float          d_hat,
+                                                          Float          dt,
+                                                          const Vector3& prev_P0,
+                                                          const Vector3& prev_P1,
+                                                          const Vector3& P0,
+                                                          const Vector3& P1)
     {
-        return Float{0};
+        using namespace distance;
+        using namespace friction;
+        Matrix<Float, 3, 2> basis;
+        point_point_tangent_basis(prev_P0, prev_P1, basis);
+
+        Vector3 dP0 = P0 - prev_P0;
+        Vector3 dP1 = P1 - prev_P1;
+        Vector2 u;
+        point_point_tan_rel_dx(dP0, dP1, basis, u);
+
+        Float coeff = (dt * dt) * (Ct / (2.0 * d_hat)) * beta * beta;
+        return coeff * u.squaredNorm();
     }
 
-    inline __device__ void PP_tangential_adhesion_gradient_hessian(
-        Vector6&       G,
-        Matrix6x6&     H,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&)
+    inline __device__ void
+    PP_tangential_adhesion_gradient_hessian(Vector6&       G,
+                                            Matrix6x6&     H,
+                                            Float          Ct,
+                                            Float          beta,
+                                            Float          d_hat,
+                                            Float          dt,
+                                            const Vector3& prev_P0,
+                                            const Vector3& prev_P1,
+                                            const Vector3& P0,
+                                            const Vector3& P1)
     {
-        G = Vector6::Zero();
-        H = Matrix6x6::Zero();
+        using namespace distance;
+        using namespace friction;
+        Matrix<Float, 3, 2> basis;
+        point_point_tangent_basis(prev_P0, prev_P1, basis);
+
+        Vector3 dP0 = P0 - prev_P0;
+        Vector3 dP1 = P1 - prev_P1;
+        Vector2 u;
+        point_point_tan_rel_dx(dP0, dP1, basis, u);
+
+        Matrix<Float, 2, 6> J;
+        point_point_jacobi(basis, J);
+
+        Float coeff = (dt * dt) * (Ct / d_hat) * beta * beta;
+        G           = J.transpose() * (coeff * u);
+        H           = (coeff)*J.transpose() * J;
     }
 
-    inline __device__ void PP_tangential_adhesion_gradient(
-        Vector6&       G,
-        Float, Float, Float, Float,
-        const Vector3&, const Vector3&,
-        const Vector3&, const Vector3&)
+    inline __device__ void
+    PP_tangential_adhesion_gradient(Vector6&       G,
+                                    Float          Ct,
+                                    Float          beta,
+                                    Float          d_hat,
+                                    Float          dt,
+                                    const Vector3& prev_P0,
+                                    const Vector3& prev_P1,
+                                    const Vector3& P0,
+                                    const Vector3& P1)
     {
-        G = Vector6::Zero();
+        using namespace distance;
+        using namespace friction;
+        Matrix<Float, 3, 2> basis;
+        point_point_tangent_basis(prev_P0, prev_P1, basis);
+
+        Vector3 dP0 = P0 - prev_P0;
+        Vector3 dP1 = P1 - prev_P1;
+        Vector2 u;
+        point_point_tan_rel_dx(dP0, dP1, basis, u);
+
+        Matrix<Float, 2, 6> J;
+        point_point_jacobi(basis, J);
+
+        Float coeff = (dt * dt) * (Ct / d_hat) * beta * beta;
+        G           = J.transpose() * (coeff * u);
     }
 }  // namespace sym::codim_ipc_rcc_adhesive
 }  // namespace uipc::backend::cuda

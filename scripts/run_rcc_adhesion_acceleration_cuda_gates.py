@@ -72,6 +72,7 @@ def main() -> int:
 
     run([core_test, "[rcc_bonded_pt]", "-r", "compact"])
     run([backend_test, "[rcc_bonded_pt]", "-r", "compact"])
+    run([backend_test, "[rcc_adhesion][oracle][feature_adhesion]", "-r", "compact"])
     run([backend_test, "gpu_sanity_check", "-c", "bunny", "-r", "compact"])
 
     print("RCC adhesion acceleration CUDA gates passed.", flush=True)

@@ -30,6 +30,9 @@ class SimplexFrictionalContact : public ContactReporter
         muda::CBufferView<Vector4i>       friction_EEs() const;
         muda::CBufferView<Vector3i>       friction_PEs() const;
         muda::CBufferView<Vector2i>       friction_PPs() const;
+        // Per-VT-primitive list (full topo + closest-feature flag) for RCC
+        // adhesion; additive, parallel to the reduced friction lists above.
+        muda::CBufferView<ActiveVT>       friction_VTs() const;
         muda::CBufferView<Vector3>        positions() const;
         muda::CBufferView<Vector3>        prev_positions() const;
         muda::CBufferView<Vector3>        rest_positions() const;

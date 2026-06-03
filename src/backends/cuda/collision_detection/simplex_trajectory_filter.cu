@@ -179,11 +179,18 @@ void SimplexTrajectoryFilter::Impl::record_friction_candidates(
     loose_resize(friction_PP, PPs.size());
     friction_PP.view().copy_from(PPs);
 
-    logger::info("SimplexTrajectoryFilter Friction PT: {}, EE: {}, PE: {}, PP: {}",
+    // VT (full-topo + feature-flag primitives for RCC adhesion; lagged
+    // snapshot, same phase as the reduced friction lists)
+    loose_resize(friction_VT, VTs.size());
+    if(VTs.size() > 0)
+        friction_VT.view().copy_from(VTs);
+
+    logger::info("SimplexTrajectoryFilter Friction PT: {}, EE: {}, PE: {}, PP: {}, VT: {}",
                  friction_PT.size(),
                  friction_EE.size(),
                  friction_PE.size(),
-                 friction_PP.size());
+                 friction_PP.size(),
+                 friction_VT.size());
 }
 
 
@@ -297,6 +304,11 @@ muda::CBufferView<Vector2i> SimplexTrajectoryFilter::PPs() const noexcept
     return m_impl.PPs;
 }
 
+muda::CBufferView<ActiveVT> SimplexTrajectoryFilter::VTs() const noexcept
+{
+    return m_impl.VTs;
+}
+
 muda::CBufferView<Vector4i> SimplexTrajectoryFilter::friction_PTs() const noexcept
 {
     return m_impl.friction_PT;
@@ -344,6 +356,11 @@ muda::CBufferView<Vector2i> SimplexTrajectoryFilter::friction_PPs() const noexce
     return m_impl.friction_PP;
 }
 
+muda::CBufferView<ActiveVT> SimplexTrajectoryFilter::friction_VTs() const noexcept
+{
+    return m_impl.friction_VT;
+}
+
 muda::CBufferView<Vector3> SimplexTrajectoryFilter::DetectInfo::displacements() const noexcept
 {
     return m_impl->global_vertex_manager->displacements();
@@ -378,6 +395,11 @@ void SimplexTrajectoryFilter::FilterActiveInfo::PPs(muda::CBufferView<Vector2i> 
 {
     m_impl->PPs = PPs;
 }
+
+void SimplexTrajectoryFilter::FilterActiveInfo::VTs(muda::CBufferView<ActiveVT> VTs) noexcept
+{
+    m_impl->VTs = VTs;
+}
 muda::VarView<Float> SimplexTrajectoryFilter::FilterTOIInfo::toi() noexcept
 {
     return m_toi;
@@ -389,6 +411,7 @@ void SimplexTrajectoryFilter::do_clear_friction_candidates()
     m_impl.friction_EE.resize(0);
     m_impl.friction_PE.resize(0);
     m_impl.friction_PP.resize(0);
+    m_impl.friction_VT.resize(0);
 }
 
 bool SimplexTrajectoryFilter::Impl::dump(DumpInfo& info)

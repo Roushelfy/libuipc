@@ -10,6 +10,19 @@
 
 namespace uipc::backend::cuda
 {
+// One active vertex-triangle (VT) primitive: the full (point, t0, t1, t2)
+// topology plus its closest-feature classification flag (2 = PP / 3 = PE /
+// 4 = PT-interior, the `dim` from degenerate_point_triangle). Emitted
+// ADDITIVELY by each simplex filter's filter_active for every active VT
+// candidate (before the dim-switch reduces it), so RCC adhesion can run
+// per-VT-primitive while the barrier/friction reduced lists stay untouched.
+// Trivially copyable so it can ride a DeviceSelect compaction.
+struct ActiveVT
+{
+    Vector4i topo;
+    IndexT   flag;
+};
+
 class SimplexTrajectoryFilter : public TrajectoryFilter
 {
   public:
@@ -105,6 +118,12 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
          * @brief Candidate point-point pairs.
          */
         void PPs(muda::CBufferView<Vector2i> PPs) noexcept;
+        /**
+         * @brief Active vertex-triangle primitives (full topo + feature flag),
+         * additive and parallel to PTs/PEs/PPs. One entry per active VT
+         * candidate regardless of closest-feature reduction.
+         */
+        void VTs(muda::CBufferView<ActiveVT> VTs) noexcept;
     };
 
     class FilterTOIInfo : public DetectInfo
@@ -143,11 +162,13 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         muda::CBufferView<Vector4i> EEs;
         muda::CBufferView<Vector3i> PEs;
         muda::CBufferView<Vector2i> PPs;
+        muda::CBufferView<ActiveVT>  VTs;
 
         muda::DeviceBuffer<Vector4i> friction_PT;
         muda::DeviceBuffer<Vector4i> friction_EE;
         muda::DeviceBuffer<Vector3i> friction_PE;
         muda::DeviceBuffer<Vector2i> friction_PP;
+        muda::DeviceBuffer<ActiveVT> friction_VT;
 
         muda::DeviceBuffer<Vector4i> recovered_PT;
         muda::DeviceBuffer<Vector4i> recovered_EE;
@@ -187,11 +208,13 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
     muda::CBufferView<Vector4i> EEs() const noexcept;
     muda::CBufferView<Vector3i> PEs() const noexcept;
     muda::CBufferView<Vector2i> PPs() const noexcept;
+    muda::CBufferView<ActiveVT> VTs() const noexcept;
 
     muda::CBufferView<Vector4i> friction_PTs() const noexcept;
     muda::CBufferView<Vector4i> friction_EEs() const noexcept;
     muda::CBufferView<Vector3i> friction_PEs() const noexcept;
     muda::CBufferView<Vector2i> friction_PPs() const noexcept;
+    muda::CBufferView<ActiveVT> friction_VTs() const noexcept;
 
     void  set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
     void  clear_rcc_bonded_pt_locked_keys() noexcept;

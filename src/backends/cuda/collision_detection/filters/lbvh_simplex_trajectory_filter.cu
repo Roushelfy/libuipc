@@ -557,6 +557,8 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
 
     temp_PTs.resize(N_PTs);
     temp_EEs.resize(N_EEs);
+    // one VT slot per AllP_AllT candidate (emitted before reduction)
+    temp_VTs.resize(N_PTs);
 
     SizeT temp_PP_offset = 0;
     SizeT temp_PE_offset = 0;
@@ -706,6 +708,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
                  temp_PPs    = PP_view.viewer().name("temp_PPs"),
                  temp_PEs    = PE_view.viewer().name("temp_PEs"),
                  temp_PTs    = temp_PTs.viewer().name("temp_PTs"),
+                 temp_VTs    = temp_VTs.viewer().name("temp_VTs"),
                  d_hats = info.d_hats().viewer().name("d_hats")] __device__(int i) mutable
                 {
                     auto& PP = temp_PPs(i);
@@ -714,6 +717,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
                     PE.setConstant(-1);
                     auto& PT = temp_PTs(i);
                     PT.setConstant(-1);
+                    temp_VTs(i).topo.setConstant(-1);
 
                     Vector2i indices = PT_pairs(i);
                     IndexT   V       = surf_vertices(indices(0));
@@ -752,6 +756,10 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
 
                     Vector4i offsets;
                     auto dim = distance::degenerate_point_triangle(flag, offsets);
+
+                    // Additive VT primitive: full topo + closest-feature flag,
+                    // for every active VT candidate regardless of reduction.
+                    temp_VTs(i) = ActiveVT{vIs, dim};
 
                     switch(dim)
                     {
@@ -903,6 +911,14 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
         PEs.resize(temp_PEs.size());
         PTs.resize(temp_PTs.size());
         EEs.resize(temp_EEs.size());
+        active_VTs.resize(temp_VTs.size());
+
+        DeviceSelect().If(temp_VTs.data(),
+                          active_VTs.data(),
+                          selected_VT_count.data(),
+                          temp_VTs.size(),
+                          [] CUB_RUNTIME_FUNCTION(const ActiveVT& v)
+                          { return v.topo(0) != -1; });
 
         DeviceSelect().If(temp_PPs.data(),
                           PPs.data(),
@@ -936,17 +952,20 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
         IndexT PE_count = selected_PE_count;
         IndexT PT_count = selected_PT_count;
         IndexT EE_count = selected_EE_count;
+        IndexT VT_count = selected_VT_count;
 
         PPs.resize(PP_count);
         PEs.resize(PE_count);
         PTs.resize(PT_count);
         EEs.resize(EE_count);
+        active_VTs.resize(VT_count);
     }
 
     info.PPs(PPs);
     info.PEs(PEs);
     info.PTs(PTs);
     info.EEs(EEs);
+    info.VTs(active_VTs);
 
     if constexpr(PrintDebugInfo)
     {

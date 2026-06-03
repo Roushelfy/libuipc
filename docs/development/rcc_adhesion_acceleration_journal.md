@@ -981,3 +981,118 @@ The corner-peel sweep showed geometric release (strain/gap) cannot peel a stiff 
 ### Decision
 
 The force/energy criterion resolves the compliant-counterpart release blind spot (phys-1) and is the recommended release trigger for stiff bonds; geometric strain/gap remain available. The threshold is scene-dependent (scales with `kappa`, `V0`, `dt`) and stays default-off (`1e30`).
+
+## 2026-06-02 Full-Feature Adhesion Plan And PE/PP Formulas
+
+### Context
+
+The bonded acceleration only ever covers face-interior point-triangle contacts. Investigating why two off-diagonal corners on the faceted cube top face never bonded traced back to RCC adhesion itself being PT-only: the single-diagonal triangulation makes those corners classify as PE/PP, and PE/PP/EE adhesion is disabled, beta is PT-only, so they never enter `friction_PTs()`, never evolve beta, never lock. The advisor's framing is that the mesh **vertex-triangle (VT)** and **edge-edge (EE)** pair is the contact primitive; the PP/PE/PT split is only the closest-feature sub-formula. We downloaded the RCC adhesion paper's reference implementation (XBow `src/Bow/Energy/FEM/RCCAdhesionEnergy.h`) to see how it handles PP/PE.
+
+### Source Observations
+
+- XBow `RCCAdhesionEnergy3D`: beta stored per VT primitive keyed by `(boundary_point, boundary_face)`, carried across feature transitions; each step `point_triangle_distance_type` classifies PP/PE/PT and uses the **true feature distance** + matching tangent basis; pairs weighted by `boundary_point_area / 2`; the adhesion op extends the IPC barrier op (shares classified pairs, distances, kappa).
+- libuipc `codim_ipc_simplex_rcc_adhesive_function.h`: `PT_*` adhesion uses the unflagged plane projection (`point_triangle_distance2`, deliberately, to avoid a diagonal-pull artifact); `EE_*`/`PE_*`/`PP_*` normal and tangential adhesion all `return 0` (V1 disabled).
+- `ipc_simplex_rcc_adhesive_contact.cu`: beta is PT-only (`m_beta_EE/PE/PP.fill(0)`); the PE/PP **assembly skeleton already exists** — it loops `friction_PEs()`/`friction_PPs()`, reads `m_beta_PE/PP`, early-outs on `beta <= 0`, and calls the `PE_*`/`PP_*` functions for energy (947-995) and grad/hess (1216-1311). Only the formula bodies and per-primitive beta were missing.
+- Distance + friction utils for PE/PP all exist: unflagged `point_edge_distance2`/`point_point_distance2` (+ `_gradient` -> Vector9/6, + `_hessian` -> 9x9/6x6) via `distance_flagged.h`, and `point_edge_*`/`point_point_*` basis/closest/`tan_rel_dx`/`jacobi` in `friction_utils.h`. The barrier path uses the flagged (true closest-feature) distance for non-penetration.
+
+### Decisions
+
+- Adopt the XBow model: per-VT-primitive beta + true feature distance (PP/PE/PT) + area weight, built on the barrier's classified pairs/distances (reuse `d^2` and derivatives). Keep the barrier on the true closest-feature distance for non-penetration. The bonded lock decides on the VT primitive; the ABD tet stays point-plane (`F = Ds Dm_inv`).
+- Implement in five independently-verifiable steps (architecture "Full-Feature Adhesion And Per-Primitive Beta", roadmap Phase 6). Start with Step 1 (PE/PP formulas) because it is self-contained and behaviour-neutral until beta is wired.
+- Documented the plan into architecture (new section + relationship update), roadmap (Phase 6 + current-focus note + blocker), conventions (rules 15/16 + adhesion sub-formula oracle rule), and the subsystem doc (scope + Phase 6 table).
+
+### Implemented
+
+- Step 1: replaced the `return 0` `PE_normal/PE_tangential/PP_normal/PP_tangential` adhesion energy/gradient/gradient_hessian stubs with the true point-edge / point-point feature-distance formulas, mirroring `PT_*` exactly (PE: Vector9/9x9 via `point_edge_distance2*` and `point_edge_*` friction basis; PP: Vector6/6x6 via `point_point_distance2*` and `point_point_*`). Updated the EE normal/tangential disable comments (EE still disabled; PE/PP now implemented). Confirmed argument order against the call sites (`Cn/Ct, beta, d_hat, dt, [prev...], [curr...]`) and that PE normal Hessian is SPD-projected by the caller while PP/tangential blocks are naturally PSD.
+- Behaviour is unchanged: `m_beta_PE/PP` are still zero-filled and every call site early-outs on `beta <= 0`, so the new formulas are not reached until Step 2.
+
+### Commands
+
+- `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` — source/doc gate (with new Phase 6 anchors).
+- CUDA backend rebuild to confirm the device formulas compile.
+
+## 2026-06-02 Distance Reuse Analysis (Workflow)
+
+### Context
+
+Question for Step 4: can RCC adhesion/bonded reuse the distance the barrier already computed instead of recomputing it? My earlier framing (and the docs I wrote earlier today) said "reuse the barrier's classified pairs/distances; the libuipc analogue of XBow layering the adhesion op on the barrier op." Ran a 5-reader workflow (barrier / friction / rcc-adhesive / reporter-arch / XBow) + verified the load-bearing fact myself.
+
+### Source Observations
+
+- Barrier (normal contact) RECOMPUTES `d^2`/grad/hess in-kernel every pass and stores nothing: `D` is materialized only under `if constexpr(RUNTIME_CHECK)` ([ipc_simplex_normal_contact.cu:67-83](../../src/backends/cuda/contact_system/contact_models/ipc_simplex_normal_contact.cu)); production passes only the `flag` to `PT_barrier_energy`, which recomputes `D` internally. The only per-pair distance buffer (`per_pt_dist2`) is telemetry — full-pair (not flagged), reduced to a scalar, exposed through no reporter Info.
+- XBow's "reuse" is structural only, and NOT even a shared pair set: `RCCAdhesionEnergy3D : IpcEnergyOp3D` and barrier are SEPARATE `make_shared` instances (distinct PP/PE/PT storage); RCC overrides `precompute()`, clears the inherited arrays, and rebuilds them from its own bonded `pair_PT/pair_EE`; it recomputes distances independently. Only `xi/dHat/kappa` VALUES are shared (XBow `RCCAdhesionEnergy.h:586/848/875`, `IPCSimulator.h:440/492/501`).
+- libuipc RCC already shares MORE structurally than XBow: it iterates the same lagged `friction_PTs()` lists and writes additively into the shared friction output buffers.
+- Lists differ by design: barrier iterates live `PTs()` (current-step DCD); friction + RCC adhesion iterate lagged `friction_PTs()`. RCC's lagged tangential basis/foot is bit-identical to friction's `PT_friction_basis` (same helper, prev positions, list order).
+- RCC normal uses the deliberately UNFLAGGED plane-projection `d^2` (`codim_ipc_simplex_rcc_adhesive_function.h:393-403`), numerically different from the barrier's flagged `d^2`; cannot be inherited from the barrier. Per Newton iteration a bonded PT pair recomputes current-position `d^2` ~5x across 4-5 launches.
+
+### Decisions
+
+- Reject a shared per-pair `d^2`/derivative scratch buffer: on launch/bandwidth-bound kernels it trades cheap in-register arithmetic for global-memory traffic (Hessian = 144 floats/pair) — a likely regression.
+- Reframe Step 4 as structural single-compute: (a) intra-RCC reuse `D` across RCC's own normal energy/grad/hess + `db_dd2` (zero cross-reporter coupling); (b) optionally merge with the FRICTION kernel (same lagged list, bit-identical basis) — preferred over a barrier merge (which needs list reconciliation + only `db_dd2`/flagged `d^2` shareable).
+- Corrected architecture (XBow reference item 4, target-model item 5, Step-4 table), roadmap (Phase 6 Step 4), and the subsystem doc to match. The earlier "reuse the barrier's distances / layer like XBow" wording was inaccurate.
+
+### Commands
+
+- Workflow `rcc-distance-reuse-analysis` (6 agents); independent read of `ipc_simplex_normal_contact.cu` + `codim_ipc_simplex_normal_contact_function.h` to confirm the no-store fact.
+- `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` — source/doc gate after the corrections.
+
+## 2026-06-02 Contact Area Weight Check (Workflow)
+
+### Context
+
+Question for Step 3: does libuipc already fold the per-vertex contact area into Cn/Ct, making a separate `A_k` weight redundant? Ran a 2-reader workflow (libuipc coeff trace + XBow area weighting) and verified the spec note myself.
+
+### Source Observations
+
+- libuipc: Cn/Ct are raw scalar stiffnesses; no area/mass/volume factor at any stage. `RCCAdhesiveCoeff` is 8 Floats + enabled ([rcc_adhesive_coeff.h:16-26](../../src/backends/cuda/contact_system/rcc_adhesive_coeff.h)); frontend writes them verbatim ([rcc_adhesive.cpp:114-115](../../src/constitution/rcc_adhesive.cpp)); tabular copies verbatim ([ipc_simplex_rcc_adhesive_contact.cu:205-216]); energy is `dt^2·Cn/(2 d_hat)·β²·D`, no `A_k` ([codim_ipc_simplex_rcc_adhesive_function.h:416]). Stencil coeffs are arithmetic averages (PT /3, PE /2, EE /4), same as barrier `kappa`. The barrier itself also does not area-weight per pair.
+- Spec records the convention explicitly ([docs/specification/contact_models/rcc_adhesion.md:176-177](../specification/contact_models/rcc_adhesion.md)): "Cn and Ct are treated as area-weighted stiffnesses divided by d_hat ... Area A_k: lumped into Cn/Ct (libuipc IPC convention); not plumbed as a separate per-pair attribute."
+- XBow: Cn/Ct are per-unit-area densities; area is a SEPARATE per-vertex `m_boundary_point_area` (face_area/3 onto each of 3 boundary verts, `IPCSimulator.h:109/118`), multiplied as `wPT` into the energy (`RCCAdhesionEnergy.h:1111`) and folded into tangential `mu_lambda = β²·area/dHat`. The 3D `/4` = `/2` (double-count) × `/2` (PT emplaced twice as EE). The same area field also weights XBow's ordinary barrier (`IpcEnergy3D.cpp:334`) — shared infra, nearly free.
+
+### Decisions
+
+- Verdict: area is NOT computed into Cn/Ct by any code (nothing to double-count yet), but by libuipc's documented convention it is *meant* to be lumped into Cn/Ct — consistent with barrier `kappa`. So a separate `A_k` is optional, not redundant-with-existing-code and not a bug fix.
+- Consequence of the lumped convention: per-pair-uniform stiffness → adhesion scales with vertex count (not physical area) and non-uniform meshes pull unevenly; Cn is per-contact-element-pair so it cannot encode per-vertex area at all.
+- Re-scoped Step 3 as optional / lowest priority: keep the lumped convention (uniform meshes), OR add per-vertex `A_k` for resolution-independent / non-uniform-mesh adhesion — but then Cn/Ct must be reinterpreted as densities and the area reused from the barrier's boundary-point area (no parallel field), else double-count. Corrected the Step-3 wording in architecture, roadmap, and the subsystem doc (the earlier "defaults to 1 until area exists" framing was inaccurate).
+
+### Commands
+
+- Workflow `rcc-area-weight-check` (3 agents); independent read of `docs/specification/contact_models/rcc_adhesion.md:170-185` to confirm the lumped-area note.
+- `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py` — source/doc gate after the corrections.
+
+## 2026-06-02 Step 2 Plan And Step 0 PE/PP Oracle
+
+### Context
+
+Starting Phase 6 Step 2 (per-primitive beta). User chose the faithful VT-primitive model (align with advisor/XBow: judge on the VT pair, classification only picks the distance sub-formula). A planning workflow (`rcc-step2-vt-primitive-plan`, 4 agents) verified feasibility and produced the ordered plan.
+
+### Source Observations
+
+- The filter REDUCES each VT candidate to one of PT/PE/PP and the reduced PE/PP lists are NOT pure VT-reductions — they fuse VT, EE, and CodimPE degeneracies (lbvh_simplex_trajectory_filter.cu AllP_AllT vs AllE_AllE/CodimPE blocks). So unioning the reduced lists does NOT reconstruct the VT set; the correct construction is one entry per active `AllP_AllT` candidate, emitted before the dim-switch, carrying the full `(point,t0,t1,t2)` + a feature flag (= `degenerate_point_triangle` dim).
+- The beta evolution law `PT_beta_evolve_existing(...,D,u_sq,blocked)` is feature-agnostic; only D and u_sq carry geometry. The sticky gate + occlusion gate are full-triangle based and carry over unchanged for any VT pair. The pair key `PT_pair_key(topo)` is identical for any VT primitive (pure function of the 4 vertex ids).
+
+### Decisions
+
+- Option 2 (VT-primitive). Ordered steps: (0) PE/PP FD oracle [decision-free]; (1) additive `active_VTs{topo,flag}` + `friction_VTs` across the 4 filters + interface [behavior-neutral]; (2) per-VT beta over `friction_VTs` keyed by `PT_pair_key`, flag-driven feature distance, gates carry over [behavior-neutral]; (3) single VT assembly loop, flag-switched to the Step-1 formulas [behavior FLIPS]; (4) retire `m_beta_PE/PP/EE` + zero-fill + separate loops; (5) producer kept on the `flag==4` subset so bonding stays byte-for-byte unchanged (real Step 5 later).
+- Risk noted for Step 3: enabling PE/PP adhesion re-introduces the "diagonal-pull" the unflagged-plane PT formula was chosen to avoid (a face-interior-hovering vertex also emits a PE toward the shared diagonal). Must be validated on the faceted-cube fixture, not assumed.
+
+### Implemented (Step 0)
+
+- `apps/tests/backends/cuda/rcc_adhesion_oracle.cu`: GPU finite-difference E/G/H oracle for the Step-1 PE/PP adhesion device functions (PE Vector9/9x9, PP Vector6/6x6, normal + tangential), launching 1-thread kernels and central-differencing the energy/gradient. Tag `[rcc_adhesion][oracle][feature_adhesion][cuda]`. FD the raw (un-projected) Hessian; tangential perturbs only current DOFs (lagged basis fixed); beta passed >0 directly.
+- Wired into `run_rcc_adhesion_acceleration_cuda_gates.py`; added source/doc gate anchors; ticked roadmap.
+
+### Commands
+
+- `cmake build/cuda_mixed_fused_pcg` (reconfigure for GLOB) + `cmake --build ... --target backend_cuda` — compiles + links clean.
+- `uipc_test_backend_cuda "[rcc_adhesion][oracle][feature_adhesion]"` → All tests passed (12 assertions in 4 test cases).
+
+### Implemented (Step 1)
+
+- Added `struct ActiveVT { Vector4i topo; IndexT flag; }` (collision_detection/simplex_trajectory_filter.h) and an additive `active_VTs` list emitted by all four simplex filters' `filter_active`, written from the `AllP_AllT` (VT-candidate) kernel right after `degenerate_point_triangle` (full `vIs` topo + `dim` flag), before the reduction switch — one entry per active VT candidate regardless of closest feature. Compacted by a 5th `DeviceSelect` (predicate `topo(0)!=-1`) and emitted via the new `FilterActiveInfo::VTs(...)`.
+- Trajectory filter: new `VTs()` accessor, `friction_VT` snapshot in `record_friction_candidates` (lagged, same phase as the reduced friction lists), `friction_VTs()` accessor, cleared in `do_clear_friction_candidates`. Consumer interface: `SimplexFrictionalContact::BaseInfo::friction_VTs()` forwards it.
+- Additive only: barrier/friction reduced lists untouched; nothing consumes `friction_VTs` yet, so behaviour is unchanged.
+- Important: the reduced PE/PP lists fuse VT + EE + CodimPE degeneracies, so `active_VTs` is emitted from the VT-candidate kernel (not reconstructed from the reduced lists) — its count is exactly the active VT candidates.
+
+### Commands (Step 1)
+
+- `cmake --build ... --target backend_cuda` — all 4 filters + interface compile + link clean.
+- `scripts/run_rcc_adhesion_acceleration_cuda_gates.py --no-build` → core 91/6, backend 247/14, adhesion oracle 12/4, bunny 4/1 (no regression).

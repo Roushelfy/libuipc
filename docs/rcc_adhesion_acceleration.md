@@ -6,14 +6,14 @@ This is the focused subsystem note for replacing stable RCC point-triangle adhes
 
 In scope:
 
-- RCC adhesive point-triangle pairs only.
+- RCC adhesive vertex-triangle (VT) primitives. The first production milestone locks face-interior point-triangle pairs; Phase 6 extends adhesion and locking to the full VT primitive across all closest-feature classifications (PP/PE/PT) — see "Full-Feature Adhesion And Per-Primitive Beta" below.
 - Stable pairs whose beta and motion history make contact topology unlikely to change during the next step.
 - CUDA backend trajectory filtering, RCC beta persistence, and complement-energy assembly.
 - Dynamic runtime state owned by the backend.
 
 Out of scope for the first production milestone:
 
-- PE, PP, or EE adhesion locking.
+- EE (edge-edge) adhesion and locking. PP/PE adhesion is added in Phase 6; EE is a later follow-up.
 - Vertex-half-plane adhesion locking.
 - Frontend `SoftVertexTriangleStitch` geometry rebuilds for transient pairs.
 - Default-on behavior before correctness and benchmark gates pass.
@@ -60,6 +60,28 @@ This table is the short handoff surface. It intentionally separates lock, releas
 | Scene/benchmark | Legacy RCC cube-cube and cube-cloth lift/release baselines; bonded-mode `pt_lift_release` press/hold/lift no-penetration gate with `rcc_bonded_pt_skip_ccd` on | Forced-pull release/separation and adhesion-off baseline in the scene gate, and benchmark timers |
 
 Release context is not a lock gate. Sticky-side signs, normals, contact masks, subscene masks, and adhesive enable flags are currently routed into the bonded owner for release decisions; the live producer still needs explicit lock-side use of those inputs before scene correctness claims.
+
+## Full-Feature Adhesion And Per-Primitive Beta
+
+The bonded acceleration today only covers face-interior point-triangle contacts because RCC adhesion itself is PT-only: `EE_*`/`PE_*`/`PP_*` adhesion returned zero, beta lived only on PT-classified pairs (`m_beta_PE`/`m_beta_PP` zero-filled), and there was no contact-area weight. A stable edge/corner contact therefore gets neither adhesion nor a bond. Phase 6 rebuilds adhesion on the XBow `RCCAdhesionEnergy3D` model so the bonded lock can cover the full vertex-triangle (VT) primitive. The architecture page is the design of record; this is the subsystem-level checklist and status.
+
+Principles (see [architecture](./architecture.md) "Full-Feature Adhesion And Per-Primitive Beta"):
+
+- The VT pair is the primitive; the closest-feature classification (PP/PE/PT) only chooses the distance sub-formula and tangent basis for that step.
+- Beta is per primitive, evolved from the **true closest-feature distance**, carried across PP/PE/PT transitions.
+- PE/PP (and later EE) adhesion uses the true `point_edge_distance2` / `point_point_distance2` and matching friction basis, mirroring the `PT_*` functions.
+- Contact area is currently **lumped into Cn/Ct** (libuipc IPC convention, matching barrier `kappa`; spec `rcc_adhesion.md:176-177`), not a separate per-pair factor — the assembled energy has no `A_k` term. An explicit per-vertex `A_k` (XBow style, where Cn/Ct stay per-unit-area densities) is optional and only for resolution-independent / non-uniform-mesh adhesion; adding it requires reinterpreting Cn/Ct as densities, else it double-counts.
+- Distance handling is structural single-compute, NOT a reused buffer: the barrier recomputes `d^2` in-kernel and stores nothing, and a per-pair `d^2`/derivative buffer would be a GPU regression. Compute `d^2`/basis once per pair in one kernel body (intra-RCC first, then optionally merge with the friction kernel — same lagged `friction_PTs()`, bit-identical lagged basis). Only `db_dd2` and the flagged `d^2` are barrier-shareable; RCC's unflagged plane normal `d^2` is intrinsically different. The IPC barrier keeps the true closest-feature distance for non-penetration.
+- The bonded lock decides on the VT primitive; the ABD virtual-tet energy stays point-plane (`F = Ds Dm_inv`).
+
+| Step | Change | Status |
+| --- | --- | --- |
+| 1 | PE/PP true-feature adhesion formulas replace the `return 0` stubs (point-edge / point-point distance + friction basis, mirroring `PT_*`) | Implemented; behaviour-neutral while `m_beta_PE/PP == 0` (call sites early-out on `beta <= 0`) |
+| 1-oracle | PE/PP E/G/H finite-difference oracle | Planned before Step 2 makes the formulas load-bearing |
+| 2 | Per-primitive beta evolved from the true closest-feature distance; `m_beta_PE/PP` no longer zero-filled | Planned |
+| 3 | (Optional, lowest priority) per-vertex `A_k` weight — area is currently lumped into Cn/Ct; adding A_k needs Cn/Ct reinterpreted as densities + barrier boundary-area reuse, else double-count | Optional |
+| 4 | Distance single-compute in one kernel body (intra-RCC, then optional friction-kernel merge); reject a per-pair `d^2` scratch buffer (GPU regression) | Planned |
+| 5 | Bonded lock on the VT primitive; corner/edge contacts bond; ABD tet stays point-plane | Planned |
 
 ## Pair Keys
 

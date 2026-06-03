@@ -48,16 +48,21 @@ class LBVHSimplexTrajectoryFilter final : public SimplexTrajectoryFilter
         muda::DeviceVar<IndexT> selected_EE_count;
         muda::DeviceVar<IndexT> selected_PE_count;
         muda::DeviceVar<IndexT> selected_PP_count;
+        muda::DeviceVar<IndexT> selected_VT_count;
 
         muda::DeviceBuffer<Vector4i> temp_PTs;
         muda::DeviceBuffer<Vector4i> temp_EEs;
         muda::DeviceBuffer<Vector3i> temp_PEs;
         muda::DeviceBuffer<Vector2i> temp_PPs;
+        // Additive per-VT-primitive list (full topo + feature flag) for RCC
+        // adhesion; one entry per active AllP_AllT candidate before reduction.
+        muda::DeviceBuffer<ActiveVT> temp_VTs;
 
         muda::DeviceBuffer<Vector4i> PTs;
         muda::DeviceBuffer<Vector4i> EEs;
         muda::DeviceBuffer<Vector3i> PEs;
         muda::DeviceBuffer<Vector2i> PPs;
+        muda::DeviceBuffer<ActiveVT> active_VTs;
 
 
         /****************************************************

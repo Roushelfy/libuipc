@@ -273,6 +273,11 @@ muda::CBufferView<Vector3i> SimplexFrictionalContact::BaseInfo::friction_PEs() c
     return m_impl->simplex_trajectory_filter->friction_PEs();
 }
 
+muda::CBufferView<ActiveVT> SimplexFrictionalContact::BaseInfo::friction_VTs() const
+{
+    return m_impl->simplex_trajectory_filter->friction_VTs();
+}
+
 muda::CBufferView<Vector2i> SimplexFrictionalContact::BaseInfo::friction_PPs() const
 {
     return m_impl->simplex_trajectory_filter->friction_PPs();

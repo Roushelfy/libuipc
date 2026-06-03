@@ -18,6 +18,8 @@ These conventions are enforceable rules for RCC bonded point-triangle accelerati
 12. Do not assemble a released pair in the bonded reporter for the same step in which its release flag is produced.
 13. Give the end-of-step bonded producer a steady-state early-out: when no pair is released and no new pair locks (no membership change), do not re-sort, re-merge, or rebuild the bridge — keep the existing locked buffers. A stable locked set must not pay O(locked) sorts/scans every step.
 14. Disable release reasons with a negative threshold sentinel so the `>= 0.0` guards short-circuit, not with a large positive value such as `1e30` (which still runs the per-lock 3x3 inverse and closest-point work every step). Keep the degeneracy and finiteness guards unconditional even when release thresholds are disabled.
+15. RCC adhesion distance must match the closest-feature classification (full-feature adhesion). PT uses the plane projection (which equals the true distance for a face-interior pair), PE uses `point_edge_distance2`, PP uses `point_point_distance2`. Do not assemble an edge/vertex contact with the plane formula, and do not silently drop it by leaving the sub-formula at `return 0`.
+16. Beta is stored and evolved **per VT primitive**, not per closest-feature-classified pair. Carry beta across PP/PE/PT transitions; do not reset it when the closest feature changes. `m_beta_PE`/`m_beta_PP` must evolve, not stay zero-filled, once per-primitive beta is on. The bonded lock decides on the VT primitive; the ABD virtual-tet energy stays point-plane (`F = Ds Dm_inv`) regardless of which adhesion sub-formula classified the pair.
 
 ## Data Layout Rules
 
@@ -85,6 +87,7 @@ ABD/SVTS boundary:
 - Source scans enforce documentation structure and dependency boundaries only.
 - Unit and contract tests must use deterministic synthetic fixtures.
 - Numeric energy, gradient, and Hessian claims require a CPU or legacy oracle.
+- Each new adhesion sub-formula (PE/PP/EE energy, gradient, Hessian) requires its own finite-difference oracle before it becomes load-bearing. A `return 0` -> real-formula change is behaviour-neutral only while the corresponding beta buffer is zero-filled; once beta is per-primitive the formula carries force and must be oracle-backed first.
 - Energy oracles must name the model they validate. A Stable Neo-Hookean oracle is only proof for the debug/prototype path; production requires an ABD-style high-kappa oracle.
 - E/G/H oracle success does not by itself prove non-penetration after CCD is skipped. A bonded-mode scene gate must observe penetration/gap or an equivalent fixture-specific geometric bound.
 - Release tests must assert both sides of the lifecycle: active locks stay zipped after compaction, and released snapshots carry key/topology/beta/age/flags back toward RCC persistence.
