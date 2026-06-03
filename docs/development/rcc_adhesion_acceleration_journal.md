@@ -1126,3 +1126,23 @@ The behavior-flipping core of Phase 6: move beta + assembly from the face-interi
 - `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda uipc_test_sim_case` — compiles + links (one round of fixes: materialize Eigen diff expressions before `*_tan_rel_dx`).
 - `uipc_test_backend_cuda "[rcc_adhesion][oracle]"/"[rcc_bonded_pt]"/"gpu_sanity_check -c bunny"`; `uipc_test_sim_case "[rcc_adhesion][gate]"/"[rcc_bonded_pt][scene][pt_lift_release]"`.
 - `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py`.
+
+## 2026-06-02 Headless Demo Verification (Corner Adhesion + Diagonal Pull)
+
+### Context
+
+Built `pyuipc` (and copied the fresh `libuipc_backend_cuda.so`/`libuipc_core.so` into the venv `_native/` — the stale-wheel trap) and probed the faceted-cube + oriented-cloth demos headless to directly confirm the Step 2/3 behavior, since the gates prove no-regression but not the new coverage.
+
+### Observed Result
+
+- Subdivided faceted cube (`rcc_adhesive_subdivided_cube_lift_release_demo`), adhesion ON + bonded ON: at hold the per-VT beta snapshot is **96 primitives all at beta=1.0** (`dump_pt_state()`, frac09=1.0) while the bonded producer locks only **8** (the face-interior `flag==4` subset). 96 >> 8 ⇒ the edge/corner VTs (previously beta-less) now carry beta — corner adhesion is active. During lift the lower cube follows (botY +0.170 -> +0.426, contact gap held ~0.019); adhesion OFF it is left behind (botY +0.170, gap opens to +0.275). Contact-face gaps are uniform (min≈mean≈max) ⇒ no diagonal distortion. No NaN over 160 frames.
+- Oriented cloth (`rcc_adhesive_oriented_cloth_demo`, single-diagonal triangulation), adhesion ON vs OFF, hold phase: in-plane drift `|dXZ|mean` 0.00301 (ON) vs 0.00261 (OFF) — essentially equal and dominated by physical deformation (grid spacing ~0.029). `diagRMS < antiRMS` for both ⇒ **no bias toward the +x+z diagonal**: enabling PE/PP adhesion did NOT reintroduce the diagonal-pull artifact the unflagged-plane PT formula was originally chosen to avoid. Cloth stays flat (Yspan ~0.0596 ON==OFF) and follows the cube up during lift. No NaN.
+
+### Decision
+
+Step 2/3 confirmed end to end in real scenes: corner/edge adhesion active, no diagonal-pull artifact, stable, no regression. The bonded path is unchanged (8 locks). Probes were headless throwaway scripts (`/tmp`), not committed.
+
+### Commands
+
+- `cmake --build build/cuda_mixed_fused_pcg --target pyuipc`; `cp .../bin/libuipc_backend_cuda.so libuipc_core.so python/.venv/.../uipc/_native/`.
+- `python/.venv/bin/python` headless probes over `rcc_adhesive_subdivided_cube_lift_release_demo` and `rcc_adhesive_oriented_cloth_demo` (`dump_pt_state`, `locked_pair_count`, cube height/gap stats, cloth XZ drift).
