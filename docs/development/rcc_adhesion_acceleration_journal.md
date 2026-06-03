@@ -1096,3 +1096,33 @@ Starting Phase 6 Step 2 (per-primitive beta). User chose the faithful VT-primiti
 
 - `cmake --build ... --target backend_cuda` — all 4 filters + interface compile + link clean.
 - `scripts/run_rcc_adhesion_acceleration_cuda_gates.py --no-build` → core 91/6, backend 247/14, adhesion oracle 12/4, bunny 4/1 (no regression).
+
+## 2026-06-02 Step 2/3 Per-VT-Primitive Beta And Unified Assembly
+
+### Context
+
+The behavior-flipping core of Phase 6: move beta + assembly from the face-interior `friction_PTs` to the full per-VT-primitive `friction_VTs`, so edge/corner contacts (the off-diagonal cube corners that started this) get adhesion.
+
+### Implemented
+
+- Function header `codim_ipc_simplex_rcc_adhesive_function.h`: added `VT_normal_adhesion_*` (uses the FLAGGED `point_triangle_distance2(flag,...)` dispatch, which routes PT->plane / PE->point-edge / PP->point-point and emits a 12-DOF gradient/Hessian directly — same machinery the barrier uses, so one path covers all features), `VT_tangential_adhesion_*` (switches on `degenerate_point_triangle` dim, calls the Step-1 PT/PE/PP tangential helpers on the reduced sub-stencil and scatters the Vector12/9/6 result into the 12-DOF block), and `VT_tangential_rel_dx_sq` for beta evolution. Coeff/d_hat aggregated over the full VT primitive (`PT_rcc_coeff`/`PT_d_hat`/`PT_contact_coeff`) so evolution and assembly stay consistent.
+- Base `SimplexFrictionalContact`: added a `friction_pair_counts(pt,ee,pe,pp)` virtual hook (default = friction list sizes) called by the (still-final) extent functions. RCC overrides it to `{friction_VTs size, 0, 0, 0}` so all VT primitives ride the PT output slot as 12-DOF blocks; the friction reporter is unaffected.
+- `ipc_simplex_rcc_adhesive_contact.cu`: `ActiveVT` now carries the `Vector4i` flag (lagged, fixed across the step). Phase B init/match, `_phase_b_if_new_frame`, `_compute_curr_keys_PT`, and `_evolve_beta_step_at_end` all iterate `friction_VTs` (key = `PT_pair_key(topo)`, identical for any VT primitive → beta persists across PP/PE/PT transitions; flagged feature distance + `VT_tangential_rel_dx_sq`). `do_compute_energy`/`do_assemble` collapsed to ONE VT loop. Sticky + occlusion gates carry over verbatim (full-triangle). Retired `m_beta_EE/PE/PP`, `_sync_disabled_buffers`, and the separate per-feature energy/assemble loops. Bonded producer kept PT-only via a `flag==4`-compacted `m_beta_PT_face` (DeviceSelect.Flagged) fed with `friction_PTs()` — byte-for-byte bonding behavior preserved (Step 5 will let it consume the full VT list).
+- The 4 filters now emit `ActiveVT{vIs, flag}` (the Vector4i flag).
+
+### Decisions
+
+- Normal adhesion uses the flagged `point_triangle_distance2` path (provably equal to scattering the per-feature Step-1 PE/PP normal grad, and simpler); the Step-1 PE/PP normal functions stay (oracle-tested) and the PE/PP tangential functions are reused by the VT tangential wrapper.
+- Coeff/d_hat aggregated over the full VT primitive regardless of flag (R7): treats the VT as the unit, keeps evolution/assembly consistent, avoids per-flag coeff branching.
+- `make_spd` applied uniformly to the normal Hessian block (PP normal is already PSD, so it is a harmless no-op there).
+
+### Observed Result / Validation
+
+- `backend_cuda` + `uipc_test_sim_case` build + link clean. All gates green, no regression from the behavior flip: `[rcc_adhesion][oracle][feature_adhesion]` 12/4; backend `[rcc_bonded_pt]` 247/14; bunny 4/1; legacy `[rcc_adhesion][gate]` 836/2; bonded `[rcc_bonded_pt][scene][pt_lift_release]` 596/1; source/doc gate green (new VT anchors).
+- The legacy scenes passing means the diagonal-pull risk (R-physics: enabling PE/PP adhesion re-introduces a sideways pull for face-interior-hovering verts near a diagonal) did not break the existing fixtures. A dedicated edge/corner-adhesion demo/unit test (proving the new coverage directly, not just no-regression) is the recommended next behavioral proof.
+
+### Commands
+
+- `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda uipc_test_sim_case` — compiles + links (one round of fixes: materialize Eigen diff expressions before `*_tan_rel_dx`).
+- `uipc_test_backend_cuda "[rcc_adhesion][oracle]"/"[rcc_bonded_pt]"/"gpu_sanity_check -c bunny"`; `uipc_test_sim_case "[rcc_adhesion][gate]"/"[rcc_bonded_pt][scene][pt_lift_release]"`.
+- `uv run --no-sync python scripts/run_rcc_adhesion_acceleration_gates.py`.

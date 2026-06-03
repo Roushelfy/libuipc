@@ -177,6 +177,12 @@ class SimplexFrictionalContact : public ContactReporter
     virtual void do_compute_energy(EnergyInfo& info) = 0;
     virtual void do_assemble(ContactInfo& info)      = 0;
 
+    // Per-reporter pair counts that size the energy/gradient/Hessian extent
+    // and the PT/EE/PE/PP output subviews. Defaults to the simplex trajectory
+    // filter's reduced friction lists. Subclasses may override to remap the
+    // slots (RCC adhesion puts all VT primitives in the PT slot, EE/PE/PP=0).
+    virtual void friction_pair_counts(SizeT& pt, SizeT& ee, SizeT& pe, SizeT& pp) const;
+
   private:
     virtual void do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info) override final;
     virtual void do_compute_energy(GlobalContactManager::EnergyInfo& info) override final;

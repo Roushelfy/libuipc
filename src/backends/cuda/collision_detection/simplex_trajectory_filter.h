@@ -11,16 +11,19 @@
 namespace uipc::backend::cuda
 {
 // One active vertex-triangle (VT) primitive: the full (point, t0, t1, t2)
-// topology plus its closest-feature classification flag (2 = PP / 3 = PE /
-// 4 = PT-interior, the `dim` from degenerate_point_triangle). Emitted
-// ADDITIVELY by each simplex filter's filter_active for every active VT
-// candidate (before the dim-switch reduces it), so RCC adhesion can run
-// per-VT-primitive while the barrier/friction reduced lists stay untouched.
-// Trivially copyable so it can ride a DeviceSelect compaction.
+// topology plus its closest-feature classification flag (the Vector4i from
+// point_triangle_distance_flag; degenerate_point_triangle(flag) -> 2=PP /
+// 3=PE / 4=PT-interior and the sub-feature offsets). Emitted ADDITIVELY by
+// each simplex filter's filter_active for every active VT candidate (before
+// the dim-switch reduces it), so RCC adhesion can run per-VT-primitive while
+// the barrier/friction reduced lists stay untouched. The lagged flag is
+// snapshotted with the topology so the feature classification is fixed across
+// the step (consistent with friction's lagged basis). Trivially copyable so
+// it can ride a DeviceSelect compaction.
 struct ActiveVT
 {
     Vector4i topo;
-    IndexT   flag;
+    Vector4i flag;
 };
 
 class SimplexTrajectoryFilter : public TrajectoryFilter

@@ -32,14 +32,18 @@ void SimplexFrictionalContact::do_build(ContactReporter::BuildInfo& info)
         });
 }
 
-void SimplexFrictionalContact::do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info)
+void SimplexFrictionalContact::friction_pair_counts(SizeT& pt, SizeT& ee, SizeT& pe, SizeT& pp) const
 {
     auto& filter = m_impl.simplex_trajectory_filter;
+    pt = filter->friction_PTs().size();
+    ee = filter->friction_EEs().size();
+    pe = filter->friction_PEs().size();
+    pp = filter->friction_PPs().size();
+}
 
-    m_impl.PT_count = filter->friction_PTs().size();
-    m_impl.EE_count = filter->friction_EEs().size();
-    m_impl.PE_count = filter->friction_PEs().size();
-    m_impl.PP_count = filter->friction_PPs().size();
+void SimplexFrictionalContact::do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info)
+{
+    friction_pair_counts(m_impl.PT_count, m_impl.EE_count, m_impl.PE_count, m_impl.PP_count);
 
     info.energy_count(m_impl.PT_count + m_impl.EE_count + m_impl.PE_count
                       + m_impl.PP_count);
@@ -79,13 +83,9 @@ void SimplexFrictionalContact::do_compute_energy(GlobalContactManager::EnergyInf
 
 void SimplexFrictionalContact::do_report_gradient_hessian_extent(GlobalContactManager::GradientHessianExtentInfo& info)
 {
-    auto& filter        = m_impl.simplex_trajectory_filter;
-    bool  gradient_only = info.gradient_only();
+    bool gradient_only = info.gradient_only();
 
-    m_impl.PT_count = filter->friction_PTs().size();
-    m_impl.EE_count = filter->friction_EEs().size();
-    m_impl.PE_count = filter->friction_PEs().size();
-    m_impl.PP_count = filter->friction_PPs().size();
+    friction_pair_counts(m_impl.PT_count, m_impl.EE_count, m_impl.PE_count, m_impl.PP_count);
 
     auto count_4 = (m_impl.PT_count + m_impl.EE_count);
     auto count_3 = m_impl.PE_count;

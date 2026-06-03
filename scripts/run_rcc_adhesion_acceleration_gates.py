@@ -721,6 +721,22 @@ def main() -> int:
             "info.VTs(active_VTs)",
             "filter emits the additive active_VTs list (Step 1)",
         )
+    # Step 2/3: per-VT-primitive beta + unified VT assembly.
+    expect_contains(
+        "src/backends/cuda/contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h",
+        "VT_normal_adhesion_energy",
+        "VT-primitive adhesion wrapper (flagged feature distance) exists (Step 2/3)",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/contact_models/ipc_simplex_rcc_adhesive_contact.cu",
+        "friction_VTs()",
+        "RCC beta + assembly run over the per-VT-primitive list (Step 2/3)",
+    )
+    expect_contains(
+        "src/backends/cuda/contact_system/simplex_frictional_contact.cu",
+        "friction_pair_counts",
+        "reporter routes all VT primitives to the PT output slot (Step 3)",
+    )
 
     print("RCC adhesion acceleration source/doc gate passed.")
     print("Checked playbook skeleton, nav links, all-gates entry, and current source anchors.")

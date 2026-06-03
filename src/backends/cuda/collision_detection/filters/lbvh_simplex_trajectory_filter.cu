@@ -759,7 +759,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
 
                     // Additive VT primitive: full topo + closest-feature flag,
                     // for every active VT candidate regardless of reduction.
-                    temp_VTs(i) = ActiveVT{vIs, dim};
+                    temp_VTs(i) = ActiveVT{vIs, flag};
 
                     switch(dim)
                     {

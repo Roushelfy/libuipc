@@ -945,5 +945,276 @@ namespace sym::codim_ipc_rcc_adhesive
         Float coeff = (dt * dt) * (Ct / d_hat) * beta * beta;
         G           = J.transpose() * (coeff * u);
     }
+    // =====================================================================
+    // VT-primitive wrappers (Phase 6 Step 2/3): a single per-VT-primitive
+    // entry point that switches on the lagged closest-feature `flag` (the
+    // Vector4i from point_triangle_distance_flag) and produces full 12-DOF
+    // (4-vertex) gradient/Hessian blocks against the (P,T0,T1,T2) stencil.
+    //
+    //  - Normal: uses the FLAGGED point_triangle_distance2 dispatch, which
+    //    routes PT->plane, PE->point-edge, PP->point-point and already
+    //    scatters the reduced feature derivative into the 12-DOF block with
+    //    zero-padding for the inactive vertex (same machinery the IPC barrier
+    //    uses). So one path covers all three closest-feature cases.
+    //  - Tangential: there is no flagged friction basis, so we switch on the
+    //    degenerate dim, call the reduced PT/PE/PP tangential helper, and
+    //    scatter its (Vector12/9/6) result into the 12-DOF block via the
+    //    degenerate offsets.
+    //
+    // Coeff/d_hat are aggregated over the full VT primitive by the caller
+    // (PT_rcc_coeff / PT_d_hat / PT_contact_coeff) so evolution and assembly
+    // stay consistent regardless of which sub-feature is closest.
+    // =====================================================================
+
+    inline __device__ Float VT_normal_adhesion_energy(Float           Cn,
+                                                      Float           beta,
+                                                      Float           d_hat,
+                                                      Float           dt,
+                                                      const Vector4i& flag,
+                                                      const Vector3&  P,
+                                                      const Vector3&  T0,
+                                                      const Vector3&  T1,
+                                                      const Vector3&  T2)
+    {
+        using namespace distance;
+        Float D;
+        point_triangle_distance2(flag, P, T0, T1, T2, D);  // true closest-feature distance
+        return (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta * D;
+    }
+
+    inline __device__ void
+    VT_normal_adhesion_gradient_hessian(Vector12&       G,
+                                        Matrix12x12&    H,
+                                        Float           Cn,
+                                        Float           beta,
+                                        Float           d_hat,
+                                        Float           dt,
+                                        const Vector4i& flag,
+                                        const Vector3&  P,
+                                        const Vector3&  T0,
+                                        const Vector3&  T1,
+                                        const Vector3&  T2)
+    {
+        using namespace distance;
+        Vector12 GradD;
+        point_triangle_distance2_gradient(flag, P, T0, T1, T2, GradD);
+        Matrix12x12 HessD;
+        point_triangle_distance2_hessian(flag, P, T0, T1, T2, HessD);
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
+        H           = coeff * HessD;  // caller SPD-projects the normal block
+    }
+
+    inline __device__ void VT_normal_adhesion_gradient(Vector12&       G,
+                                                       Float           Cn,
+                                                       Float           beta,
+                                                       Float           d_hat,
+                                                       Float           dt,
+                                                       const Vector4i& flag,
+                                                       const Vector3&  P,
+                                                       const Vector3&  T0,
+                                                       const Vector3&  T1,
+                                                       const Vector3&  T2)
+    {
+        using namespace distance;
+        Vector12 GradD;
+        point_triangle_distance2_gradient(flag, P, T0, T1, T2, GradD);
+        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        G           = coeff * GradD;
+    }
+
+    // Lagged tangential relative-displacement magnitude squared for the VT
+    // primitive (feature-classified). Used by the beta-evolution law.
+    inline __device__ Float VT_tangential_rel_dx_sq(const Vector4i& flag,
+                                                    const Vector3&  pP,
+                                                    const Vector3&  pT0,
+                                                    const Vector3&  pT1,
+                                                    const Vector3&  pT2,
+                                                    const Vector3&  P,
+                                                    const Vector3&  T0,
+                                                    const Vector3&  T1,
+                                                    const Vector3&  T2)
+    {
+        using namespace distance;
+        using namespace friction;
+        Vector4i offsets;
+        IndexT   dim = degenerate_point_triangle(flag, offsets);
+        Vector3  prev[4] = {pP, pT0, pT1, pT2};
+        Vector3  cur[4]  = {P, T0, T1, T2};
+        Vector2  u;
+        if(dim == 4)
+        {
+            Vector2             bary;
+            Matrix<Float, 3, 2> basis;
+            point_triangle_closest_point(pP, pT0, pT1, pT2, bary);
+            point_triangle_tangent_basis(pP, pT0, pT1, pT2, basis);
+            Vector3 dP = P - pP, dT0 = T0 - pT0, dT1 = T1 - pT1, dT2 = T2 - pT2;
+            point_triangle_tan_rel_dx(dP, dT0, dT1, dT2, basis, bary, u);
+        }
+        else if(dim == 3)
+        {
+            IndexT              a = offsets(0), b = offsets(1), c = offsets(2);
+            Float               eta;
+            Matrix<Float, 3, 2> basis;
+            point_edge_closest_point(prev[a], prev[b], prev[c], eta);
+            point_edge_tangent_basis(prev[a], prev[b], prev[c], basis);
+            Vector3 dPa = cur[a] - prev[a], dPb = cur[b] - prev[b], dPc = cur[c] - prev[c];
+            point_edge_tan_rel_dx(dPa, dPb, dPc, basis, eta, u);
+        }
+        else  // dim == 2
+        {
+            IndexT              a = offsets(0), b = offsets(1);
+            Matrix<Float, 3, 2> basis;
+            point_point_tangent_basis(prev[a], prev[b], basis);
+            Vector3 dPa = cur[a] - prev[a], dPb = cur[b] - prev[b];
+            point_point_tan_rel_dx(dPa, dPb, basis, u);
+        }
+        return u.squaredNorm();
+    }
+
+    inline __device__ Float VT_tangential_adhesion_energy(Float           Ct,
+                                                          Float           beta,
+                                                          Float           d_hat,
+                                                          Float           dt,
+                                                          const Vector4i& flag,
+                                                          const Vector3&  pP,
+                                                          const Vector3&  pT0,
+                                                          const Vector3&  pT1,
+                                                          const Vector3&  pT2,
+                                                          const Vector3&  P,
+                                                          const Vector3&  T0,
+                                                          const Vector3&  T1,
+                                                          const Vector3&  T2)
+    {
+        using namespace distance;
+        Vector4i offsets;
+        IndexT   dim     = degenerate_point_triangle(flag, offsets);
+        Vector3  prev[4] = {pP, pT0, pT1, pT2};
+        Vector3  cur[4]  = {P, T0, T1, T2};
+        if(dim == 4)
+            return PT_tangential_adhesion_energy(Ct, beta, d_hat, dt, pP, pT0, pT1, pT2, P, T0, T1, T2);
+        if(dim == 3)
+        {
+            IndexT a = offsets(0), b = offsets(1), c = offsets(2);
+            return PE_tangential_adhesion_energy(Ct, beta, d_hat, dt,
+                                                 prev[a], prev[b], prev[c],
+                                                 cur[a], cur[b], cur[c]);
+        }
+        IndexT a = offsets(0), b = offsets(1);
+        return PP_tangential_adhesion_energy(Ct, beta, d_hat, dt, prev[a], prev[b], cur[a], cur[b]);
+    }
+
+    inline __device__ void
+    VT_tangential_adhesion_gradient_hessian(Vector12&       G,
+                                            Matrix12x12&    H,
+                                            Float           Ct,
+                                            Float           beta,
+                                            Float           d_hat,
+                                            Float           dt,
+                                            const Vector4i& flag,
+                                            const Vector3&  pP,
+                                            const Vector3&  pT0,
+                                            const Vector3&  pT1,
+                                            const Vector3&  pT2,
+                                            const Vector3&  P,
+                                            const Vector3&  T0,
+                                            const Vector3&  T1,
+                                            const Vector3&  T2)
+    {
+        using namespace distance;
+        G = Vector12::Zero();
+        H = Matrix12x12::Zero();
+        Vector4i offsets;
+        IndexT   dim     = degenerate_point_triangle(flag, offsets);
+        Vector3  prev[4] = {pP, pT0, pT1, pT2};
+        Vector3  cur[4]  = {P, T0, T1, T2};
+        if(dim == 4)
+        {
+            PT_tangential_adhesion_gradient_hessian(G, H, Ct, beta, d_hat, dt,
+                                                    pP, pT0, pT1, pT2, P, T0, T1, T2);
+        }
+        else if(dim == 3)
+        {
+            Vector9   g9;
+            Matrix9x9 h9;
+            IndexT    idx[3] = {offsets(0), offsets(1), offsets(2)};
+            PE_tangential_adhesion_gradient_hessian(g9, h9, Ct, beta, d_hat, dt,
+                                                    prev[idx[0]], prev[idx[1]], prev[idx[2]],
+                                                    cur[idx[0]], cur[idx[1]], cur[idx[2]]);
+            for(int r = 0; r < 3; ++r)
+            {
+                G.template segment<3>(3 * idx[r]) = g9.template segment<3>(3 * r);
+                for(int s = 0; s < 3; ++s)
+                    H.template block<3, 3>(3 * idx[r], 3 * idx[s]) =
+                        h9.template block<3, 3>(3 * r, 3 * s);
+            }
+        }
+        else  // dim == 2
+        {
+            Vector6   g6;
+            Matrix6x6 h6;
+            IndexT    idx[2] = {offsets(0), offsets(1)};
+            PP_tangential_adhesion_gradient_hessian(g6, h6, Ct, beta, d_hat, dt,
+                                                    prev[idx[0]], prev[idx[1]],
+                                                    cur[idx[0]], cur[idx[1]]);
+            for(int r = 0; r < 2; ++r)
+            {
+                G.template segment<3>(3 * idx[r]) = g6.template segment<3>(3 * r);
+                for(int s = 0; s < 2; ++s)
+                    H.template block<3, 3>(3 * idx[r], 3 * idx[s]) =
+                        h6.template block<3, 3>(3 * r, 3 * s);
+            }
+        }
+    }
+
+    inline __device__ void
+    VT_tangential_adhesion_gradient(Vector12&       G,
+                                    Float           Ct,
+                                    Float           beta,
+                                    Float           d_hat,
+                                    Float           dt,
+                                    const Vector4i& flag,
+                                    const Vector3&  pP,
+                                    const Vector3&  pT0,
+                                    const Vector3&  pT1,
+                                    const Vector3&  pT2,
+                                    const Vector3&  P,
+                                    const Vector3&  T0,
+                                    const Vector3&  T1,
+                                    const Vector3&  T2)
+    {
+        using namespace distance;
+        G = Vector12::Zero();
+        Vector4i offsets;
+        IndexT   dim     = degenerate_point_triangle(flag, offsets);
+        Vector3  prev[4] = {pP, pT0, pT1, pT2};
+        Vector3  cur[4]  = {P, T0, T1, T2};
+        if(dim == 4)
+        {
+            PT_tangential_adhesion_gradient(G, Ct, beta, d_hat, dt,
+                                            pP, pT0, pT1, pT2, P, T0, T1, T2);
+        }
+        else if(dim == 3)
+        {
+            Vector9 g9;
+            IndexT  idx[3] = {offsets(0), offsets(1), offsets(2)};
+            PE_tangential_adhesion_gradient(g9, Ct, beta, d_hat, dt,
+                                            prev[idx[0]], prev[idx[1]], prev[idx[2]],
+                                            cur[idx[0]], cur[idx[1]], cur[idx[2]]);
+            for(int r = 0; r < 3; ++r)
+                G.template segment<3>(3 * idx[r]) = g9.template segment<3>(3 * r);
+        }
+        else  // dim == 2
+        {
+            Vector6 g6;
+            IndexT  idx[2] = {offsets(0), offsets(1)};
+            PP_tangential_adhesion_gradient(g6, Ct, beta, d_hat, dt,
+                                            prev[idx[0]], prev[idx[1]],
+                                            cur[idx[0]], cur[idx[1]]);
+            for(int r = 0; r < 2; ++r)
+                G.template segment<3>(3 * idx[r]) = g6.template segment<3>(3 * r);
+        }
+    }
+
 }  // namespace sym::codim_ipc_rcc_adhesive
 }  // namespace uipc::backend::cuda
