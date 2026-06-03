@@ -946,7 +946,13 @@ void RCCBondedPTSystem::do_build()
         kappa_attr ? kappa_attr->view()[0] : 1e8,
         dt_attr ? dt_attr->view()[0] : 0.01);
     auto skip_ccd_attr = config.find<IndexT>("rcc_bonded_pt_skip_ccd");
-    m_impl.set_skip_ccd(skip_ccd_attr && skip_ccd_attr->view()[0] != 0);
+    // skip_ccd: <0 (default) = auto -> skip the CCD thickness check for locked
+    // pairs whenever bonded is enabled (a locked pair is owned by the ABD
+    // virtual tet; the CCD check on it is redundant and aborts on over-
+    // compression). 0/1 = explicit override. Only takes effect when enabled()
+    // (the filter feed/bind paths are enabled-gated).
+    const IndexT skip_v = skip_ccd_attr ? skip_ccd_attr->view()[0] : IndexT{-1};
+    m_impl.set_skip_ccd(skip_v < 0 ? true : (skip_v != 0));
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
 
     on_init_scene(

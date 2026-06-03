@@ -371,8 +371,7 @@ def _hub_axis_to_z() -> Matrix4x4:
 def build_demo(adhesion_on: bool = True,
                bonded: bool = False,
                beta_lock_threshold: float = 0.9,
-               kappa: float = 1.0e8,
-               skip_ccd: bool = False):
+               kappa: float = 1.0e8):
     # Default Warn; bump to e.g. info/debug via `--set LOG_LEVEL=info`.
     L.apply_log_level(_CFG, default="warn")
 
@@ -392,7 +391,8 @@ def build_demo(adhesion_on: bool = True,
         # RCC bonded-PT acceleration: stable high-beta face-interior tape
         # contacts are replaced by a stiff ABD virtual tet (point-plane).
         config["rcc_bonded_pt_enabled"] = 1
-        config["rcc_bonded_pt_skip_ccd"] = 1 if skip_ccd else 0
+        # skip_ccd is auto-on for locked pairs in the backend (config default
+        # rcc_bonded_pt_skip_ccd=-1 -> skip when bonded); no need to set it here.
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = kappa

@@ -52,7 +52,10 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("rcc_bonded_pt_release_gap", Float{1e30});
     config.create("rcc_bonded_pt_release_slip", Float{1e30});
     config.create("rcc_bonded_pt_release_force", Float{1e30});
-    config.create("rcc_bonded_pt_skip_ccd", IndexT{0});
+    // -1 = auto: skip the CCD thickness check for locked pairs whenever bonded
+    // is enabled (a locked pair is owned by the ABD virtual tet, so that check
+    // is redundant and aborts on over-compression). 0/1 = explicit override.
+    config.create("rcc_bonded_pt_skip_ccd", IndexT{-1});
 
     // default:
     //  - ipc
