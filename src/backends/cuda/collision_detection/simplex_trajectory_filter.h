@@ -181,6 +181,11 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         muda::CBufferView<U64>       rcc_bonded_pt_locked_keys;
         muda::DeviceBuffer<Vector4i> rcc_bonded_pt_unlocked_PT;
         muda::DeviceVar<IndexT>      rcc_bonded_pt_unlocked_PT_count;
+        // Same locked-key removal applied to the per-VT-primitive adhesion
+        // view, so a bonded VT is not also adhered (no double-count with the
+        // bonded virtual tet). Mirrors rcc_bonded_pt_unlocked_PT.
+        muda::DeviceBuffer<ActiveVT> rcc_bonded_pt_unlocked_VT;
+        muda::DeviceVar<IndexT>      rcc_bonded_pt_unlocked_VT_count;
         SizeT                        rcc_bonded_pt_filter_skipped = 0;
         SizeT                        rcc_bonded_pt_filter_gen = 0;
         // When true, locked PTs are skipped before PT CCD broadphase emission.

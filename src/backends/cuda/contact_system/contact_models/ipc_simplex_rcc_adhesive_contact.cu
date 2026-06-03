@@ -64,12 +64,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // is active this step. Name kept as `m_beta_PT` for persistence/anchor
     // continuity; it now spans the full VT list, not just face-interior PT.
     muda::DeviceBuffer<Float> m_beta_PT;
-    // Face-interior (flag==4) β compacted from m_beta_PT, aligned with
-    // friction_PTs(), fed to the bonded producer so bonding stays PT-only
-    // (Step 5 will let the producer consume edge/corner VTs too).
-    muda::DeviceBuffer<Float>  m_beta_PT_face;
-    muda::DeviceVar<IndexT>    m_beta_PT_face_count;
-    muda::DeviceBuffer<IndexT> m_vt_face_flags;
+    // Step 5: Vector4i topologies extracted from friction_VTs(), fed to the
+    // bonded producer together with m_beta_PT so the lock decision is made on
+    // the full VT primitive (corner/edge contacts can bond, not just
+    // face-interior PT). The bonded ABD virtual tet stays point-plane; the
+    // producer's rest-shape conditioning + det_dm_min accept well-conditioned
+    // pairs and reject degenerate ones.
+    muda::DeviceBuffer<Vector4i> m_vt_topos;
 
     // ---- v2 state ----
     // β + sorted keys snapshotted at end of last step (Phase A output;
@@ -1146,44 +1147,32 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                 m_gcm_for_phase_a->subscene_mask_tabular();
             release_context.adhesive_tabular = m_adhesive_tabular;
 
-            // Bonding stays PT-only for this milestone: compact the
-            // face-interior (degenerate dim==4) per-VT beta into an array
-            // aligned with friction_PTs(). The flag==4 VTs are 1:1, in order,
-            // with friction_PTs (both are dim==4 selections of the same
-            // candidate set), so the compacted beta lines up with the PT list.
-            // Edge/corner VTs are excluded from locking until the producer
-            // learns to consume them (Step 5).
+            // Step 5: bond on the full VT primitive. Extract the Vector4i
+            // topologies from friction_VTs (aligned 1:1 with m_beta_PT) and
+            // hand them to the producer with the per-VT beta. The producer
+            // matches existing locks by key (PT_pair_key(topo), identical for
+            // any VT), adds high-beta candidates, conditions/rejects rest
+            // shapes (edge/corner pairs are near-coplanar -> offset along the
+            // normal by min_separate_distance, or rejected by det_dm_min). The
+            // bonded ABD tet remains point-plane over F = Ds Dm_inv. Locked VTs
+            // are removed from friction_VTs by the filter's locked-key compact,
+            // so no pair is both adhered and bonded.
             auto   vt_pairs = m_stf_for_phase_a->friction_VTs();
-            auto   pt_pairs = m_stf_for_phase_a->friction_PTs();
             IndexT vt_n     = (IndexT)vt_pairs.size();
-            m_vt_face_flags.resize(vt_n);
-            m_beta_PT_face.resize(vt_n);
-            IndexT face_n = 0;
+            m_vt_topos.resize(vt_n);
             if(vt_n > 0)
             {
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
                     .apply(vt_n,
                            [VTs   = vt_pairs.viewer().name("VTs"),
-                            flags = m_vt_face_flags.view().viewer().name("face_flags")] __device__(int i) mutable
-                           {
-                               Vector4i off;
-                               IndexT   dim =
-                                   distance::degenerate_point_triangle(VTs(i).flag, off);
-                               flags(i) = (dim == 4) ? IndexT{1} : IndexT{0};
-                           });
-                DeviceSelect().Flagged(m_beta_PT.view().data(),
-                                       m_vt_face_flags.view().data(),
-                                       m_beta_PT_face.view().data(),
-                                       m_beta_PT_face_count.data(),
-                                       vt_n);
-                face_n = (IndexT)m_beta_PT_face_count;
+                            topos = m_vt_topos.view().viewer().name("vt_topos")] __device__(int i) mutable
+                           { topos(i) = VTs(i).topo; });
             }
-            m_beta_PT_face.resize(face_n);
 
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
-                pt_pairs,
-                m_beta_PT_face.view(),
+                m_vt_topos.view(),
+                m_beta_PT.view(),
                 positions,
                 m_bonded_pt_beta_lock_threshold,
                 release_context);

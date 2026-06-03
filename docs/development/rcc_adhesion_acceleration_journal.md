@@ -1146,3 +1146,28 @@ Step 2/3 confirmed end to end in real scenes: corner/edge adhesion active, no di
 
 - `cmake --build build/cuda_mixed_fused_pcg --target pyuipc`; `cp .../bin/libuipc_backend_cuda.so libuipc_core.so python/.venv/.../uipc/_native/`.
 - `python/.venv/bin/python` headless probes over `rcc_adhesive_subdivided_cube_lift_release_demo` and `rcc_adhesive_oriented_cloth_demo` (`dump_pt_state`, `locked_pair_count`, cube height/gap stats, cloth XZ drift).
+
+## 2026-06-02 Step 5 Bonded Lock On The VT Primitive
+
+### Context
+
+Final Phase 6 step: let the bonded producer lock on the full VT primitive (corner/edge contacts bond, not only face-interior PT). The ABD virtual-tet energy stays point-plane.
+
+### Implemented
+
+- RCC `_evolve_beta_step_at_end`: feed the producer the full `friction_VTs` topologies (extracted into `m_vt_topos`, aligned 1:1 with the per-VT `m_beta_PT`) instead of the `flag==4`-compacted face subset. The producer matches existing locks by key (`PT_pair_key(topo)`, identical for any VT), adds high-beta candidates, and conditions/rejects rest shapes (`build_rest_shape` offsets a near-coplanar corner point along the normal by `min_separate_distance`, or rejects via `det_dm_min`). Removed the `m_beta_PT_face`/`m_vt_face_flags`/`m_beta_PT_face_count` plumbing.
+- Filter `filter_rcc_bonded_pt_locked_active_pairs`: now also compacts locked VTs out of the active `VTs` view (new `rcc_bonded_pt_unlocked_VT` + count, predicate `!rcc_bonded_pt_is_locked(keys, v.topo)`), restructured so the VT compact runs whenever locked keys exist (not gated on `PTs.size()`). This removes a latent double-count: a bonded VT was still in `friction_VTs` (left additive in Step 1) and would have been both adhered and bonded; now a locked pair leaves `friction_VTs` exactly as a locked PT leaves `friction_PTs`.
+
+### Observed Result / Validation
+
+- All gates green: backend `[rcc_bonded_pt]` 247/14, `[rcc_adhesion][oracle]` 12/4, bunny 4/1, legacy `[rcc_adhesion][gate]` 836/2, and the key bonded no-penetration scene `[rcc_bonded_pt][scene][pt_lift_release]` 596/1 (corner/edge bonding allowed, still penetration-free). Source/doc gate green.
+- Headless probe (faceted subdivided cube, adhesion+bonded on, skip_ccd off): **96 bonded locks** (was 8 face-only in Step 2/3) — the full VT primitive set (incl. edge/corner) now bonds; lower cube carried through the lift (botY +0.170 -> +0.427, contact gap held ~0.019, uniform); adhesion-off separates (gap -> +0.275). No NaN.
+
+### Decision
+
+Step 5 complete. Bonding now decides on the VT primitive; the ABD tet stays point-plane; no double-count (locked VTs leave adhesion). Phase 6 functional milestone (Steps 0-5) done. Remaining are optional perf items (Step 3-area weight, Step 4 distance single-compute) and EE adhesion.
+
+### Commands
+
+- `cmake --build build/cuda_mixed_fused_pcg --target backend_cuda uipc_test_sim_case`; cp `libuipc_backend_cuda.so` -> venv.
+- `uipc_test_backend_cuda "[rcc_bonded_pt]"/"[rcc_adhesion][oracle]"/"gpu_sanity_check -c bunny"`; `uipc_test_sim_case "[rcc_bonded_pt][scene][pt_lift_release]"/"[rcc_adhesion][gate]"`; headless cube probe; `run_rcc_adhesion_acceleration_gates.py`.

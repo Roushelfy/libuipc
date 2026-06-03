@@ -117,26 +117,47 @@ void SimplexTrajectoryFilter::Impl::filter_rcc_bonded_pt_locked_active_pairs()
     rcc_bonded_pt_filter_skipped = 0;
     ++rcc_bonded_pt_filter_gen;
 
-    const SizeT original_count = PTs.size();
-    if(original_count == 0 || rcc_bonded_pt_locked_keys.size() == 0)
+    if(rcc_bonded_pt_locked_keys.size() == 0)
         return;
 
     using namespace muda;
-    rcc_bonded_pt_unlocked_PT.resize(original_count);
     auto locked_keys = rcc_bonded_pt_locked_keys;
 
-    DeviceSelect().If(PTs.data(),
-                      rcc_bonded_pt_unlocked_PT.data(),
-                      rcc_bonded_pt_unlocked_PT_count.data(),
-                      original_count,
-                      [locked_keys] CUB_RUNTIME_FUNCTION(const Vector4i& PT)
-                      { return !rcc_bonded_pt_is_locked(locked_keys, PT); });
+    // Remove locked PTs from the active barrier/contact PT view.
+    const SizeT original_count = PTs.size();
+    if(original_count > 0)
+    {
+        rcc_bonded_pt_unlocked_PT.resize(original_count);
+        DeviceSelect().If(PTs.data(),
+                          rcc_bonded_pt_unlocked_PT.data(),
+                          rcc_bonded_pt_unlocked_PT_count.data(),
+                          original_count,
+                          [locked_keys] CUB_RUNTIME_FUNCTION(const Vector4i& PT)
+                          { return !rcc_bonded_pt_is_locked(locked_keys, PT); });
+        const IndexT kept_count = rcc_bonded_pt_unlocked_PT_count;
+        rcc_bonded_pt_unlocked_PT.resize(kept_count);
+        PTs = rcc_bonded_pt_unlocked_PT.view();
+        rcc_bonded_pt_filter_skipped =
+            original_count - static_cast<SizeT>(kept_count);
+    }
 
-    const IndexT kept_count = rcc_bonded_pt_unlocked_PT_count;
-    rcc_bonded_pt_unlocked_PT.resize(kept_count);
-    PTs = rcc_bonded_pt_unlocked_PT.view();
-    rcc_bonded_pt_filter_skipped =
-        original_count - static_cast<SizeT>(kept_count);
+    // Remove locked VTs from the per-VT-primitive adhesion view: a bonded pair
+    // is replaced by the bonded virtual tet, so it must not also be adhered
+    // (Step 5; the bond key is PT_pair_key(topo), identical for any VT).
+    const SizeT original_vt = VTs.size();
+    if(original_vt > 0)
+    {
+        rcc_bonded_pt_unlocked_VT.resize(original_vt);
+        DeviceSelect().If(VTs.data(),
+                          rcc_bonded_pt_unlocked_VT.data(),
+                          rcc_bonded_pt_unlocked_VT_count.data(),
+                          original_vt,
+                          [locked_keys] CUB_RUNTIME_FUNCTION(const ActiveVT& v)
+                          { return !rcc_bonded_pt_is_locked(locked_keys, v.topo); });
+        const IndexT kept_vt = rcc_bonded_pt_unlocked_VT_count;
+        rcc_bonded_pt_unlocked_VT.resize(kept_vt);
+        VTs = rcc_bonded_pt_unlocked_VT.view();
+    }
 }
 
 void SimplexTrajectoryFilter::Impl::set_rcc_bonded_pt_locked_keys(
