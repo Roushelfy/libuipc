@@ -135,10 +135,14 @@ SPC_STRENGTH      = float(_CFG.get("SPC_STRENGTH", 1000))
 # Free tail strategy: every vertex whose arc-length from the anchor is
 # more than (L_wound + BUFFER_LENGTH) is pinned along the tangent line
 # from the wrap-off point. The unpinned BUFFER_LENGTH worth of tape
-# right at the wrap-off region is where bending onto the hub actually
-# happens. Smaller buffer → sharper bend (stress concentration);
-# larger buffer → tape doesn't actually contact the hub in time.
-BUFFER_LENGTH     = float(_CFG.get("BUFFER_LENGTH", 0.04))
+# right at the wrap-off region is the free lead-in that bends onto the
+# hub. Default 0.005 m — a very short free lead-in (≈1/26 turn for this
+# hub) that keeps the about-to-wind section short and the wrap tight
+# against the hub, removing the loose/wrinkled dangling lead-in that a
+# long buffer (the old 0.04 ≈ 0.3 turn) produced. Verified stable on the
+# 2-turn e5e7 preset; for many-turn / different-hub winds a slightly
+# larger value may be safer — tune with `--set BUFFER_LENGTH=…`.
+BUFFER_LENGTH     = float(_CFG.get("BUFFER_LENGTH", 0.005))
 # Anchor strip: the first ANCHOR_ROWS mesh rows (at i=0..ANCHOR_ROWS-1)
 # are locked at their rest pose for the ENTIRE simulation — mimics a
 # tape with a permanent glue-tab. Specified in *cell count* rather than

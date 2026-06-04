@@ -1362,14 +1362,14 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    9.0e-5,
         "D_HAT_RATIO":       2.0,
         "LAYER_THICKNESS":   2.5e-4,
-        "BUFFER_LENGTH":     0.04,
+        "BUFFER_LENGTH":     0.005,
         "ADH_CN":            1.0,
         "ADH_CT":            1.0,
         "ADH_W":             1.0,
-        "RCC_BETA_LOCK_THRESHOLD": 0.1,  # bond locks a face-interior VT when its per-VT beta >= this
-        "RCC_RELEASE_FORCE": 3.0e-6,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
+        "RCC_BETA_LOCK_THRESHOLD": 0.9,  # bond locks a face-interior VT when its per-VT beta >= this
+        "RCC_RELEASE_FORCE": 3.0e-7,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  20.0,
+        "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  0.0,
         "SPC_STRENGTH":      10000.0,
         "SETTLE1_FRAMES":    100,
@@ -1392,14 +1392,14 @@ WIND_PRESETS = {
         "TAPE_THICKNESS":    9.0e-5,
         "D_HAT_RATIO":       2.0,
         "LAYER_THICKNESS":   2.5e-4,
-        "BUFFER_LENGTH":     0.04,
+        "BUFFER_LENGTH":     0.005,
         "ADH_CN":            5.0,
         "ADH_CT":            5.0,
         "ADH_W":             1.0,
         "RCC_BETA_LOCK_THRESHOLD": 0.9,  # bond locks a face-interior VT when its per-VT beta >= this
-        "RCC_RELEASE_FORCE": 3.0e-6,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
+        "RCC_RELEASE_FORCE": 3.0e-7,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  20.0,
+        "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  0.0,
         "SPC_STRENGTH":      10000.0,
         "SETTLE1_FRAMES":    100,
