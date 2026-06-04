@@ -127,7 +127,9 @@ HALF_LIFT          = L.cfg_flag(_CFG, "HALF_LIFT", default=False)
 LIFT_FRACTION      = 0.5 if HALF_LIFT else 1.0
 
 HOLD_FRAMES        = 30
-PULL_FRAMES        = 600
+# Frames over which the free end is lifted to LIFT_HEIGHT. Override with
+# `--set PULL_FRAMES=300` for a faster pull.
+PULL_FRAMES        = int(_CFG.get("PULL_FRAMES", 600))
 # Hold at top long enough to see whether the lifted roll stays
 # bonded or starts peeling — 6 s @ dt=0.01 (halved with HALF_LIFT).
 TOP_FRAMES         = 300 if HALF_LIFT else 600
