@@ -281,8 +281,21 @@ def _save_asset_impl(sim, state):
                   f"mean={betas.mean():.3f}, "
                   f"frac>0.9={(betas > 0.9).mean():.2%}" if len(betas)
                   else "  β snapshot: 0 pairs (no PT contacts saved)")
+    # Snapshot the bonded-PT lock state (topology + β per lock) so a downstream
+    # load can re-lock the bonds directly (seed_locks) instead of re-forming
+    # them over the first step. Only present when bonded was enabled.
+    locked_pairs = None
+    if state.get("bonded"):
+        bpt = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+        if bpt is not None:
+            topos, lbetas = bpt.dump_locked_pairs()
+            if len(lbetas) > 0:
+                locked_pairs = (topos, lbetas)
+                print(f"  bonded-lock snapshot: n={len(lbetas)} locks "
+                      f"(mean β={lbetas.mean():.3f})")
     L.save_tape_asset(ASSET_OUT_PATH, hub_T, tape_pos, params,
-                      pair_state=pair_state, tape_velocity=tape_vel)
+                      pair_state=pair_state, tape_velocity=tape_vel,
+                      locked_pairs=locked_pairs)
     if tape_vel is not None:
         vmax = float(np.linalg.norm(tape_vel, axis=1).max())
         vmean = float(np.linalg.norm(tape_vel, axis=1).mean())

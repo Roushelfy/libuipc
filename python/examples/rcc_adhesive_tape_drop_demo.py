@@ -393,8 +393,12 @@ def build_demo(adhesion_on: bool = True,
         # RCC bonded-PT acceleration: stable high-beta face-interior tape
         # contacts are replaced by a stiff ABD virtual tet (point-plane).
         config["rcc_bonded_pt_enabled"] = 1
-        # skip_ccd is auto-on for locked pairs in the backend (config default
-        # rcc_bonded_pt_skip_ccd=-1 -> skip when bonded); no need to set it here.
+        # CCD on locked pairs. Default -1 = auto (skip CCD for locked pairs when
+        # bonded, since the ABD tet owns them). `--set SKIP_CCD=0` keeps CCD on
+        # for locked pairs (the last non-penetration guard; may hit the D=0
+        # thickness assert on over-compressed wound layers). `--set SKIP_CCD=1`
+        # forces skip.
+        config["rcc_bonded_pt_skip_ccd"] = int(_CFG.get("SKIP_CCD", -1))
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         # Default: ALL VTs may bond (incl. edge/corner) — maximizes the locked
         # fraction but risks skewed sliver tets. `--set LOCK_FACE_INTERIOR_ONLY=1`
@@ -621,6 +625,20 @@ def build_demo(adhesion_on: bool = True,
             if acc is None:
                 print("[drop] WARNING: RCCAdhesionStateAccessorFeature not found "
                       "— β was not restored.")
+
+    # Restore the bonded-PT lock state directly: re-lock the saved bonds against
+    # the loaded geometry BEFORE the first advance, so step 1's trajectory
+    # filter already compacts them out (no re-form transient / no doubling /
+    # no soft-instead-rigid first step). Falls back to the merged-β re-form path
+    # for legacy assets without bonded_locked_topos.
+    if bonded:
+        locked_pairs = L.load_tape_locked_pairs(ASSET_IN_PATH)
+        bpt = world.features().find(RCCBondedPTStateAccessorFeature)
+        if locked_pairs is not None and bpt is not None:
+            topos, lbetas = locked_pairs
+            bpt.seed_locks(topos, lbetas, beta_lock_threshold)
+            print(f"[drop] seeded {len(lbetas)} bonded locks from asset "
+                  f"(threshold={beta_lock_threshold:g}).")
 
     return {
         "engine": engine, "world": world, "scene": scene,

@@ -67,6 +67,46 @@ class RCCBondedPTStateAccessorOverriderImpl final
         return out;
     }
 
+    void do_dump_locked_pairs(uipc::vector<Vector4i>& out_topos,
+                              uipc::vector<Float>&    out_betas) override
+    {
+        m_owner.sync_filter_skipped_count();
+        auto        topos = m_owner.locked_topos();
+        auto        betas = m_owner.locked_beta();
+        const SizeT m     = topos.size();
+        out_topos.resize(m);
+        out_betas.resize(m);
+        if(m > 0)
+        {
+            topos.copy_to(out_topos.data());
+            betas.copy_to(out_betas.data());
+        }
+    }
+
+    void do_seed_locks(span<const Vector4i> topos,
+                       span<const Float>    betas,
+                       Float                beta_lock_threshold) override
+    {
+        const SizeT n = topos.size();
+        if(n == 0)
+            return;
+        // Upload the saved (topo, beta) to device and re-lock against the
+        // current (loaded) geometry. lock_from_rcc_pt_snapshot rebuilds each
+        // rest shape from m_gvm.positions(), derives keys from the topos, and
+        // feeds the locked keys to the trajectory filter — so the first step's
+        // filter already compacts these out of friction_VTs (no re-form
+        // transient). The no-release-context overload is used: a freshly seeded
+        // (empty) bridge has no carried locks for the release policy to act on.
+        muda::DeviceBuffer<Vector4i> d_topos(n);
+        muda::DeviceBuffer<Float>    d_betas(n);
+        d_topos.view().copy_from(topos.data());
+        d_betas.view().copy_from(betas.data());
+        m_owner.lock_from_rcc_pt_snapshot(d_topos.view(),
+                                          d_betas.view(),
+                                          m_gvm.positions(),
+                                          beta_lock_threshold);
+    }
+
   private:
     RCCBondedPTSystem&   m_owner;
     GlobalVertexManager& m_gvm;

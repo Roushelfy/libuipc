@@ -529,6 +529,20 @@ def build_demo(adhesion_on: bool = True,
                 print("[unwind] WARNING: RCCAdhesionStateAccessorFeature not found "
                       "— β was not restored.")
 
+    # Restore the bonded-PT lock state directly: re-lock the saved bonds against
+    # the loaded geometry BEFORE the first advance, so step 1's trajectory
+    # filter already compacts them out (no re-form transient / no doubling /
+    # no soft-instead-rigid first step). Falls back to the merged-β re-form path
+    # for legacy assets without bonded_locked_topos.
+    if bonded:
+        locked_pairs = L.load_tape_locked_pairs(ASSET_IN_PATH)
+        bpt = world.features().find(RCCBondedPTStateAccessorFeature)
+        if locked_pairs is not None and bpt is not None:
+            topos, lbetas = locked_pairs
+            bpt.seed_locks(topos, lbetas, beta_lock_threshold)
+            print(f"[unwind] seeded {len(lbetas)} bonded locks from asset "
+                  f"(threshold={beta_lock_threshold:g}).")
+
     return {
         "engine": engine, "world": world, "scene": scene,
         "scene_io": SceneIO(scene),

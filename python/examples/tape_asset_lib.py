@@ -789,7 +789,8 @@ def save_tape_asset(npz_path: str,
                     tape_positions: np.ndarray,
                     params: dict,
                     pair_state=None,
-                    tape_velocity=None) -> None:
+                    tape_velocity=None,
+                    locked_pairs=None) -> None:
     """Save a wound tape asset.
 
     Stores:
@@ -834,6 +835,20 @@ def save_tape_asset(npz_path: str,
                 f"save_tape_asset: tape_velocity shape {tape_velocity.shape} "
                 f"must match tape_positions shape {tape_positions.shape}")
         payload["tape_velocity"] = tape_velocity
+    if locked_pairs is not None:
+        # Bonded-PT lock state: per-lock topology ([M,4] vertex indices
+        # [p,t0,t1,t2]) + beta, from RCCBondedPTStateAccessorFeature
+        # .dump_locked_pairs(). On reload the unwind/drop demos call
+        # seed_locks(topos, betas, threshold) BEFORE the first advance so the
+        # bonds are restored directly (rest shape recomputed from the loaded
+        # geometry) instead of re-forming over the first step. Optional;
+        # legacy assets without it fall back to the merged-β re-form path.
+        topos, betas = locked_pairs
+        topos = np.asarray(topos, dtype=np.int32)
+        betas = np.asarray(betas, dtype=np.float64)
+        if topos.ndim == 2 and topos.shape[1] == 4 and topos.shape[0] == betas.shape[0]:
+            payload["bonded_locked_topos"] = topos
+            payload["bonded_locked_betas"] = betas
     np.savez(npz_path, **payload)
 
 
@@ -863,6 +878,24 @@ def load_tape_asset(npz_path: str):
             data["params"][0],
             pair_state,
             tape_velocity)
+
+
+def load_tape_locked_pairs(npz_path: str):
+    """Return the saved bonded-PT lock state, or None for legacy assets.
+
+    Returns (topos, betas): topos is (M, 4) int32 vertex indices
+    [p, t0, t1, t2] per lock, betas is (M,) float64. Pass to
+    RCCBondedPTStateAccessorFeature.seed_locks(topos, betas, threshold) after
+    world.init and before the first world.advance to restore the bonds.
+    """
+    data = np.load(npz_path, allow_pickle=True)
+    if "bonded_locked_topos" not in data.files:
+        return None
+    topos = np.asarray(data["bonded_locked_topos"], dtype=np.int32)
+    betas = np.asarray(data["bonded_locked_betas"], dtype=np.float64)
+    if topos.size == 0:
+        return None
+    return (topos, betas)
 
 
 def peek_asset_params(npz_path: str) -> dict:
@@ -1357,6 +1390,39 @@ WIND_PRESETS = {
         "N_TURNS":           2,
         "TAPE_NZ":           10,
         "TAPE_YOUNGS":       5.0e7,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       2.0,
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.005,
+        "ADH_CN":            1.0,
+        "ADH_CT":            1.0,
+        "ADH_W":             1.0,
+        "RCC_BETA_LOCK_THRESHOLD": 0.9,  # bond locks a face-interior VT when its per-VT beta >= this
+        "RCC_RELEASE_FORCE": 3.0e-7,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  1.0,
+        "ADH_INITIAL_BETA":  0.0,
+        "SPC_STRENGTH":      10000.0,
+        "SETTLE1_FRAMES":    100,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    500,
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
+    },
+        "temflex175-2turn-e5e8-dhat2-cnct1": {
+        # Soft 2-turn wind/drop preset:
+        #   E = 5e7 Pa, d_hat = 2 * TAPE_THICKNESS, ABD tol = 0.02/s,
+        #   nodal displacement tol = 0.02 * 19mm tape width.
+        # Adhesion matches temflex175 wind except Cn and Ct are both 1.
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       5.0e8,
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,

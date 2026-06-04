@@ -263,6 +263,68 @@ duplicate_suppressed_count.)");
         R"(World-space positions of each locked virtual tet's four vertices as
 an [M, 4, 3] float64 numpy array, ordered [point, tri0, tri1, tri2] per lock.)");
 
+    class_RCCBondedPTStateAccessorFeature.def(
+        "dump_locked_pairs",
+        [](const RCCBondedPTStateAccessorFeature& self)
+        {
+            uipc::vector<uipc::Vector4i> topos;
+            uipc::vector<uipc::Float>    betas;
+            self.dump_locked_pairs(topos, betas);
+            const py::ssize_t m = static_cast<py::ssize_t>(topos.size());
+            py::array_t<int32_t> py_topos({m, py::ssize_t(4)});
+            py::array_t<double>  py_betas(m);
+            if(m > 0)
+            {
+                std::memcpy(py_topos.mutable_data(),
+                            topos.data(),
+                            topos.size() * sizeof(uipc::Vector4i));
+                std::memcpy(py_betas.mutable_data(),
+                            betas.data(),
+                            betas.size() * sizeof(double));
+            }
+            return py::make_tuple(py_topos, py_betas);
+        },
+        R"(Per-lock topology + beta for persisting the bonded lock state.
+
+Returns:
+    (topos, betas): topos is [M, 4] int32 ([point, tri0, tri1, tri2] vertex
+    indices per lock); betas is [M] float64. Pair with seed_locks() on reload.)");
+
+    class_RCCBondedPTStateAccessorFeature.def(
+        "seed_locks",
+        [](const RCCBondedPTStateAccessorFeature& self,
+           py::array_t<int32_t, py::array::c_style | py::array::forcecast> topos,
+           py::array_t<double, py::array::c_style | py::array::forcecast>  betas,
+           double beta_lock_threshold)
+        {
+            static_assert(sizeof(uipc::Float) == sizeof(double),
+                          "uipc::Float must be double for the pybind cast");
+            if(topos.ndim() != 2 || topos.shape(1) != 4)
+                throw std::invalid_argument(
+                    "seed_locks: topos must be an [M, 4] array");
+            const py::ssize_t m = topos.shape(0);
+            if(m != betas.size())
+                throw std::invalid_argument(
+                    "seed_locks: topos rows must equal betas length");
+            uipc::span<const uipc::Vector4i> topo_span(
+                reinterpret_cast<const uipc::Vector4i*>(topos.data()),
+                static_cast<std::size_t>(m));
+            uipc::span<const uipc::Float> beta_span(
+                reinterpret_cast<const uipc::Float*>(betas.data()),
+                static_cast<std::size_t>(m));
+            self.seed_locks(topo_span,
+                            beta_span,
+                            static_cast<uipc::Float>(beta_lock_threshold));
+        },
+        py::arg("topos"),
+        py::arg("betas"),
+        py::arg("beta_lock_threshold"),
+        R"(Re-lock bonded PT pairs from saved (topos, betas) against the current
+geometry (rest shape recomputed from the loaded positions, so the loaded state
+is force-free). Must be called after world.init(scene) and before the first
+world.advance() so the first step's trajectory filter already compacts the
+locks out. topos: [M, 4] int32 vertex indices, betas: [M] float64.)");
+
     class_RCCBondedPTStateAccessorFeature.attr("FeatureName") =
         RCCBondedPTStateAccessorFeature::FeatureName;
 }
