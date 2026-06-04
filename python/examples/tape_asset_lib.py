@@ -996,7 +996,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "default",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     # ===== 3M Temflex 175 vinyl electrical tape =====
     # Geometry from 3M's official datasheet:
@@ -1056,7 +1056,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "default",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     "temflex175-2turn-middle": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
@@ -1105,7 +1105,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },    "temflex175-2turn-soft": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
         # (~1/3 the frames of the 5-turn baseline) — best for iterating
@@ -1153,7 +1153,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },"temflex175-2turn-soft": {
         # Smallest useful spool: 2 turns instead of 5. Fastest wind sim
         # (~1/3 the frames of the 5-turn baseline) — best for iterating
@@ -1201,7 +1201,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     "temflex175-3turn": {
         # Quick test: 3 turns instead of 5. Faster wind sim for iteration.
@@ -1247,7 +1247,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     "temflex175-thick": {
         # Sim TAPE_THICKNESS = full physical 0.178 mm. Larger IPC band
@@ -1296,7 +1296,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     "temflex175-10turn": {
         # 10 turns instead of 5 — more impressive spool, slower to sim.
@@ -1342,7 +1342,7 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    2000,
         # Solver precision (see SOLVER_PROFILES). Override per-preset by
         # picking a different name or per-run via `--set SOLVER_PROFILE=…`.
-        "SOLVER_PROFILE":    "high",
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
     "temflex175-2turn-e5e7-dhat2-cnct1": {
         # Soft 2-turn wind/drop preset:
