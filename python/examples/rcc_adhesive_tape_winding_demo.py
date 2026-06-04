@@ -387,6 +387,12 @@ def build_demo(adhesion_on: bool = True,
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    # SOFT RCC normal-adhesion energy-minimum offset (independent of bonding).
+    # Leave at the engine default (0.5 = band center) unless overridden. `--set
+    # RCC_ADHESION_NORMAL_OFFSET_COEFF=0` -> legacy min at d=0; =1 -> band edge.
+    _off = _CFG.get("RCC_ADHESION_NORMAL_OFFSET_COEFF")
+    if _off is not None:
+        config["rcc_adhesion_normal_offset_coeff"] = float(_off)
     if bonded:
         # RCC bonded-PT acceleration: stable high-beta face-interior tape
         # contacts are replaced by a stiff ABD virtual tet (point-plane).

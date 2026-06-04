@@ -119,11 +119,18 @@ ADH_INITIAL_BETA  = _CFG["ADH_INITIAL_BETA"]
 #                adhesion drags along falls back under gravity. This is
 #                the "does the bonded roll stay together after being
 #                dropped from the top?" stress test.
+# `--set HALF_LIFT=1`: pull the free end up only HALF as far
+# (LIFT_HEIGHT/2, applied to lift_y below) and hold at the top for half as
+# long (TOP_FRAMES halved) before releasing — a gentler lift that lets go
+# before fully clearing the roll.
+HALF_LIFT          = L.cfg_flag(_CFG, "HALF_LIFT", default=False)
+LIFT_FRACTION      = 0.5 if HALF_LIFT else 1.0
+
 HOLD_FRAMES        = 30
 PULL_FRAMES        = 600
 # Hold at top long enough to see whether the lifted roll stays
-# bonded or starts peeling — 6 s @ dt=0.01.
-TOP_FRAMES         = 600
+# bonded or starts peeling — 6 s @ dt=0.01 (halved with HALF_LIFT).
+TOP_FRAMES         = 300 if HALF_LIFT else 600
 # Post-release free-fall window. 5 s @ dt=0.01 is enough for a 10 cm
 # lift to hit the ground (½·g·t² ≈ 0.49 m after 1 s already).
 FREEFALL_FRAMES    = int(_CFG.get("FREEFALL_FRAMES", 500))
@@ -372,6 +379,14 @@ def build_demo(adhesion_on: bool = True,
     config["contact"]["d_hat"] = D_HAT
     config["extras"]["strict_mode"]["enable"] = False
     config["linear_system"]["tol_rate"] = 1.0e-3
+    # SOFT RCC normal-adhesion energy-minimum offset (applies whether or not
+    # bonding is on). Leave at the engine default (0.5 = band center d*=xi+d_hat/2,
+    # a gentle spring to a natural gap instead of pulling into the C-IPC barrier
+    # wall) unless overridden. `--set RCC_ADHESION_NORMAL_OFFSET_COEFF=0` -> legacy
+    # min at d=0; =1 -> band outer edge.
+    _off = _CFG.get("RCC_ADHESION_NORMAL_OFFSET_COEFF")
+    if _off is not None:
+        config["rcc_adhesion_normal_offset_coeff"] = float(_off)
     if bonded:
         # RCC bonded-PT acceleration: stable high-beta face-interior tape
         # contacts are replaced by a stiff ABD virtual tet (point-plane).
@@ -574,7 +589,7 @@ def build_demo(adhesion_on: bool = True,
         # saturates at LIFT_HEIGHT and SPC holds the free end there.
         pull_idx = f - HOLD_FRAMES
         t = min(pull_idx / max(PULL_FRAMES, 1), 1.0)
-        lift_y = smooth_lerp(0.0, LIFT_HEIGHT, t)
+        lift_y = smooth_lerp(0.0, LIFT_HEIGHT * LIFT_FRACTION, t)
 
         start = anim_state["pull_start_pos"]
         for jj, k in enumerate(free_ids):

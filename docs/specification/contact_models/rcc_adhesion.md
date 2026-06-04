@@ -51,6 +51,33 @@ $$
 p_{na,k}=-C_n\beta_k^2d_k.
 $$
 
+#### Normal energy minimum offset (conditioning)
+
+By default $P_{na,k}$ is minimized at $d_k=0$ and is monotone increasing across the C-IPC active band $d_k\in(\xi_k,\xi_k+\hat d)$, where $\xi_k$ is the contact-pair thickness. It therefore pulls the surfaces toward the barrier singularity at $d_k=\xi_k$ (where the barrier diverges to $+\infty$), so the soft adhesion fights the stiffest part of the barrier — a poorly conditioned configuration for the Newton solve.
+
+To relieve this, the normal energy minimum can be **offset** to a small nonzero gap inside the gentle part of the band:
+
+$$
+d^*_k=\xi_k+c\,\hat d,\qquad c\in[0,1],\qquad
+P_{na,k}=\frac{C_n}{2}\beta_k^2\,(d_k-d^*_k)^2 .
+$$
+
+With the implementation's $1/\hat d$ scaling and $D_k=d_k^2$ (see "Backend implementation notes"), this is evaluated as $\tfrac{C_n}{2\hat d}\beta_k^2(\sqrt{D_k}-d^*_k)^2$, with
+
+$$
+\nabla E_{na,k}=A_k\frac{C_n}{2\hat d}\beta_k^2\Big(1-\frac{d^*_k}{\sqrt{D_k}}\Big)\nabla D_k,
+$$
+
+$$
+\nabla^2E_{na,k}=A_k\frac{C_n}{2\hat d}\beta_k^2\Big[\Big(1-\frac{d^*_k}{\sqrt{D_k}}\Big)\nabla^2D_k+\frac{d^*_k}{2\,D_k^{3/2}}\nabla D_k\nabla D_k^{\top}\Big].
+$$
+
+The coefficient $c$ is the scene config key `rcc_adhesion_normal_offset_coeff`, **default $0.5$** (band center $d^*_k=\xi_k+\hat d/2$). $c=0$ is special-cased to **disable** the offset entirely ($d^*_k\equiv0$), exactly recovering the legacy $P_{na,k}=\tfrac{C_n}{2}\beta_k^2 d_k^2$ with minimum at $d_k=0$ — bitwise identical (no `sqrt`). For $c>0$ the minimum is set to $d^*_k=\xi_k+c\hat d$. (There is therefore a deliberate jump at $c\to0^+$: the offset is an on/off feature, and the smallest *enabled* minimum is $\xi_k$ at $c\to0^+$, never the barrier-free $d_k=0$.) The thickness $\xi_k$ is the **sum** of the per-primitive thicknesses (each primitive stores half the physical thickness). For $d_k<d^*_k$ the gradient pushes the surfaces apart toward $d^*_k$ (a gentle spring); the possibly-indefinite first Hessian term is `make_spd`-projected as usual, and the second (outer-product) term is PSD for $d^*_k\ge0$. A small relative floor $\sqrt{D_k}\leftarrow\max(\sqrt{D_k},10^{-12}\hat d)$ guards the $d^*_k/\sqrt{D_k}$ and $d^*_k/D_k^{3/2}$ ratios on near-zero line-search trials.
+
+**Recommended / default value:** $c=0.5$ (band center). On a soft 2-turn tape drop (bonded off), sweeping $c$ reduced the mean Newton iterations/frame monotonically — $c{=}0$: 29.6, $c{=}0.25$: 13.4, $c{=}0.5$: 8.5, $c{=}0.75$: 6.8, $c{=}1$: 4.3 — and SpMV (≈ PCG iterations)/frame from 29.6k ($c{=}0$) to 2.4k ($c{=}1$); the $c{=}0$ run also hit the line-search max-iteration cap, no $c{>}0$ run did. Conditioning keeps improving toward $c{=}1$, but $c{=}1$ parks the rest gap at the band's outer edge $\xi_k+\hat d$ where both the barrier and the adhesion gradient vanish (neutral equilibrium, weakest effective adhesion, risk of pairs drifting out of the band). $c=0.5$ is the principled balance — a proper two-sided spring at the band center with a 3.5×/2.8× Newton/SpMV reduction.
+
+**Intentional divergence from the $\beta$-evolution law:** only the *assembled solver energy* above is offset. The $\beta$ bonding/debonding rule (below) keeps its own normal-energy proxy $\propto D_k$ with minimum at $d_k=0$ — the pressure $p_{na,k}=-C_n\beta_k^2d_k$ and the debonding term $C_n\beta_kd_k^2$ are unchanged. At $c=0$ the two agree exactly; for $c>0$ the bonding/release thresholds continue to use the raw distance and are unaffected by the offset.
+
 ### Tangential Adhesion
 
 The tangential adhesion energy density of contact pair $k$ is:

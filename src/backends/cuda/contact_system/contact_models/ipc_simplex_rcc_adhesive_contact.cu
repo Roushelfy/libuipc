@@ -849,6 +849,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         Ps          = info.positions().viewer().name("Ps"),
                         prev_Ps     = info.prev_positions().viewer().name("prev_Ps"),
                         d_hats      = info.d_hats().viewer().name("d_hats"),
+                        thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                        offset_coeff = m_adhesion_normal_offset_coeff,
                         beta_buf    = m_beta_PT.cviewer().name("beta_VT"),
                         sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
                         vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
@@ -874,6 +876,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            }
                            Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
                                                   d_hats(PT[2]), d_hats(PT[3]));
+                           // offset_coeff == 0 -> d_star = 0 disables the offset
+                           // (legacy min at d=0). offset_coeff > 0 -> min at
+                           // d* = xi + c*d_hat.
+                           Float xi = PT_thickness(thicknesses(PT[0]), thicknesses(PT[1]),
+                                                   thicknesses(PT[2]), thicknesses(PT[3]));
+                           Float d_star =
+                               offset_coeff > 0 ? xi + offset_coeff * d_hat : Float{0};
 
                            const auto& P  = Ps(PT[0]);
                            const auto& T0 = Ps(PT[1]);
@@ -899,7 +908,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            const auto& pT2 = prev_Ps(PT[3]);
 
                            Float En = VT_normal_adhesion_energy(
-                               coeff.Cn, beta, d_hat, dt, flag, P, T0, T1, T2);
+                               coeff.Cn, beta, d_hat, dt, d_star, flag, P, T0, T1, T2);
                            Float Et = VT_tangential_adhesion_energy(
                                coeff.Ct, beta, d_hat, dt, flag,
                                pP, pT0, pT1, pT2, P, T0, T1, T2);
@@ -928,6 +937,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                         Ps          = info.positions().viewer().name("Ps"),
                         prev_Ps     = info.prev_positions().viewer().name("prev_Ps"),
                         d_hats      = info.d_hats().viewer().name("d_hats"),
+                        thicknesses = info.thicknesses().viewer().name("thicknesses"),
+                        offset_coeff = m_adhesion_normal_offset_coeff,
                         dt          = info.dt(),
                         VTs         = info.friction_VTs().viewer().name("VTs"),
                         PT_Gs       = info.friction_PT_gradients().viewer().name("PT_Gs"),
@@ -954,6 +965,12 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                {
                                    Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
                                                           d_hats(PT[2]), d_hats(PT[3]));
+                                   // offset_coeff == 0 -> d_star = 0 disables
+                                   // the offset (legacy min at d=0).
+                                   Float xi = PT_thickness(thicknesses(PT[0]), thicknesses(PT[1]),
+                                                           thicknesses(PT[2]), thicknesses(PT[3]));
+                                   Float d_star =
+                                       offset_coeff > 0 ? xi + offset_coeff * d_hat : Float{0};
                                    const auto& P  = Ps(PT[0]);
                                    const auto& T0 = Ps(PT[1]);
                                    const auto& T1 = Ps(PT[2]);
@@ -978,7 +995,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                        if(gradient_only)
                                        {
                                            VT_normal_adhesion_gradient(
-                                               Gn, coeff.Cn, beta, d_hat, dt, flag, P, T0, T1, T2);
+                                               Gn, coeff.Cn, beta, d_hat, dt, d_star, flag, P, T0, T1, T2);
                                            if(coeff.Ct > 0)
                                                VT_tangential_adhesion_gradient(
                                                    Gt, coeff.Ct, beta, d_hat, dt, flag,
@@ -988,7 +1005,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                        else
                                        {
                                            VT_normal_adhesion_gradient_hessian(
-                                               Gn, Hn, coeff.Cn, beta, d_hat, dt, flag, P, T0, T1, T2);
+                                               Gn, Hn, coeff.Cn, beta, d_hat, dt, d_star, flag, P, T0, T1, T2);
                                            if(coeff.Ct > 0)
                                                VT_tangential_adhesion_gradient_hessian(
                                                    Gt, Ht, coeff.Ct, beta, d_hat, dt, flag,
@@ -1036,6 +1053,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // foot may be (barycentric units) and still bond. 0 = strictly
     // inside/on-boundary. config rcc_bonded_pt_lock_face_margin.
     Float                                    m_bonded_pt_lock_face_margin = 0.5;
+    // SOFT RCC normal-adhesion energy-minimum offset coefficient c in [0,1].
+    // Moves the min to d* = xi + c*d_hat (xi = per-pair thickness) so the normal
+    // term is a gentle spring to a natural gap instead of pulling into the C-IPC
+    // barrier wall at d=xi. 0 = legacy min at gap d=0. Default 0.5 = band center
+    // (matches the scene-config default). config rcc_adhesion_normal_offset_coeff.
+    // Applies to all soft adhesive PT pairs, independent of bonding.
+    Float                                    m_adhesion_normal_offset_coeff = 0.5;
 
     void _evolve_beta_step_at_end(Float dt)
     {
@@ -1408,6 +1432,16 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
             config.find<Float>("rcc_bonded_pt_lock_face_margin");
         if(lock_face_margin)
             rcc->m_bonded_pt_lock_face_margin = lock_face_margin->view()[0];
+        auto normal_offset_coeff =
+            config.find<Float>("rcc_adhesion_normal_offset_coeff");
+        if(normal_offset_coeff)
+        {
+            Float c = normal_offset_coeff->view()[0];
+            // clamp to [0,1]: c<0 would move the min behind the barrier; c>1
+            // would push it past the active-band outer edge d_hat.
+            rcc->m_adhesion_normal_offset_coeff =
+                std::min(Float{1}, std::max(Float{0}, c));
+        }
 
         on_init_scene(
             [this]

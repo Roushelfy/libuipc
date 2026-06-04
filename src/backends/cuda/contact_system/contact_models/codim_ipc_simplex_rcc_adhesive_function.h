@@ -401,10 +401,13 @@ namespace sym::codim_ipc_rcc_adhesive
     // the adhesion force perpendicular to the triangle's plane regardless of
     // where the point projects, which matches the spec intent and removes the
     // diagonal artifact.
+    // d_star = xi + c*d_hat offsets the energy minimum to gap d=d_star; d_star<=0
+    // recovers the legacy E=k*D (min at d=0). See VT_normal_adhesion_* for the math.
     inline __device__ Float PT_normal_adhesion_energy(Float          Cn,
                                                       Float          beta,
                                                       Float          d_hat,
                                                       Float          dt,
+                                                      Float          d_star,
                                                       const Vector3& P,
                                                       const Vector3& T0,
                                                       const Vector3& T1,
@@ -413,7 +416,11 @@ namespace sym::codim_ipc_rcc_adhesive
         using namespace distance;
         Float    D;
         point_triangle_distance2(P, T0, T1, T2, D);  // unflagged: plane projection
-        return (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta * D;
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+            return k * D;
+        Float dm = sqrt(D) - d_star;
+        return k * dm * dm;
     }
 
     inline __device__ void
@@ -423,6 +430,7 @@ namespace sym::codim_ipc_rcc_adhesive
                                         Float          beta,
                                         Float          d_hat,
                                         Float          dt,
+                                        Float          d_star,
                                         const Vector3& P,
                                         const Vector3& T0,
                                         const Vector3& T1,
@@ -434,9 +442,22 @@ namespace sym::codim_ipc_rcc_adhesive
         Matrix12x12 HessD;
         point_triangle_distance2_hessian(P, T0, T1, T2, HessD);
 
-        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
-        G           = coeff * GradD;
-        H           = coeff * HessD;
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+        {
+            G = k * GradD;
+            H = k * HessD;
+            return;
+        }
+        Float D;
+        point_triangle_distance2(P, T0, T1, T2, D);
+        Float d   = sqrt(D);
+        Float eps = 1e-12 * d_hat;
+        Float s   = d > eps ? d : eps;
+        Float fp  = k * (1.0 - d_star / s);
+        Float fpp = k * d_star / (2.0 * s * s * s);
+        G         = fp * GradD;
+        H         = fp * HessD + fpp * (GradD * GradD.transpose());
     }
 
     inline __device__ void PT_normal_adhesion_gradient(Vector12&      G,
@@ -444,6 +465,7 @@ namespace sym::codim_ipc_rcc_adhesive
                                                        Float          beta,
                                                        Float          d_hat,
                                                        Float          dt,
+                                                       Float          d_star,
                                                        const Vector3& P,
                                                        const Vector3& T0,
                                                        const Vector3& T1,
@@ -453,8 +475,19 @@ namespace sym::codim_ipc_rcc_adhesive
         Vector12 GradD;
         point_triangle_distance2_gradient(P, T0, T1, T2, GradD);  // plane projection
 
-        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
-        G           = coeff * GradD;
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+        {
+            G = k * GradD;
+            return;
+        }
+        Float D;
+        point_triangle_distance2(P, T0, T1, T2, D);
+        Float d   = sqrt(D);
+        Float eps = 1e-12 * d_hat;
+        Float s   = d > eps ? d : eps;
+        Float fp  = k * (1.0 - d_star / s);
+        G         = fp * GradD;
     }
 
     // EE
@@ -966,10 +999,16 @@ namespace sym::codim_ipc_rcc_adhesive
     // stay consistent regardless of which sub-feature is closest.
     // =====================================================================
 
+    // d_star = xi + c*d_hat is the target gap (energy minimum). d_star <= 0
+    // recovers the legacy energy (min at d=0) bitwise: E = k*D, G = k*GradD,
+    // H = k*HessD. Otherwise E = k*(sqrt(D) - d_star)^2 with
+    //   f'(D)  = k*(1 - d_star/sqrt(D)),  f''(D) = k*d_star/(2*D^{3/2}),
+    //   G = f'(D)*GradD,  H = f'(D)*HessD + f''(D)*GradD*GradD^T.
     inline __device__ Float VT_normal_adhesion_energy(Float           Cn,
                                                       Float           beta,
                                                       Float           d_hat,
                                                       Float           dt,
+                                                      Float           d_star,
                                                       const Vector4i& flag,
                                                       const Vector3&  P,
                                                       const Vector3&  T0,
@@ -979,7 +1018,11 @@ namespace sym::codim_ipc_rcc_adhesive
         using namespace distance;
         Float D;
         point_triangle_distance2(flag, P, T0, T1, T2, D);  // true closest-feature distance
-        return (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta * D;
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+            return k * D;  // legacy: min at d=0 (no sqrt, bitwise identical)
+        Float dm = sqrt(D) - d_star;
+        return k * dm * dm;  // E = k (sqrt(D) - d*)^2, min at d = d*
     }
 
     inline __device__ void
@@ -989,6 +1032,7 @@ namespace sym::codim_ipc_rcc_adhesive
                                         Float           beta,
                                         Float           d_hat,
                                         Float           dt,
+                                        Float           d_star,
                                         const Vector4i& flag,
                                         const Vector3&  P,
                                         const Vector3&  T0,
@@ -1000,9 +1044,23 @@ namespace sym::codim_ipc_rcc_adhesive
         point_triangle_distance2_gradient(flag, P, T0, T1, T2, GradD);
         Matrix12x12 HessD;
         point_triangle_distance2_hessian(flag, P, T0, T1, T2, HessD);
-        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
-        G           = coeff * GradD;
-        H           = coeff * HessD;  // caller SPD-projects the normal block
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+        {
+            G = k * GradD;
+            H = k * HessD;  // caller SPD-projects the normal block
+            return;
+        }
+        Float D;
+        point_triangle_distance2(flag, P, T0, T1, T2, D);
+        Float d   = sqrt(D);
+        Float eps = 1e-12 * d_hat;              // relative gap floor for the ratios
+        Float s   = d > eps ? d : eps;
+        Float fp  = k * (1.0 - d_star / s);             // f'(D)
+        Float fpp = k * d_star / (2.0 * s * s * s);     // f''(D) = k d*/(2 D^{3/2})
+        G         = fp * GradD;
+        H         = fp * HessD + fpp * (GradD * GradD.transpose());
+        // caller SPD-projects the normal block (handles fp<0 when d<d*)
     }
 
     inline __device__ void VT_normal_adhesion_gradient(Vector12&       G,
@@ -1010,6 +1068,7 @@ namespace sym::codim_ipc_rcc_adhesive
                                                        Float           beta,
                                                        Float           d_hat,
                                                        Float           dt,
+                                                       Float           d_star,
                                                        const Vector4i& flag,
                                                        const Vector3&  P,
                                                        const Vector3&  T0,
@@ -1019,8 +1078,19 @@ namespace sym::codim_ipc_rcc_adhesive
         using namespace distance;
         Vector12 GradD;
         point_triangle_distance2_gradient(flag, P, T0, T1, T2, GradD);
-        Float coeff = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
-        G           = coeff * GradD;
+        Float k = (dt * dt) * (Cn / (2.0 * d_hat)) * beta * beta;
+        if(d_star <= 0)
+        {
+            G = k * GradD;
+            return;
+        }
+        Float D;
+        point_triangle_distance2(flag, P, T0, T1, T2, D);
+        Float d   = sqrt(D);
+        Float eps = 1e-12 * d_hat;
+        Float s   = d > eps ? d : eps;
+        Float fp  = k * (1.0 - d_star / s);
+        G         = fp * GradD;
     }
 
     // Lagged tangential relative-displacement magnitude squared for the VT

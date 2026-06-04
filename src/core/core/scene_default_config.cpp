@@ -67,6 +67,16 @@ geometry::AttributeCollection default_scene_config() noexcept
     // the foot may be and still bond. 0 = strictly inside/on-boundary.
     config.create("rcc_bonded_pt_lock_face_margin", Float{0.5});
 
+    // SOFT RCC normal-adhesion energy-minimum offset coefficient c in [0,1].
+    // Moves the normal-energy min to d* = xi + c*d_hat (xi = per-pair thickness,
+    // sum of the two half-thicknesses), turning the normal term into a gentle
+    // spring to a natural gap instead of pulling surfaces into the C-IPC barrier
+    // wall at d=xi. Default 0.5 = band center xi+d_hat/2 (large conditioning win:
+    // ~3.5x fewer Newton iters on the soft tape drop). 0.0 = legacy min at d=0
+    // (bitwise identical). Applies to all soft adhesive PT pairs (independent of
+    // bonding); clamped to [0,1] on read.
+    config.create("rcc_adhesion_normal_offset_coeff", Float{0.5});
+
     // default:
     //  - ipc
     // or:

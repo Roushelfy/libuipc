@@ -206,6 +206,7 @@ def build_demo(
     release_strain: float = 1.0e30,
     release_gap: float = 1.0e30,
     release_slip: float = 1.0e30,
+    normal_offset_coeff: float | None = None,
 ):
     Logger.set_level(Logger.Level.Warn)
 
@@ -220,6 +221,11 @@ def build_demo(
     config["contact"]["friction"]["enable"] = True
     config["contact"]["d_hat"] = 0.02
     config["extras"]["strict_mode"]["enable"] = False
+    # SOFT RCC normal-adhesion energy-minimum offset (independent of bonding).
+    # None -> engine default (0.5 = band center). 0 = legacy min at d=0;
+    # c>0 -> min at d* = xi + c*d_hat.
+    if normal_offset_coeff is not None:
+        config["rcc_adhesion_normal_offset_coeff"] = float(normal_offset_coeff)
     if bonded:
         # Bonded-PT acceleration: stable high-beta PT pairs become a stiff ABD
         # virtual tet. With skip_ccd, they are also removed from CCD broadphase.
