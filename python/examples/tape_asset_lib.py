@@ -1422,7 +1422,7 @@ WIND_PRESETS = {
         "TAPE_LENGTH":       0.34,
         "N_TURNS":           2,
         "TAPE_NZ":           10,
-        "TAPE_YOUNGS":       5.0e8,
+        "TAPE_YOUNGS":       1.0e9,
         "TAPE_POISSON":      0.45,
         "TAPE_MASS_DENSITY": 1300,
         "TAPE_THICKNESS":    9.0e-5,
@@ -1432,10 +1432,10 @@ WIND_PRESETS = {
         "ADH_CN":            1.0,
         "ADH_CT":            1.0,
         "ADH_W":             1.0,
-        "RCC_BETA_LOCK_THRESHOLD": 0.9,  # bond locks a face-interior VT when its per-VT beta >= this
+        "RCC_BETA_LOCK_THRESHOLD": 0.1,  # bond locks a face-interior VT when its per-VT beta >= this
         "RCC_RELEASE_FORCE": 3.0e-7,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
         "ADH_ETA":           100.0,
-        "ADH_BONDING_RATE":  1.0,
+        "ADH_BONDING_RATE":  20.0,
         "ADH_INITIAL_BETA":  0.0,
         "SPC_STRENGTH":      10000.0,
         "SETTLE1_FRAMES":    100,
@@ -1474,6 +1474,20 @@ WIND_PRESETS = {
         "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
 }
+
+
+# Electrical-tape shell bending stiffness for DiscreteShellBending's per-edge
+# `bending_stiffness` κ (a bending energy DENSITY in Pa; backend energy =
+# κ·(θ−θ̄)²·L0/h̄ · V̄, with V̄ = A·t). Calibrated to a vinyl electrical-tape
+# flexural rigidity D = E·t³/(12(1−ν²)) via κ = D/(A·t_sim): with E ≈ 27 MPa
+# (soft plasticized PVC), physical t ≈ 0.18 mm, ν = 0.45, on the ~1.9 mm tape
+# mesh (A ≈ 3.6e-6 m², t_sim = 0.09 mm) → κ ≈ 5e4 Pa. Real tape is nearly
+# inextensible (stiff membrane) but floppy in bending, so this soft bending
+# value is intentionally decoupled from the (high) membrane TAPE_YOUNGS.
+# Override with `--set BENDING_STIFFNESS=…`. Added to every preset below.
+BENDING_STIFFNESS_DEFAULT = 5.0e4
+for _p in WIND_PRESETS.values():
+    _p.setdefault("BENDING_STIFFNESS", BENDING_STIFFNESS_DEFAULT)
 
 
 # ----------------------------------------------------------------------
@@ -1603,6 +1617,8 @@ UNWIND_PRESETS = {
         "SPC_STRENGTH":      1.0e10,
     },
 }
+for _p in UNWIND_PRESETS.values():
+    _p.setdefault("BENDING_STIFFNESS", BENDING_STIFFNESS_DEFAULT)
 
 
 def cfg_flag(cfg: dict, key: str, default: bool = False) -> bool:

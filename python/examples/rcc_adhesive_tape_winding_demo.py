@@ -51,6 +51,7 @@ from uipc.core import (RCCAdhesionStateAccessorFeature,
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
+    DiscreteShellBending,
     SoftPositionConstraint,
     ElasticModuli2D,
     RCCAdhesive,
@@ -106,6 +107,9 @@ TAPE_THICKNESS    = _CFG["TAPE_THICKNESS"]
 TAPE_YOUNGS       = _CFG["TAPE_YOUNGS"]
 TAPE_POISSON      = _CFG["TAPE_POISSON"]
 TAPE_MASS_DENSITY = _CFG["TAPE_MASS_DENSITY"]
+# Shell bending stiffness (DiscreteShellBending κ, Pa) — electrical-tape value;
+# see BENDING_STIFFNESS_DEFAULT in tape_asset_lib. `--set BENDING_STIFFNESS=…`.
+BENDING_STIFFNESS = float(_CFG.get("BENDING_STIFFNESS", L.BENDING_STIFFNESS_DEFAULT))
 
 # ---- hub material ----
 HUB_KAPPA         = 1.0e8
@@ -414,8 +418,11 @@ def build_demo(adhesion_on: bool = True,
         # RCC bonded-PT acceleration: stable high-beta face-interior tape
         # contacts are replaced by a stiff ABD virtual tet (point-plane).
         config["rcc_bonded_pt_enabled"] = 1
-        # skip_ccd is auto-on for locked pairs in the backend (config default
-        # rcc_bonded_pt_skip_ccd=-1 -> skip when bonded); no need to set it here.
+        # CCD on locked pairs during winding. Default -1 = auto (skip CCD for
+        # locked pairs when bonded). `--set SKIP_CCD=0` keeps CCD on locked
+        # pairs, `=1` forces skip. Set the same way for the matching drop so a
+        # config is wound and dropped under identical CCD behaviour.
+        config["rcc_bonded_pt_skip_ccd"] = int(_CFG.get("SKIP_CCD", -1))
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         # Default: ALL VTs may bond (incl. edge/corner) — maximizes the locked
         # fraction but risks skewed sliver tets. `--set LOCK_FACE_INTERIOR_ONLY=1`
@@ -442,6 +449,7 @@ def build_demo(adhesion_on: bool = True,
 
     abd = AffineBodyConstitution()
     nhs = NeoHookeanShell()
+    dsb = DiscreteShellBending()
     spc = SoftPositionConstraint()
 
     tabular = scene.contact_tabular()
@@ -498,6 +506,8 @@ def build_demo(adhesion_on: bool = True,
     nhs.apply_to(tape_sc, moduli,
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
+    # Shell bending resistance (a single triangle shell has none without this).
+    dsb.apply_to(tape_sc, BENDING_STIFFNESS)
     tape_contact.apply_to(tape_sc)
     spc.apply_to(tape_sc, SPC_STRENGTH)
     if adhesion_on:

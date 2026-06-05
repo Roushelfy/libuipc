@@ -49,6 +49,7 @@ from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorF
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
+    DiscreteShellBending,
     SoftPositionConstraint,
     ElasticModuli2D,
     RCCAdhesive,
@@ -234,6 +235,7 @@ def build_demo(adhesion_on: bool = True,
     D_HAT             = _resolve_and_log("D_HAT",             "D_HAT")
     TAPE_THICKNESS    = _resolve_and_log("TAPE_THICKNESS",    "TAPE_THICKNESS")
     TAPE_YOUNGS       = _resolve_and_log("TAPE_YOUNGS",       "TAPE_YOUNGS")
+    BENDING_STIFFNESS = _resolve_and_log("BENDING_STIFFNESS", "BENDING_STIFFNESS")
     TAPE_POISSON      = _resolve_and_log("TAPE_POISSON",      "TAPE_POISSON", ".3f")
     TAPE_MASS_DENSITY = _resolve_and_log("TAPE_MASS_DENSITY", "TAPE_MASS_DENSITY", ".1f")
     ADH_CN            = _resolve_and_log("ADH_CN",            "ADH_CN")
@@ -344,6 +346,7 @@ def build_demo(adhesion_on: bool = True,
     rest_sc    = _make_tape_sc(rest_positions, tris)
 
     moduli = ElasticModuli2D.youngs_poisson(TAPE_YOUNGS, TAPE_POISSON)
+    dsb = DiscreteShellBending()
     # `nhs.apply_to` is what (a) tags constitution_uid, (b) sets thickness,
     # mass_density, and (c) runs compute_vertex_volume → adds `volume`
     # vertex attribute. The CUDA FEM backend reads `volume` from the REST
@@ -353,9 +356,11 @@ def build_demo(adhesion_on: bool = True,
     nhs.apply_to(current_sc, moduli,
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
+    dsb.apply_to(current_sc, BENDING_STIFFNESS)
     nhs.apply_to(rest_sc, moduli,
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
+    dsb.apply_to(rest_sc, BENDING_STIFFNESS)
     # Contact / SPC / sticky_side are dynamic-state attributes — only
     # needed on the current geometry.
     tape_contact.apply_to(current_sc)

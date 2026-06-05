@@ -62,6 +62,7 @@ from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorF
 from uipc.constitution import (
     AffineBodyConstitution,
     NeoHookeanShell,
+    DiscreteShellBending,
     SoftPositionConstraint,
     ElasticModuli2D,
     RCCAdhesive,
@@ -127,9 +128,9 @@ HALF_LIFT          = L.cfg_flag(_CFG, "HALF_LIFT", default=False)
 LIFT_FRACTION      = 0.5 if HALF_LIFT else 1.0
 
 HOLD_FRAMES        = 30
-# Frames over which the free end is lifted to LIFT_HEIGHT. Override with
-# `--set PULL_FRAMES=300` for a faster pull.
-PULL_FRAMES        = int(_CFG.get("PULL_FRAMES", 600))
+# Frames over which the free end is lifted to LIFT_HEIGHT. Default 300 (a fast
+# pull); override with `--set PULL_FRAMES=600` for a slower lift.
+PULL_FRAMES        = int(_CFG.get("PULL_FRAMES", 300))
 # Hold at top long enough to see whether the lifted roll stays
 # bonded or starts peeling — 6 s @ dt=0.01 (halved with HALF_LIFT).
 TOP_FRAMES         = 300 if HALF_LIFT else 600
@@ -151,10 +152,9 @@ def phase_at(f: int) -> str:
 # How high to lift the free end (metres, +y). Must exceed the roll's
 # vertical reach (≈ R_outer + N_TURNS·2·t when standing on side, plus
 # slack for the tail) so a successful lift visibly clears the ground.
-# 10 cm is comfortable for the temflex175 5-turn family (roll radius
-# ≈ 2.2 cm). Override per-run with `--set LIFT_HEIGHT=0.05` for a
-# shorter pull, etc.
-LIFT_HEIGHT        = float(_CFG.get("LIFT_HEIGHT", 0.10))
+# Default 0.20 m (a high lift that clearly clears the roll); override
+# per-run with `--set LIFT_HEIGHT=0.10` for a shorter pull, etc.
+LIFT_HEIGHT        = float(_CFG.get("LIFT_HEIGHT", 0.20))
 
 # Initial drop height of the assembly above the IPC active band. The
 # `_stand_on_ground` shift puts the lowest geometry vertex at
@@ -344,6 +344,7 @@ def build_demo(adhesion_on: bool = True,
     D_HAT             = _resolve_and_log("D_HAT",             "D_HAT")
     TAPE_THICKNESS    = _resolve_and_log("TAPE_THICKNESS",    "TAPE_THICKNESS")
     TAPE_YOUNGS       = _resolve_and_log("TAPE_YOUNGS",       "TAPE_YOUNGS")
+    BENDING_STIFFNESS = _resolve_and_log("BENDING_STIFFNESS", "BENDING_STIFFNESS")
     TAPE_POISSON      = _resolve_and_log("TAPE_POISSON",      "TAPE_POISSON", ".3f")
     TAPE_MASS_DENSITY = _resolve_and_log("TAPE_MASS_DENSITY", "TAPE_MASS_DENSITY", ".1f")
     ADH_CN            = _resolve_and_log("ADH_CN",            "ADH_CN")
@@ -491,12 +492,15 @@ def build_demo(adhesion_on: bool = True,
         rest_sc = _make_tape_sc(tape_pos_lay, tris)
 
     moduli = ElasticModuli2D.youngs_poisson(TAPE_YOUNGS, TAPE_POISSON)
+    dsb = DiscreteShellBending()
     nhs.apply_to(current_sc, moduli,
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
+    dsb.apply_to(current_sc, BENDING_STIFFNESS)
     nhs.apply_to(rest_sc, moduli,
                  mass_density=TAPE_MASS_DENSITY,
                  thickness=TAPE_THICKNESS)
+    dsb.apply_to(rest_sc, BENDING_STIFFNESS)
     tape_contact.apply_to(current_sc)
     spc.apply_to(current_sc, SPC_STRENGTH)
     if adhesion_on:
