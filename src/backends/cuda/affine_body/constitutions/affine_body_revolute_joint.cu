@@ -1083,8 +1083,30 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        //  F^A_b  = (tau/2) * [e_world_b]_x * A_b^{-T}    (3x3)
                        auto torque_to_F = [](Float tau, const Vector3& e, const Vector12& q)
                        {
-                           Matrix3x3 A_inv_T = q_to_A(q).inverse().transpose();
-                           Matrix3x3 FA      = (0.5 * tau) * skew(e) * A_inv_T;
+                           Matrix3x3 A = q_to_A(q);
+                           // A_inv_T = inv(A)^T = cofactor(A) / det(A), computed in
+                           // closed form. Eigen's general Matrix3::inverse() is NOT
+                           // device-safe (its Eigen/LU evaluator emits a device trap),
+                           // so we must not call .inverse() inside a kernel here.
+                           Float a00 = A(0, 0), a01 = A(0, 1), a02 = A(0, 2);
+                           Float a10 = A(1, 0), a11 = A(1, 1), a12 = A(1, 2);
+                           Float a20 = A(2, 0), a21 = A(2, 1), a22 = A(2, 2);
+                           Float det = a00 * (a11 * a22 - a12 * a21)
+                                       - a01 * (a10 * a22 - a12 * a20)
+                                       + a02 * (a10 * a21 - a11 * a20);
+                           Matrix3x3 A_inv_T;
+                           A_inv_T(0, 0) = (a11 * a22 - a12 * a21);
+                           A_inv_T(0, 1) = -(a10 * a22 - a12 * a20);
+                           A_inv_T(0, 2) = (a10 * a21 - a11 * a20);
+                           A_inv_T(1, 0) = -(a01 * a22 - a02 * a21);
+                           A_inv_T(1, 1) = (a00 * a22 - a02 * a20);
+                           A_inv_T(1, 2) = -(a00 * a21 - a01 * a20);
+                           A_inv_T(2, 0) = (a01 * a12 - a02 * a11);
+                           A_inv_T(2, 1) = -(a00 * a12 - a02 * a10);
+                           A_inv_T(2, 2) = (a00 * a11 - a01 * a10);
+                           A_inv_T /= det;
+
+                           Matrix3x3 FA = (0.5 * tau) * skew(e) * A_inv_T;
 
                            Vector12 F      = Vector12::Zero();
                            F.segment<9>(3) = A_to_q(FA);
