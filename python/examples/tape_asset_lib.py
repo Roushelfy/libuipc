@@ -183,6 +183,57 @@ def make_rod(R: float,
     return sc
 
 
+def make_rod_tube_shell(R: float,
+                        length: float,
+                        segments: int = 64,
+                        n_sides: int = 12,
+                        center: tuple = (0.0, 0.0, 0.0)):
+    """Open thin-walled tube SHELL with its axis along +z, for a
+    *deformable* rod (NeoHookeanShell + DiscreteShellBending) — the
+    faithful libuipc analogue of the wire_harnessing wire rod.
+
+    Geometry: a `segments+1`-ring × `n_sides`-gon cylindrical surface
+    (NO end caps), triangulated with outward-pointing normals. Returns
+    `(sc, pin_indices)` where `pin_indices` are the vertex ids of the
+    first and last rings (`2*n_sides` verts) — clamp these (is_fixed or
+    SoftPositionConstraint) to fix both ends.
+
+    Unlike `make_rod` (a closed ABD cylinder), this is an open surface
+    meant for a shell membrane: build it straight here and place/orient
+    it with an instance transform; gravity + winding load do the rest.
+    """
+    assert R > 0.0 and length > 0.0 and segments >= 1 and n_sides >= 3
+    cx, cy, cz = center
+    n = n_sides
+    z = np.linspace(cz - 0.5 * length, cz + 0.5 * length, segments + 1)
+    theta = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+
+    verts = np.empty(((segments + 1) * n, 3), dtype=np.float64)
+    for r in range(segments + 1):
+        base = r * n
+        verts[base:base + n, 0] = cx + R * cos_t
+        verts[base:base + n, 1] = cy + R * sin_t
+        verts[base:base + n, 2] = z[r]
+
+    tris = []
+    for r in range(segments):          # ring r (lo z) -> ring r+1 (hi z)
+        lo, hi = r * n, (r + 1) * n
+        for i in range(n):
+            j = (i + 1) % n
+            # outward (+radial) winding, mirroring make_rod's side faces
+            tris.append([hi + i, lo + i, hi + j])
+            tris.append([hi + j, lo + i, lo + j])
+
+    sc = trimesh(verts, np.asarray(tris, dtype=np.int32))
+    label_surface(sc)
+    pin_indices = np.concatenate([
+        np.arange(0, n, dtype=np.int32),                       # first ring
+        np.arange(segments * n, (segments + 1) * n, dtype=np.int32),  # last ring
+    ])
+    return sc, pin_indices
+
+
 # ----------------------------------------------------------------------
 # Flat tape strip (sticky face UP by default winding)
 # ----------------------------------------------------------------------
