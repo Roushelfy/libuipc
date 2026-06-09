@@ -112,7 +112,7 @@ ROD_CZ            = _cfg_f("ROD_CZ", 0.0)
 HANG_RADIUS       = _cfg_f("HANG_RADIUS", -1.0)     # orbit radius (m); <0 ⇒ auto = the hub's natural risen hang radius, captured at orbit entry
 N_TURNS           = _cfg_f("N_TURNS", 3.0)          # number of orbits = turns wound
 WRAP_PITCH        = _cfg_f("WRAP_PITCH", 0.0)       # axial advance per turn (m). 0=stacked, >0=helical
-ORBIT_DIR         = _cfg_f("ORBIT_DIR", 1.0)        # +1 / -1 orbit sense
+ORBIT_DIR         = _cfg_f("ORBIT_DIR", -1.0)       # +1 / -1: fold-bulge & orbit sense (flip if it folds/winds the wrong way)
 
 # ---- press / drape onto the rod ----
 # Anchor a row BACK from the tip (so the tip drapes OVER the rod) and press
