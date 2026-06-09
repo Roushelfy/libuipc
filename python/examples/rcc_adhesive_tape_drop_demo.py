@@ -459,6 +459,23 @@ def build_demo(adhesion_on: bool = True,
             initial_beta=ADH_INITIAL_BETA,
             enabled=True,
         )
+        # PER-PAIR bonded-PT overrides (only meaningful with bonded on). Each
+        # value < 0 inherits the global rcc_bonded_pt_* config, so by default
+        # this is a no-op. Lets tape-tape and tape-hub lock / release under
+        # different conditions, e.g. `--set BONDED_HUB_LOCK=0.1` to bond the
+        # tape to the hub more readily than tape-to-tape, or
+        # `--set BONDED_TAPE_RELEASE_FORCE=3e-7` to peel inter-layer bonds while
+        # the tape-hub bond holds.
+        _tt_lk = float(_CFG.get("BONDED_TAPE_LOCK", -1.0))
+        _th_lk = float(_CFG.get("BONDED_HUB_LOCK", -1.0))
+        _tt_rf = float(_CFG.get("BONDED_TAPE_RELEASE_FORCE", -1.0))
+        _th_rf = float(_CFG.get("BONDED_HUB_RELEASE_FORCE", -1.0))
+        adhesive.set_bonded(tabular, tape_contact, tape_contact,
+                            lock_threshold=_tt_lk, release_strain=-1.0,
+                            release_gap=-1.0, release_slip=-1.0, release_force=_tt_rf)
+        adhesive.set_bonded(tabular, tape_contact, hub_contact,
+                            lock_threshold=_th_lk, release_strain=-1.0,
+                            release_gap=-1.0, release_slip=-1.0, release_force=_th_rf)
 
     # ---- hub (FREE — no is_fixed, no SPC) ----
     hub_sc = L.make_ring_hub(

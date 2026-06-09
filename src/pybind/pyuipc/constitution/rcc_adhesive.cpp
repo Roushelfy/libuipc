@@ -89,6 +89,54 @@ barrier + friction. See docs/specification/contact_models/rcc_adhesion.md.)");
         py::arg("enabled") = true,
         R"(Set default RCC adhesion parameters for unspecified (L, R) pairs (row 0).)");
 
+    class_RCCAdhesive.def(
+        "set_bonded",
+        [](const RCCAdhesive&    self,
+           ContactTabular&       tabular,
+           const ContactElement& L,
+           const ContactElement& R,
+           Float                 lock_threshold,
+           Float                 release_strain,
+           Float                 release_gap,
+           Float                 release_slip,
+           Float                 release_force)
+        {
+            self.set_bonded(tabular, L, R, lock_threshold, release_strain,
+                            release_gap, release_slip, release_force);
+        },
+        py::arg("tabular"),
+        py::arg("L"),
+        py::arg("R"),
+        py::arg("lock_threshold"),
+        py::arg("release_strain") = 1e30,
+        py::arg("release_gap")    = 1e30,
+        py::arg("release_slip")   = 1e30,
+        py::arg("release_force")  = 1e30,
+        R"(Set PER-PAIR bonded-PT params for an existing (L, R) contact pair
+(lock threshold + release strain/gap/slip/force). Any value < 0 inherits the
+global rcc_bonded_pt_* scene config. bonded kappa is currently global.)");
+
+    class_RCCAdhesive.def(
+        "default_bonded",
+        [](const RCCAdhesive& self,
+           ContactTabular&    tabular,
+           Float              lock_threshold,
+           Float              release_strain,
+           Float              release_gap,
+           Float              release_slip,
+           Float              release_force)
+        {
+            self.default_bonded(tabular, lock_threshold, release_strain,
+                                release_gap, release_slip, release_force);
+        },
+        py::arg("tabular"),
+        py::arg("lock_threshold"),
+        py::arg("release_strain") = 1e30,
+        py::arg("release_gap")    = 1e30,
+        py::arg("release_slip")   = 1e30,
+        py::arg("release_force")  = 1e30,
+        R"(Set default per-pair bonded-PT params for unspecified (L, R) pairs (row 0).)");
+
     class_RCCAdhesive.def_static(
         "set_sticky_side",
         &RCCAdhesive::set_sticky_side,

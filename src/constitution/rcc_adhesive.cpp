@@ -58,6 +58,20 @@ void RCCAdhesive::apply_to(core::ContactTabular& tabular) const
         models.create<Float>("initial_beta", Float{0});
     if(!models.find<IndexT>("adhesion_enabled"))
         models.create<IndexT>("adhesion_enabled", IndexT{0});
+
+    // Per-pair BONDED-PT params. Default -1 = "inherit the global
+    // rcc_bonded_pt_* scene-config value" (the backend resolves the sentinel at
+    // tabular-rebuild time). Set per-pair via RCCAdhesive::set_bonded.
+    if(!models.find<Float>("bonded_lock_threshold"))
+        models.create<Float>("bonded_lock_threshold", Float{-1});
+    if(!models.find<Float>("bonded_release_strain"))
+        models.create<Float>("bonded_release_strain", Float{-1});
+    if(!models.find<Float>("bonded_release_gap"))
+        models.create<Float>("bonded_release_gap", Float{-1});
+    if(!models.find<Float>("bonded_release_slip"))
+        models.create<Float>("bonded_release_slip", Float{-1});
+    if(!models.find<Float>("bonded_release_force"))
+        models.create<Float>("bonded_release_force", Float{-1});
 }
 
 static IndexT _find_pair_index(core::ContactTabular&       tabular,
@@ -159,6 +173,63 @@ void RCCAdhesive::default_model(core::ContactTabular& tabular,
     apply_to(tabular);
     // ContactTabular always has a default model at row 0.
     _write_row(tabular, 0, Cn, Ct, W, eta, bonding_rate, p0, initial_beta, enabled);
+}
+
+static void _write_bonded_row(core::ContactTabular& tabular,
+                              IndexT                index,
+                              Float                 lock_threshold,
+                              Float                 release_strain,
+                              Float                 release_gap,
+                              Float                 release_slip,
+                              Float                 release_force)
+{
+    auto models = tabular.contact_models();
+    auto lt = models.find<Float>("bonded_lock_threshold");
+    auto rs = models.find<Float>("bonded_release_strain");
+    auto rg = models.find<Float>("bonded_release_gap");
+    auto rl = models.find<Float>("bonded_release_slip");
+    auto rf = models.find<Float>("bonded_release_force");
+    UIPC_ASSERT(lt && rs && rg && rl && rf,
+                "RCCAdhesive bonded attributes are missing on ContactTabular. "
+                "Did you forget to call RCCAdhesive::apply_to(tabular) first?");
+    geometry::view(*lt)[index] = lock_threshold;
+    geometry::view(*rs)[index] = release_strain;
+    geometry::view(*rg)[index] = release_gap;
+    geometry::view(*rl)[index] = release_slip;
+    geometry::view(*rf)[index] = release_force;
+}
+
+void RCCAdhesive::set_bonded(core::ContactTabular&       tabular,
+                             const core::ContactElement& L,
+                             const core::ContactElement& R,
+                             Float                       lock_threshold,
+                             Float                       release_strain,
+                             Float                       release_gap,
+                             Float                       release_slip,
+                             Float                       release_force) const
+{
+    apply_to(tabular);
+    IndexT idx = _find_pair_index(tabular, L, R);
+    UIPC_ASSERT(idx >= 0,
+                "RCCAdhesive::set_bonded: contact pair (L={}, R={}) is not "
+                "present in the ContactTabular. Call tabular.insert(L, R, ...) "
+                "first.",
+                L.id(),
+                R.id());
+    _write_bonded_row(tabular, idx, lock_threshold, release_strain, release_gap,
+                      release_slip, release_force);
+}
+
+void RCCAdhesive::default_bonded(core::ContactTabular& tabular,
+                                 Float                 lock_threshold,
+                                 Float                 release_strain,
+                                 Float                 release_gap,
+                                 Float                 release_slip,
+                                 Float                 release_force) const
+{
+    apply_to(tabular);
+    _write_bonded_row(tabular, 0, lock_threshold, release_strain, release_gap,
+                      release_slip, release_force);
 }
 
 void RCCAdhesive::set_sticky_side(geometry::SimplicialComplex& geo, IndexT sign)

@@ -23,5 +23,18 @@ struct RCCAdhesiveCoeff
     Float  p0           = 0.0;
     Float  initial_beta = 0.0;
     IndexT enabled      = 0;
+
+    // Per-pair BONDED-PT parameters. The lock filter and the release-flag
+    // kernel look these up per contact-element pair (via contact_element_ids)
+    // so different surface pairs can lock/separate under different conditions.
+    // Filled by _rebuild_adhesive_tabular: a per-pair value from the
+    // contact-model attribute, or the GLOBAL rcc_bonded_pt_* scene-config value
+    // when the per-pair attribute is unset (sentinel < 0). bonded_kappa is NOT
+    // per-pair yet (the ABD-tet energy uses the global stiffness).
+    Float bonded_lock_threshold = 1.0;     // beta >= this -> lock (this pair)
+    Float bonded_release_strain = 1e30;    // release if ABD strain exceeds
+    Float bonded_release_gap    = 1e30;    // release if normal gap exceeds
+    Float bonded_release_slip   = 1e30;    // release if tangential slip exceeds
+    Float bonded_release_force  = 1e30;    // release if restoring force exceeds
 };
 }  // namespace uipc::backend::cuda

@@ -186,6 +186,36 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
        || rest_volume <= 0.0)
         return core::RCCBondedPTReleaseDegenerate;
 
+    // Per-pair release thresholds: when the policy (adhesive tabular +
+    // contact-element ids) is available, override the global scalar thresholds
+    // with this contact-pair's values (averaged over the triangle's three
+    // vertices, which normally share one contact element). Falls back to the
+    // scalar (global) thresholds otherwise. kappa stays global.
+    if(policy_enabled
+       && topo[0] < static_cast<IndexT>(contact_ids_view.size())
+       && topo[1] < static_cast<IndexT>(contact_ids_view.size())
+       && topo[2] < static_cast<IndexT>(contact_ids_view.size())
+       && topo[3] < static_cast<IndexT>(contact_ids_view.size()))
+    {
+        const Vector4i cids{contact_ids(topo[0]),
+                            contact_ids(topo[1]),
+                            contact_ids(topo[2]),
+                            contact_ids(topo[3])};
+        Float s = 0, g = 0, l = 0, f = 0;
+        for(int j = 1; j < 4; ++j)
+        {
+            const RCCAdhesiveCoeff cc = adhesive_tabular(cids[0], cids[j]);
+            s += cc.bonded_release_strain;
+            g += cc.bonded_release_gap;
+            l += cc.bonded_release_slip;
+            f += cc.bonded_release_force;
+        }
+        strain_threshold = s / Float{3};
+        gap_threshold    = g / Float{3};
+        slip_threshold   = l / Float{3};
+        force_threshold  = f / Float{3};
+    }
+
     const Vector3 x0 = positions(topo[0]);
     const Vector3 x1 = positions(topo[1]);
     const Vector3 x2 = positions(topo[2]);
@@ -562,15 +592,43 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     if(n > 0)
     {
         muda::CBufferView<U64> released_keys = m_released_keys;
+        // Per-pair lock threshold: when the policy (adhesive tabular +
+        // contact-element ids) is provided, this pair's bonded_lock_threshold
+        // (averaged over the triangle's verts) decides locking instead of the
+        // global scalar. Falls back to beta_lock_threshold otherwise.
+        const bool use_tabular = release_context.policy_enabled
+                                 && release_context.contact_element_ids.size() > 0;
+        auto         contact_ids = release_context.contact_element_ids.viewer();
+        auto         adhesive_tabular = release_context.adhesive_tabular.viewer();
+        const IndexT n_cid =
+            static_cast<IndexT>(release_context.contact_element_ids.size());
         DeviceSelect().If(
             m_candidate_entries.data(),
             m_new_locked_entries.data(),
             m_new_locked_count.data(),
             n,
-            [beta_lock_threshold, released_keys] CUB_RUNTIME_FUNCTION(
+            [beta_lock_threshold, released_keys, use_tabular, contact_ids,
+             adhesive_tabular, n_cid] CUB_RUNTIME_FUNCTION(
                 const RCCBondedPTDeviceEntry& entry)
             {
-                return entry.beta >= beta_lock_threshold
+                Float thr = beta_lock_threshold;
+                if(use_tabular)
+                {
+                    const Vector4i& t = entry.topo;
+                    if(t[0] >= 0 && t[0] < n_cid && t[1] < n_cid && t[2] < n_cid
+                       && t[3] < n_cid)
+                    {
+                        const Vector4i cids{contact_ids(t[0]),
+                                            contact_ids(t[1]),
+                                            contact_ids(t[2]),
+                                            contact_ids(t[3])};
+                        Float a = 0;
+                        for(int j = 1; j < 4; ++j)
+                            a += adhesive_tabular(cids[0], cids[j]).bonded_lock_threshold;
+                        thr = a / Float{3};
+                    }
+                }
+                return entry.beta >= thr
                        && entry.release_flags == core::RCCBondedPTReleaseNone
                        && !rcc_bonded_pt_is_locked(released_keys, entry.key);
             });

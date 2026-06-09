@@ -198,6 +198,32 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
 
         m_N = static_cast<IndexT>(world().scene().contact_tabular().element_count());
 
+        // Per-pair BONDED-PT params: optional contact-model attributes (created
+        // by RCCAdhesive::apply_to, written by set_bonded). A value < 0 is the
+        // "inherit global" sentinel → resolved here to the scene-config
+        // rcc_bonded_pt_* value, so scenes that only set the global config keep
+        // uniform bonded behaviour.
+        auto&       cfg   = world().scene().config();
+        auto        cfg_f = [&](const char* k, Float d) -> Float
+        { auto a = cfg.find<Float>(k); return a ? a->view()[0] : d; };
+        const Float G_LOCK   = cfg_f("rcc_bonded_pt_beta_lock_threshold", 1.0);
+        const Float G_STRAIN = cfg_f("rcc_bonded_pt_release_strain", 1e30);
+        const Float G_GAP    = cfg_f("rcc_bonded_pt_release_gap", 1e30);
+        const Float G_SLIP   = cfg_f("rcc_bonded_pt_release_slip", 1e30);
+        const Float G_FORCE  = cfg_f("rcc_bonded_pt_release_force", 1e30);
+        auto attr_blt = contact_models.find<Float>("bonded_lock_threshold");
+        auto attr_brs = contact_models.find<Float>("bonded_release_strain");
+        auto attr_brg = contact_models.find<Float>("bonded_release_gap");
+        auto attr_brl = contact_models.find<Float>("bonded_release_slip");
+        auto attr_brf = contact_models.find<Float>("bonded_release_force");
+        auto rb = [](auto& attr, SizeT row, Float g) -> Float
+        {
+            if(!attr)
+                return g;
+            const Float v = attr->view()[row];
+            return (v >= Float{0}) ? v : g;  // sentinel < 0 -> global
+        };
+
         RCCAdhesiveCoeff default_coeff;
         default_coeff.Cn           = Cn_view[0];
         default_coeff.Ct           = Ct_view[0];
@@ -207,6 +233,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         default_coeff.p0           = p0_view[0];
         default_coeff.initial_beta = ib_view[0];
         default_coeff.enabled      = en_view[0];
+        default_coeff.bonded_lock_threshold = rb(attr_blt, 0, G_LOCK);
+        default_coeff.bonded_release_strain = rb(attr_brs, 0, G_STRAIN);
+        default_coeff.bonded_release_gap    = rb(attr_brg, 0, G_GAP);
+        default_coeff.bonded_release_slip   = rb(attr_brl, 0, G_SLIP);
+        default_coeff.bonded_release_force  = rb(attr_brf, 0, G_FORCE);
 
         std::vector<RCCAdhesiveCoeff> host(m_N * m_N, default_coeff);
 
@@ -222,6 +253,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             c.p0           = p0_view[row];
             c.initial_beta = ib_view[row];
             c.enabled      = en_view[row];
+            c.bonded_lock_threshold = rb(attr_blt, row, G_LOCK);
+            c.bonded_release_strain = rb(attr_brs, row, G_STRAIN);
+            c.bonded_release_gap    = rb(attr_brg, row, G_GAP);
+            c.bonded_release_slip   = rb(attr_brl, row, G_SLIP);
+            c.bonded_release_force  = rb(attr_brf, row, G_FORCE);
 
             host[ids.x() * m_N + ids.y()] = c;
             host[ids.y() * m_N + ids.x()] = c;

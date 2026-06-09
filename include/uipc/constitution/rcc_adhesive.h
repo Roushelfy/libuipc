@@ -66,6 +66,31 @@ class UIPC_CONSTITUTION_API RCCAdhesive
                        Float                 initial_beta,
                        bool                  enabled = true) const;
 
+    /// Set PER-PAIR bonded-PT parameters for an existing (L,R) contact pair, so
+    /// different surface pairs can lock / separate under different conditions.
+    /// Any value < 0 means "inherit the global rcc_bonded_pt_* scene config".
+    ///   lock_threshold : beta >= this -> the pair locks into a bonded ABD tet
+    ///   release_strain/gap/slip/force : a locked bond on this pair releases
+    ///       when the corresponding measure exceeds the threshold (1e30 = never)
+    /// (bonded kappa is currently global — the ABD-tet energy stiffness.)
+    /// Requires the pair to have been inserted via `tabular.insert(L,R,...)`.
+    void set_bonded(core::ContactTabular&       tabular,
+                    const core::ContactElement& L,
+                    const core::ContactElement& R,
+                    Float                       lock_threshold,
+                    Float                       release_strain,
+                    Float                       release_gap,
+                    Float                       release_slip,
+                    Float                       release_force) const;
+
+    /// Per-pair bonded params for the default (un-specified) pair (index 0).
+    void default_bonded(core::ContactTabular& tabular,
+                        Float                 lock_threshold,
+                        Float                 release_strain,
+                        Float                 release_gap,
+                        Float                 release_slip,
+                        Float                 release_force) const;
+
     /// Mark a shell geometry's sticky face for v3 single-sided adhesion.
     ///
     /// `sign = +1`  → the +n̂ face (the face that the triangle winding makes
