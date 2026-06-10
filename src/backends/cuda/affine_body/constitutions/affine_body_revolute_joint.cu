@@ -1681,8 +1681,27 @@ class AffineBodyIncrementalDrivingRevoluteJointConstraint final : public InterAf
                        if(gradient_only)
                            return;
 
-                       // Gauss-Newton Hessian = strength * J * J^T (already PSD, no make_spd)
-                       Matrix24x24            H = s * (J * J.transpose());
+                       // H = s * J * J^T + (s * r) * dd(delta_theta)/ddq
+                       Matrix24x24 H = s * (J * J.transpose());
+
+                       if(s * r != 0.0)
+                       {
+                           Vector12 F;
+                           Vector12 F_prev;
+                           ERJ::F<Float>(F, lb, qk, rb, ql);
+                           ERJ::F<Float>(F_prev, lb, q_prevk, rb, q_prevl);
+
+                           Matrix12x12 ddDeltaTheta_ddF;
+                           ERJ::ddDeltaTheta_ddF(ddDeltaTheta_ddF, F, F_prev);
+
+                           Matrix12x12 H_F = (s * r) * ddDeltaTheta_ddF;
+                           make_spd(H_F);
+
+                           Matrix24x24 JT_H_J;
+                           ERJ::JT_H_J<Float>(JT_H_J, H_F, lb, rb, lb, rb);
+                           H += JT_H_J;
+                       }
+
                        TripletMatrixAssembler TMA{H12x12s};
                        TMA.half_block<StencilSize>(HalfHessianSize * I).write(bids, H);
                    });

@@ -1665,8 +1665,27 @@ class AffineBodyIncrementalDrivingPrismaticJointConstraint final : public InterA
                        if(gradient_only)
                            return;
 
-                       // Gauss-Newton Hessian = strength * J * J^T (already PSD, no make_spd)
-                       Matrix24x24            H = s * (J * J.transpose());
+                       // H = s * J * J^T + (s * r) * dd(delta_theta)/ddq
+                       Matrix24x24 H = s * (J * J.transpose());
+
+                       if(s * r != 0.0)
+                       {
+                           Vector12 F;
+                           Vector12 F_prev;
+                           EPJ::F<Float>(F, basis_k, qk, basis_l, ql);
+                           EPJ::F<Float>(F_prev, basis_k, q_prevk, basis_l, q_prevl);
+
+                           Matrix12x12 ddDeltaTheta_ddF;
+                           EPJ::ddDeltaTheta_ddF(ddDeltaTheta_ddF, F, F_prev);
+
+                           Matrix12x12 H_F = (s * r) * ddDeltaTheta_ddF;
+                           make_spd(H_F);
+
+                           Matrix24x24 JT_H_J;
+                           EPJ::JT_H_J<Float>(JT_H_J, H_F, basis_k, basis_l, basis_k, basis_l);
+                           H += JT_H_J;
+                       }
+
                        TripletMatrixAssembler TMA{H12x12s};
                        TMA.half_block<StencilSize>(HalfHessianSize * I).write(bids, H);
                    });
