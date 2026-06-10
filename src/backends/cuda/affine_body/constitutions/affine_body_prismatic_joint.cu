@@ -1389,4 +1389,289 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
 };
 REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointLimit);
 
+
+// ============================================================================
+// AffineBodyIncrementalDrivingPrismaticJoint (UID 34)
+// Per-edge implicit-PD constraint on the base AffineBodyPrismaticJoint (UID 20).
+// Reuses body_ids / rest_cs (c_bar) / rest_ts (t_bar) from AffineBodyPrismaticJoint
+// (index-aligned). The prismatic delta-theta basis layout is [c_bar, t_bar] per
+// body: basis.segment<3>(0) = c_bar, basis.segment<3>(3) = t_bar.
+// ============================================================================
+class AffineBodyIncrementalDrivingPrismaticJointConstraint final : public InterAffineBodyConstraint
+{
+  public:
+    using InterAffineBodyConstraint::InterAffineBodyConstraint;
+
+    static constexpr SizeT HalfHessianSize = 2 * (2 + 1) / 2;
+    static constexpr SizeT StencilSize     = 2;
+
+    static constexpr U64 ConstraintUID = 34;
+
+    SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
+
+    OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
+
+    vector<IndexT> h_is_constrained;
+    vector<Float>  h_strength;
+    vector<Float>  h_aim_increment;
+
+    muda::DeviceBuffer<IndexT> is_constrained;
+    muda::DeviceBuffer<Float>  strength;
+    muda::DeviceBuffer<Float>  aim_increment;
+
+    void do_build(BuildInfo& info) override
+    {
+        prismatic_joint = require<AffineBodyPrismaticJoint>();
+    }
+
+    U64 get_uid() const noexcept override { return ConstraintUID; }
+
+    void do_init(InterAffineBodyAnimator::FilteredInfo& info) override
+    {
+        auto geo_slots = world().scene().geometries();
+
+        h_geo_joint_offsets_counts.resize(info.anim_inter_geo_infos().size());
+
+        list<IndexT> is_constrained_list;
+        list<Float>  strength_list;
+        list<Float>  aim_increment_list;
+
+        IndexT joint_offset = 0;
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto constitution_uid = geo.meta().find<U64>(builtin::constitution_uid);
+                UIPC_ASSERT(constitution_uid, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'constitution_uid' attribute");
+                U64 uid_value = constitution_uid->view()[0];
+                UIPC_ASSERT(uid_value == AffineBodyPrismaticJoint::ConstitutionUID,
+                            "AffineBodyIncrementalDrivingPrismaticJoint: Geometry constitution UID mismatch (expected {}, got {})",
+                            AffineBodyPrismaticJoint::ConstitutionUID,
+                            uid_value);
+
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyIncrementalDrivingPrismaticJoint geometry must be SimplicialComplex");
+
+                h_geo_joint_offsets_counts.counts()[joint_offset] = sc->edges().size();
+
+                auto is_constrained = sc->edges().find<IndexT>("pd/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/is_constrained' attribute on `edges`");
+                std::ranges::copy(is_constrained->view(),
+                                  std::back_inserter(is_constrained_list));
+
+                auto strength = sc->edges().find<Float>("pd/strength");
+                UIPC_ASSERT(strength, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/strength' attribute on `edges`");
+                std::ranges::copy(strength->view(), std::back_inserter(strength_list));
+
+                auto aim_increment = sc->edges().find<Float>("pd/aim_increment");
+                UIPC_ASSERT(aim_increment, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/aim_increment' attribute on `edges`");
+                std::ranges::copy(aim_increment->view(),
+                                  std::back_inserter(aim_increment_list));
+
+                joint_offset++;
+            });
+
+        h_geo_joint_offsets_counts.scan();
+
+        h_is_constrained.resize(is_constrained_list.size());
+        std::ranges::copy(is_constrained_list, h_is_constrained.begin());
+
+        h_strength.resize(strength_list.size());
+        std::ranges::copy(strength_list, h_strength.begin());
+
+        h_aim_increment.resize(aim_increment_list.size());
+        std::ranges::copy(aim_increment_list, h_aim_increment.begin());
+
+        is_constrained.copy_from(h_is_constrained);
+        strength.copy_from(h_strength);
+        aim_increment.copy_from(h_aim_increment);
+
+        UIPC_ASSERT(h_is_constrained.size() == prismatic_joint->h_body_ids.size(),
+                    "AffineBodyIncrementalDrivingPrismaticJoint: joint count {} must equal "
+                    "AffineBodyPrismaticJoint joint count {} (index alignment required)",
+                    h_is_constrained.size(),
+                    prismatic_joint->h_body_ids.size());
+    }
+
+    void do_step(InterAffineBodyAnimator::FilteredInfo& info) override
+    {
+        auto  geo_slots       = world().scene().geometries();
+        SizeT geo_joint_index = 0;
+
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must be a simplicial complex");
+
+                auto [offset, count] = h_geo_joint_offsets_counts[geo_joint_index];
+                UIPC_ASSERT(sc->edges().size() == count,
+                            "AffineBodyIncrementalDrivingPrismaticJoint: Geometry edges size {} mismatch with joint count {}",
+                            sc->edges().size(),
+                            count);
+
+                auto is_constrained = sc->edges().find<IndexT>("pd/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/is_constrained' attribute on `edges`");
+                std::ranges::copy(is_constrained->view(),
+                                  span{h_is_constrained}.subspan(offset, count).begin());
+
+                auto strength = sc->edges().find<Float>("pd/strength");
+                UIPC_ASSERT(strength, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/strength' attribute on `edges`");
+                std::ranges::copy(strength->view(),
+                                  span{h_strength}.subspan(offset, count).begin());
+
+                auto aim_increment = sc->edges().find<Float>("pd/aim_increment");
+                UIPC_ASSERT(aim_increment, "AffineBodyIncrementalDrivingPrismaticJoint: Geometry must have 'pd/aim_increment' attribute on `edges`");
+                std::ranges::copy(aim_increment->view(),
+                                  span{h_aim_increment}.subspan(offset, count).begin());
+
+                ++geo_joint_index;
+            });
+
+        is_constrained.copy_from(h_is_constrained);
+        strength.copy_from(h_strength);
+        aim_increment.copy_from(h_aim_increment);
+    }
+
+    void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
+    {
+        info.energy_count(is_constrained.size());
+        info.gradient_count(StencilSize * is_constrained.size());
+        if(info.gradient_only())
+            return;
+
+        info.hessian_count(HalfHessianSize * is_constrained.size());
+    }
+
+    // Reconstruct the prismatic delta-theta basis [c_bar, t_bar] per body from the
+    // base joint's rest_cs (c_bar) and rest_ts (t_bar) Vector6 storage:
+    //   rest_cs[I] = [L_c_bar (0:3), R_c_bar (3:6)]
+    //   rest_ts[I] = [L_t_bar (0:3), R_t_bar (3:6)]
+    // basis_k (L body) = [L_c_bar, L_t_bar], basis_l (R body) = [R_c_bar, R_t_bar].
+    void do_compute_energy(InterAffineBodyAnimator::ComputeEnergyInfo& info) override
+    {
+        using namespace muda;
+        namespace EPJ = sym::external_prismatic_joint_constraint;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(is_constrained.size(),
+                   [body_ids = prismatic_joint->body_ids.cviewer().name("body_ids"),
+                    rest_cs  = prismatic_joint->rest_cs.cviewer().name("rest_cs"),
+                    rest_ts  = prismatic_joint->rest_ts.cviewer().name("rest_ts"),
+                    is_constrained = is_constrained.cviewer().name("is_constrained"),
+                    strength = strength.cviewer().name("strength"),
+                    aim_increment = aim_increment.cviewer().name("aim_increment"),
+                    qs      = info.qs().cviewer().name("qs"),
+                    q_prevs = info.q_prevs().cviewer().name("q_prevs"),
+                    Es = info.energies().viewer().name("Es")] __device__(int I)
+                   {
+                       if(is_constrained(I) == 0)
+                       {
+                           Es(I) = 0.0;
+                           return;
+                       }
+
+                       Vector2i bids = body_ids(I);
+                       Vector6  c    = rest_cs(I);
+                       Vector6  t    = rest_ts(I);
+
+                       Vector6 basis_k, basis_l;
+                       basis_k.segment<3>(0) = c.segment<3>(0);
+                       basis_k.segment<3>(3) = t.segment<3>(0);
+                       basis_l.segment<3>(0) = c.segment<3>(3);
+                       basis_l.segment<3>(3) = t.segment<3>(3);
+
+                       const Vector12& qk      = qs(bids[0]);
+                       const Vector12& ql      = qs(bids[1]);
+                       const Vector12& q_prevk = q_prevs(bids[0]);
+                       const Vector12& q_prevl = q_prevs(bids[1]);
+
+                       Float delta_theta = 0.0;
+                       EPJ::DeltaTheta<Float>(delta_theta, basis_k, qk, q_prevk, basis_l, ql, q_prevl);
+
+                       Float r = delta_theta - aim_increment(I);
+                       Es(I)   = 0.5 * strength(I) * r * r;
+                   });
+    }
+
+    void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override
+    {
+        using Vector24    = Vector<Float, 24>;
+        using Matrix24x24 = Matrix<Float, 24, 24>;
+
+        using namespace muda;
+        namespace EPJ = sym::external_prismatic_joint_constraint;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(is_constrained.size(),
+                   [body_ids = prismatic_joint->body_ids.cviewer().name("body_ids"),
+                    rest_cs  = prismatic_joint->rest_cs.cviewer().name("rest_cs"),
+                    rest_ts  = prismatic_joint->rest_ts.cviewer().name("rest_ts"),
+                    is_constrained = is_constrained.cviewer().name("is_constrained"),
+                    strength = strength.cviewer().name("strength"),
+                    aim_increment = aim_increment.cviewer().name("aim_increment"),
+                    qs      = info.qs().cviewer().name("qs"),
+                    q_prevs = info.q_prevs().cviewer().name("q_prevs"),
+                    G12s    = info.gradients().viewer().name("G12s"),
+                    H12x12s = info.hessians().viewer().name("H12x12s"),
+                    gradient_only = info.gradient_only()] __device__(int I) mutable
+                   {
+                       Vector2i bids = body_ids(I);
+
+                       if(is_constrained(I) == 0)
+                       {
+                           DoubletVectorAssembler DVA{G12s};
+                           DVA.segment<StencilSize>(StencilSize * I).write(bids, Vector24::Zero());
+
+                           if(gradient_only)
+                               return;
+
+                           TripletMatrixAssembler TMA{H12x12s};
+                           TMA.half_block<StencilSize>(HalfHessianSize * I).write(bids, Matrix24x24::Zero());
+                           return;
+                       }
+
+                       Vector6 c = rest_cs(I);
+                       Vector6 t = rest_ts(I);
+
+                       Vector6 basis_k, basis_l;
+                       basis_k.segment<3>(0) = c.segment<3>(0);
+                       basis_k.segment<3>(3) = t.segment<3>(0);
+                       basis_l.segment<3>(0) = c.segment<3>(3);
+                       basis_l.segment<3>(3) = t.segment<3>(3);
+
+                       const Vector12& qk      = qs(bids[0]);
+                       const Vector12& ql      = qs(bids[1]);
+                       const Vector12& q_prevk = q_prevs(bids[0]);
+                       const Vector12& q_prevl = q_prevs(bids[1]);
+
+                       Float delta_theta = 0.0;
+                       EPJ::DeltaTheta<Float>(delta_theta, basis_k, qk, q_prevk, basis_l, ql, q_prevl);
+
+                       Float s = strength(I);
+                       Float r = delta_theta - aim_increment(I);
+
+                       Vector24 J;
+                       EPJ::dDeltaTheta_dQ<Float>(J, basis_k, qk, q_prevk, basis_l, ql, q_prevl);
+
+                       // gradient = strength * r * dDeltaTheta_dQ
+                       Vector24               G = (s * r) * J;
+                       DoubletVectorAssembler DVA{G12s};
+                       DVA.segment<StencilSize>(StencilSize * I).write(bids, G);
+
+                       if(gradient_only)
+                           return;
+
+                       // Gauss-Newton Hessian = strength * J * J^T (already PSD, no make_spd)
+                       Matrix24x24            H = s * (J * J.transpose());
+                       TripletMatrixAssembler TMA{H12x12s};
+                       TMA.half_block<StencilSize>(HalfHessianSize * I).write(bids, H);
+                   });
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyIncrementalDrivingPrismaticJointConstraint);
+
 }  // namespace uipc::backend::cuda
