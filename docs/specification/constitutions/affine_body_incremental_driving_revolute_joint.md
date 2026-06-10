@@ -86,16 +86,31 @@ Driving-specific attributes on **edges**:
 - `pd/aim_increment`: $\tilde{\delta\theta}$, the target angle increment for this step.
 - `pd/is_constrained`: enables (`1`) or disables (`0`) the driving effect.
 
-## Note on tracking fidelity
+## Note on tracking fidelity (driver responsibility)
 
-Because $\delta\theta$ is referenced to the previous step (not the rest frame), this constitution
-exhibits a modest extra dynamic-tracking lag relative to the absolute-angle driving joint
-(empirically ~3× the 1-DOF tracking RMS at matched gains; equivalently a higher effective joint
-inertia at high stiffness). This lag is **intrinsic to the incremental parametrization** — it is
-identical whether the same energy is delivered through this constitution or through the External
-Articulation Constraint with a diagonal mass, and it is unchanged by the Gauss-Newton Hessian.
-The trade is deliberate: branch-cut robustness (survives fast / near-limit motion) in exchange
-for slightly softer dynamic tracking. Equilibrium/holding is unaffected.
+The constitution's angle is faithful: `δθ(x)` and `∂δθ/∂x` are **bit-identical** to the
+absolute-angle driving joint's `θ`/`∂θ/∂x` (verified by direct evaluation of the symbolic
+kernels, rigid and non-rigid, at any angle). So the angle parametrization introduces **no**
+fidelity loss by itself.
+
+A tracking lag can nonetheless appear, and it is a property of **how the driver computes the
+target** `aim_increment` (δθ̃), not of this constitution. δθ̃ must be the increment to the target
+measured in the *same* angle convention this constitution uses (the symmetric basis-dot `atan2`
+above). If the driver instead forms δθ̃ from a *different* angle reconstruction of the previous
+state — e.g. a quaternion-extracted joint angle from the body transforms — the two reconstructions
+agree only while the bodies are rigid; under the affine scale/shear that develops in a stiff solve
+they diverge, the target is mis-referenced, and the joint tracks with a gain/motion-dependent lag
+(empirically up to ~3× the 1-DOF RMS at high stiffness).
+
+This is a genuine tension, not a bug. Making δθ̃ self-consistent by referencing it to a **fixed**
+pose (build/rest) closes the lag exactly **but reintroduces the ±π `atan2` branch cut** of the
+absolute angle once a joint's excursion from that pose exceeds π — defeating the whole purpose of
+the incremental form. A recent reference in the *same* convention cancels back to the absolute
+angle (same branch cut). So for a **non-stateful** driver the choices are: branch-cut-robust with a
+modest lag (use a recent, possibly-different reconstruction for δθ̃), or faithful but branch-cut-
+fragile (fixed reference). Closing the lag *and* staying robust requires **stateful continuous-angle
+unwrapping** (tracking the winding number so the absolute basis-dot angle never wraps). Equilibrium
+and holding are unaffected in all cases.
 
 The prismatic counterpart is
 [AffineBodyIncrementalDrivingPrismaticJoint](./affine_body_incremental_driving_prismatic_joint.md)

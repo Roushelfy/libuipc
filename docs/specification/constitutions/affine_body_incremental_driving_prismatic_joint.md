@@ -38,3 +38,7 @@ On **edges**: `pd/strength`, `pd/aim_increment`, `pd/is_constrained` (see the re
 Prismatic is linear, so it never had a branch-cut problem; this constitution exists for symmetry
 with the revolute one and to provide the same clean per-edge `½·strength·(δθ−aim_increment)²` energy
 with direct joint-stiffness units.
+
+The driver-reference tracking caveat in the revolute doc's *Note on tracking fidelity* applies here
+too: `aim_increment` (δθ̃) must be the target increment in the same axis-projection convention this
+constitution measures; a mismatched reconstruction in the driver yields a tracking lag.
