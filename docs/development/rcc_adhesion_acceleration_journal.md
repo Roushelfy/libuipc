@@ -1259,3 +1259,26 @@ Implemented all five Phase 7 steps from the 2026-06-10 feasibility design: dista
 - Build: H100 (`hpc-low`), full `cmake --build` RelWithDebInfo, clean.
 - Gates green: `[rcc_bonded_pt][oracle][distance_lock]` 18/2 (band predicate vs exact brute-force closest-distance reference — all probe feet on grid nodes — plus face-foot gate incl. degenerate triangle); `[rcc_bonded_pt][scene][distance_lock]` 604/1 (bonds by distance with `Cn = Ct = 0`, threshold-clamp pin at global 1.5, carried lift, sentinel beta 1.0 in the accessor dump, live rejection counter, forced-pull release via unchanged gates, zero locks at full separation, penetration-free with CCD skipped); `[rcc_bonded_pt][state][counters]` 28/1; regressions `[rcc_bonded_pt]` 265/16, `[rcc_bonded_pt][scene][pt_lift_release]` 596/1, `[rcc_adhesion][oracle]` 12/4, `[rcc_adhesion][gate]` 836/2.
 - `python3 scripts/run_rcc_adhesion_acceleration_gates.py` — source/doc gate green after the status flips.
+
+## 2026-06-11 Distance-Lock Wind/Drop/Unwind Probes (temflex175-2turn-e5e7-dhat2-cnct1)
+
+### Context
+
+First end-to-end asset pipeline runs of the implemented Phase 7 mode on the soft 2-turn tape preset (H100, headless EGL): wind -> saved asset -> drop, then wind asset -> unwind (peel).
+
+### Source Observations
+
+- Wind, c = 0.5 (default): ZERO locks, save-time max|v| = 0.33 m/s (the released roll was unspooling — nothing holds it in this mode without bonds). Wound layers rest at pitch LAYER_THICKNESS = 2.5e-4, i.e. d − ξ ≈ 1.6e-4 = 0.89·d_hat (d_hat = 2·thickness = 1.8e-4), so a 0.5·d_hat band is unreachable — the same press-equilibrium lesson as the cube scene gate, diagnosed directly by `distance_rejected_count == candidate_count`.
+- Wind, c = 0.95: 1379 locks, save-time max|v| = 1.0e-5 m/s; settle1 max|v| ~ 1e-9 (the bonded roll is effectively rigidified — quieter than the beta-mode wind). 2630 frames in ~106 s wall-clock. Sentinel beta 1.0 round-trips the asset dump (`frac>0.9 = 100%`).
+- Drop: auto-detects the mode from the asset, reseeds all 1379 locks, survives hold/pull/top/freefall intact, lands as a coherent roll. PNGs/mp4 under `output/distlock_run/`.
+- Unwind (peel): does NOT peel — the documented "no load-based lock suppression" caveat, now with data. Lock-count trace during the pull: 1396 at seed -> RISES to ~1568 mid-pull -> stable 1524 at settle; force releases (RCC_RELEASE_FORCE = 3e-7 from the asset) are cancelled by next-step relocks while the peel-front pairs are still inside the band, and the pull itself presses more pairs into the band. Visually the slack segment straightens but the wound body never opens. Beta mode peels here because tension drives beta down and a released pair does not immediately relock.
+
+### Decisions
+
+- Distance-lock mode is fit for wind/drop/hold-style workloads (grab, hold rigidly, release on gross separation); peel-style workloads need beta mode — or a future released-pair cooldown / load-based lock suppression if peel-under-distance-lock becomes a requirement. Recorded as-is; no code change.
+- `rcc_adhesive_tape_unwind_demo.py` gained the same DISTANCE_LOCK wiring as the drop demo (CLI > asset > default) and a per-progress-line bonded-lock count in the headless record path (the live peel-front signal that made this diagnosis one log read).
+
+### Commands
+
+- `run_wind_drop.sh` (output/distlock_run): wind + drop, `--set DISTANCE_LOCK=1 --set DISTANCE_LOCK_RATIO=0.95 --set LOCK_FACE_INTERIOR_ONLY=1`.
+- `rcc_adhesive_tape_unwind_demo.py --preset default --asset .../temflex175-2turn-e5e7-dhat2-cnct1-distlock.npz --set RECORD_DIR=... --set RECORD_ZOOM=1.2` — UNWIND_OK (sim stable), peel stalled per the lock trace above.

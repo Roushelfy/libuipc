@@ -281,6 +281,20 @@ def build_demo(adhesion_on: bool = True,
         # energy-matches the non-bonded debonding load; see the note in
         # tape_asset_lib.py above WIND_PRESETS.
         config["rcc_bonded_pt_release_force"] = release_force
+        # Phase 7 distance-locked bonding. Precedence: `--set DISTANCE_LOCK=...`
+        # wins; else the asset's saved flag (a tape wound in distance-lock mode
+        # auto-replays in it). No soft adhesion energy / beta in this mode; the
+        # lock gate is the end-of-step distance band d < xi + c*d_hat. Caveat
+        # vs beta mode: a force-released bond relocks next step while the pair
+        # is still inside the band (no load-based relock suppression) — for a
+        # peel that must STAY peeled, the peel motion has to carry the pair out
+        # of the band before the next step end.
+        if L.resolve_flag(_CFG, params, "DISTANCE_LOCK", default=False):
+            config["rcc_bonded_pt_distance_lock"] = 1
+            _ratio = _CFG.get("DISTANCE_LOCK_RATIO")
+            if _ratio is None:
+                _ratio = params.get("DISTANCE_LOCK_RATIO", 0.5)
+            config["rcc_bonded_pt_distance_lock_ratio"] = float(_ratio)
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
@@ -632,9 +646,13 @@ def run_demo():
     if record_dir:
         every_n = int(_CFG.get("RECORD_EVERY", 10))
         zoom    = float(_CFG.get("RECORD_ZOOM", 5.0))
+        # Bonded-lock count per progress line: the live signal that the peel
+        # front is advancing (locks release) or stalling (relock churn).
+        bpt_for_log = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
         def _on_progress(f, tot):
+            locked = bpt_for_log.locked_pair_count() if bpt_for_log else -1
             print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
-                  f"Phase: {phase_at(f - 1)}")
+                  f"Phase: {phase_at(f - 1)}  locked={locked}")
         L.record_demo_to_pngs(sim=sim, total_frames=TOTAL_FRAMES,
                               output_dir=record_dir, every_n=every_n,
                               up_dir="z_up", mesh_name="unwind_tape",
