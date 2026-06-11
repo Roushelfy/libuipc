@@ -1,32 +1,38 @@
 """
-Wind a sticky tape onto a fixed deformable rod (Option B — hub-orbit).
+Stick a tape's free end onto a fixed deformable rod and fold it over
+(first slice of the rod-wind sequence; the orbit/winding comes later).
 
-A pre-wound tape roll (loaded from a wind asset, like the drop demo) lies
-on its SIDE on the ground (hub axis horizontal, +z). A two-end-fixed
-DEFORMABLE rod (a thin tube shell, the libuipc analogue of the
-wire_harnessing wire) is suspended in the air, axis parallel to the roll
-(+z). The sequence:
+A pre-wound tape roll (loaded from a wind asset) is stood UPRIGHT: the
+whole asset is rotated about the hub axis (+z) so the protruding free
+segment points straight UP, sticky face toward the rod. A two-end-pinned
+DEFORMABLE rod (thin tube shell) is suspended with its axis +z at the
+height of the upper-middle of the protruding segment, a small horizontal
+gap away on the sticky side. The sequence:
 
-  HOLD   : everything settles on the ground under gravity.
-  PRESS  : SoftPositionConstraint lifts the tape's free-end ROW straight
-           up and presses it onto the underside of the rod, where the
-           tape-rod RCC adhesion fires (β rises).
-  BOND   : hold the free end on the rod so the bond strengthens; the hub
-           (free ABD) hangs below, suspended by the now-anchored tape.
-  ORBIT  : the free-end SPC releases; the hub is driven by a
-           SoftTransformConstraint on a CIRCLE around the rod axis —
-           translation ONLY, orientation pinned (no self-rotation). Each
-           orbit wraps one turn onto the rod; tape is paid out / peeled
-           off the roll (soft-adhesion debond, or bonded-PT release if
-           --bonded). N_TURNS orbits = N turns.
-  SETTLE : hub held at the final orbit point; the wrap relaxes.
+  PIN      : hub held by a SoftTransformConstraint at its stand-up pose;
+             the free-end ROW held by a SoftPositionConstraint. The rest
+             of the tape settles under gravity between the two anchors.
+  APPROACH : hub STC aim and free-end-row SPC aim translate horizontally
+             toward the rod by the same vector, until the tape's sticky
+             face meets the rod surface (IPC band) at the rod's height.
+  WRAP     : hub frozen at the contact pose; the tape rows in contact
+             with the rod are SPC-frozen where they touched; the rows
+             from the free end down to the contact band rotate rigidly
+             180 deg about the ROD AXIS — the free end folds over the
+             rod and hangs on the far side.
+  SQUEEZE  : below the rod, the folded strip and the incoming strip are
+             SPC-pinched toward each other into the adhesion band →
+             tape–tape bond closes the loop around the rod.
+  SETTLE   : all constraints held; adhesion/bonds strengthen.
+  FREE     : every tape SPC releases (hub stays held) — the wrap stays
+             on the rod iff the bond took.
 
 Almost everything is a knob (CLI `--set KEY=VALUE`, or a preset). The
 defaults are a starting point to iterate from, not a tuned result.
 
 Run (interactive):
     python/.venv/bin/python python/examples/rcc_adhesive_tape_rod_wind_demo.py \
-        --asset output/rcc_tape_wind_drop/e5e7_dhat2_abd002_nodal002w_cnct1/wound_asset.npz
+        --asset output/rcc_adhesive_tape_winding/temflex175-2turn-e5e7-dhat2-cnct1-distlock.npz
 
 Headless render:
     ... --set RECORD_DIR=output/rod_wind/run1
@@ -49,7 +55,7 @@ except ModuleNotFoundError:
 from uipc import (
     Logger, Matrix4x4, Engine, World, Scene, SceneIO, Animation, view, builtin,
 )
-from uipc.geometry import ground
+from uipc.geometry import ground, trimesh, label_surface
 from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
@@ -103,60 +109,61 @@ ROD_DENSITY       = _cfg_f("ROD_DENSITY", 1000.0)
 ROD_THICKNESS     = _cfg_f("ROD_THICKNESS", 5.0e-4)
 ROD_BENDING       = _cfg_f("ROD_BENDING", 1.0e-2)
 ROD_PIN_STRENGTH  = _cfg_f("ROD_PIN_STRENGTH", 1.0e6)
-# rod placement (y-up world). Axis +z, centered at (ROD_CX, ROD_Y, ROD_CZ).
-ROD_Y             = _cfg_f("ROD_Y", 0.16)           # height of rod axis (m)
-ROD_CX            = _cfg_f("ROD_CX", 0.0)
+# rod placement (y-up world). Axis +z. The X position is AUTO: the rod sits
+# a horizontal gap ROD_GAP off the tape's sticky face (toward the roll
+# center). The height is AUTO: ROD_HEIGHT_FRAC of the way up the protruding
+# free segment ("middle, slightly above"). ROD_Y >= 0 overrides the height.
+ROD_Y             = _cfg_f("ROD_Y", -1.0)           # rod axis height (m); <0 ⇒ auto
+ROD_GAP           = _cfg_f("ROD_GAP", 0.03)         # initial tape-face → rod-surface gap (m)
+ROD_HEIGHT_FRAC   = _cfg_f("ROD_HEIGHT_FRAC", 0.6)  # rod height along the protruding segment (0=root, 1=tip)
 ROD_CZ            = _cfg_f("ROD_CZ", 0.0)
 
-# ---- orbit (hub motion) ----
-HANG_RADIUS       = _cfg_f("HANG_RADIUS", -1.0)     # orbit radius (m); <0 ⇒ auto = the hub's natural risen hang radius, captured at orbit entry
-N_TURNS           = _cfg_f("N_TURNS", 3.0)          # number of orbits = turns wound
-WRAP_PITCH        = _cfg_f("WRAP_PITCH", 0.0)       # axial advance per turn (m). 0=stacked, >0=helical
-ORBIT_DIR         = _cfg_f("ORBIT_DIR", -1.0)       # +1 / -1: fold-bulge & orbit sense (flip if it folds/winds the wrong way)
-
-# ---- press / drape onto the rod ----
-# Anchor a row BACK from the tip (so the tip drapes OVER the rod) and press
-# that row onto the rod. The rows beyond the anchor stay free → drape over.
-PRESS_BACK        = _cfg_i("PRESS_BACK", 15)        # # of overhang rows; fold is always a 180° half-circle, this sets its RADIUS (r=PRESS_BACK*ds_len/π)
+# ---- wrap (180° fold of the free end about the rod axis) ----
+FOLD_ROWS         = _cfg_i("FOLD_ROWS", -1)         # rows from the tip that rotate; <0 ⇒ auto = every row above the contact band
+WRAP_DIR          = _cfg_f("WRAP_DIR", 0.0)         # ±1 rotation sense about +z; 0 ⇒ auto (over the rod top, away from the tape side)
 
 # ---- adhesion-to-rod (tape ↔ rod). Defaults mirror tape-tape unless set ----
 STICKY            = _cfg_i("STICKY", 0)             # 0=double-sided (robust), ±1=single
 
 # ---- timeline (dt = 0.01) ----
-#   HOLD  → settle on ground
-#   PRESS → DRAPE: lift the anchor row onto the rod top; the tip overhangs
-#           over the far side (the tape goes up & over the rod).
-#   FOLD  → curl the overhanging tip in a half-circle around the rod and
-#           press it down onto the incoming tape below (tape–tape bond) →
-#           a secure first wrap.
-#   BOND  → hold the wrap so the bond strengthens.
-#   ORBIT → release the tape SPC; the hub orbits → more turns.
-HOLD_FRAMES       = _cfg_i("HOLD_FRAMES", 40)
-PRESS_FRAMES      = _cfg_i("PRESS_FRAMES", 120)
-FOLD_FRAMES       = _cfg_i("FOLD_FRAMES", 150)      # curl the overhang around the rod onto the incoming
-BOND_FRAMES       = _cfg_i("BOND_FRAMES", 150)
-ORBIT_FRAMES      = _cfg_i("ORBIT_FRAMES", 1500)
+#   PIN      → hub STC + free-end-row SPC hold the stand-up pose; the rest
+#              of the tape settles between the two anchors.
+#   APPROACH → hub aim + free-end-row aim translate toward the rod until
+#              the sticky face meets the rod surface (IPC band).
+#   WRAP     → hub frozen; contact-band rows SPC-frozen; the rows above
+#              them rotate rigidly 180° about the rod axis.
+#   SQUEEZE  → below the rod, the folded-over strip and the incoming strip
+#              are SPC-driven horizontally TOWARD EACH OTHER until their
+#              mid-surfaces sit inside the adhesion band → tape–tape bond.
+#   SETTLE   → all constraints held; adhesion/bonds strengthen.
+#   FREE     → every tape SPC releases (hub stays held): if the bond took,
+#              the wrap stays on the rod; if not, it springs open.
+PIN_FRAMES        = _cfg_i("PIN_FRAMES", 30)
+APPROACH_FRAMES   = _cfg_i("APPROACH_FRAMES", 120)
+WRAP_FRAMES       = _cfg_i("WRAP_FRAMES", 240)
+SQUEEZE_FRAMES    = _cfg_i("SQUEEZE_FRAMES", 120)
 SETTLE_FRAMES     = _cfg_i("SETTLE_FRAMES", 150)
+FREE_FRAMES       = _cfg_i("FREE_FRAMES", 150)
 
 SPC_STRENGTH      = _cfg_f("SPC_STRENGTH", 1.0e9)
 STC_ETA_P         = _cfg_f("STC_ETA_P", 1.0e8)      # hub translation strength
-STC_ETA_A         = _cfg_f("STC_ETA_A", 1.0e8)      # hub rotation strength (>0 ⇒ no self-rotation)
+STC_ETA_A         = _cfg_f("STC_ETA_A", 1.0e8)      # hub rotation strength (>0 ⇒ orientation pinned)
 
-_T0 = HOLD_FRAMES
-_Tp = _T0 + PRESS_FRAMES        # drape done
-_Tf = _Tp + FOLD_FRAMES         # fold done
-_T2 = _Tf + BOND_FRAMES         # bond done → orbit start
-_T3 = _T2 + ORBIT_FRAMES
-TOTAL_FRAMES      = _T3 + SETTLE_FRAMES
+_T0  = PIN_FRAMES
+_Ta  = _T0 + APPROACH_FRAMES     # approach done → wrap start
+_Tw  = _Ta + WRAP_FRAMES         # wrap done → squeeze start
+_Tsq = _Tw + SQUEEZE_FRAMES      # squeeze done → settle
+_Ts  = _Tsq + SETTLE_FRAMES      # settle done → free
+TOTAL_FRAMES      = _Ts + FREE_FRAMES
 
 
 def phase_at(f: int) -> str:
-    if f < _T0: return "hold"
-    if f < _Tp: return "press"
-    if f < _Tf: return "fold"
-    if f < _T2: return "bond"
-    if f < _T3: return "orbit"
-    return "settle"
+    if f < _T0:  return "pin"
+    if f < _Ta:  return "approach"
+    if f < _Tw:  return "wrap"
+    if f < _Tsq: return "squeeze"
+    if f < _Ts:  return "settle"
+    return "free"
 
 
 # ----------------------------------------------------------------------
@@ -186,7 +193,6 @@ def _make_tape_topology_tris(NX, NZ):
 
 
 def _make_tape_sc(positions, tris):
-    from uipc.geometry import trimesh, label_surface
     sc = trimesh(positions.astype(np.float64), tris)
     label_surface(sc)
     return sc
@@ -205,20 +211,36 @@ def _straight_rest_positions(R_anchor, length, width, NX, NZ):
     return verts
 
 
-def _lay_on_side(tape_pos, hub_T, hub_R_outer, ground_clearance, target_xz):
-    """Keep the asset's native orientation (hub axis +z, horizontal) — the
-    roll lies on its SIDE — and translate so its lowest point sits
-    `ground_clearance` above y=0 and its hub center is at target_xz=(x, z)."""
+def _stand_upright(tape_pos, hub_T, hub_R_outer, ground_clearance, target_xz,
+                   n_width, tip_rows=6):
+    """Rotate the whole asset (tape + hub) about the hub axis (+z, through
+    the hub center) so the protruding free segment points straight UP, then
+    translate so the roll's lowest point sits `ground_clearance` above y=0
+    with the hub center at target_xz=(x, z).
+
+    The free-end direction is estimated from the last `tip_rows` row
+    centers (xy projection). Returns (tape_new, hub_T_new, Rz) — Rz so the
+    caller can rotate the saved velocity snapshot consistently."""
     hub_center = hub_T[:3, 3].copy()
+    centers = tape_pos.reshape(-1, n_width, 3).mean(axis=1)
+    d = centers[-1] - centers[-1 - max(tip_rows, 1)]
+    rot = np.pi / 2 - float(np.arctan2(d[1], d[0]))   # tip direction → +y
+    c, s = np.cos(rot), np.sin(rot)
+    Rz = np.array([[c, -s, 0.0],
+                   [s,  c, 0.0],
+                   [0.0, 0.0, 1.0]], dtype=np.float64)
+    tape_new = (tape_pos - hub_center) @ Rz.T + hub_center
+    hub_T_new = hub_T.copy()
+    hub_T_new[:3, :3] = Rz @ hub_T[:3, :3]
+
     hub_bottom_y = float(hub_center[1]) - hub_R_outer
-    min_y = min(float(tape_pos[:, 1].min()), hub_bottom_y)
+    min_y = min(float(tape_new[:, 1].min()), hub_bottom_y)
     shift = np.array([target_xz[0] - hub_center[0],
                       ground_clearance - min_y,
                       target_xz[1] - hub_center[2]], dtype=np.float64)
-    tape_new = tape_pos + shift
-    hub_T_new = hub_T.copy()
+    tape_new = tape_new + shift
     hub_T_new[:3, 3] += shift
-    return tape_new, hub_T_new
+    return tape_new, hub_T_new, Rz
 
 
 def smooth_lerp(a, b, t):
@@ -267,11 +289,37 @@ def build_demo(adhesion_on: bool = True,
           f"tape ({TAPE_NX+1}×{TAPE_NZ+1}), L={TAPE_LENGTH:.3f} m, "
           f"hub R∈[{HUB_R_INNER:.4f},{HUB_R_OUTER:.4f}]")
 
-    # ---- lay the roll on its side on the ground, centered under the rod
+    # ---- stand the roll upright: free segment pointing straight UP ----
     GROUND_CLEARANCE = TAPE_THICKNESS + 0.5 * D_HAT
-    tape_pos_lay, hub_T_lay = _lay_on_side(
-        tape_pos, hub_T, HUB_R_OUTER, GROUND_CLEARANCE, (ROD_CX, ROD_CZ))
-    R_fixed = hub_T_lay[:3, :3].copy()   # hub orientation pinned during the orbit
+    n_width = TAPE_NZ + 1
+    tape_pos_up, hub_T_up, Rz_up = _stand_upright(
+        tape_pos, hub_T, HUB_R_OUTER, GROUND_CLEARANCE, (0.0, ROD_CZ), n_width)
+
+    # ---- rod placement from the stood-up geometry ----
+    # Protruding segment: from the roll's top (root) to the tip.
+    centers   = tape_pos_up.reshape(-1, n_width, 3).mean(axis=1)
+    hub_c_up  = hub_T_up[:3, 3]
+    LAYER_THICKNESS = float(params.get("LAYER_THICKNESS", 2.5e-4))
+    ASSET_TURNS     = float(params.get("N_TURNS", 2.0))
+    R_roll    = HUB_R_OUTER + ASSET_TURNS * LAYER_THICKNESS + TAPE_THICKNESS
+    y_tip     = float(centers[-1, 1])
+    y_root    = float(hub_c_up[1]) + R_roll
+    rod_y     = ROD_Y if ROD_Y >= 0 else (
+        y_root + ROD_HEIGHT_FRAC * (y_tip - y_root))
+    # Sticky side faces the roll center (the face that was glued to the
+    # layer below continues onto the free segment) → the rod goes on the
+    # side of the tape face that points toward the hub center.
+    x_tape    = float(centers[-1, 0])               # vertical-segment plane
+    side_inner = 1.0 if (float(hub_c_up[0]) - x_tape) >= 0.0 else -1.0
+    rod_x     = x_tape + side_inner * (ROD_GAP + ROD_R)
+    # APPROACH translation: move tape face into the IPC band at the rod
+    # surface (stop just inside the band; IPC carries the actual contact).
+    band_target = 0.5 * TAPE_THICKNESS + 0.5 * D_HAT
+    approach_dx = side_inner * max(ROD_GAP - band_target, 0.0)
+    wrap_dir  = WRAP_DIR if WRAP_DIR != 0.0 else -side_inner
+    print(f"[rod-wind] stand-up: tip y={y_tip:.4f}, root y={y_root:.4f}, "
+          f"rod=({rod_x:.4f}, {rod_y:.4f}), side_inner={side_inner:+.0f}, "
+          f"approach dx={approach_dx:+.4f}, wrap_dir={wrap_dir:+.0f}")
 
     workspace = AssetDir.output_path(__file__)
     engine = Engine("cuda", workspace)
@@ -297,6 +345,15 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_energy_model"] = "abd_ortho"
         config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
         config["rcc_bonded_pt_release_force"] = release_force
+        # Phase 7 distance-locked bonding. Precedence: `--set DISTANCE_LOCK=...`
+        # wins; else the asset's saved flag (a tape wound in distance-lock mode
+        # auto-replays in it). No soft adhesion energy / beta in this mode.
+        if L.resolve_flag(_CFG, params, "DISTANCE_LOCK", default=False):
+            config["rcc_bonded_pt_distance_lock"] = 1
+            _ratio = _CFG.get("DISTANCE_LOCK_RATIO")
+            if _ratio is None:
+                _ratio = params.get("DISTANCE_LOCK_RATIO", 0.5)
+            config["rcc_bonded_pt_distance_lock_ratio"] = float(_ratio)
     L.apply_solver_overrides(config, _CFG, params=params)
     scene = Scene(config)
 
@@ -308,14 +365,14 @@ def build_demo(adhesion_on: bool = True,
 
     tabular = scene.contact_tabular()
     tabular.default_model(0.5, 1.0e9)
-    hub_contact  = tabular.default_element()         # hub + ground
-    tape_contact = tabular.create("tape")
-    rod_contact  = tabular.create("rod")
-    tabular.insert(tape_contact, tape_contact, 0.5, 1.0e9)
-    tabular.insert(tape_contact, hub_contact,  0.5, 1.0e9)
-    tabular.insert(tape_contact, rod_contact,  0.5, 1.0e9)
-    tabular.insert(rod_contact,  hub_contact,  0.5, 1.0e9)
-    tabular.insert(rod_contact,  rod_contact,  0.5, 1.0e9)
+    hub_contact     = tabular.default_element()      # hub + ground
+    tape_contact    = tabular.create("tape")
+    rod_contact     = tabular.create("rod")
+    tabular.insert(tape_contact,    tape_contact,    0.5, 1.0e9)
+    tabular.insert(tape_contact,    hub_contact,     0.5, 1.0e9)
+    tabular.insert(tape_contact,    rod_contact,     0.5, 1.0e9)
+    tabular.insert(rod_contact,     hub_contact,     0.5, 1.0e9)
+    tabular.insert(rod_contact,     rod_contact,     0.5, 1.0e9)
 
     if adhesion_on:
         adhesive = RCCAdhesive()
@@ -340,20 +397,20 @@ def build_demo(adhesion_on: bool = True,
                                     release_gap=-1.0, release_slip=-1.0,
                                     release_force=rf)
 
-    # ---- hub (ABD; free during hold/press/bond, STC-driven during orbit) ----
+    # ---- hub (ABD; STC-held for the whole sequence) ----
     hub_sc = L.make_ring_hub(R_outer=HUB_R_OUTER, R_inner=HUB_R_INNER,
                              height=HUB_HEIGHT, n_radial=48, center=(0.0, 0.0, 0.0))
     abd.apply_to(hub_sc, HUB_KAPPA, HUB_MASS_DENSITY)
     hub_contact.apply_to(hub_sc)
     stc.apply_to(hub_sc, np.array([STC_ETA_P, STC_ETA_A], dtype=np.float64))
-    view(hub_sc.transforms())[0] = _mat4_to_uipc(hub_T_lay)
+    view(hub_sc.transforms())[0] = _mat4_to_uipc(hub_T_up)
     hub_obj = scene.objects().create("hub")
     hub_geo, _ = hub_obj.geometries().create(hub_sc)
 
     # ---- deformable rod (tube shell, both end rings pinned) ----
     rod_sc, rod_pin = L.make_rod_tube_shell(
         R=ROD_R, length=ROD_LENGTH, segments=ROD_SEGMENTS, n_sides=ROD_SIDES,
-        center=(ROD_CX, ROD_Y, ROD_CZ))
+        center=(rod_x, rod_y, ROD_CZ))
     rod_moduli = ElasticModuli2D.youngs_poisson(ROD_YOUNGS, ROD_POISSON)
     nhs.apply_to(rod_sc, rod_moduli, mass_density=ROD_DENSITY, thickness=ROD_THICKNESS)
     dsb.apply_to(rod_sc, ROD_BENDING)
@@ -370,9 +427,9 @@ def build_demo(adhesion_on: bool = True,
     rod_obj = scene.objects().create("rod")
     rod_geo, _ = rod_obj.geometries().create(rod_sc)
 
-    # ---- tape (current = wound-laid; rest = wind's straight strip) ----
+    # ---- tape (current = stood-up wound pose; rest = wind's straight strip) ----
     tris = _make_tape_topology_tris(TAPE_NX, TAPE_NZ)
-    current_sc = _make_tape_sc(tape_pos_lay, tris)
+    current_sc = _make_tape_sc(tape_pos_up, tris)
     R_anchor_rest = HUB_R_OUTER + TAPE_THICKNESS + 0.5 * D_HAT
     rest_positions = _straight_rest_positions(
         R_anchor_rest, TAPE_LENGTH, TAPE_WIDTH, TAPE_NX, TAPE_NZ)
@@ -388,10 +445,11 @@ def build_demo(adhesion_on: bool = True,
         RCCAdhesive.set_sticky_side(current_sc, STICKY)
 
     if tape_vel is not None and tape_vel.shape == tape_pos.shape:
-        # lay-on-side keeps orientation ⇒ velocity unchanged (pure translation)
+        # stand-upright rotates the asset ⇒ rotate the velocity snapshot too
+        tape_vel_up = tape_vel @ Rz_up.T
         if current_sc.vertices().find("velocity") is None:
             current_sc.vertices().create("velocity", np.zeros(3, dtype=np.float64))
-        view(current_sc.vertices().find("velocity"))[:] = tape_vel.reshape(-1, 3, 1)
+        view(current_sc.vertices().find("velocity"))[:] = tape_vel_up.reshape(-1, 3, 1)
 
     tape_obj = scene.objects().create("tape")
     tape_geo, _ = tape_obj.geometries().create(current_sc, rest_sc)
@@ -400,45 +458,27 @@ def build_demo(adhesion_on: bool = True,
     ground_obj = scene.objects().create("ground")
     ground_obj.geometries().create(ground(0.0))
 
-    # ---- free-end DRAPE + FOLD press ----
-    # PRESS (drape): drive ONLY the anchor row (PRESS_BACK rows from the tip)
-    #   up to the rod TOP. The tip rows stay free → the tape goes up & over
-    #   the rod, tip overhanging the far side (the orbit1 frame-40 look).
-    # FOLD: curl the overhang — drive rows anchor_i..NX onto the rod surface,
-    #   laid by arc length STARTING AT THE TOP (θ=π) and wrapping in ORBIT_DIR
-    #   (r̂(θ)=(sinθ,-cosθ): θ=π→top, θ=2π→bottom). PRESS_BACK≈6 ⇒ ~half-circle
-    #   so the tip folds down onto the incoming tape (tape–tape bond) at the
-    #   rod bottom. Held through BOND, released at ORBIT.
+    # ---- free-end row + wrap targets ----
     def vid(i, j): return i * (TAPE_NZ + 1) + j
-    band   = TAPE_THICKNESS + 0.5 * D_HAT
-    wrap_R = ROD_R + band
-    ds_len = TAPE_LENGTH / TAPE_NX
-    anchor_i = max(TAPE_NX - PRESS_BACK, 1)
-    rod_top_y = ROD_Y + wrap_R
-    anchor_ids = [vid(anchor_i, j) for j in range(TAPE_NZ + 1)]
-    # FOLD targets: the overhang folds as a clean HALF-CIRCLE (hairpin).
-    # The tip ALWAYS travels 180° and lands on the incoming tape below the
-    # rod; a longer overhang only makes the half-circle RADIUS bigger
-    # (r = overhang_len / π), not the angle. The anchor (driven to the rod
-    # top in PRESS) is the TOP of the diameter; the tip is the BOTTOM of the
-    # diameter (= straight below the rod, on the incoming). Bulge = ORBIT_DIR.
-    L_over  = max(PRESS_BACK, 1) * ds_len
-    r_fold  = L_over / np.pi
-    cy_fold = (ROD_Y + wrap_R) - r_fold         # α=0 ⇒ anchor at rod top
-    fold_ids, fold_xy, fold_alpha = [], [], []
-    for k in range(anchor_i, TAPE_NX + 1):
-        alpha = ((k - anchor_i) * ds_len) / r_fold   # 0 (top/anchor) … π (tip on incoming)
-        tx = ROD_CX + ORBIT_DIR * r_fold * np.sin(alpha)
-        ty = cy_fold + r_fold * np.cos(alpha)
-        for j in range(TAPE_NZ + 1):
-            fold_ids.append(vid(k, j))
-            fold_xy.append((tx, ty))
-            fold_alpha.append(alpha)
-    fold_ids   = np.asarray(fold_ids,   dtype=np.int64)
-    fold_xy    = np.asarray(fold_xy,    dtype=np.float64)
-    fold_alpha = np.asarray(fold_alpha, dtype=np.float64)
-    drape_state = {"start": None}
-    fold_state  = {"start": None}
+    band    = TAPE_THICKNESS + 0.5 * D_HAT
+    ds_len  = TAPE_LENGTH / TAPE_NX
+    tip_ids = [vid(TAPE_NX, j) for j in range(TAPE_NZ + 1)]
+    tip_p0  = tape_pos_up[tip_ids].copy()            # stand-up pose of the free-end row
+    rod_axis = np.array([rod_x, rod_y], dtype=np.float64)
+
+    # WRAP state, captured at wrap entry from the LIVE shape:
+    #   contact rows — row centers within the IPC band of the rod surface →
+    #                  SPC-frozen where they touched;
+    #   fold rows    — rows above the contact band (or the last FOLD_ROWS) →
+    #                  rotate rigidly about the rod axis by 180°.
+    # SQUEEZE state, captured at squeeze entry: below the rod the folded
+    # strip and the incoming strip are parallel, ~2·(rod R + band) apart —
+    # too far for adhesion. Each side gets a horizontal SPC displacement
+    # toward the other until their mid-surfaces sit one tape thickness +
+    # half an IPC band apart (inside the adhesion / distance-lock band).
+    wrap_state    = {"init": None}
+    squeeze_state = {"init": None}
+    squeeze_sep_target = TAPE_THICKNESS + 0.5 * D_HAT
 
     def animate_tape(info: Animation.UpdateInfo):
         geo = info.geo_slots()[0].geometry()
@@ -446,84 +486,129 @@ def build_demo(adhesion_on: bool = True,
         is_c = view(geo.vertices().find(builtin.is_constrained))
         aim  = view(geo.vertices().find(builtin.aim_position))
         is_c[:] = 0
-        if f < _T0 or f >= _T2:          # hold + (orbit/settle): tape unconstrained
-            drape_state["start"] = None
-            fold_state["start"] = None
+        if f >= _Ts:                      # FREE: all tape SPC released
             return
-        live = np.asarray(view(geo.positions())).reshape(-1, 3)
-        if f < _Tp:                       # DRAPE: anchor row → rod top
-            if drape_state["start"] is None:
-                drape_state["start"] = live[anchor_ids].copy()
-            t = min((f - _T0) / max(PRESS_FRAMES, 1), 1.0)
-            s = drape_state["start"]
-            for jj, k in enumerate(anchor_ids):
-                tgt = np.array([smooth_lerp(s[jj, 0], ROD_CX, t),
-                                smooth_lerp(s[jj, 1], rod_top_y, t),
-                                s[jj, 2]], dtype=np.float64)
+        if f < _Ta:                       # PIN + APPROACH: drive the free-end row
+            t = 0.0 if f < _T0 else min((f - _T0) / max(APPROACH_FRAMES, 1), 1.0)
+            dx = smooth_lerp(0.0, approach_dx, t)
+            for jj, k in enumerate(tip_ids):
                 is_c[k] = 1
+                tgt = tip_p0[jj] + np.array([dx, 0.0, 0.0])
                 aim[k] = tgt.reshape(3, 1)
-        else:                             # FOLD (progressive lay-down) then hold through BOND
-            # Wrap front sweeps α: 0→π. A row is pinned to its arc target only
-            # once the front reaches its α (laid down); rows ahead of the front
-            # stay free (trailing) → the tape wraps AROUND the rod, never pulled
-            # straight through it. By BOND (t≥1) all rows are laid and held.
-            if fold_state["start"] is None:
-                fold_state["start"] = live[fold_ids, 2].copy()   # capture z (width)
-            t = min((f - _Tp) / max(FOLD_FRAMES, 1), 1.0)
-            alpha_front = np.pi * t
-            sz = fold_state["start"]
-            for idx in range(len(fold_ids)):
-                if fold_alpha[idx] > alpha_front + 1e-9:
-                    continue                   # not yet reached by the wrap front → free
-                k = int(fold_ids[idx])
-                tx, ty = fold_xy[idx]
+            wrap_state["init"] = None
+            squeeze_state["init"] = None
+            return
+        # WRAP + SQUEEZE + SETTLE
+        if wrap_state["init"] is None:
+            live = np.asarray(view(geo.positions())).reshape(-1, 3).copy()
+            centers_live = live.reshape(-1, TAPE_NZ + 1, 3).mean(axis=1)
+            dist = np.hypot(centers_live[:, 0] - rod_axis[0],
+                            centers_live[:, 1] - rod_axis[1])
+            contact = dist < (ROD_R + band + 0.5 * ds_len)
+            contact_rows = np.nonzero(contact)[0]
+            if len(contact_rows) == 0:    # fallback: row closest to the rod
+                contact_rows = np.array([int(np.argmin(dist))])
+            top_contact = int(contact_rows.max())
+            first_fold  = (top_contact + 1 if FOLD_ROWS < 0
+                           else max(TAPE_NX + 1 - FOLD_ROWS, top_contact + 1))
+            fold_rows   = list(range(first_fold, TAPE_NX + 1))
+            frozen_rows = [int(r) for r in contact_rows]
+            wrap_state["init"] = (live, frozen_rows, fold_rows)
+            print(f"[rod-wind] wrap start: contact rows {frozen_rows}, "
+                  f"fold rows {first_fold}..{TAPE_NX} "
+                  f"({len(fold_rows)} rows)", flush=True)
+        live0, frozen_rows, fold_rows = wrap_state["init"]
+        # contact rows: frozen where they touched the rod
+        for r in frozen_rows:
+            for j in range(TAPE_NZ + 1):
+                k = vid(r, j)
                 is_c[k] = 1
-                aim[k] = np.array([tx, ty, sz[idx]], dtype=np.float64).reshape(3, 1)
+                aim[k] = live0[k].reshape(3, 1)
+        # fold rows: rigid rotation about the rod axis, 0 → 180°
+        t = min((f - _Ta) / max(WRAP_FRAMES, 1), 1.0)
+        theta = wrap_dir * np.pi * (0.5 - 0.5 * np.cos(np.pi * t))
+        c, s = np.cos(theta), np.sin(theta)
+        fold_tgt = {}
+        for r in fold_rows:
+            for j in range(TAPE_NZ + 1):
+                k = vid(r, j)
+                dx0 = live0[k, 0] - rod_axis[0]
+                dy0 = live0[k, 1] - rod_axis[1]
+                fold_tgt[k] = np.array([rod_axis[0] + c * dx0 - s * dy0,
+                                        rod_axis[1] + s * dx0 + c * dy0,
+                                        live0[k, 2]], dtype=np.float64)
+        # SQUEEZE: pinch the two strips below the rod toward each other
+        sq_dx_fold = sq_dx_in = 0.0
+        in_ids = []
+        if f >= _Tw:
+            if squeeze_state["init"] is None:
+                live = np.asarray(view(geo.positions())).reshape(-1, 3).copy()
+                # The squeeze must NOT shear the rows that sit on the rod: the
+                # displacement TAPERS from 0 near the rod bottom to its full
+                # value `taper_len` further down (otherwise the transition row
+                # between the frozen contact band and the squeezed zone is
+                # dragged straight into the rod -> thickness violation).
+                y_cut     = rod_axis[1] - (ROD_R + band) - 1.0 * ds_len
+                taper_len = max(3.0 * ds_len, 2.0 * (ROD_R + band))
+                def _w(y):
+                    return float(np.clip((y_cut - y) / taper_len, 0.0, 1.0))
+                # folded-strip vertices below the rod (use the wrap endpoints)
+                f_ids = [k for k, tg in fold_tgt.items() if tg[1] < y_cut]
+                f_w   = {k: _w(fold_tgt[k][1]) for k in f_ids}
+                # incoming rows: below the contact band, vertically overlapping
+                # the folded strip
+                y_lo = (min(fold_tgt[k][1] for k in f_ids) - 2 * ds_len
+                        if f_ids else y_cut)
+                ids, ws = [], []
+                for r in range(0, min(frozen_rows)):
+                    for j in range(TAPE_NZ + 1):
+                        k = vid(r, j)
+                        if y_lo <= live[k, 1] <= y_cut:
+                            ids.append(k)
+                            ws.append(_w(live[k, 1]))
+                if f_ids and ids:
+                    x_f = float(np.mean([fold_tgt[k][0] for k in f_ids]))
+                    x_i = float(np.mean(live[ids, 0]))
+                    sep = x_f - x_i
+                    s_t = np.sign(sep) * squeeze_sep_target
+                    sq_f = -(sep - s_t) / 2.0
+                    sq_i = +(sep - s_t) / 2.0
+                else:
+                    sq_f = sq_i = 0.0
+                squeeze_state["init"] = (live, f_w, ids, ws, sq_f, sq_i)
+                print(f"[rod-wind] squeeze start: fold verts {len(f_ids)}, "
+                      f"incoming verts {len(ids)}, "
+                      f"dx fold={sq_f:+.4f}, dx in={sq_i:+.4f}", flush=True)
+            live_sq, f_w, in_ids, in_ws, sq_f, sq_i = squeeze_state["init"]
+            tq = min((f - _Tw) / max(SQUEEZE_FRAMES, 1), 1.0)
+            sq = 0.5 - 0.5 * np.cos(np.pi * tq)
+            sq_dx_fold, sq_dx_in = sq * sq_f, sq * sq_i
+            for k, w in zip(in_ids, in_ws):
+                is_c[k] = 1
+                tgt = live_sq[k] + np.array([sq_dx_in * w, 0.0, 0.0])
+                aim[k] = tgt.reshape(3, 1)
+        else:
+            squeeze_state["init"] = None
+            f_w = {}
+        for k, tg in fold_tgt.items():
+            is_c[k] = 1
+            tgt = tg + np.array([sq_dx_fold * f_w.get(k, 0.0), 0.0, 0.0])
+            aim[k] = tgt.reshape(3, 1)
 
     scene.animator().insert(tape_obj, animate_tape)
 
-    # ---- hub orbit: SoftTransformConstraint, translation-only circle.
-    # During PRESS/BOND the hub is FREE and rises with the lifted tape,
-    # ending up hanging just below the rod. At orbit entry we capture that
-    # natural (radius, angle) and sweep the hub around the rod axis from
-    # exactly there — no jump, no fighting the hang. Orientation is pinned
-    # to R_fixed ⇒ NO self-rotation. φ=0 ⇒ straight below the rod.
-    MIN_ORBIT_R = ROD_R + HUB_R_OUTER + 0.003
-    orbit_state = {"init": None}
-
+    # ---- hub: STC-held for the whole sequence ----
+    # PIN: hold the stand-up pose. APPROACH: translate by the same horizontal
+    # vector as the free-end row. WRAP/SETTLE: frozen at the contact pose.
     def animate_hub(info: Animation.UpdateInfo):
         geo = info.geo_slots()[0].geometry()
         f = max(info.frame() - 1, 0)
         is_c = view(geo.instances().find(builtin.is_constrained))
         aim  = view(geo.instances().find(builtin.aim_transform))
-        if f < _T2:                       # free before the orbit (rises with the lift)
-            is_c[0] = 0
-            orbit_state["init"] = None
-            return
-        cur = np.asarray(view(geo.transforms())[0]).reshape(4, 4)
-        c0 = cur[:3, 3]
-        if orbit_state["init"] is None:
-            dx, dy = float(c0[0] - ROD_CX), float(c0[1] - ROD_Y)
-            r_nat = float(np.hypot(dx, dy))
-            r = HANG_RADIUS if HANG_RADIUS > 0 else max(r_nat, MIN_ORBIT_R)
-            phi0 = float(np.arctan2(dx, -dy))   # so point(φ0)=current center
-            # Capture the hub's ACTUAL current orientation (it may have tilted
-            # while free during press/bond). Holding this — not the stale
-            # build-time R_fixed — makes the STC engage at zero initial error
-            # (no snap / no Newton blow-up) and pins orientation ⇒ no self-rotation.
-            orbit_state["init"] = (r, phi0, float(c0[2]), cur[:3, :3].copy())
-            print(f"[rod-wind] orbit start: r={r*1e3:.1f} mm "
-                  f"(natural {r_nat*1e3:.1f} mm), φ0={np.degrees(phi0):.0f}°", flush=True)
-        r, phi0, z0, R_hold = orbit_state["init"]
-        frac = min((f - _T2) / max(ORBIT_FRAMES, 1), 1.0)
-        sweep = ORBIT_DIR * 2.0 * np.pi * N_TURNS * (0.5 - 0.5 * np.cos(np.pi * frac))
-        phi = phi0 + sweep
-        c = np.array([ROD_CX + r * np.sin(phi),
-                      ROD_Y - r * np.cos(phi),
-                      z0 + WRAP_PITCH * sweep / (2.0 * np.pi)], dtype=np.float64)
-        M = np.eye(4, dtype=np.float64)
-        M[:3, :3] = R_hold                # hold the hub's entry orientation ⇒ no snap, no self-rotation
-        M[:3, 3] = c
+        t = 0.0 if f < _T0 else min((f - _T0) / max(APPROACH_FRAMES, 1), 1.0)
+        dx = smooth_lerp(0.0, approach_dx, t)
+        M = hub_T_up.copy()
+        M[0, 3] += dx
         is_c[0] = 1
         aim[0] = _mat4_to_uipc(M)
 
@@ -553,11 +638,16 @@ def build_demo(adhesion_on: bool = True,
 
 
 def run_demo():
-    bonded = L.cfg_flag(_CFG, "BONDED", default=False)
+    # `--set BONDED=...` wins; else the asset's saved flag (a tape wound WITH
+    # bonded — incl. distance-lock mode — auto-enables it); else OFF.
+    _asset_params = L.peek_asset_params(ASSET_IN_PATH)
+    bonded = L.resolve_flag(_CFG, _asset_params, "BONDED", default=False)
     sim = build_demo(adhesion_on=True, bonded=bonded,
-                     beta_lock_threshold=_cfg_f("RCC_BETA_LOCK_THRESHOLD", 0.9),
+                     beta_lock_threshold=float(L.resolve_param(
+                         _CFG, _asset_params, "RCC_BETA_LOCK_THRESHOLD")),
                      kappa=_cfg_f("RCC_KAPPA", 1.0e8),
-                     release_force=_cfg_f("RCC_RELEASE_FORCE", 1.0e30) if bonded else 1.0e30)
+                     release_force=float(L.resolve_param(
+                         _CFG, _asset_params, "RCC_RELEASE_FORCE")) if bonded else 1.0e30)
 
     record_dir = _CFG.get("RECORD_DIR")
     if record_dir:
