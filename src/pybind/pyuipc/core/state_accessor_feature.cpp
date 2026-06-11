@@ -239,11 +239,13 @@ positions of each locked virtual tetrahedron (for visualization).)");
             d["degenerate_rejected_count"]  = c.degenerate_rejected_count;
             d["filter_skipped_count"]       = c.filter_skipped_count;
             d["duplicate_suppressed_count"] = c.duplicate_suppressed_count;
+            d["distance_rejected_count"]    = c.distance_rejected_count;
+            d["policy_rejected_count"]      = c.policy_rejected_count;
             return d;
         },
         R"(Bonded PT counters as a dict: candidate_count, locked_count,
 released_count, degenerate_rejected_count, filter_skipped_count,
-duplicate_suppressed_count.)");
+duplicate_suppressed_count, distance_rejected_count, policy_rejected_count.)");
 
     class_RCCBondedPTStateAccessorFeature.def(
         "dump_locked_tet_world_positions",

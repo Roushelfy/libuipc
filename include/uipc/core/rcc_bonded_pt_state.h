@@ -40,6 +40,12 @@ struct UIPC_CORE_API RCCBondedPTCounters
     SizeT degenerate_rejected_count = 0;
     SizeT filter_skipped_count = 0;
     SizeT duplicate_suppressed_count = 0;
+    // Distance-lock mode (Phase 7) lock-gate rejections: candidates rejected
+    // by the distance band or the cross-layer occlusion cast.
+    SizeT distance_rejected_count = 0;
+    // Lock-gate rejections from the explicit per-pair adhesion_enabled check
+    // (distance-lock mode; in beta mode the policy gate acts via beta pinning).
+    SizeT policy_rejected_count = 0;
 };
 
 class UIPC_CORE_API RCCBondedPTState

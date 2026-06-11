@@ -113,6 +113,8 @@ TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
     CHECK(state.counters().degenerate_rejected_count == 2);
     CHECK(state.counters().filter_skipped_count == 3);
     CHECK(state.counters().duplicate_suppressed_count == 1);
+    CHECK(state.counters().distance_rejected_count == 0);
+    CHECK(state.counters().policy_rejected_count == 0);
 
     REQUIRE(state.mark_released(17, RCCBondedPTReleasePolicy));
     auto released = state.extract_released();
@@ -128,6 +130,8 @@ TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
     CHECK(state.counters().degenerate_rejected_count == 0);
     CHECK(state.counters().filter_skipped_count == 0);
     CHECK(state.counters().duplicate_suppressed_count == 0);
+    CHECK(state.counters().distance_rejected_count == 0);
+    CHECK(state.counters().policy_rejected_count == 0);
 
     RCCBondedPTCounters restored;
     restored.candidate_count             = 8;
@@ -136,6 +140,8 @@ TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
     restored.degenerate_rejected_count   = 4;
     restored.filter_skipped_count        = 3;
     restored.duplicate_suppressed_count = 2;
+    restored.distance_rejected_count     = 7;
+    restored.policy_rejected_count       = 6;
     state.set_counters(restored);
 
     CHECK(state.counters().candidate_count == 8);
@@ -144,4 +150,6 @@ TEST_CASE("rcc_bonded_pt_state_counters_are_reportable",
     CHECK(state.counters().degenerate_rejected_count == 4);
     CHECK(state.counters().filter_skipped_count == 3);
     CHECK(state.counters().duplicate_suppressed_count == 2);
+    CHECK(state.counters().distance_rejected_count == 7);
+    CHECK(state.counters().policy_rejected_count == 6);
 }

@@ -233,6 +233,115 @@ namespace sym::codim_ipc_rcc_adhesive
         return (tt > tmin) && (tt < tmax);
     }
 
+    // Cross-layer occlusion gate shared by the Phase B beta-init kernels and
+    // the distance-mode lock-eligibility kernel: cast a segment from
+    // centroid(T) toward P; if any other shell triangle blocks it, the pair
+    // is separated by an intervening layer and must not bond. The engage test
+    // fires for BOTH orientations in which adhesion can engage (mirroring
+    // PT_sticky_gate): T's sticky face toward P, OR P's sticky face toward T.
+    // Triangles sharing any of the pair's 4 vertices are excluded from the
+    // cast. PT = (P, T0, T1, T2) global vertex ids; positions/triangles come
+    // in as device viewers so each caller supplies its own position snapshot.
+    template <typename PosViewer, typename TriViewer>
+    inline __device__ bool VT_occlusion_blocked(const Vector4i&  PT,
+                                                const Vector3&   P,
+                                                const Vector3&   T0,
+                                                const Vector3&   T1,
+                                                const Vector3&   T2,
+                                                IndexT           sticky_P,
+                                                IndexT           sticky_T,
+                                                const Vector3&   normal_P,
+                                                const PosViewer& Ps,
+                                                const TriViewer& shell_tris,
+                                                IndexT           n_tris)
+    {
+        Vector3    N    = (T1 - T0).cross(T2 - T0);
+        Vector3    Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
+        Vector3    sdir = P - Cen;
+        const bool engage =
+            (sticky_P == 0 && sticky_T == 0)
+            || (sticky_T != 0 && Float(sticky_T) * N.dot(sdir) > Float{0})
+            || (sticky_P != 0 && Float(sticky_P) * normal_P.dot(sdir) < Float{0});
+        if(!engage)
+            return false;
+        constexpr Float TMIN = Float{1e-5};
+        constexpr Float TMAX = Float{1} - Float{1e-5};
+        for(IndexT j = 0; j < n_tris; ++j)
+        {
+            const Vector3i& tri = shell_tris(j);
+            if(tri[0] == PT[0] || tri[1] == PT[0] || tri[2] == PT[0])
+                continue;
+            if(tri[0] == PT[1] || tri[1] == PT[1] || tri[2] == PT[1])
+                continue;
+            if(tri[0] == PT[2] || tri[1] == PT[2] || tri[2] == PT[2])
+                continue;
+            if(tri[0] == PT[3] || tri[1] == PT[3] || tri[2] == PT[3])
+                continue;
+            Vector3 A = Ps(tri[0]);
+            Vector3 B = Ps(tri[1]);
+            Vector3 C = Ps(tri[2]);
+            if(segment_triangle_hit(Cen, sdir, A, B, C, TMIN, TMAX))
+                return true;
+        }
+        return false;
+    }
+
+    // -------- distance-locked bonding (Phase 7) lock-gate helpers --------
+    // MUDA_GENERIC so the CPU oracle ([rcc_bonded_pt][oracle][distance_lock])
+    // can call them on host while the Phase A lock-eligibility kernel calls
+    // them on device.
+
+    // Face-interior foot test shared by the beta-mode lock mask and the
+    // distance-mode lock gate: true iff P's perpendicular foot lies inside
+    // the triangle, or on / within `margin` (barycentric units) of its
+    // boundary. Degenerate (zero-area) triangles count as face-exterior —
+    // the rest-shape builder would reject them downstream anyway.
+    inline MUDA_GENERIC bool VT_lock_face_interior_pass(const Vector3& P,
+                                                        const Vector3& A,
+                                                        const Vector3& B,
+                                                        const Vector3& C,
+                                                        Float          margin)
+    {
+        const Vector3 e0 = B - A, e1 = C - A, ep = P - A;
+        const Float   d00 = e0.dot(e0), d01 = e0.dot(e1), d11 = e1.dot(e1);
+        const Float   d20 = ep.dot(e0), d21 = ep.dot(e1);
+        const Float   den = d00 * d11 - d01 * d01;
+        if(den <= Float{0})
+            return false;
+        const Float v        = (d11 * d20 - d01 * d21) / den;
+        const Float w        = (d00 * d21 - d01 * d20) / den;
+        const Float u        = Float{1} - v - w;
+        const Float min_bary = fmin(u, fmin(v, w));
+        return min_bary >= -margin;
+    }
+
+    // Distance-band lock predicate: true iff the VT primitive's true
+    // closest-feature distance satisfies d < xi + c*d_hat. The closest-feature
+    // flag is recomputed from the given (end-of-step) positions — the lock is
+    // a fresh decision about end-of-step geometry, never the lagged
+    // begin-of-step ActiveVT.flag. c = 0 can never pass: the band collapses to
+    // d < xi, which the IPC barrier never allows.
+    inline MUDA_GENERIC bool VT_distance_lock_band_pass(const Vector3& P,
+                                                        const Vector3& A,
+                                                        const Vector3& B,
+                                                        const Vector3& C,
+                                                        Float          xi,
+                                                        Float          d_hat,
+                                                        Float          ratio)
+    {
+        // ratio <= 0 disables distance locking STRUCTURALLY (the documented
+        // "c = 0 never locks" contract) — with xi > 0 the band would otherwise
+        // degenerate to a thickness-violation detector d < xi, which only the
+        // IPC d > xi invariant keeps empty.
+        if(ratio <= Float{0})
+            return false;
+        const Float band = xi + ratio * d_hat;
+        const Vector4i flag = distance::point_triangle_distance_flag(P, A, B, C);
+        Float          D;
+        distance::point_triangle_distance2(flag, P, A, B, C, D);
+        return D < band * band;
+    }
+
     // -------- PT-pair sorted-vertex U64 hash key --------
     // (p, t0, t1, t2): sort (t0,t1,t2) into ascending order, then mix.
     // Collision probability across ~10⁶ pairs ≈ N²/2^64 ≈ 1e-8.

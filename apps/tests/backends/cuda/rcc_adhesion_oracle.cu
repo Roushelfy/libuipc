@@ -4,8 +4,12 @@
 #include <muda/buffer/device_buffer.h>
 #include <contact_system/contact_models/codim_ipc_simplex_rcc_adhesive_function.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
+#include <limits>
+#include <vector>
 
 // Finite-difference E/G/H oracle for the per-feature RCC adhesion device
 // functions (Phase 6 Step 1 formulas). Proves the PE (Vector9/9x9) and PP
@@ -298,4 +302,120 @@ TEST_CASE("rcc_adhesion_PP_tangential_egh_matches_finite_difference",
         [&](const Eigen::Vector<Float, 6>& q) { return launch_PP_tan_E(prev, unpack<2>(q), Ct, beta, d_hat, dt); },
         [&](const Eigen::Vector<Float, 6>& q) { Vector6 g; Matrix6x6 h; launch_PP_tan_GH(prev, unpack<2>(q), Ct, beta, d_hat, dt, g, h); return g; },
         G, H);
+}
+
+// ============================================================================
+// Phase 7: distance-locked bonding lock-gate oracle (host-side).
+// VT_distance_lock_band_pass / VT_lock_face_interior_pass are MUDA_GENERIC, so
+// the oracle calls them directly on the CPU and checks them against an
+// independent brute-force reference:
+//   - distance: dense clamped-barycentric sampling of the closest point on the
+//     triangle (grid error << the margin of every probe to the band boundary);
+//   - face-interior: the analytic foot of P on the triangle plane.
+// Probes cover: face-interior PT inside/outside the band, the exact-boundary
+// case (strict <), PE/PP closest features, xi > 0, ratio = 0 (never locks),
+// and degenerate triangles (face-exterior).
+// ============================================================================
+
+namespace
+{
+using namespace uipc;
+using uipc::backend::cuda::sym::codim_ipc_rcc_adhesive::VT_distance_lock_band_pass;
+using uipc::backend::cuda::sym::codim_ipc_rcc_adhesive::VT_lock_face_interior_pass;
+
+// Brute-force closest distance from P to triangle ABC via barycentric grid
+// sampling (clamped to the triangle). Grid error <= edge_len / N.
+Float brute_force_point_triangle_distance(
+    const Vector3& P, const Vector3& A, const Vector3& B, const Vector3& C, int N = 400)
+{
+    Float best2 = std::numeric_limits<Float>::infinity();
+    for(int i = 0; i <= N; ++i)
+    {
+        for(int j = 0; j <= N - i; ++j)
+        {
+            Float   u = Float(i) / N;
+            Float   v = Float(j) / N;
+            Vector3 Q = A + u * (B - A) + v * (C - A);
+            best2     = std::min(best2, (P - Q).squaredNorm());
+        }
+    }
+    return std::sqrt(best2);
+}
+}  // namespace
+
+TEST_CASE("rcc_bonded_pt_distance_lock_band_predicate_matches_brute_force",
+          "[rcc_bonded_pt][oracle][distance_lock]")
+{
+    using namespace uipc;
+
+    const Vector3 A{0.0, 0.0, 0.0};
+    const Vector3 B{1.0, 0.0, 0.0};
+    const Vector3 C{0.0, 0.0, 1.0};
+    const Float   d_hat = 0.02;
+
+    struct Probe
+    {
+        Vector3 P;
+        Float   xi;
+        Float   ratio;
+    };
+    // Probes keep >= 20% margin to the band boundary so the brute-force grid
+    // error (~edge/400) cannot flip the reference decision.
+    const std::vector<Probe> probes = {
+        // face-interior PT feature, inside / outside the band (band = 0.01)
+        {Vector3{0.25, 0.005, 0.25}, 0.0, 0.5},
+        {Vector3{0.25, 0.015, 0.25}, 0.0, 0.5},
+        // PE feature: beyond edge AB (z < 0), distance dominated by the edge
+        {Vector3{0.5, 0.004, -0.006}, 0.0, 0.5},
+        {Vector3{0.5, 0.010, -0.015}, 0.0, 0.5},
+        // PP feature: beyond corner A
+        {Vector3{-0.004, 0.004, -0.004}, 0.0, 0.5},
+        {Vector3{-0.012, 0.012, -0.012}, 0.0, 0.5},
+        // xi > 0 widens the band to xi + c*d_hat = 0.06
+        {Vector3{0.25, 0.045, 0.25}, 0.05, 0.5},
+        {Vector3{0.25, 0.075, 0.25}, 0.05, 0.5},
+        // ratio = 1: band = d_hat
+        {Vector3{0.25, 0.015, 0.25}, 0.0, 1.0},
+        {Vector3{0.25, 0.025, 0.25}, 0.0, 1.0},
+    };
+
+    for(const auto& p : probes)
+    {
+        const Float d_ref = brute_force_point_triangle_distance(p.P, A, B, C);
+        const bool  ref   = d_ref < p.xi + p.ratio * d_hat;
+        const bool  got = VT_distance_lock_band_pass(p.P, A, B, C, p.xi, d_hat, p.ratio);
+        CAPTURE(p.P.transpose(), p.xi, p.ratio, d_ref);
+        CHECK(got == ref);
+    }
+
+    // ratio = 0, xi = 0: the band collapses — never locks, even in contact.
+    CHECK_FALSE(VT_distance_lock_band_pass(
+        Vector3{0.25, 1e-6, 0.25}, A, B, C, 0.0, d_hat, 0.0));
+    // ratio = 0, xi > 0: band = xi; a point at distance > xi must not lock
+    // (under the IPC barrier d > xi always holds, so this never fires).
+    CHECK_FALSE(VT_distance_lock_band_pass(
+        Vector3{0.25, 0.06, 0.25}, A, B, C, 0.05, d_hat, 0.0));
+    // Exact band boundary is exclusive (strict <): d = band must not lock.
+    CHECK_FALSE(VT_distance_lock_band_pass(
+        Vector3{0.25, 0.01, 0.25}, A, B, C, 0.0, d_hat, 0.5));
+}
+
+TEST_CASE("rcc_bonded_pt_distance_lock_face_interior_pass",
+          "[rcc_bonded_pt][oracle][distance_lock]")
+{
+    using namespace uipc;
+
+    const Vector3 A{0.0, 0.0, 0.0};
+    const Vector3 B{1.0, 0.0, 0.0};
+    const Vector3 C{0.0, 0.0, 1.0};
+
+    // Foot inside the triangle.
+    CHECK(VT_lock_face_interior_pass(Vector3{0.25, 0.1, 0.25}, A, B, C, 0.0));
+    // Foot beyond edge AB (w_C = -0.2): rejected at margin 0, admitted at 0.5.
+    CHECK_FALSE(VT_lock_face_interior_pass(Vector3{0.5, 0.1, -0.2}, A, B, C, 0.0));
+    CHECK(VT_lock_face_interior_pass(Vector3{0.5, 0.1, -0.2}, A, B, C, 0.5));
+    // Foot far outside (face-exterior even with the default margin).
+    CHECK_FALSE(VT_lock_face_interior_pass(Vector3{0.5, 0.1, -0.8}, A, B, C, 0.5));
+    // Degenerate (zero-area) triangle counts as face-exterior.
+    CHECK_FALSE(VT_lock_face_interior_pass(Vector3{0.25, 0.1, 0.25}, A, B, A, 0.5));
 }

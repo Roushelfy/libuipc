@@ -71,6 +71,11 @@ class RCCBondedPTSystem final : public SimSystem
         void sync_filter_skipped_count(const SimplexTrajectoryFilter::Impl& filter) noexcept;
 
         const core::RCCBondedPTCounters& counters() const noexcept;
+        // Distance-lock mode (Phase 7): the lock producer reports its
+        // eligibility-kernel rejections here (the producer owns the gate;
+        // this system owns the counters).
+        void add_lock_rejection_counts(SizeT distance_rejected,
+                                       SizeT policy_rejected) noexcept;
         muda::CBufferView<U64>      released_keys() const noexcept;
         muda::CBufferView<Vector4i> released_topos() const noexcept;
         muda::CBufferView<Float>    released_beta() const noexcept;
@@ -135,6 +140,8 @@ class RCCBondedPTSystem final : public SimSystem
     bool  empty() const noexcept;
     bool  enabled() const noexcept;
     const core::RCCBondedPTCounters& counters() const noexcept;
+    void add_lock_rejection_counts(SizeT distance_rejected,
+                                   SizeT policy_rejected) noexcept;
     muda::CBufferView<Vector4i> locked_topos() const noexcept;
     muda::CBufferView<Matrix3x3> locked_dm_inv() const noexcept;
     muda::CBufferView<Float> locked_rest_volume() const noexcept;

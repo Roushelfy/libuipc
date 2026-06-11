@@ -942,6 +942,13 @@ const core::RCCBondedPTCounters& RCCBondedPTSystem::Impl::counters() const noexc
     return m_counters;
 }
 
+void RCCBondedPTSystem::Impl::add_lock_rejection_counts(SizeT distance_rejected,
+                                                        SizeT policy_rejected) noexcept
+{
+    m_counters.distance_rejected_count += distance_rejected;
+    m_counters.policy_rejected_count += policy_rejected;
+}
+
 muda::CBufferView<U64> RCCBondedPTSystem::Impl::released_keys() const noexcept
 {
     return m_released_keys;
@@ -1085,6 +1092,12 @@ bool RCCBondedPTSystem::enabled() const noexcept
 const core::RCCBondedPTCounters& RCCBondedPTSystem::counters() const noexcept
 {
     return m_impl.counters();
+}
+
+void RCCBondedPTSystem::add_lock_rejection_counts(SizeT distance_rejected,
+                                                  SizeT policy_rejected) noexcept
+{
+    m_impl.add_lock_rejection_counts(distance_rejected, policy_rejected);
 }
 
 muda::CBufferView<Vector4i> RCCBondedPTSystem::locked_topos() const noexcept

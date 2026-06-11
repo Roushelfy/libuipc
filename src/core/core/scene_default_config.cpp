@@ -66,6 +66,17 @@ geometry::AttributeCollection default_scene_config() noexcept
     // Barycentric margin for the face gate above: how far outside the triangle
     // the foot may be and still bond. 0 = strictly inside/on-boundary.
     config.create("rcc_bonded_pt_lock_face_margin", Float{0.5});
+    // Phase 7: distance-locked bonding (adhesion-free mode). 1 = the soft RCC
+    // adhesion energy is NOT assembled and beta does not exist; the bonded lock
+    // gate becomes the geometric distance band below. Release gates unchanged.
+    // RCCAdhesive::apply_to is still required (the tabular carries
+    // adhesion_enabled and the per-pair bonded_* overrides); Cn/Ct are ignored.
+    config.create("rcc_bonded_pt_distance_lock", IndexT{0});
+    // Lock-band coefficient c in [0,1] for distance-locked bonding: a VT pair
+    // locks when its end-of-step true closest-feature distance satisfies
+    // d < xi + c*d_hat (xi = per-pair thickness; xi = 0 reduces to d < c*d_hat).
+    // c = 0 never locks (IPC keeps d > xi). Clamped to [0,1] on read.
+    config.create("rcc_bonded_pt_distance_lock_ratio", Float{0.5});
 
     // SOFT RCC normal-adhesion energy-minimum offset coefficient c in [0,1].
     // Moves the normal-energy min to d* = xi + c*d_hat (xi = per-pair thickness,

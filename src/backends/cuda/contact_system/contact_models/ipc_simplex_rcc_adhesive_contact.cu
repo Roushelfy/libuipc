@@ -14,6 +14,7 @@
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/device_buffer_2d.h>
 #include <muda/buffer/device_var.h>
+#include <muda/atomic.h>
 #include <thrust/sort.h>
 #include <thrust/binary_search.h>
 #include <thrust/execution_policy.h>
@@ -94,6 +95,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // evolution rule — the bonding_term can lift it from zero without this
     // gate). Not snapshotted across steps: the next frame's Phase B re-runs
     // the test against the current geometry, so persistence is unnecessary.
+    // (Beta mode only — in distance-lock mode this buffer is never written or
+    // read; the occlusion cast is fused into the Phase A lock-eligibility
+    // kernel via the shared VT_occlusion_blocked.)
     muda::DeviceBuffer<IndexT>  m_blocked_PT;
 
     // Positions at the START of the current step. Phase A uses these to compute
@@ -102,7 +106,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     muda::DeviceBuffer<Vector3> m_pos_at_step_begin;
 
     // Step-boundary detection: Phase B runs once per frame, the rest of the
-    // Newton iterations within the same frame just read m_beta_PT.
+    // Newton iterations within the same frame just read m_beta_PT. (Beta mode
+    // only — in distance-lock mode Phase B never runs and m_beta_PT is never
+    // read; Phase A owns all lock state.)
     SizeT m_last_seen_frame = ~SizeT(0);
     bool  m_first_step      = true;
 
@@ -206,7 +212,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto&       cfg   = world().scene().config();
         auto        cfg_f = [&](const char* k, Float d) -> Float
         { auto a = cfg.find<Float>(k); return a ? a->view()[0] : d; };
-        const Float G_LOCK   = cfg_f("rcc_bonded_pt_beta_lock_threshold", 1.0);
+        const Float G_LOCK_raw = cfg_f("rcc_bonded_pt_beta_lock_threshold", 1.0);
+        // Distance-lock mode (Phase 7): the indicator lock-beta is 1.0, and the
+        // producer's select replaces the global scalar with the per-pair
+        // bonded_lock_threshold whenever the tabular is provided — so a
+        // beta-mode global value > 1 must not propagate through the sentinel
+        // resolution and silently veto every lock. Explicit per-pair values
+        // keep their raw meaning (> 1 = deliberate per-pair veto).
+        // (m_bonded_pt_distance_lock is set in RCCBetaEvolutionTimeIntegrator::
+        // do_build, which runs before this on_init_scene callback.)
+        const Float G_LOCK = m_bonded_pt_distance_lock ?
+                                 std::min(G_LOCK_raw, Float{1}) :
+                                 G_LOCK_raw;
         const Float G_STRAIN = cfg_f("rcc_bonded_pt_release_strain", 1e30);
         const Float G_GAP    = cfg_f("rcc_bonded_pt_release_gap", 1e30);
         const Float G_SLIP   = cfg_f("rcc_bonded_pt_release_slip", 1e30);
@@ -266,6 +283,25 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         m_adhesive_tabular.resize(muda::Extent2D{static_cast<size_t>(m_N),
                                                  static_cast<size_t>(m_N)});
         m_adhesive_tabular.view().copy_from(host.data());
+
+        // Phase 7: distance-lock mode never assembles adhesion energy or runs
+        // the beta law, so nonzero adhesion coefficients are a contradictory
+        // config — report once and ignore them. (m_bonded_pt_distance_lock is
+        // set in RCCBetaEvolutionTimeIntegrator::do_build, which runs before
+        // this on_init_scene callback.)
+        if(m_bonded_pt_distance_lock)
+        {
+            bool any_adhesion = false;
+            for(SizeT row = 0; row < Cn_view.size() && !any_adhesion; ++row)
+                any_adhesion = en_view[row] != 0
+                               && (Cn_view[row] > 0 || Ct_view[row] > 0);
+            if(any_adhesion)
+                logger::warn(
+                    "RCC distance-lock mode (rcc_bonded_pt_distance_lock=1) is "
+                    "on, but an adhesion-enabled contact-model row has "
+                    "Cn/Ct > 0: soft adhesion energy is NOT assembled in this "
+                    "mode and the adhesion coefficients are ignored.");
+        }
     }
 
     // ---- v3 helpers: oriented-adhesion topology + vertex normals ----
@@ -501,52 +537,17 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            return;
                        }
 
-                       // Cross-layer occlusion gate: cast a segment from
-                       // centroid(T) toward P at frame-open positions; if
-                       // any other shell triangle blocks it, this pair is
-                       // separated by an intervening layer and must not bond.
-                       // Normal-side test: only fire when T faces P
-                       // (otherwise IPC barrier already keeps them apart and
-                       // there's no adhesion semantics on the wrong side).
-                       bool blocked = false;
-                       {
-                           Vector3 N    = (T1 - T0).cross(T2 - T0);
-                           Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
-                           Vector3 sdir = P - Cen;
-                           // Fire the occlusion ray-cast for BOTH orientations in
-                           // which adhesion can engage (mirror PT_sticky_gate): T's
-                           // sticky face toward P, OR P's sticky face toward T. The
-                           // old `N.dot(sdir) > 0` only covered T-front-toward-P, so
-                           // a P-sticky-driven pair reaching a triangle through an
-                           // intervening layer leaked (beta grew unblocked). O(1)
-                           // guard; the loop still skips sticky-failing pairs (they
-                           // returned early above).
-                           const IndexT  sP = sticky_sign(PT[0]);
-                           const IndexT  sT = sticky_sign(PT[1]);
-                           const Vector3 nP = vert_normal(PT[0]);
-                           const bool engage =
-                               (sP == 0 && sT == 0)
-                               || (sT != 0 && Float(sT) * N.dot(sdir) > Float{0})
-                               || (sP != 0 && Float(sP) * nP.dot(sdir) < Float{0});
-                           if(engage)
-                           {
-                               constexpr Float TMIN = Float{1e-5};
-                               constexpr Float TMAX = Float{1} - Float{1e-5};
-                               for(IndexT j = 0; j < n_tris; ++j)
-                               {
-                                   const Vector3i& tri = shell_tris(j);
-                                   if(tri[0] == PT[0] || tri[1] == PT[0] || tri[2] == PT[0]) continue;
-                                   if(tri[0] == PT[1] || tri[1] == PT[1] || tri[2] == PT[1]) continue;
-                                   if(tri[0] == PT[2] || tri[1] == PT[2] || tri[2] == PT[2]) continue;
-                                   if(tri[0] == PT[3] || tri[1] == PT[3] || tri[2] == PT[3]) continue;
-                                   Vector3 A = Ps(tri[0]);
-                                   Vector3 B = Ps(tri[1]);
-                                   Vector3 Cv = Ps(tri[2]);
-                                   if(segment_triangle_hit(Cen, sdir, A, B, Cv, TMIN, TMAX))
-                                   { blocked = true; break; }
-                               }
-                           }
-                       }
+                       // Cross-layer occlusion gate (shared VT_occlusion_blocked:
+                       // segment-cast from centroid(T) toward P at frame-open
+                       // positions; the engage test mirrors PT_sticky_gate's two
+                       // orientations).
+                       const bool blocked = VT_occlusion_blocked(PT, P, T0, T1, T2,
+                                                                 sticky_sign(PT[0]),
+                                                                 sticky_sign(PT[1]),
+                                                                 vert_normal(PT[0]),
+                                                                 Ps,
+                                                                 shell_tris,
+                                                                 n_tris);
                        blocked_dst(i) = blocked ? IndexT{1} : IndexT{0};
                        if(blocked)
                        {
@@ -652,48 +653,16 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            return;
                        }
 
-                       // Cross-layer occlusion gate (same logic as
-                       // _phase_b_init_all_new). Runs for found pairs too so
-                       // geometry changes flip the blocked state immediately.
-                       bool blocked = false;
-                       {
-                           Vector3 N    = (T1 - T0).cross(T2 - T0);
-                           Vector3 Cen  = (T0 + T1 + T2) * Float{1.0 / 3.0};
-                           Vector3 sdir = P - Cen;
-                           // Fire the occlusion ray-cast for BOTH orientations in
-                           // which adhesion can engage (mirror PT_sticky_gate): T's
-                           // sticky face toward P, OR P's sticky face toward T. The
-                           // old `N.dot(sdir) > 0` only covered T-front-toward-P, so
-                           // a P-sticky-driven pair reaching a triangle through an
-                           // intervening layer leaked (beta grew unblocked). O(1)
-                           // guard; the loop still skips sticky-failing pairs (they
-                           // returned early above).
-                           const IndexT  sP = sticky_sign(PT[0]);
-                           const IndexT  sT = sticky_sign(PT[1]);
-                           const Vector3 nP = vert_normal(PT[0]);
-                           const bool engage =
-                               (sP == 0 && sT == 0)
-                               || (sT != 0 && Float(sT) * N.dot(sdir) > Float{0})
-                               || (sP != 0 && Float(sP) * nP.dot(sdir) < Float{0});
-                           if(engage)
-                           {
-                               constexpr Float TMIN = Float{1e-5};
-                               constexpr Float TMAX = Float{1} - Float{1e-5};
-                               for(IndexT j = 0; j < n_tris; ++j)
-                               {
-                                   const Vector3i& tri = shell_tris(j);
-                                   if(tri[0] == PT[0] || tri[1] == PT[0] || tri[2] == PT[0]) continue;
-                                   if(tri[0] == PT[1] || tri[1] == PT[1] || tri[2] == PT[1]) continue;
-                                   if(tri[0] == PT[2] || tri[1] == PT[2] || tri[2] == PT[2]) continue;
-                                   if(tri[0] == PT[3] || tri[1] == PT[3] || tri[2] == PT[3]) continue;
-                                   Vector3 A = Ps(tri[0]);
-                                   Vector3 B = Ps(tri[1]);
-                                   Vector3 Cv = Ps(tri[2]);
-                                   if(segment_triangle_hit(Cen, sdir, A, B, Cv, TMIN, TMAX))
-                                   { blocked = true; break; }
-                               }
-                           }
-                       }
+                       // Cross-layer occlusion gate (shared VT_occlusion_blocked,
+                       // same as _phase_b_init_all_new). Runs for found pairs too
+                       // so geometry changes flip the blocked state immediately.
+                       const bool blocked = VT_occlusion_blocked(PT, P, T0, T1, T2,
+                                                                 sticky_sign(PT[0]),
+                                                                 sticky_sign(PT[1]),
+                                                                 vert_normal(PT[0]),
+                                                                 Ps,
+                                                                 shell_tris,
+                                                                 n_tris);
                        blocked_dst(i) = blocked ? IndexT{1} : IndexT{0};
                        if(blocked)
                        {
@@ -856,9 +825,15 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
 
     // Phase 6: all VT primitives assemble as 12-DOF (4-vertex) blocks, so the
     // reporter puts the whole VT list in the PT slot and zeroes EE/PE/PP.
+    // Phase 7 distance-lock mode: no adhesion energy at all — report 0. The
+    // energy/assemble kernels are gated on the same flag (counts and kernels
+    // must change together: the kernels write into subviews sized by these
+    // counts).
     void friction_pair_counts(SizeT& pt, SizeT& ee, SizeT& pe, SizeT& pp) const override
     {
-        pt = m_stf_for_phase_a ? m_stf_for_phase_a->friction_VTs().size() : 0;
+        pt = (m_stf_for_phase_a && !m_bonded_pt_distance_lock) ?
+                 m_stf_for_phase_a->friction_VTs().size() :
+                 0;
         ee = 0;
         pe = 0;
         pp = 0;
@@ -867,6 +842,12 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     virtual void do_compute_energy(EnergyInfo& info) override
     {
         using namespace muda;
+
+        // Phase 7 distance-lock mode: no adhesion energy. friction_pair_counts
+        // reports 0 (the output subviews are empty), and Phase B does not run —
+        // Phase A owns all lock state in this mode.
+        if(m_bonded_pt_distance_lock)
+            return;
 
         // Once per frame: Phase B match-or-init over the VT primitive list.
         _phase_b_if_new_frame(info);
@@ -957,6 +938,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     virtual void do_assemble(ContactInfo& info) override
     {
         using namespace muda;
+
+        // Phase 7 distance-lock mode: no adhesion gradient/Hessian (see
+        // do_compute_energy).
+        if(m_bonded_pt_distance_lock)
+            return;
 
         _phase_b_if_new_frame(info);
 
@@ -1096,6 +1082,27 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // (matches the scene-config default). config rcc_adhesion_normal_offset_coeff.
     // Applies to all soft adhesive PT pairs, independent of bonding.
     Float                                    m_adhesion_normal_offset_coeff = 0.5;
+    // Phase 7: distance-locked bonding (adhesion-free mode). When true:
+    // the adhesion energy is not assembled (friction_pair_counts reports 0
+    // and the energy/assemble kernels are gated together — the kernels write
+    // into subviews sized by the reported counts), Phase B beta init and
+    // Phase A beta evolution are skipped together (the evolve kernel reads
+    // m_beta_PT, which Phase B sizes), the released-beta carry is skipped,
+    // and the lock-eligibility kernel switches from beta masking to the
+    // distance band d < xi + c*d_hat below (with the occlusion cast fused
+    // into the same kernel body — structural single-compute). The lagged
+    // vertex-normal recompute and the release-context wiring keep running:
+    // they feed the unchanged sticky-side/policy release gates.
+    // config rcc_bonded_pt_distance_lock.
+    bool                                     m_bonded_pt_distance_lock = false;
+    // Lock-band coefficient c in [0,1]: lock when the end-of-step true
+    // closest-feature distance satisfies d < xi + c*d_hat. c = 0 never locks
+    // (IPC keeps d > xi). config rcc_bonded_pt_distance_lock_ratio.
+    Float                                    m_bonded_pt_distance_lock_ratio = 0.5;
+    // Distance-mode lock-eligibility rejection counters (persistent DeviceVars
+    // so the per-step hot path avoids alloc/free churn; reset each Phase A).
+    muda::DeviceVar<IndexT>                  m_lock_distance_rejected;
+    muda::DeviceVar<IndexT>                  m_lock_policy_rejected;
 
     void _evolve_beta_step_at_end(Float dt)
     {
@@ -1104,16 +1111,32 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto n           = pairs.size();
         auto positions   = m_gvm_for_phase_a->positions();
 
+        const bool distance_lock = m_bonded_pt_distance_lock;
+
         // Make sure m_pos_at_step_begin is sized to the vertex count (first time only).
         if(m_pos_at_step_begin.size() != positions.size())
         {
             m_pos_at_step_begin.resize(positions.size());
-            // First step: no displacement signal yet. Just snapshot and skip evolve.
+            // Beta mode: no displacement signal yet — just snapshot and skip
+            // evolve (and the lock). Distance mode: the lock needs no
+            // displacement signal; continue so bonds can already form at the
+            // end of frame 1 (friction_VTs is seeded by the frame-1 DCD).
             m_pos_at_step_begin.view().copy_from(positions);
-            return;
+            if(!distance_lock)
+                return;
         }
 
-        if(n > 0)
+        // Distance mode: Phase B (which lazily builds the v3 sticky/occlusion
+        // topology via _ensure_v3_state) does not run, so build it here. Safe:
+        // Phase A runs at end of step, after the vertex reporters have filled
+        // global_vertex_offset.
+        if(distance_lock && !m_v3_built)
+        {
+            _build_sticky_topology(positions.size());
+            m_v3_built = true;
+        }
+
+        if(n > 0 && !distance_lock)
         {
             auto contact_ids = m_gvm_for_phase_a->contact_element_ids();
             auto barrier_tab = m_gcm_for_phase_a->contact_tabular();
@@ -1268,7 +1291,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             IndexT vt_n     = (IndexT)vt_pairs.size();
             m_vt_topos.resize(vt_n);
             m_vt_lock_beta.resize(vt_n);
-            if(vt_n > 0)
+            if(vt_n > 0 && !distance_lock)
             {
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
@@ -1281,6 +1304,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                             face_interior_only = m_bonded_pt_lock_face_interior_only,
                             margin   = m_bonded_pt_lock_face_margin] __device__(int i) mutable
                            {
+                               using namespace sym::codim_ipc_rcc_adhesive;
                                const auto&     vt = VTs(i);
                                const Vector4i& T  = vt.topo;
                                topos(i)           = T;
@@ -1301,36 +1325,157 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                    const Vector3 A = Ps(T[1]);
                                    const Vector3 B = Ps(T[2]);
                                    const Vector3 C = Ps(T[3]);
-                                   const Vector3 e0 = B - A, e1 = C - A, ep = P - A;
-                                   const Float d00 = e0.dot(e0), d01 = e0.dot(e1),
-                                               d11 = e1.dot(e1);
-                                   const Float d20 = ep.dot(e0), d21 = ep.dot(e1);
-                                   const Float den = d00 * d11 - d01 * d01;
-                                   Float min_bary = -1e30;  // degenerate -> exterior
-                                   if(den > Float{0})
-                                   {
-                                       const Float v = (d11 * d20 - d01 * d21) / den;
-                                       const Float w = (d00 * d21 - d01 * d20) / den;
-                                       const Float u = Float{1} - v - w;
-                                       min_bary = fmin(u, fmin(v, w));
-                                   }
-                                   eligible = (min_bary >= -margin);
+                                   eligible = VT_lock_face_interior_pass(P, A, B, C, margin);
                                }
                                lockbeta(i) = eligible ? beta(i) : Float{0};
                            });
             }
+            else if(vt_n > 0)  // distance_lock
+            {
+                // Phase 7 distance-mode lock-eligibility kernel. Beta does not
+                // exist; the kernel emits an INDICATOR lock-beta (1.0 = all
+                // gates pass, 0.0 = rejected) so the bonded producer's
+                // beta>=threshold select, rest-shape conditioning, age/dedup,
+                // and the whole release path run unmodified. Gates, cheapest
+                // first:
+                //   1. adhesion_enabled (explicit — in beta mode this arrives
+                //      via beta pinning); rejections -> policy counter.
+                //   2. sticky-side parity (beta mode never bonds sticky-fail
+                //      pairs, their beta is pinned 0; counter still planned).
+                //   3. face-interior foot (same gate as beta mode).
+                //   4. distance band: end-of-step flag recompute + flagged
+                //      D < (xi + c*d_hat)^2; rejections -> distance counter.
+                //   5. cross-layer occlusion segment-cast (most expensive,
+                //      fused here instead of the skipped Phase B kernels —
+                //      structural single-compute); rejections -> distance
+                //      counter.
+                auto contact_ids = m_gvm_for_phase_a->contact_element_ids();
+                auto d_hats      = m_gvm_for_phase_a->d_hats();
+                auto thicknesses = m_gvm_for_phase_a->thicknesses();
+
+                m_lock_distance_rejected = 0;
+                m_lock_policy_rejected   = 0;
+
+                ParallelFor()
+                    .file_line(__FILE__, __LINE__)
+                    .apply(vt_n,
+                           [VTs      = vt_pairs.viewer().name("VTs"),
+                            topos    = m_vt_topos.view().viewer().name("vt_topos"),
+                            lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta"),
+                            Ps       = positions.viewer().name("Ps_lock"),
+                            contact_ids = contact_ids.viewer().name("contact_ids"),
+                            rcc_table = m_adhesive_tabular.cviewer().name("rcc_tabular"),
+                            d_hats      = d_hats.viewer().name("d_hats"),
+                            thicknesses = thicknesses.viewer().name("thicknesses"),
+                            sticky_sign = m_sticky_sign.cviewer().name("sticky_sign"),
+                            vert_normal = m_vertex_normal.cviewer().name("vert_normal"),
+                            shell_tris  = m_shell_triangles.cviewer().name("shell_tris"),
+                            n_tris      = (IndexT)m_shell_triangles.size(),
+                            face_interior_only = m_bonded_pt_lock_face_interior_only,
+                            margin = m_bonded_pt_lock_face_margin,
+                            ratio = m_bonded_pt_distance_lock_ratio,
+                            distance_rejected =
+                                m_lock_distance_rejected.viewer().name(
+                                    "distance_rejected"),
+                            policy_rejected =
+                                m_lock_policy_rejected.viewer().name(
+                                    "policy_rejected")] __device__(int i) mutable
+                           {
+                               using namespace sym::codim_ipc_rcc_adhesive;
+                               const auto&     vt = VTs(i);
+                               const Vector4i& T  = vt.topo;
+                               topos(i)           = T;
+                               lockbeta(i)        = Float{0};
+
+                               Vector4i cids = {contact_ids(T[0]),
+                                                contact_ids(T[1]),
+                                                contact_ids(T[2]),
+                                                contact_ids(T[3])};
+                               auto     rcc  = PT_rcc_coeff(rcc_table, cids);
+                               if(!rcc.enabled)
+                               {
+                                   muda::atomic_add(policy_rejected.data(), IndexT{1});
+                                   return;
+                               }
+
+                               const Vector3 P = Ps(T[0]);
+                               const Vector3 A = Ps(T[1]);
+                               const Vector3 B = Ps(T[2]);
+                               const Vector3 C = Ps(T[3]);
+
+                               if(!PT_sticky_gate(sticky_sign(T[0]),
+                                                  sticky_sign(T[1]),
+                                                  vert_normal(T[0]),
+                                                  vert_normal(T[1]),
+                                                  P, A, B, C))
+                                   return;
+
+                               if(face_interior_only
+                                  && !VT_lock_face_interior_pass(P, A, B, C, margin))
+                                   return;
+
+                               Float xi = PT_thickness(thicknesses(T[0]),
+                                                       thicknesses(T[1]),
+                                                       thicknesses(T[2]),
+                                                       thicknesses(T[3]));
+                               Float d_hat = PT_d_hat(d_hats(T[0]), d_hats(T[1]),
+                                                      d_hats(T[2]), d_hats(T[3]));
+                               if(!VT_distance_lock_band_pass(P, A, B, C, xi, d_hat, ratio))
+                               {
+                                   muda::atomic_add(distance_rejected.data(), IndexT{1});
+                                   return;
+                               }
+
+                               // Cross-layer occlusion (shared VT_occlusion_blocked,
+                               // the same gate the skipped Phase B kernels apply in
+                               // beta mode), at end-of-step positions.
+                               if(VT_occlusion_blocked(T, P, A, B, C,
+                                                       sticky_sign(T[0]),
+                                                       sticky_sign(T[1]),
+                                                       vert_normal(T[0]),
+                                                       Ps,
+                                                       shell_tris,
+                                                       n_tris))
+                               {
+                                   muda::atomic_add(distance_rejected.data(), IndexT{1});
+                                   return;
+                               }
+
+                               lockbeta(i) = Float{1};
+                           });
+
+                const IndexT h_distance_rejected = m_lock_distance_rejected;
+                const IndexT h_policy_rejected   = m_lock_policy_rejected;
+                m_bonded_pt_system_for_phase_a->add_lock_rejection_counts(
+                    static_cast<SizeT>(h_distance_rejected),
+                    static_cast<SizeT>(h_policy_rejected));
+            }
+
+            // Distance mode passes the global threshold clamped to <= 1: the
+            // indicator lock-beta is 1.0, and a beta-mode threshold > 1 must
+            // not silently veto every lock. A per-pair bonded_lock_threshold
+            // > 1 remains a deliberate per-pair veto (the tabular override
+            // replaces this scalar inside the producer's select).
+            const Float lock_threshold =
+                distance_lock ?
+                    std::min(m_bonded_pt_beta_lock_threshold, Float{1}) :
+                    m_bonded_pt_beta_lock_threshold;
 
             m_bonded_pt_system_for_phase_a->lock_from_rcc_pt_snapshot(
                 m_vt_topos.view(),
                 m_vt_lock_beta.view(),
                 positions,
-                m_bonded_pt_beta_lock_threshold,
+                lock_threshold,
                 release_context);
-            m_bonded_pt_beta_carry.merge_released_beta(
-                m_prev_keys_PT,
-                m_prev_beta_PT,
-                m_bonded_pt_system_for_phase_a->released_keys(),
-                m_bonded_pt_system_for_phase_a->released_beta());
+            // Released-beta carry is a beta-mode contract: in distance mode
+            // beta does not exist and its consumer (Phase B matching) does
+            // not run.
+            if(!distance_lock)
+                m_bonded_pt_beta_carry.merge_released_beta(
+                    m_prev_keys_PT,
+                    m_prev_beta_PT,
+                    m_bonded_pt_system_for_phase_a->released_keys(),
+                    m_bonded_pt_system_for_phase_a->released_beta());
         }
     }
 
@@ -1476,6 +1621,20 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
             // clamp to [0,1]: c<0 would move the min behind the barrier; c>1
             // would push it past the active-band outer edge d_hat.
             rcc->m_adhesion_normal_offset_coeff =
+                std::min(Float{1}, std::max(Float{0}, c));
+        }
+        auto distance_lock = config.find<IndexT>("rcc_bonded_pt_distance_lock");
+        if(distance_lock)
+            rcc->m_bonded_pt_distance_lock = distance_lock->view()[0] != 0;
+        auto distance_lock_ratio =
+            config.find<Float>("rcc_bonded_pt_distance_lock_ratio");
+        if(distance_lock_ratio)
+        {
+            Float c = distance_lock_ratio->view()[0];
+            // clamp to [0,1]: the lock band d < xi + c*d_hat must stay inside
+            // the DCD activity band (xi, xi + d_hat); c=0 disables distance
+            // locking (d < xi never holds under the IPC barrier).
+            rcc->m_bonded_pt_distance_lock_ratio =
                 std::min(Float{1}, std::max(Float{0}, c));
         }
 

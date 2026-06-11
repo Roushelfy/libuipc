@@ -306,7 +306,9 @@ ContactGapStats contact_gap_stats(const S<SimplicialComplexSlot>& slot)
     return stats;
 }
 
-S<SimplicialComplexSlot> build_scene(Scene& scene, bool adhesion_on)
+S<SimplicialComplexSlot> build_scene(Scene& scene,
+                                     bool   adhesion_on,
+                                     bool   zero_adhesion_coeffs = false)
 {
     AffineBodyConstitution  abd;
     SoftTransformConstraint stc;
@@ -329,17 +331,38 @@ S<SimplicialComplexSlot> build_scene(Scene& scene, bool adhesion_on)
                                0.0,
                                0.0,
                                false);
-        adhesive.set(tabular,
-                     cube_contact,
-                     cube_contact,
-                     AdhesionCn,
-                     AdhesionCt,
-                     AdhesionW,
-                     AdhesionEta,
-                     1.0,
-                     0.0,
-                     1.0,
-                     true);
+        if(zero_adhesion_coeffs)
+        {
+            // Distance-lock mode scene: RCCAdhesive applied (the lock driver
+            // requires the tabular) with all adhesion coefficients zero —
+            // bonding eligibility comes from adhesion_enabled alone; there is
+            // no soft adhesion force at all.
+            adhesive.set(tabular,
+                         cube_contact,
+                         cube_contact,
+                         0.0,
+                         0.0,
+                         0.0,
+                         1.0,
+                         0.0,
+                         0.0,
+                         0.0,
+                         true);
+        }
+        else
+        {
+            adhesive.set(tabular,
+                         cube_contact,
+                         cube_contact,
+                         AdhesionCn,
+                         AdhesionCt,
+                         AdhesionW,
+                         AdhesionEta,
+                         1.0,
+                         0.0,
+                         1.0,
+                         true);
+        }
     }
 
     auto cube = make_subdivided_cube();
@@ -936,4 +959,132 @@ TEST_CASE("rcc_bonded_pt_cube_lift_hold_no_penetration_gate",
     REQUIRE(hold_height.bottom_y > cube_gate::BottomLiftY - 0.06);
 
     advance_to(world, cube_gate::TotalFrames);
+}
+
+// Phase 7 distance-lock scene gate: bonded virtual tets with NO adhesion
+// energy at all. RCCAdhesive is applied with Cn = Ct = 0 (the lock driver
+// requires the tabular; adhesion_enabled = 1 grants bond eligibility), and
+// the lock gate is the distance band d < xi + c*d_hat evaluated at end of
+// step. The gate proves (1) bonds form by distance alone, (2) no visible
+// penetration while CCD is skipped, (3) the lower cube is carried purely by
+// the bonded energy (no soft adhesion force exists in this mode), (4) locked
+// entries carry the sentinel beta 1.0 through the accessor dump, (5) the
+// unchanged release gates fire on the forced pull and full separation leaves
+// zero locks, and (6) the distance-rejection counter is live.
+TEST_CASE("rcc_bonded_pt_distance_lock_cube_lift_release_gate",
+          "[rcc_bonded_pt][scene][distance_lock][cuda]")
+{
+    using namespace uipc;
+    using namespace uipc::core;
+
+    logger::set_level(spdlog::level::err);
+
+    auto out_path = fmt::format("{}distance_lock_cube/",
+                                AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE));
+    Engine engine{"cuda", out_path};
+    World  world{engine};
+
+    auto config                               = test::Scene::default_config();
+    config["dt"]                              = 0.01;
+    config["gravity"]                         = Vector3{0.0, -9.8, 0.0};
+    config["contact"]["enable"]               = true;
+    config["contact"]["friction"]["enable"]   = true;
+    config["contact"]["d_hat"]                = 0.02;
+    config["linear_system"]["tol_rate"]       = 1.0e-3;
+    config["extras"]["strict_mode"]["enable"] = false;
+    config["rcc_bonded_pt_enabled"]           = 1;
+    config["rcc_bonded_pt_skip_ccd"]          = 1;
+    config["rcc_bonded_pt_energy_model"]      = "abd_ortho";
+    config["rcc_bonded_pt_kappa"]             = 1.0e8;
+    // Distance-lock mode: lock when d < xi + c*d_hat (xi = 0 here). The press
+    // equilibrium gap of this fixture is ~0.0178 (the IPC barrier at
+    // d_hat = 0.02 carries the press load well before contact), so the band
+    // must cover it: c = 0.95 -> band 0.019. Keeping c < 1 leaves an active
+    // DCD window (0.019, 0.02) that the approach transits, which keeps the
+    // distance-rejection counter assertion meaningful.
+    config["rcc_bonded_pt_distance_lock"]       = 1;
+    config["rcc_bonded_pt_distance_lock_ratio"] = 0.95;
+    // Distance mode locks on first contact; only face-interior feet may bond
+    // (the default 0 would mass-lock edge/corner sliver tets).
+    config["rcc_bonded_pt_lock_face_interior_only"] = 1;
+    // Deliberately a beta-mode value > 1: the distance-lock driver must clamp
+    // the global threshold to <= 1 so it cannot veto indicator locks.
+    config["rcc_bonded_pt_beta_lock_threshold"] = 1.5;
+    // Gap release band wider than the lock band (release_gap > c*d_hat), per
+    // the anti-churn guidance; the forced pull separates far beyond it.
+    config["rcc_bonded_pt_release_gap"] = 0.05;
+    test::Scene::dump_config(config, out_path);
+
+    Scene scene{config};
+    auto  cube_slot =
+        cube_gate::build_scene(scene, true, /*zero_adhesion_coeffs=*/true);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    constexpr Float PenTol = 0.01;
+
+    SizeT max_locked      = 0;
+    Float min_gap         = std::numeric_limits<Float>::infinity();
+    Float worst_pen_frame = -1.0;
+
+    for(int f = cube_gate::ContactAt; f <= cube_gate::PrePullHoldUntil; ++f)
+    {
+        advance_to(world, SizeT(f));
+        auto cg = cube_gate::contact_gap_stats(cube_slot);
+        if(cg.min < min_gap)
+        {
+            min_gap         = cg.min;
+            worst_pen_frame = Float(f);
+        }
+        if(f % 20 == 0)
+            max_locked = std::max(max_locked, bonded_stats(world).locked);
+    }
+
+    auto pre_pull   = bonded_stats(world);
+    max_locked      = std::max(max_locked, pre_pull.locked);
+    auto hold_height = cube_gate::height_stats(cube_slot);
+    auto bstats      = beta_stats(world);
+
+    CAPTURE(max_locked,
+            pre_pull.counters.candidate_count,
+            pre_pull.counters.locked_count,
+            pre_pull.counters.released_count,
+            pre_pull.counters.distance_rejected_count,
+            pre_pull.counters.policy_rejected_count,
+            pre_pull.counters.degenerate_rejected_count,
+            pre_pull.counters.duplicate_suppressed_count,
+            min_gap,
+            worst_pen_frame,
+            hold_height.bottom_y,
+            bstats.count,
+            bstats.min);
+
+    // (1) Bonds formed by the distance band alone (beta does not exist).
+    REQUIRE(max_locked >= 1);
+    // (2) No visible penetration while CCD is skipped for locked pairs.
+    REQUIRE(min_gap >= -PenTol);
+    // (3) The lower cube is carried purely by the bonded virtual tets: with
+    // Cn = Ct = 0 there is no soft adhesion force that could lift it.
+    REQUIRE(hold_height.bottom_y > cube_gate::BottomLiftY - 0.06);
+    // (4) Sentinel-beta contract: the adhesion state dump contains exactly
+    // the bonded locked pairs (no soft beta state exists), all at beta 1.0.
+    REQUIRE(bstats.count == pre_pull.locked);
+    if(bstats.count > 0)
+        REQUIRE(bstats.min == 1.0);
+    // (6) The distance-band rejection counter is live: the gradual press
+    // transits the DCD-active-but-outside-band window (c*d_hat, d_hat).
+    REQUIRE(pre_pull.counters.distance_rejected_count >= 1);
+
+    // (5) Forced pull: the unchanged release gates fire (gap growth exceeds
+    // rcc_bonded_pt_release_gap) and full separation leaves zero locks.
+    advance_to(world, cube_gate::PullUntil);
+    auto post_pull = bonded_stats(world);
+    CAPTURE(post_pull.locked, post_pull.counters.released_count);
+    REQUIRE(post_pull.counters.released_count > pre_pull.counters.released_count);
+
+    advance_to(world, cube_gate::TotalFrames);
+    auto end_bonded = bonded_stats(world);
+    CAPTURE(end_bonded.locked);
+    REQUIRE(end_bonded.locked == 0);
 }
