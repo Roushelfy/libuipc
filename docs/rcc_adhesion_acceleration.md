@@ -83,6 +83,28 @@ Principles (see [architecture](./architecture.md) "Full-Feature Adhesion And Per
 | 4 | Distance single-compute in one kernel body (intra-RCC, then optional friction-kernel merge); reject a per-pair `d^2` scratch buffer (GPU regression) | Planned |
 | 5 | Bonded lock on the VT primitive; corner/edge contacts bond; ABD tet stays point-plane | Planned |
 
+## Distance-Locked Bonding Without Adhesion Energy
+
+A planned alternative bonded mode: no soft adhesion energy at all (and therefore no beta), while the bonded virtual-tet lock/release machinery keeps running. The lock gate becomes purely geometric — a VT pair locks when its end-of-step true closest-feature distance satisfies `d < ξ + c·d_hat` with user coefficient `c ∈ [0,1]` (`ξ` = per-pair thickness; `ξ = 0` reduces to the user-facing `d < c·d_hat`). Release gates are unchanged — they never read beta. The [architecture](./architecture.md) section "Distance-Locked Bonding Without Adhesion Energy" is the design of record; this is the subsystem-level checklist and status.
+
+Principles:
+
+- The lock driver stays Phase A of the adhesive reporter (`RCCAdhesive::apply_to` still required; `Cn`/`Ct` stay 0 and are never read); a parallel beta-free driver would duplicate candidate/release-context ownership. As for RCC adhesion today, the candidate stream requires `contact/friction/enable` on (the default).
+- Existing shortcuts do not work: `adhesion_enabled = 0` pins beta to 0 and policy-releases locks; `Cn = 0` is a 0/0 hazard in beta evolution. Hence a dedicated mode switch (which also warns if `Cn`/`Ct > 0` is set alongside it).
+- The distance gate runs in the existing Phase A lock-eligibility kernel (which already captures the end-of-step positions buffer) and emits an indicator lock-beta (1.0/0.0), so the bonded producer's select, rest-shape conditioning, age, dedup, and the whole release path run unmodified; the global lock threshold is passed as `min(value, 1.0)` so a beta-mode setting cannot silently veto indicator locks, while a per-pair `bonded_lock_threshold > 1` remains a deliberate veto.
+- The flag for the closest-feature distance is recomputed from end-of-step positions (pure function), not taken from the lagged `ActiveVT.flag`.
+- Face-interior mask, cross-layer occlusion, and `adhesion_enabled` eligibility compose with the distance gate; the occlusion test is extracted from the Phase B beta-init kernels into a beta-free pass, and distance-mode scenes should set `rcc_bonded_pt_lock_face_interior_only = 1` (without beta's multi-step integration, the default `0` mass-locks edge/corner sliver tets on first contact — the 2026-06-03 failure mode).
+- Energy bypass is atomic: zero `friction_pair_counts` AND gate the energy/assemble kernel bodies together (the kernels write into subviews sized by the reported counts); Phase B init and Phase A evolution are skipped together.
+- No temporal hysteresis: set the gap release band wider than the lock band — `rcc_bonded_pt_release_gap` is a growth threshold relative to the lock-time gap, so `release_gap > c·d_hat` is the conservative sufficient condition — to avoid lock/release churn; the planned min-age gate composes when it lands.
+
+| Step | Change | Status |
+| --- | --- | --- |
+| 1 | Config keys `rcc_bonded_pt_distance_lock` + `rcc_bonded_pt_distance_lock_ratio` (clamped `[0,1]`) + contradictory-config warning (adhesion-enabled row with `Cn`/`Ct > 0` while the mode is on) | Implemented |
+| 2 | Distance-mode eligibility kernel (end-of-step flag + flagged `D` + `D < (ξ + c·d_hat)²` via shared `VT_distance_lock_band_pass` + enabled/occlusion/sticky/face-interior compose; indicator lock-beta; global threshold clamped `<= 1` in BOTH the producer-call scalar and the per-pair sentinel resolution) | Implemented; CPU oracle `[rcc_bonded_pt][oracle][distance_lock]` 18/2 green |
+| 3 | Energy/beta bypass (zero `friction_pair_counts` + gate energy/assemble kernels atomically; skip Phase B init + Phase A evolution together + beta carry; occlusion cast fused into the eligibility kernel via shared `VT_occlusion_blocked`, end-of-step positions; keep vertex-normal recompute and release-context wiring) | Implemented |
+| 4 | Scene gate: distance-lock `pt_lift_release` variant with `Cn = Ct = 0`, `rcc_bonded_pt_lock_face_interior_only = 1`, `c = 0.95` (press equilibrium gap ~0.89·d_hat must sit inside the band) | Implemented; `[rcc_bonded_pt][scene][distance_lock]` 604/1 green |
+| 5 | `rcc_bonded_pt_rejected_distance_count` counter (distance/occlusion rejections; explicit `enabled` rejections go to `rcc_bonded_pt_rejected_policy_count`) + doc status flip | Implemented; counters in the pybind dict and the `[rcc_bonded_pt][state][counters]` contract fixture |
+
 ## Pair Keys
 
 Use two representations:
@@ -102,7 +124,7 @@ The bonded PT lifecycle has four observable states. Tests and reports should be 
 | --- | --- | --- |
 | Candidate | Current RCC PT pair is considered for lock | Still owned by contact/RCC until all lock gates pass |
 | Locked | Pair is stable enough to skip CCD/contact/RCC | Owned by exactly one ABD-style bonded reporter input |
-| Released | A release gate fired for a previously locked pair | Removed from bonded reporter input and returned to RCC beta persistence |
+| Released | A release gate fired for a previously locked pair | Removed from bonded reporter input and returned to RCC beta persistence (beta mode; vacuous in distance-lock mode) |
 | Rejected | Candidate failed lock gates or rest-shape conditioning | Remains in normal contact/RCC path |
 
 A pair must not be both `Locked` and active in `PTs()` / `friction_PTs()` for the same Newton iteration. A pair must not be `Released` and still assembled by the bonded reporter in the same step.
@@ -121,7 +143,8 @@ A candidate can lock only if every condition passes. The target policy and the c
 | Normal gap band | End-of-step positions | `rcc_bonded_pt_rejected_gap_count` | Planned for lock; implemented for release only |
 | Tangential slip band | Lagged closest coordinates/basis | `rcc_bonded_pt_rejected_slip_count` | Planned for lock; implemented for release only |
 | Rest-shape quality | Triangle area, normal, `det(Dm)`, rest volume | `rcc_bonded_pt_rejected_degenerate_count` | Implemented as degenerate fresh-lock rejection |
-| Contact policy | Contact tabular enable/disable | `rcc_bonded_pt_rejected_policy_count` | Planned for lock; implemented for release only |
+| Contact policy | Contact tabular enable/disable | `rcc_bonded_pt_rejected_policy_count` | Implemented for release; implemented for lock in distance-lock mode (explicit `adhesion_enabled` check + counter); still planned for the beta-mode lock (acts via beta pinning, uncounted) |
+| Distance band (distance-lock mode) | End-of-step positions, per-vertex `d_hats`/thicknesses: `D < (ξ + c·d_hat)²` | `rcc_bonded_pt_rejected_distance_count` | Implemented — supersedes the beta threshold when `rcc_bonded_pt_distance_lock` is on (the beta select is trivially satisfied via an indicator lock-beta; see "Distance-Locked Bonding Without Adhesion Energy") |
 
 The conservative rule is: reject on missing data. A missing sticky-side normal, invalid triangle normal, or unavailable beta carry is not a reason to guess.
 
@@ -311,6 +334,7 @@ Minimum backend report fields before scene gates:
 | `rcc_bonded_pt_duplicate_suppressed_count` | Duplicate ownership prevented | Implemented in counters |
 | `rcc_bonded_pt_rejected_degenerate_count` | Rest-shape quality rejection | Implemented in counters |
 | `rcc_bonded_pt_rejected_age/sticky/gap/slip/policy_count` | Lock-gate rejection reasons | Planned |
+| `rcc_bonded_pt_rejected_distance_count` | Distance-band / occlusion rejections in distance-lock mode | Implemented in counters (with `rcc_bonded_pt_rejected_policy_count` for explicit `adhesion_enabled` lock rejections) |
 | `rcc_bonded_pt_release_flags` or per-reason counters | Reason a locked pair returned to RCC/contact | Planned for scene-accessible diagnostics; implemented only in backend owner/test buffers |
 | `rcc_bonded_pt_energy_model` | Reported model, expected production value `abd_ortho` unless the test explicitly chooses another model | Config implemented; scene report planned |
 | `rcc_bonded_pt_kappa` | Reported ABD-style stiffness used by the bonded reporter | Config implemented; scene report planned |
