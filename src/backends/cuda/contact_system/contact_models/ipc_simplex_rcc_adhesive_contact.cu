@@ -289,18 +289,23 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         // config — report once and ignore them. (m_bonded_pt_distance_lock is
         // set in RCCBetaEvolutionTimeIntegrator::do_build, which runs before
         // this on_init_scene callback.)
-        if(m_bonded_pt_distance_lock)
+        if(m_bonded_pt_distance_lock && !m_distance_lock_cnct_warned)
         {
             bool any_adhesion = false;
             for(SizeT row = 0; row < Cn_view.size() && !any_adhesion; ++row)
                 any_adhesion = en_view[row] != 0
                                && (Cn_view[row] > 0 || Ct_view[row] > 0);
             if(any_adhesion)
+            {
+                // Warn ONCE: scenes that touch geometry every frame (e.g. an
+                // animator driving SPC aims) re-run this rebuild every frame.
+                m_distance_lock_cnct_warned = true;
                 logger::warn(
                     "RCC distance-lock mode (rcc_bonded_pt_distance_lock=1) is "
                     "on, but an adhesion-enabled contact-model row has "
                     "Cn/Ct > 0: soft adhesion energy is NOT assembled in this "
                     "mode and the adhesion coefficients are ignored.");
+            }
         }
     }
 
@@ -1103,6 +1108,10 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // so the per-step hot path avoids alloc/free churn; reset each Phase A).
     muda::DeviceVar<IndexT>                  m_lock_distance_rejected;
     muda::DeviceVar<IndexT>                  m_lock_policy_rejected;
+    // Warn-once latch for the contradictory-config (Cn/Ct > 0 in distance
+    // mode) diagnostic: scenes that touch geometry every frame re-run
+    // _rebuild_adhesive_tabular every frame.
+    bool                                     m_distance_lock_cnct_warned = false;
 
     void _evolve_beta_step_at_end(Float dt)
     {
