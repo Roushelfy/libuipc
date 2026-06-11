@@ -274,6 +274,12 @@ def _save_asset_impl(sim, state):
     # Persist whether bonded-PT was enabled at wind time so a downstream
     # load (drop/unwind) auto-enables bonded — no `--set BONDED=1` needed.
     params["BONDED"] = 1 if state.get("bonded") else 0
+    # Same for distance-lock mode: a tape wound in distance-lock mode replays
+    # in it (the saved β snapshot carries sentinel 1.0 per lock, no soft beta).
+    _dlock = state.get("bonded") and L.cfg_flag(_CFG, "DISTANCE_LOCK", default=False)
+    params["DISTANCE_LOCK"] = 1 if _dlock else 0
+    if _dlock:
+        params["DISTANCE_LOCK_RATIO"] = float(_CFG.get("DISTANCE_LOCK_RATIO", 0.5))
     # Snapshot the RCC adhesion β state for downstream demos.
     pair_state = None
     if state["adhesion_on"]:
@@ -434,6 +440,18 @@ def build_demo(adhesion_on: bool = True,
         # Hessian conditioning / fewer line-search blowups on thin sliver tets,
         # at the cost of softer bonds). Default = the build_demo kwarg (1e8).
         config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
+        # Phase 7 distance-locked bonding: `--set DISTANCE_LOCK=1` disables the
+        # soft adhesion energy entirely (no beta) and locks by the end-of-step
+        # distance band d < xi + c*d_hat instead (c = `--set
+        # DISTANCE_LOCK_RATIO=...`, default 0.5, clamped [0,1] by the engine).
+        # The preset's Cn/Ct are ignored in this mode (the engine warns once);
+        # release gates are unchanged. Recommend LOCK_FACE_INTERIOR_ONLY=1 —
+        # without beta's multi-step integration, edge/corner VTs would
+        # mass-lock skewed sliver tets on first contact.
+        if L.cfg_flag(_CFG, "DISTANCE_LOCK", default=False):
+            config["rcc_bonded_pt_distance_lock"] = 1
+            config["rcc_bonded_pt_distance_lock_ratio"] = float(
+                _CFG.get("DISTANCE_LOCK_RATIO", 0.5))
         # Release thresholds left at their disabled defaults (1e30): once a
         # tape contact bonds it stays bonded (the wound tape does not peel).
         # The preset's RCC_RELEASE_FORCE is NOT applied here on purpose — it is

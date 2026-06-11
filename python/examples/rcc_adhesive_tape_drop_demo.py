@@ -415,6 +415,18 @@ def build_demo(adhesion_on: bool = True,
         # energy-matches the non-bonded debonding load; see the note in
         # tape_asset_lib.py above WIND_PRESETS.
         config["rcc_bonded_pt_release_force"] = release_force
+        # Phase 7 distance-locked bonding. Precedence: `--set DISTANCE_LOCK=...`
+        # wins; else the asset's saved flag (a tape wound in distance-lock mode
+        # auto-replays in it). No soft adhesion energy / beta in this mode; the
+        # lock gate is the end-of-step distance band d < xi + c*d_hat. Caveat
+        # vs beta mode: a force-released bond relocks next step while the pair
+        # is still inside the band (no load-based relock suppression).
+        if L.resolve_flag(_CFG, params, "DISTANCE_LOCK", default=False):
+            config["rcc_bonded_pt_distance_lock"] = 1
+            _ratio = _CFG.get("DISTANCE_LOCK_RATIO")
+            if _ratio is None:
+                _ratio = params.get("DISTANCE_LOCK_RATIO", 0.5)
+            config["rcc_bonded_pt_distance_lock_ratio"] = float(_ratio)
     # User-facing solver knobs (e.g. `--set LIN_TOL_RATE=1e-5
     # --set NEWTON_VELOCITY_TOL=0.005`) get translated into the
     # libuipc nested config here, AFTER the demo's own defaults so
