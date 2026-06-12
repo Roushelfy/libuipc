@@ -451,13 +451,28 @@ def build_demo(adhesion_on: bool = True,
                          bonding_rate=ADH_BONDING_RATE, p0=0.0,
                          initial_beta=b0, enabled=True)
         if bonded:
+            # Per-pair lock thresholds (-1 = inherit the global config).
+            # tape-hub mirrors tape-tape unless explicitly overridden: the
+            # innermost layer peeling off the hub is the same event as a
+            # layer peeling off the layer below.
+            _tt_lk = float(_CFG.get("BONDED_TAPE_LOCK", -1.0))
+            _th_lk = float(_CFG.get("BONDED_HUB_LOCK", _tt_lk))
+            _tr_lk = float(_CFG.get("BONDED_ROD_LOCK", -1.0))
+            # Per-pair release forces. tape-rod bonds must HOLD while the
+            # roll peels: the global release force is tuned low so roll
+            # layers let go, but with the same value on the rod the winding
+            # falls off — default the rod side to 100x the global one.
+            # tape-hub mirrors tape-tape.
             _tt_rf = float(_CFG.get("BONDED_TAPE_RELEASE_FORCE", -1.0))
-            _th_rf = float(_CFG.get("BONDED_HUB_RELEASE_FORCE", -1.0))
-            for (A, B, rf) in [(tape_contact, tape_contact, _tt_rf),
-                               (tape_contact, hub_contact,  _th_rf),
-                               (tape_contact, rod_contact,  -1.0)]:
+            _th_rf = float(_CFG.get("BONDED_HUB_RELEASE_FORCE", _tt_rf))
+            _tr_rf_default = (100.0 * release_force
+                              if release_force < 1.0e29 else -1.0)
+            _tr_rf = float(_CFG.get("BONDED_ROD_RELEASE_FORCE", _tr_rf_default))
+            for (A, B, lk, rf) in [(tape_contact, tape_contact, _tt_lk, _tt_rf),
+                                   (tape_contact, hub_contact,  _th_lk, _th_rf),
+                                   (tape_contact, rod_contact,  _tr_lk, _tr_rf)]:
                 adhesive.set_bonded(tabular, A, B,
-                                    lock_threshold=-1.0, release_strain=-1.0,
+                                    lock_threshold=lk, release_strain=-1.0,
                                     release_gap=-1.0, release_slip=-1.0,
                                     release_force=rf)
 
@@ -498,6 +513,23 @@ def build_demo(adhesion_on: bool = True,
             rod_aim[int(k)] = rod_rest[int(k)].reshape(3, 1)
     rod_obj = scene.objects().create("rod")
     rod_geo, _ = rod_obj.geometries().create(rod_sc)
+
+    # ---- carrier: ABD rod through the hub's center hole ----
+    # ORBIT no longer drags the hub by STC. Instead this carrier (radius =
+    # half the hub hole) is the STC-driven body: PIN..FREE it shadows the hub
+    # center, at ORBIT entry the hub's own STC disengages and the hub rides
+    # the carrier through hole contact while the carrier sweeps the circle.
+    CARRIER_R   = _cfg_f("CARRIER_R", 0.5 * HUB_R_INNER)
+    CARRIER_LEN = _cfg_f("CARRIER_LEN", 4.0 * HUB_HEIGHT)
+    carrier_c0  = np.array([float(hub_T_up[0, 3]), float(hub_T_up[1, 3]),
+                            ROD_CZ], dtype=np.float64)
+    carrier_sc = _make_rod_abd_sc(CARRIER_R, CARRIER_LEN, ROD_SIDES,
+                                  tuple(carrier_c0))
+    abd.apply_to(carrier_sc, ROD_ABD_KAPPA, ROD_DENSITY)
+    rod_contact.apply_to(carrier_sc)
+    stc.apply_to(carrier_sc, np.array([STC_ETA_P, STC_ETA_A], dtype=np.float64))
+    carrier_obj = scene.objects().create("carrier")
+    carrier_geo, _ = carrier_obj.geometries().create(carrier_sc)
 
     # ---- tape (current = stood-up wound pose; rest = wind's straight strip) ----
     tris = _make_tape_topology_tris(TAPE_NX, TAPE_NZ)
@@ -730,45 +762,65 @@ def build_demo(adhesion_on: bool = True,
 
     scene.animator().insert(tape_obj, animate_tape)
 
-    # ---- hub: STC-held for the whole sequence ----
+    # ---- hub: STC-held until orbit, then free ----
     # PIN: hold the stand-up pose. APPROACH: translate by the same horizontal
     # vector as the free-end row. WRAP..FREE: frozen at the contact pose.
-    # ORBIT: sweep a circle around the rod axis from the hub's natural entry
-    # point — translation only, orientation pinned to the entry orientation
-    # (no self-rotation; the tape must pay off the roll by peeling). Each
-    # orbit winds one more turn onto the rod. SETTLE2: hold the final point.
+    # ORBIT and beyond: the hub's STC disengages — the CARRIER (through the
+    # hub hole) sweeps the circle and the hub rides it under gravity + tape
+    # tension, free to find its own pose (the tape pays off by peeling).
     MIN_ORBIT_R = ROD_R + R_roll + 0.003
     orbit_sweep = ORBIT_SWEEP_DIR if ORBIT_SWEEP_DIR != 0.0 else -wrap_dir
-    orbit_state = {"init": None}
 
     def animate_hub(info: Animation.UpdateInfo):
         geo = info.geo_slots()[0].geometry()
         f = max(info.frame() - 1, 0)
         is_c = view(geo.instances().find(builtin.is_constrained))
         aim  = view(geo.instances().find(builtin.aim_transform))
+        if f >= _Tf2:                     # ORBIT and beyond: hub is free
+            is_c[0] = 0
+            return
         is_c[0] = 1
-        if f < _Tf2:                      # PIN .. FREE: held / approach slide
+        t = 0.0 if f < _T0 else min((f - _T0) / max(APPROACH_FRAMES, 1), 1.0)
+        dx = smooth_lerp(0.0, approach_dx, t)
+        M = hub_T_up.copy()
+        M[0, 3] += dx
+        aim[0] = _mat4_to_uipc(M)
+
+    scene.animator().insert(hub_obj, animate_hub)
+
+    # ---- carrier: shadows the hub center until orbit, then sweeps ----
+    # ORBIT: circle around the rod axis. The radius defaults to the hub's
+    # natural entry radius PLUS the hole slack (hole R - carrier R), so the
+    # tape tension takes the slack up and the free segment stays taut.
+    carrier_state = {"init": None}
+
+    def animate_carrier(info: Animation.UpdateInfo):
+        geo = info.geo_slots()[0].geometry()
+        f = max(info.frame() - 1, 0)
+        is_c = view(geo.instances().find(builtin.is_constrained))
+        aim  = view(geo.instances().find(builtin.aim_transform))
+        is_c[0] = 1
+        if f < _Tf2:                      # PIN .. FREE: shadow the hub center
             t = 0.0 if f < _T0 else min((f - _T0) / max(APPROACH_FRAMES, 1), 1.0)
             dx = smooth_lerp(0.0, approach_dx, t)
-            M = hub_T_up.copy()
-            M[0, 3] += dx
-            orbit_state["init"] = None
+            M = np.eye(4, dtype=np.float64)
+            M[0, 3] = dx                  # mesh is baked at the hub center
+            carrier_state["init"] = None
             aim[0] = _mat4_to_uipc(M)
             return
         cur = np.asarray(view(geo.transforms())[0]).reshape(4, 4)
-        if orbit_state["init"] is None:
-            c0 = cur[:3, 3]
+        if carrier_state["init"] is None:
+            c0 = carrier_c0 + cur[:3, 3]  # baked center + current translation
             dxr, dyr = float(c0[0] - rod_axis[0]), float(c0[1] - rod_axis[1])
             r_nat = float(np.hypot(dxr, dyr))
-            r = HANG_RADIUS if HANG_RADIUS > 0 else max(r_nat, MIN_ORBIT_R)
+            slack = max(HUB_R_INNER - CARRIER_R, 0.0)
+            r = HANG_RADIUS if HANG_RADIUS > 0 else max(r_nat + slack, MIN_ORBIT_R)
             phi0 = float(np.arctan2(dxr, -dyr))   # point(φ0) = current center
-            # Hold the hub's ACTUAL entry orientation so the STC engages at
-            # zero initial error (no snap), and pin it ⇒ no self-rotation.
-            orbit_state["init"] = (r, phi0, float(c0[2]), cur[:3, :3].copy())
-            print(f"[rod-wind] orbit start: r={r*1e3:.1f} mm "
-                  f"(natural {r_nat*1e3:.1f} mm), φ0={np.degrees(phi0):.0f}°, "
-                  f"sweep={orbit_sweep:+.0f}", flush=True)
-        r, phi0, z0, R_hold = orbit_state["init"]
+            carrier_state["init"] = (r, phi0, float(c0[2]), cur[:3, :3].copy())
+            print(f"[rod-wind] carrier orbit start: r={r*1e3:.1f} mm "
+                  f"(natural {r_nat*1e3:.1f} mm + slack {slack*1e3:.1f} mm), "
+                  f"φ0={np.degrees(phi0):.0f}°, sweep={orbit_sweep:+.0f}", flush=True)
+        r, phi0, z0, R_hold = carrier_state["init"]
         frac  = min((f - _Tf2) / max(ORBIT_FRAMES, 1), 1.0)
         sweep = orbit_sweep * 2.0 * np.pi * N_TURNS * (0.5 - 0.5 * np.cos(np.pi * frac))
         phi   = phi0 + sweep
@@ -777,10 +829,11 @@ def build_demo(adhesion_on: bool = True,
                       z0 + WRAP_PITCH * sweep / (2.0 * np.pi)], dtype=np.float64)
         M = np.eye(4, dtype=np.float64)
         M[:3, :3] = R_hold
-        M[:3, 3]  = c
+        # mesh is baked at carrier_c0: x = A x̄ + b  ⇒  b = c − A·c0
+        M[:3, 3]  = c - R_hold @ carrier_c0
         aim[0] = _mat4_to_uipc(M)
 
-    scene.animator().insert(hub_obj, animate_hub)
+    scene.animator().insert(carrier_obj, animate_carrier)
 
     world.init(scene)
 
@@ -797,8 +850,20 @@ def build_demo(adhesion_on: bool = True,
         bpt = world.features().find(RCCBondedPTStateAccessorFeature)
         if locked_pairs is not None and bpt is not None:
             topos, lbetas = locked_pairs
+            # Saved topos are GLOBAL vertex indices from the winding scene,
+            # whose backend layout is [hub | tape] (ABD bodies are numbered
+            # before FEM geometry, regardless of creation order). This scene
+            # inserts the rod and carrier blocks between them —
+            # [hub | rod | carrier | tape] — so every tape-range index must
+            # jump over both. Hub-range indices (tape-hub bonds reference
+            # hub triangles/points) stay put.
+            hub_nv = len(np.asarray(view(hub_sc.positions())).reshape(-1, 3))
+            shift = (len(np.asarray(view(rod_sc.positions())).reshape(-1, 3))
+                     + len(np.asarray(view(carrier_sc.positions())).reshape(-1, 3)))
+            topos = np.where(topos >= hub_nv, topos + shift, topos)
             bpt.seed_locks(topos, lbetas, beta_lock_threshold)
-            print(f"[rod-wind] seeded {len(lbetas)} bonded locks.")
+            print(f"[rod-wind] seeded {len(lbetas)} bonded locks "
+                  f"(tape indices shifted +{shift} past rod+carrier).")
 
     return {"engine": engine, "world": world, "scene": scene,
             "scene_io": SceneIO(scene), "hub_geo": hub_geo,
@@ -819,12 +884,17 @@ def run_demo():
 
     record_dir = _CFG.get("RECORD_DIR")
     if record_dir:
+        # Bonded-lock count per progress line: the live peel-rate signal
+        # (roll locks must DROP through the orbit, or tension accumulates).
+        bpt_for_log = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+        def _on_progress(f, t):
+            locked = bpt_for_log.locked_pair_count() if bpt_for_log else -1
+            print(f"  frame {f}/{t} [{phase_at(f)}] locked={locked}", flush=True)
         L.record_demo_to_pngs(
             sim=sim, total_frames=TOTAL_FRAMES, output_dir=record_dir,
             every_n=_cfg_i("RECORD_EVERY", 10), up_dir="y_up",
             mesh_name="rod_wind", zoom=_cfg_f("RECORD_ZOOM", 1.5),
-            on_progress=lambda f, t: print(
-                f"  frame {f}/{t} [{phase_at(f)}]", flush=True))
+            on_progress=_on_progress)
         return
 
     if ps is None or _CFG.get("HEADLESS"):
