@@ -813,6 +813,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveIn
                  temp_PEs    = PE_view.viewer().name("temp_PEs"),
                  temp_PTs    = temp_PTs.viewer().name("temp_PTs"),
                  temp_VTs    = temp_VTs.viewer().name("temp_VTs"),
+                 rcc_locked_keys = info.rcc_bonded_pt_locked_keys(),
                  d_hats = info.d_hats().viewer().name("d_hats")] __device__(int i) mutable
                 {
                     auto& PP = temp_PPs(i);
@@ -826,6 +827,15 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveIn
                     Vector2i indices = PT_pairs(i);
                     IndexT   V       = surf_vertices(indices(0));
                     Vector3i F       = surf_triangles(indices(1));
+
+                    // A bonded-locked pair is replaced by its virtual tet:
+                    // the band-edge rest legitimately holds it INSIDE the
+                    // thickness shell, so it must not reach the D > xi
+                    // asserts below, nor classify into PP/PE/PT barrier
+                    // entries (the post-filter only strips PTs/VTs; skipping
+                    // here covers the edge/vertex regions too).
+                    if(rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
+                        return;
 
                     Vector4i vIs  = {V, F(0), F(1), F(2)};
                     Vector3  Ps[] = {positions(vIs(0)),
@@ -1291,6 +1301,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& in
                     Ps     = info.positions().viewer().name("Ps"),
                     dxs    = info.displacements().viewer().name("dxs"),
                     d_hats = info.d_hats().viewer().name("d_hats"),
+                    rcc_locked_keys = info.rcc_bonded_pt_locked_keys(),
                     alpha  = info.alpha(),
                     eta,
                     max_iter,
@@ -1313,6 +1324,17 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& in
                        Vector3 FP0 = Ps(F[0]);
                        Vector3 FP1 = Ps(F[1]);
                        Vector3 FP2 = Ps(F[2]);
+
+                       // A bonded-locked pair legally sits INSIDE the
+                       // thickness shell: a TOI root-find against the full
+                       // thickness is degenerate there (toi = 0), and ANY
+                       // positive stop distance shrinks steps to nothing as
+                       // the pair compresses (Zeno). Zero the CCD thickness:
+                       // TOI only blocks an actual surface crossing; keeping
+                       // the pair OFF the surface is the bond energy's job
+                       // (rcc_bonded_pt_kappa / d_hat tuning).
+                       if(rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
+                           thickness = 0.0;
 
                        Vector3 dFP0 = alpha * dxs(F[0]);
                        Vector3 dFP1 = alpha * dxs(F[1]);

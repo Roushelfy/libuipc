@@ -77,6 +77,12 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         muda::CBufferView<Vector2i> surf_edges() const noexcept;
         muda::CBufferView<Vector3i> surf_triangles() const noexcept;
 
+        // RCC bonded-PT locked-pair keys: locked pairs live inside the
+        // thickness shell by design, so the CCD broadphase (DetectInfo
+        // path) and the DCD classify/assert kernels (FilterActiveInfo
+        // path) both need to skip them.
+        muda::CBufferView<U64> rcc_bonded_pt_locked_keys() const noexcept;
+
       protected:
         friend class SimplexTrajectoryFilter;
         Impl* m_impl = nullptr;
@@ -91,9 +97,8 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
 
         muda::CBufferView<Vector3> displacements() const noexcept;
 
-        // RCC bonded-PT pre-CCD filter inputs (see rcc_bonded_pt_system).
-        muda::CBufferView<U64> rcc_bonded_pt_locked_keys() const noexcept;
-        bool                   rcc_bonded_pt_skip_ccd() const noexcept;
+        // RCC bonded-PT pre-CCD filter input (see rcc_bonded_pt_system).
+        bool rcc_bonded_pt_skip_ccd() const noexcept;
 
       private:
         friend class SimplexTrajectoryFilter;

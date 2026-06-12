@@ -109,6 +109,12 @@ MUDA_GENERIC bool rest_shape_is_valid(
     Float rest_height_target,
     Float det_dm_min)
 {
+    // Negative target = rest_height_target_for rejected the pair (seeded
+    // topo with non-uniform triangle thickness, i.e. indices from a scene
+    // with a different global vertex layout).
+    if(rest_height_target < 0.0)
+        return false;
+
     const Vector4i topo = entry.topo;
     const IndexT n = static_cast<IndexT>(positions_view.size());
     if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
@@ -142,6 +148,14 @@ MUDA_GENERIC Float rest_height_target_for(const Vector4i& topo,
     if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
        || topo[0] >= n || topo[1] >= n || topo[2] >= n || topo[3] >= n)
         return d_hat;  // no thickness data -> xi = 0
+    // A triangle whose vertices carry different thicknesses cannot be a real
+    // surface triangle — it only happens when seeded topos come from a scene
+    // with a different global vertex layout. Reject (negative sentinel,
+    // turned into "invalid pair" by rest_shape_is_valid) instead of tripping
+    // the PT_thickness device assert and killing the process.
+    if(thickness(topo[1]) != thickness(topo[2])
+       || thickness(topo[2]) != thickness(topo[3]))
+        return -1.0;
     return PT_thickness(thickness(topo[0]),
                         thickness(topo[1]),
                         thickness(topo[2]),

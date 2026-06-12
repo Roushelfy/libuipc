@@ -387,7 +387,7 @@ muda::CBufferView<Vector3> SimplexTrajectoryFilter::DetectInfo::displacements() 
     return m_impl->global_vertex_manager->displacements();
 }
 
-muda::CBufferView<U64> SimplexTrajectoryFilter::DetectInfo::rcc_bonded_pt_locked_keys() const noexcept
+muda::CBufferView<U64> SimplexTrajectoryFilter::BaseInfo::rcc_bonded_pt_locked_keys() const noexcept
 {
     return m_impl->rcc_bonded_pt_locked_keys;
 }
