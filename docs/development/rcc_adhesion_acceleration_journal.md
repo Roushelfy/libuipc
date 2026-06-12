@@ -1459,6 +1459,8 @@ pair — a bearing is a joint, not a contact. Result: first-ever full
   200 iters.
 - jointB (beta asset 3556 locks, bend 500 runtime): completes with mild
   release/relock oscillation (1471 -> 1168), transient spikes only.
+- jointC (k3e9 asset, kappa 3e9): completes too (659 -> 438, more
+  aggressive peel at the stiffer kappa), zero frames over 200 iters.
 - Contact-mode control with kappa 3e9: still grinding at the same zone —
   killed.
 
