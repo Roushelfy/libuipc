@@ -812,14 +812,16 @@ void StacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& 
                         distance::point_triangle_distance_flag(Ps[0], Ps[1], Ps[2], Ps[3]);
 
                     Vector2 range = D_range(thickness, d_hat);
-                    // Distance-lock reach: keep far candidates active out to
-                    // xi + scale*d_hat (barrier is zero beyond xi + d_hat, so
-                    // the extra pairs are inert; only the lock-eligibility
-                    // kernel consumes them).
+                    // Distance-lock reach: VT (lock-eligibility) candidates
+                    // stay visible out to xi + scale*d_hat. ONLY the VT view
+                    // gets the extension — PP/PE/PT barrier entries keep the
+                    // original band (the barrier energy kernels assert
+                    // is_active_D on the unscaled range).
+                    Float vt_upper = range.y();
                     if(rcc_vt_scale > Float{1})
                     {
-                        Float up  = thickness + rcc_vt_scale * d_hat;
-                        range.y() = up * up;
+                        Float up = thickness + rcc_vt_scale * d_hat;
+                        vt_upper = up * up;
                     }
 
                     Float D;
@@ -866,15 +868,21 @@ void StacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& 
                                 flag(3),
                                 thickness,
                                 d_hat);
-                       if(!is_active_D(range, D))
+                       if(!(range.x() < D && D < vt_upper))
                         return;  // early return
+
+                    // Additive VT primitive: full topo + closest-feature flag,
+                    // for every active VT candidate regardless of reduction
+                    // (extended-range pairs included; the lock-eligibility
+                    // kernel applies its own distance criterion).
+                    temp_VTs(i) = ActiveVT{vIs, flag};
+
+                    // Barrier entries: original contact band only.
+                    if(!is_active_D(range, D))
+                        return;
 
                     Vector4i offsets;
                     auto dim = distance::degenerate_point_triangle(flag, offsets);
-
-                    // Additive VT primitive: full topo + closest-feature flag,
-                    // for every active VT candidate regardless of reduction.
-                    temp_VTs(i) = ActiveVT{vIs, flag};
 
                     switch(dim)
                     {

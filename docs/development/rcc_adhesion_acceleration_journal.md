@@ -1531,3 +1531,27 @@ Kappa speed curve flattens below 1e7 toward a ~450-460s fixed-cost floor;
 d_hat monotone 2 < 2.5 < 3 at low kappa. Speed recipe: dhat2 + kappa
 1e7-3e7. Physical-quality check of the soft-kappa roll (layer slip / sag)
 still by eye, not by counters.
+
+### Far-Lock (c=1.5) Validation Round
+
+VT-only correction to the range extension: the first cut scaled the whole
+classify activity band and tripped the barrier kernels' own is_active_D
+asserts on out-of-band PE pairs — the extension now applies ONLY to the
+VT (lock-eligibility) view; PP/PE/PT barrier entries keep the original
+band. With that, the r150 recipe (s4 + DISTANCE_LOCK_RATIO=1.5):
+
+- wind: 2122 locks (989 at c=0.95, x2.1) — the surplus is in-plane
+  tangential/diagonal far pairs and exposed seam pairs; cross-layer pairs
+  stay out via the fused VT_occlusion_blocked cast (segment-cast is
+  distance-agnostic, so the occlusion filter works unchanged at c>1).
+  Settled to 5.6e-4 m/s: rest = xi + c*d_hat (born at equilibrium) holds.
+- drop: completes, 1331/2122 locks at end — the tangential far locks are
+  the first to tension-release under gravity (near-normal locks held the
+  coil; c=0.95 dlock asset lost ~0 for comparison).
+- 2-turn rod-wind (joint bearing, kappa 1e8): completes, 0.73 s/frame
+  (vs 0.49 at 989 locks — assembly cost of 2x locks), wound 2122 ->
+  settles ~1100 with a mild release/relock equilibrium through orbit.
+
+Note: in distance-lock mode the demo probe's "soft=" counter is pure
+bookkeeping (tracked unlocked candidates: occlusion/face-interior/policy
+rejected), zero energy — adhesion coefficients are not assembled.
