@@ -1467,3 +1467,29 @@ pair — a bearing is a joint, not a contact. Result: first-ever full
 Drop cross-check on the new assets (rf=1e-7, kappa 3e8): dlock asset holds
 980/983 locks; beta asset releases 2/3 (prestress rescale) — per-asset
 release-force re-calibration confirmed necessary.
+
+### Speed Sweep (wind + 1-turn rod-wind, joint bearing, 8 configs)
+
+Timing of the 1710-frame 1-turn sequence, RTX PRO 6000, node-to-node noise
+~±15% (same-config repeat: 766 vs 885 s):
+
+| config                  | rod time | notes |
+|-------------------------|----------|-------|
+| dhat2 + kappa1e8 (s8)   | 766/885s | fast, healthy (x2 measurements) |
+| dhat3 + kappa1e8 (s4)   | 842s     | fast, healthy — RECOMMENDED |
+| dhat4 + kappa3e8 (s3)   | 1017s    | |
+| dhat3 + kappa3e8 (s1)   | 1049s    | old baseline |
+| interior0 (s7)          | 1112s    | knob is a wind-time no-op (983 locks unchanged) |
+| dhat2 + kappa3e8 (s2)   | 1413s    | small d_hat is NOT free: steeper barrier curvature |
+| dhat3 + kappa1e9 (s5)   | 1548s    | slowest + over-releases (1023 -> 745) |
+| ratio 0.8 (s6)          | (842s)   | DEGENERATE: 4 locks wound — lock ratio must stay ~0.9-0.95 |
+
+Kappa is monotone in cost (1e8 < 3e8 < 1e9, 20%/45% gaps) and 1e8 is also
+the healthiest dynamically. d_hat is non-monotone (2x slower at kappa 3e8).
+Production recipe: D_HAT_RATIO=3, RCC_KAPPA=1e8, DISTANCE_LOCK_RATIO=0.95,
+BENDING_STIFFNESS=500, CARRIER_JOINT=1. Full 10-turn helical validation
+(WRAP_PITCH = half tape width) running on this recipe.
+
+Infra note: parallel sweeps exposed a cross-node pip race (setuptools
+builds inside the shared NFS source dir -> "dist-info File exists"); jobs
+now copy the python dir to node-local /tmp before pip install.
