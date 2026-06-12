@@ -1510,3 +1510,24 @@ show pure relock growth. Speed at kappa<=3e7 is only usable after
 re-calibrating the release force down with kappa. Recommendation stands:
 kappa 1e8 + dhat3 (842s, peel intact) as the no-recalibration recipe;
 kappa 3e7 + dhat2 (598s, -43% vs old baseline) once rf is re-swept.
+
+### Speed Sweep Wave 3 + Correction
+
+CORRECTION to the wave-2 health reading: the aggregate locked count mixes
+peel RELEASES with NEW locks formed as tape winds onto the rod — net growth
+does NOT mean release is dead. Frame review of the kappa3e7+dhat2 2-turn
+every-frame video (rodwind_s12full.mp4) confirms peeling is healthy.
+
+Wave 3 (1-turn timing, joint bearing):
+
+| config            | rod time |
+|-------------------|----------|
+| dhat2 + kappa3e6  | 464s  (0.27 s/frame) |
+| dhat2 + kappa1e7  | 492s  |
+| dhat2 + kappa3e7  | 598s  (wave 2) |
+| dhat2.5 + kappa3e7| 652s  |
+
+Kappa speed curve flattens below 1e7 toward a ~450-460s fixed-cost floor;
+d_hat monotone 2 < 2.5 < 3 at low kappa. Speed recipe: dhat2 + kappa
+1e7-3e7. Physical-quality check of the soft-kappa roll (layer slip / sag)
+still by eye, not by counters.
