@@ -1282,3 +1282,115 @@ First end-to-end asset pipeline runs of the implemented Phase 7 mode on the soft
 
 - `run_wind_drop.sh` (output/distlock_run): wind + drop, `--set DISTANCE_LOCK=1 --set DISTANCE_LOCK_RATIO=0.95 --set LOCK_FACE_INTERIOR_ONLY=1`.
 - `rcc_adhesive_tape_unwind_demo.py --preset default --asset .../temflex175-2turn-e5e7-dhat2-cnct1-distlock.npz --set RECORD_DIR=... --set RECORD_ZOOM=1.2` — UNWIND_OK (sim stable), peel stalled per the lock trace above.
+
+## 2026-06-11 Tension-Only Release + Band-Edge Rest (xi + d_hat)
+
+### Context
+
+Two structural fixes driven by the rod-wind seam crash and the release/relock churn diagnosis (drop release-force sweep on the CCD-wound b09 asset):
+
+- The `force`/`strain` release criteria used direction-blind norms (`||C F||`, `||C||`): a compressed or sheared bond accumulated "release force" exactly like a stretched one. The deterministic rod-wind crash at the spiral seam (tape row 70 = end of the innermost turn pressed against the hub outer wall at the root azimuth, `V-F=(1854,673,769,768)`) was a bond released BY COMPRESSION while inside the thickness shell — the next DCD pass saw an unlocked pair at `D < xi^2` and aborted. Identical signature with CCD on (rodwind24) and with auto-skip (rodwind25), proving the asserting pair was unlocked.
+- Rest shapes froze the creation-time geometry, so a released pair was still inside the lock band and relocked next frame: release/relock churn. In beta mode this produced the "self-healing creep" of the drop sweep (rf <= 1e-9: locked count oscillating 400 <-> 3400 while the coil slid apart into a loose loop); in distance mode it is the documented peel stall.
+
+### Changes
+
+- `release_flags_from_current_shape` (rcc_bonded_pt_system.cu): hoisted the rest/current normal-gap computation (was gap/slip-only) and gated the `strain` and `force` flags on tension (`|curr_dist| - |rest_dist| > 0`). Compression and pure shear never release; `gap` (tensile by construction), `slip`, `flip`, `degenerate`, `sticky_side`, `policy` are unchanged.
+- `build_rest_shape` / `rest_shape_is_valid`: new `rest_height_target` input. The producer passes `PT_thickness(topo) + d_hat` (per pair, from `GlobalVertexManager::thicknesses()` + `GlobalContactManager::d_hat()` via new Impl slots): the rest point is placed at exactly the band edge, side-preserving. A tension release therefore happens at a gap past the band edge — outside both the lock band and the candidate set — so released pairs cannot relock in place. Fallback (no contact manager / thickness data): legacy `min_separate_distance` clamp.
+- Core oracle mirror (`build_rcc_bonded_pt_rest_shape_svts`): same `rest_height_target` rule, keeping the backend-vs-oracle contract.
+- Born-compressed bonds (creation gap < band edge by definition of the lock) push outward toward the band edge after locking; the tension gate makes this birth compression structurally unable to fire a release.
+
+### Tests
+
+- `[rcc_bonded_pt][oracle][rest_shape]` band_edge_target: conditioned point lands at exactly the target height on its own side, with matching rest volume.
+- New `[rcc_bonded_pt][scene][tension_release]` cube gate: press (compression overload ~0.5 in F-space units, threshold 1e-3 -> the old criterion would release everything on contact) -> zero releases; lift/hang carried; forced pull releases by force; zero locks at the end with no relock.
+
+### Drop sweep baseline (pre-change, beta mode, CCD-wound b09 asset, SKIP_CCD=0)
+
+- rf 1e-7 / 3e-8: clean (locked 3802/3808 flat, intact roll hangs).
+- rf 1e-8: passes with churn (HOLD releases ~650, heals; locked ~4150 at top).
+- rf 3e-9 / 1e-9 / 1e-10: coil disintegrates into a loose loop/fold but hangs by self-healing relock churn. Minimum usable release force ~1e-8 under OLD semantics; the new tension gate is expected to move this floor down (hang tension is what matters, press/compression no longer counts) — re-sweep pending.
+
+### Follow-up: side-face bonds made the plane-distance opening measure immortal
+
+First gate runs of the tension gate failed `end locked == 0` (48 of 96 survived) in
+both the tension gate and the distance-lock gate. Survivor dump (topo/age/current
+plane distance vs rest): all survivors age=349 (born at press), plane distance
+frozen at ~7e-5 while the cubes had FULLY separated (end gap_y = 1.03). Diagnosis:
+these are SIDE-FACE bonds — a rim vertex locked against the other cube's vertical
+side plane (the beta gates do not run the face-interior lock gate). When the pull
+separates the cubes vertically, such a pair tears apart TANGENTIALLY to its
+triangle plane: the point-plane distance never grows, so the plane-based opening
+measure said "compressed" forever and the tension gate vetoed every release —
+regardless of force ("拉的力再大也没用": the force criterion is only evaluated
+after tension=true; force is not an input to the opening test).
+
+Fix: the opening measure now uses the TRUE point-triangle closest distance
+(`point_triangle_closest_point`) against the rest height, for both the tension
+gate and the `gap` criterion (which had the same blind spot — plane distance —
+since its introduction; pre-change scenes never noticed because the
+direction-blind force release cleaned up torn side pairs by overload). A pair
+torn apart in ANY direction registers growing separation and releases; a pressed
+pair (true distance below rest) still never does.
+
+Note: an earlier hypothesis in this entry's drafting blamed AOP compression
+snap-through ("crushed zombie bonds"); the survivor dump disproved it — the 7e-5
+was a side-pair plane distance, not a crushed gap. The AOP compression branch
+non-convexity (force peak at lambda = 1/sqrt(3), flat basin at lambda -> 0)
+remains a real property worth a compression-floor guard if crush is ever
+observed, but it was NOT the failure mechanism here.
+
+## 2026-06-12 Seam-Pair Forensics — Opening Metric Must Be Region-Clamped
+
+### Context
+
+After the tension gate landed, two scene gates failed identically: forced pull
+separates the cubes fully (`gap_y = 1.03`) yet exactly 48 of 96 locks survive
+forever (`released_count` frozen at 48). Survivor dump (state accessor +
+locked-tet world positions): all age = 349 (born at press, never relocked),
+all reporting `curr ~ -7e-5` against `rest = -0.02`.
+
+### Diagnosis
+
+The 48 survivors are NOT interface pairs — they are seam pairs between the two
+cubes' COPLANAR side faces (the cubes share a footprint, so their side faces
+are flush; near the interface corner a side vertex of one cube lies in the
+side-face plane of the other at plane distance ~0). Under vertical separation
+their point-PLANE distance never changes: a plane-distance opening test reads
+"compressed" forever, so the tension gate vetoes force release permanently.
+The legacy direction-blind force release happened to free them because
+tangential tearing also accumulates `||C F||` — the veto closed exactly that
+accidental escape hatch.
+
+Second finding from the same forensics: the friction helper
+`point_triangle_closest_point` is an UNCLAMPED least-squares plane projection,
+so `(P - closest).norm()` IS the plane distance — an opening metric built on
+it is a no-op for seam pairs.
+
+### Fix
+
+`release_flags_from_current_shape` measures opening as the growth of the TRUE
+region-clamped point-triangle distance (`distance::point_triangle_distance_flag`
++ flagged `point_triangle_distance2`, the same machinery as the distance-lock
+eligibility kernel) on BOTH ends: current shape and rest shape. Rest-side
+clamping keeps an edge-born rest foot at zero opening at rest instead of
+spurious tension. Tangentially torn pairs now register opening and release by
+force/gap; genuinely pressed pairs still never release.
+
+### Also Ruled Out On The Way
+
+- Newton-cost theory of the slow suite: per-gate probe (INFO stream + summary)
+  shows all three bonded gates at mean 1.6 iters/frame, zero line-search-max,
+  ~10 s each on RTX PRO 6000; the only slow gate is the pre-existing pure-beta
+  cube-cloth lift (78 s, lift-phase mean 18.1). Born-compression from the
+  band-edge rest costs nothing measurable -> rest stays `xi + d_hat` (the
+  `xi + min(c+eps,1)*d_hat` variant buys ~nothing and loses the
+  exits-candidate-set guarantee).
+- sm_120 dev build (`build-rtx/`, RTX PRO 6000 Blackwell, rtx partitions = same
+  14 nodes at three preemption tiers) mirrors `build/` and passes the fast rcc
+  suites; scene-gate work and sweeps migrate to RTX nodes.
+
+### Post-Fix Verification And Boundary Re-Sweep
+
+- Gates after the region-clamped opening fix: `[rcc_bonded_pt][scene][distance_lock]` 604/1, `[tension_release]` 421/1, `[pt_lift_release]` 596/1; `uipc_test_backend_cuda "rcc_*"` 277/20; `uipc_test_core "rcc_*"` 131/8 (all on the sm_120 build, RTX PRO 6000).
+- Drop-lift boundary under the new semantics (CCD-wound b09 asset, SKIP_CCD=0): clean hold at release_force 1e-5 / 3e-6 (zero events), 1e-6 (~28 ambient releases, <1%), 3e-7 (~770 releases = 20% attrition, still churn-free and full-height hang); cascade transition between 3e-7 and 3e-8 — at 3e-8 and below, mass release -> structural push-back into the band -> beta>=0.9 relock -> creep ratchet (the coil pays out and sags). Minimum usable release force ~3e-7, recommended 1e-6+. Thresholds now measure net tension above the band-edge prestress (ambient scale 4*kappa*V0*dt^2*2*(d_hat-pitch)/rest ~ 1.3e-6 for this asset), NOT absolute bond load — old-semantics values (1e-7..1e-8) are not comparable.
+- Open item (pre-existing suspect): running ALL sim_case rcc tests in ONE process (`uipc_test_sim_case "rcc_*"`) fails 3 beta-demo tests (cloth_peel, smoke, pick_and_lift) that pass when run individually (smoke 31/31 verified; cloth_peel runs long alone). These tests predate the bonded work, do not enable rcc_bonded_pt, and there is no record of this 8-test batch ever being green in-process — suspected cross-Engine state interference in the test harness, tracked separately from the bonded semantics change.

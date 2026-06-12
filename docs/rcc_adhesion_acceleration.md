@@ -156,12 +156,28 @@ The rest-shape construction follows the existing `SoftVertexTriangleStitch` conv
 
 1. Use rest positions for point `x0` and triangle vertices `x1`, `x2`, `x3`.
 2. Compute triangle normal and signed point-plane distance.
-3. If the distance magnitude is below `rcc_bonded_pt_min_separate_distance`, offset the rest point along the triangle normal to create finite thickness.
+3. Place the rest point at the band-edge height `xi + d_hat` along the
+   triangle normal (preserving its side), where `xi` is the pair's
+   `PT_thickness` and `d_hat` the contact band width. The bond's equilibrium
+   gap is therefore the band edge, NOT the creation-time distance: a tension
+   release necessarily leaves the pair outside both the lock band and the
+   contact candidate set, so a released pair cannot relock in place
+   (release/relock churn is structurally impossible). When the thickness /
+   `d_hat` inputs are unavailable (unit paths without a contact manager),
+   fall back to the legacy clamp: offset only if the distance magnitude is
+   below `rcc_bonded_pt_min_separate_distance`.
 4. Build `Dm = [x1 - x0, x2 - x0, x3 - x0]`.
 5. Reject if triangle area, `abs(det(Dm))`, or rest volume is below threshold.
 6. Store `Dm_inv` and positive `rest_volume`.
 
 `min_separate_distance` is a numerical thickness, not a cosmetic gap. It must scale with scene/mesh units and should not be set arbitrarily close to zero.
+
+Band-edge rest implications: a bond is born pre-compressed (creation distance
+is inside the lock band, below `xi + d_hat`) and pushes its pair outward
+toward the band edge after locking. Because the force/strain releases are
+tension-gated (below), this birth compression can never trigger a release —
+the bond only releases after external load stretches it past its band-edge
+rest.
 
 ## Energy Model
 
@@ -216,12 +232,12 @@ Current implementation status:
 
 | Reason | Status |
 | --- | --- |
-| `strain` | Implemented on CUDA using `rcc_bonded_pt_release_strain` against `||F F^T - I||` |
-| `gap` | Implemented on CUDA using `rcc_bonded_pt_release_gap` against current normal distance growth from the lock-time rest gap reconstructed from `Dm_inv` |
+| `strain` | Implemented on CUDA using `rcc_bonded_pt_release_strain` against `||F F^T - I||`. Tension-gated: only fires when the true point-triangle distance exceeds the rest gap |
+| `gap` | Implemented on CUDA using `rcc_bonded_pt_release_gap` against the growth of the TRUE point-triangle closest distance over the rest gap reconstructed from `Dm_inv` (plane distance would never grow for tangentially torn side-face bonds) |
 | `slip` | Implemented on CUDA using `rcc_bonded_pt_release_slip` against current closest-foot tangential displacement from the lock-time rest barycentric foot reconstructed from `Dm_inv` |
 | `sticky_side` | Implemented on CUDA by routing RCC sticky signs and lagged vertex normals into the bonded owner and reusing the RCC sticky-side gate semantics |
 | `policy` | Implemented on CUDA by routing RCC adhesive enable flags plus contact/subscene masks into the bonded owner |
-| `force` | Implemented on CUDA using `rcc_bonded_pt_release_force` against the F-space restoring force `4 * kappa * V0 * dt^2 * \|\|C F\|\|` (`C = F F^T - I`). Unlike strain/gap, it is scaled by `kappa`, so it fires on a holding stiff bond and peels compliant-counterpart fixtures (cube-cloth corner pull separates at `release_force=1e-4`, `kappa=5e7`, while holding through press/hold/lift) |
+| `force` | Implemented on CUDA using `rcc_bonded_pt_release_force` against the F-space restoring force `4 * kappa * V0 * dt^2 * \|\|C F\|\|` (`C = F F^T - I`). Unlike strain/gap, it is scaled by `kappa`, so it fires on a holding stiff bond and peels compliant-counterpart fixtures. Tension-gated: the `||C F||` norm itself is direction-blind (compression and shear accumulate it just like tension), so the criterion additionally requires the bond's TRUE point-triangle closest distance to exceed its rest gap (tension). The plane-normal distance is NOT used: it never grows for a pair torn apart tangentially to its face (side-face bonds), which would make such bonds immortal. A pressed bond is load-bearing and never releases by force — glue does not fail by being squeezed together, and a compression release would strand the pair inside the contact band (relock churn) or below the thickness floor (DCD abort) |
 | `flip` / `degenerate` | Implemented on CUDA from current virtual-tet determinant/topology/rest-volume validity |
 
 Release ordering matters:
@@ -283,6 +299,8 @@ Required oracles before production use:
 | --- | --- | --- |
 | State oracle | Two PT pairs with deterministic beta/age/release flags and rest-shape payloads | Implemented by `uipc_test_core "[rcc_bonded_pt][state]"`: one lock stays active, one release is extracted, stable key/topology/beta/age/release/rest-shape permutation is preserved |
 | Rest-shape oracle | Point near triangle plane with known `min_separate_distance` | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]"`: `Dm_inv`, positive rest volume, point offset, orientation swap, and degenerate-triangle rejection match SVTS rules |
+| Band-edge rest oracle | Point inside the lock band with `rest_height_target = xi + d_hat` | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][rest_shape]"` (`band_edge_target`): the conditioned rest point lands at exactly the target height, side-preserving, with the matching rest volume |
+| Tension-only force release gate | Cube press (compression overload far above the force threshold) -> lift/hang (tension below it) -> forced pull (tension above it) | Implemented by `uipc_test_sim_case "[rcc_bonded_pt][scene][tension_release]"`: zero releases through press+hang despite a 1e-3 threshold vs a ~0.5 press overload, the hanging cube stays carried, the pull releases by force, and released pairs never relock (band-edge rest) |
 | ABD-style production energy oracle | Single virtual tet with deterministic deformation and high stiffness | Implemented by `uipc_test_core "[rcc_bonded_pt][oracle][abd_energy]"`: proves `abd_ortho` E/G/H, finite differences, SPD projection, and `kappa >= 1e8` conditioning |
 | CUDA state bridge oracle | Host state with pending and extracted release paths | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][backend_state]"`: device buffers preserve key/topology/beta/age/release/rest-shape alignment and counters roundtrip through upload/download |
 | CUDA lookup oracle | One locked key, one triangle permutation, two misses, and an empty locked set | Implemented by `uipc_test_backend_cuda "[rcc_bonded_pt][lookup]"`: lookup uses the existing RCC PT key, treats triangle permutations as the same membership key, keeps the point id distinct, and misses cleanly |

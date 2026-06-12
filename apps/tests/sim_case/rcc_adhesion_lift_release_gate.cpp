@@ -1088,3 +1088,104 @@ TEST_CASE("rcc_bonded_pt_distance_lock_cube_lift_release_gate",
     CAPTURE(end_bonded.locked);
     REQUIRE(end_bonded.locked == 0);
 }
+
+// Tension-only force release + band-edge rest gate. Two semantics under
+// test, both on the press -> lift(hang) -> pull timeline:
+//
+//   (a) Direction decomposition: the force criterion only fires when the
+//       bond has OPENED beyond its rest gap. The press drives the bonds
+//       deep into compression with an F-space restoring force ~0.5 —
+//       orders of magnitude above the 1e-3 threshold — so the old
+//       direction-blind criterion would have released every bond on
+//       contact. With the tension gate, zero releases through the whole
+//       pre-pull timeline (press + hang).
+//   (b) Band-edge rest: locked bonds are rebuilt at rest gap xi + d_hat,
+//       so the forced pull releases them only after the pair is stretched
+//       past the contact band — released pairs are out of the candidate
+//       set and cannot relock (locked count ends at zero and stays there).
+//
+// Threshold choice: hang tension of the bottom cube is ~1e-4 in F-space
+// units (4*kappa*V0*dt^2*||CF||), the press compression ~0.5. 1e-3 sits
+// between them: the hang must NOT release (the lift assertion needs the
+// bonds to carry), the kinematic pull stretches without bound and must.
+TEST_CASE("rcc_bonded_pt_tension_only_release_gate",
+          "[rcc_bonded_pt][scene][tension_release][cuda]")
+{
+    using namespace uipc;
+    using namespace uipc::core;
+
+    logger::set_level(spdlog::level::err);
+
+    auto out_path = fmt::format("{}tension_only_cube/",
+                                AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE));
+    Engine engine{"cuda", out_path};
+    World  world{engine};
+
+    auto config                               = test::Scene::default_config();
+    config["dt"]                              = 0.01;
+    config["gravity"]                         = Vector3{0.0, -9.8, 0.0};
+    config["contact"]["enable"]               = true;
+    config["contact"]["friction"]["enable"]   = true;
+    config["contact"]["d_hat"]                = 0.02;
+    config["linear_system"]["tol_rate"]       = 1.0e-3;
+    config["extras"]["strict_mode"]["enable"] = false;
+    config["rcc_bonded_pt_enabled"]             = 1;
+    config["rcc_bonded_pt_skip_ccd"]            = 1;
+    config["rcc_bonded_pt_beta_lock_threshold"] = 0.9;
+    config["rcc_bonded_pt_energy_model"]        = "abd_ortho";
+    config["rcc_bonded_pt_kappa"]               = 1.0e8;
+    config["rcc_bonded_pt_release_force"]       = 1.0e-3;
+    test::Scene::dump_config(config, out_path);
+
+    Scene scene{config};
+    auto  cube_slot = cube_gate::build_scene(scene, true);
+
+    world.init(scene);
+    REQUIRE(world.is_valid());
+
+    // Press + hold + lift + hang: bonds are compressed during the press and
+    // carry the hanging bottom cube during the lift. Neither may release.
+    SizeT max_locked = 0;
+    for(int f = cube_gate::ContactAt; f <= cube_gate::PrePullHoldUntil; ++f)
+    {
+        advance_to(world, SizeT(f));
+        if(f % 20 == 0)
+            max_locked = std::max(max_locked, bonded_stats(world).locked);
+    }
+
+    auto pre_pull = bonded_stats(world);
+    max_locked    = std::max(max_locked, pre_pull.locked);
+    auto hold_height = cube_gate::height_stats(cube_slot);
+
+    CAPTURE(max_locked,
+            pre_pull.locked,
+            pre_pull.counters.candidate_count,
+            pre_pull.counters.locked_count,
+            pre_pull.counters.released_count,
+            hold_height.bottom_y,
+            hold_height.gap_y);
+
+    // (1) Bonds formed and survived the press: compression does not release,
+    // even though the press overload dwarfs the force threshold.
+    REQUIRE(max_locked >= 1);
+    REQUIRE(pre_pull.locked >= 1);
+    REQUIRE(pre_pull.counters.released_count == 0);
+    // (2) The bonds still carry the hanging bottom cube (the hang tension
+    // stays below the threshold).
+    REQUIRE(hold_height.bottom_y > cube_gate::BottomLiftY - 0.06);
+
+    // (3) The forced pull stretches the bonds past the threshold: the force
+    // release fires under tension.
+    advance_to(world, cube_gate::PullUntil);
+    auto post_pull = bonded_stats(world);
+    CAPTURE(post_pull.locked, post_pull.counters.released_count);
+    REQUIRE(post_pull.counters.released_count > 0);
+
+    // (4) Band-edge rest: a force release happens past the lock band, so
+    // released pairs cannot relock — zero locks at the end, and the release
+    // counter stays put (no release/relock churn after separation).
+    advance_to(world, cube_gate::TotalFrames);
+    auto end_bonded = bonded_stats(world);
+    CAPTURE(end_bonded.locked, end_bonded.counters.released_count);
+    REQUIRE(end_bonded.locked == 0);
+}

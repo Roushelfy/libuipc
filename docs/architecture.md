@@ -183,6 +183,11 @@ Until both hold, keep CCD active for locked pairs and do not claim a CCD speedup
 
 Release is the normal exit path for a bonded approximation. It is evaluated from the live locked state, current or predicted positions, and scene policy. If any release condition fires, the pair must stop being reporter input for that step and must re-enter RCC persistence with its last locked beta. (Beta mode only: in distance-lock mode — "Distance-Locked Bonding Without Adhesion Energy" — beta does not exist, locked entries carry the sentinel `1.0`, and the carry is vacuous; the release gates themselves are identical.)
 
+Two structural rules keep release one-way (no release/relock churn) and shell-safe:
+
+- **Tension gating.** The overload criteria (`force`, `strain`) use direction-blind deformation norms, so they are additionally gated on the bond having OPENED beyond its rest gap, measured as the TRUE (region-clamped) point-triangle closest distance vs the same metric on the rest shape (an edge-born rest foot therefore reads zero opening at rest) (the point-plane distance would never grow for a pair torn apart tangentially to its face — e.g. a side-face bond — and would veto its release forever). A compressed or sheared bond is load-bearing and never releases by overload: glue does not fail by being squeezed, and a compression release would hand DCD an unlocked pair below the thickness floor (the deterministic rod-wind seam abort). `gap` is tensile by construction; `slip`, `flip`, `degenerate`, `sticky_side`, `policy` are unaffected.
+- **Band-edge rest.** Locked rest shapes place the point at `xi + d_hat` (pair thickness + contact band width) along the triangle normal instead of freezing the creation-time distance. The bond's equilibrium is the band edge, so a tension release necessarily leaves the pair outside both the lock band and the candidate set — it cannot relock in place. Bonds are therefore born pre-compressed (the lock band is inside the band edge) and push outward after locking; the tension gate makes that birth compression structurally unable to fire a release.
+
 Required release data:
 
 | Data | Purpose |

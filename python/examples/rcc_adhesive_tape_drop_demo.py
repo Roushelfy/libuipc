@@ -812,8 +812,16 @@ def run_demo():
             gm.set_color((0.6, 0.6, 0.6))
             gm.set_transparency(0.5)
         def _on_progress(f, tot):
+            # Lift verdict probes: locked-bond census + whole-assembly
+            # altitude. A held lift keeps locked ~flat and tape_min_y well
+            # above ground through TOP; a shedding roll collapses locked
+            # and tape_min_y returns to the contact band.
+            soft, locked = _adhesion_pt_counts(sim)
+            tp = sim["tape_geo"].geometry().positions().view().reshape(-1, 3)
+            hub_y = view(sim["hub_geo"].geometry().transforms())[0][1, 3]
             print(f"[record] frame {f}/{tot} ({f/tot*100:.1f}%)  "
-                  f"Phase: {phase_at(f - 1)}")
+                  f"Phase: {phase_at(f - 1)}  locked={locked} soft={soft} "
+                  f"tape_min_y={tp[:, 1].min():.4f} hub_y={hub_y:.4f}")
         # Tell the helper to frame for the full vertical trajectory
         # (roll diameter + LIFT_HEIGHT + DROP_HEIGHT) so the lifted
         # tape stays in view at the end of the pull. Without this,

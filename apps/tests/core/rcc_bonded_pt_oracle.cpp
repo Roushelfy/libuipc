@@ -44,6 +44,40 @@ TEST_CASE("rcc_bonded_pt_svts_rest_shape_offsets_and_orients",
     CHECK(rest.Dm.determinant() == Catch::Approx(0.05).margin(1e-14));
 }
 
+TEST_CASE("rcc_bonded_pt_svts_rest_shape_band_edge_target",
+          "[rcc_bonded_pt][oracle][rest_shape]")
+{
+    using namespace uipc;
+    using namespace uipc::core;
+
+    // With rest_height_target set (xi + d_hat), the rest point lands at
+    // exactly the target height on its current side — regardless of whether
+    // the creation distance is below or above the legacy clamp.
+    RCCBondedPTRestShapeInput input;
+    input.topo  = Vector4i{100, 200, 201, 202};
+    input.point = Vector3{0.25, 0.25, 0.012};
+    input.tri0  = Vector3{0.0, 0.0, 0.0};
+    input.tri1  = Vector3{1.0, 0.0, 0.0};
+    input.tri2  = Vector3{0.0, 1.0, 0.0};
+    input.min_separate_distance = 1e-6;
+    input.rest_height_target    = 0.02;  // xi=0, d_hat=0.02
+
+    auto rest = build_rcc_bonded_pt_rest_shape_svts(input);
+
+    REQUIRE(rest.valid);
+    CHECK(rest.signed_distance == Catch::Approx(0.012).margin(1e-14));
+    CHECK(rest.conditioned_signed_distance == Catch::Approx(0.02).margin(1e-14));
+    CHECK(rest.conditioned_point.z() == Catch::Approx(0.02).margin(1e-14));
+    CHECK(rest.rest_volume == Catch::Approx(0.02 / 6.0).margin(1e-14));
+
+    // The point's side is preserved: a negative-side point lands at -target.
+    input.point = Vector3{0.25, 0.25, -0.012};
+    rest        = build_rcc_bonded_pt_rest_shape_svts(input);
+    REQUIRE(rest.valid);
+    CHECK(rest.conditioned_signed_distance == Catch::Approx(-0.02).margin(1e-14));
+    CHECK(rest.conditioned_point.z() == Catch::Approx(-0.02).margin(1e-14));
+}
+
 TEST_CASE("rcc_bonded_pt_svts_rest_shape_rejects_degenerate_triangle",
           "[rcc_bonded_pt][oracle][rest_shape]")
 {

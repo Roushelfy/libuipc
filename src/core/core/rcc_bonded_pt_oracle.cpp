@@ -161,9 +161,18 @@ build_rcc_bonded_pt_rest_shape_svts(const RCCBondedPTRestShapeInput& input)
     Float signed_dist = normal.dot(x0 - x1);
     out.signed_distance = signed_dist;
 
-    if(std::abs(signed_dist) < input.min_separate_distance)
+    // Band-edge rest (rest_height_target > 0): the rest point is placed at
+    // exactly the target height on its current side, so the bond's
+    // equilibrium gap is the target (normally xi + d_hat) regardless of the
+    // creation-time distance. Otherwise the legacy clamp only guards
+    // degeneracy.
+    Float sign = (signed_dist >= 0) ? 1.0 : -1.0;
+    if(input.rest_height_target > 0.0)
     {
-        Float sign = (signed_dist >= 0) ? 1.0 : -1.0;
+        x0 = x0 + (sign * input.rest_height_target - signed_dist) * normal;
+    }
+    else if(std::abs(signed_dist) < input.min_separate_distance)
+    {
         x0 = x0 + (sign * input.min_separate_distance - signed_dist) * normal;
     }
 

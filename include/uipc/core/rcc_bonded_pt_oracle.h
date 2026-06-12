@@ -12,6 +12,10 @@ struct UIPC_CORE_API RCCBondedPTRestShapeInput
     Vector3  tri1 = Vector3::Zero();
     Vector3  tri2 = Vector3::Zero();
     Float    min_separate_distance = 0.001;
+    // > 0: place the rest point at exactly this height above the triangle
+    // plane (band-edge rest, normally xi + d_hat) instead of keeping the
+    // creation-time distance. 0 keeps the legacy clamp-only behavior.
+    Float    rest_height_target = 0.0;
     Float    triangle_degeneracy_tol = 1e-12;
 };
 

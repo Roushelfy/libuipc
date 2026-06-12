@@ -2,8 +2,10 @@
 
 #include <collision_detection/global_trajectory_filter.h>
 #include <collision_detection/simplex_trajectory_filter.h>
+#include <contact_system/global_contact_manager.h>
 #include <contact_system/rcc_adhesive_coeff.h>
 #include <contact_system/rcc_bonded_pt_state_bridge.h>
+#include <global_geometry/global_vertex_manager.h>
 #include <muda/buffer/device_buffer.h>
 #include <muda/buffer/device_var.h>
 #include <sim_system.h>
@@ -86,6 +88,12 @@ class RCCBondedPTSystem final : public SimSystem
 
         SimSystemSlot<GlobalTrajectoryFilter>  global_trajectory_filter;
         SimSystemSlot<SimplexTrajectoryFilter> simplex_trajectory_filter;
+        // Rest-height inputs: locked bonds are built with rest gap
+        // xi + d_hat (pair thickness + contact band width) instead of the
+        // creation-time distance, so a tension release necessarily leaves
+        // the pair outside the lock band (no immediate relock).
+        SimSystemSlot<GlobalVertexManager>  global_vertex_manager;
+        SimSystemSlot<GlobalContactManager> global_contact_manager;
 
       private:
         RCCBondedPTStateBridge     m_bridge;

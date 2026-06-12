@@ -5,6 +5,8 @@
 #include <muda/ext/eigen/inverse.h>
 #include <muda/launch/parallel_for.h>
 #include <sim_engine.h>
+#include <utils/codim_thickness.h>
+#include <utils/distance/distance_flagged.h>
 #include <utils/friction_utils.h>
 #include <utils/simplex_contact_mask_utils.h>
 #include <cmath>
@@ -33,6 +35,7 @@ MUDA_GENERIC RCCBondedPTRestShapeBuild build_rest_shape(
     const Vector3& tri1,
     const Vector3& tri2,
     Float min_separate_distance,
+    Float rest_height_target,
     Float det_dm_min)
 {
     RCCBondedPTRestShapeBuild out;
@@ -49,10 +52,19 @@ MUDA_GENERIC RCCBondedPTRestShapeBuild build_rest_shape(
         return out;
     normal /= nrm;
 
+    // Rest gap. With a target (> 0, normally xi + d_hat) the point is placed
+    // at exactly that height on its current side: the bond's equilibrium then
+    // sits at the contact-band edge, so a tension release necessarily leaves
+    // the pair outside the lock band and it cannot relock in place. Without a
+    // target, fall back to the legacy clamp that only guards degeneracy.
     const Float signed_dist = normal.dot(x0 - x1);
-    if(std::abs(signed_dist) < min_separate_distance)
+    const Float sign        = signed_dist >= 0.0 ? 1.0 : -1.0;
+    if(rest_height_target > 0.0)
     {
-        const Float sign = signed_dist >= 0.0 ? 1.0 : -1.0;
+        x0 += (sign * rest_height_target - signed_dist) * normal;
+    }
+    else if(std::abs(signed_dist) < min_separate_distance)
+    {
         x0 += (sign * min_separate_distance - signed_dist) * normal;
     }
 
@@ -94,6 +106,7 @@ MUDA_GENERIC bool rest_shape_is_valid(
     muda::CBufferView<Vector3> positions_view,
     PositionViewer positions,
     Float min_separate_distance,
+    Float rest_height_target,
     Float det_dm_min)
 {
     const Vector4i topo = entry.topo;
@@ -108,8 +121,32 @@ MUDA_GENERIC bool rest_shape_is_valid(
                                        positions(topo[2]),
                                        positions(topo[3]),
                                        min_separate_distance,
+                                       rest_height_target,
                                        det_dm_min);
     return rest.valid;
+}
+
+// Per-pair rest-height target: xi + d_hat (PT thickness offset + contact band
+// width). Returns 0 (= legacy clamp-only rest build) when the inputs are
+// unavailable, so headless/unit paths without a contact manager keep the old
+// behavior.
+template <typename ThicknessViewer>
+MUDA_GENERIC Float rest_height_target_for(const Vector4i& topo,
+                                          muda::CBufferView<Float> thickness_view,
+                                          ThicknessViewer thickness,
+                                          Float d_hat)
+{
+    if(d_hat <= 0.0)
+        return 0.0;
+    const IndexT n = static_cast<IndexT>(thickness_view.size());
+    if(topo[0] < 0 || topo[1] < 0 || topo[2] < 0 || topo[3] < 0
+       || topo[0] >= n || topo[1] >= n || topo[2] >= n || topo[3] >= n)
+        return d_hat;  // no thickness data -> xi = 0
+    return PT_thickness(thickness(topo[0]),
+                        thickness(topo[1]),
+                        thickness(topo[2]),
+                        thickness(topo[3]))
+           + d_hat;
 }
 
 MUDA_GENERIC bool rcc_bonded_pt_sticky_gate(IndexT sticky_P,
@@ -240,10 +277,69 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
     const Float strain = std::sqrt(C.squaredNorm());
     if(!std::isfinite(strain))
         flags |= core::RCCBondedPTReleaseDegenerate;
-    else if(strain_threshold >= 0.0 && strain > strain_threshold)
+
+    // Opening decomposition: how far the bond has been pulled apart beyond
+    // its rest gap (positive = tension, negative = compression). The CURRENT
+    // separation is the true point-triangle closest distance, NOT the
+    // point-plane distance: a pair whose point slides off the face (e.g. a
+    // side-face bond torn apart tangentially) keeps a near-zero plane
+    // distance forever while its real separation grows without bound — the
+    // plane measure would veto its release permanently. The rest gap is the
+    // plane height by construction (the band-edge rest build places the
+    // point on the face normal). The overload criteria (strain/force) only
+    // fire under tension: a pressed bond is load-bearing and must hold —
+    // releasing it inside the contact band would relock next frame (churn)
+    // and can strand the pair below the thickness floor (DCD abort).
+    const Matrix3x3 Dm = muda::eigen::inverse(dm_inv);
+    const Vector3   r0 = Vector3::Zero();
+    const Vector3   r1 = Dm.col(0);
+    const Vector3   r2 = Dm.col(1);
+    const Vector3   r3 = Dm.col(2);
+
+    const Vector3 rest_n   = (r2 - r1).cross(r3 - r1);
+    const Vector3 curr_n   = (x2 - x1).cross(x3 - x1);
+    const Float   rest_nrm = rest_n.norm();
+    const Float   curr_nrm = curr_n.norm();
+    bool  opening_valid = false;
+    Float normal_gap    = 0.0;
+    if(rest_nrm <= det_dm_min || curr_nrm <= det_dm_min)
+    {
+        flags |= core::RCCBondedPTReleaseDegenerate;
+    }
+    else
+    {
+        // Region-clamped closest-feature distances on BOTH ends (the
+        // friction closest-point helper is an UNCLAMPED plane projection —
+        // using it here would measure the plane distance again). The rest
+        // side uses the same metric so a pair born with its foot outside
+        // the face (edge-region lock) reads opening = 0 at rest instead of
+        // a spurious tension.
+        const Vector4i curr_flag =
+            distance::point_triangle_distance_flag(x0, x1, x2, x3);
+        Float D2_curr = 0.0;
+        distance::point_triangle_distance2(curr_flag, x0, x1, x2, x3, D2_curr);
+        const Vector4i rest_flag =
+            distance::point_triangle_distance_flag(r0, r1, r2, r3);
+        Float D2_rest = 0.0;
+        distance::point_triangle_distance2(rest_flag, r0, r1, r2, r3, D2_rest);
+        if(!std::isfinite(D2_curr) || !std::isfinite(D2_rest)
+           || D2_curr < 0.0 || D2_rest < 0.0)
+        {
+            flags |= core::RCCBondedPTReleaseDegenerate;
+        }
+        else
+        {
+            normal_gap    = std::sqrt(D2_curr) - std::sqrt(D2_rest);
+            opening_valid = true;
+        }
+    }
+    const bool tension = opening_valid && normal_gap > 0.0;
+
+    if(std::isfinite(strain) && strain_threshold >= 0.0
+       && strain > strain_threshold && tension)
         flags |= core::RCCBondedPTReleaseStrain;
 
-    if(force_threshold >= 0.0)
+    if(force_threshold >= 0.0 && tension)
     {
         // F-space restoring force of the ABD ortho bond:
         //   E = kappa * V0 * dt^2 * ||F F^T - I||^2,  dE/dF = 4 kappa V0 dt^2 C F.
@@ -306,56 +402,24 @@ MUDA_GENERIC U32 release_flags_from_current_shape(
         }
     }
 
-    if(gap_threshold >= 0.0 || slip_threshold >= 0.0)
+    if(gap_threshold >= 0.0 && opening_valid && normal_gap > gap_threshold)
+        flags |= core::RCCBondedPTReleaseGap;
+
+    if(slip_threshold >= 0.0 && opening_valid)
     {
         using namespace friction;
 
-        const Matrix3x3 Dm = muda::eigen::inverse(dm_inv);
-        const Vector3 r0 = Vector3::Zero();
-        const Vector3 r1 = Dm.col(0);
-        const Vector3 r2 = Dm.col(1);
-        const Vector3 r3 = Dm.col(2);
-
-        const Vector3 rest_n = (r2 - r1).cross(r3 - r1);
-        const Vector3 curr_n = (x2 - x1).cross(x3 - x1);
-        const Float rest_nrm = rest_n.norm();
-        const Float curr_nrm = curr_n.norm();
-        if(rest_nrm <= det_dm_min || curr_nrm <= det_dm_min)
-        {
+        Vector2 rest_bary = Vector2::Zero();
+        Vector2 curr_bary = Vector2::Zero();
+        point_triangle_closest_point(r0, r1, r2, r3, rest_bary);
+        point_triangle_closest_point(x0, x1, x2, x3, curr_bary);
+        const Vector2 delta = curr_bary - rest_bary;
+        const Vector3 slip = delta[0] * (x2 - x1) + delta[1] * (x3 - x1);
+        const Float slip_norm = slip.norm();
+        if(!std::isfinite(slip_norm))
             flags |= core::RCCBondedPTReleaseDegenerate;
-        }
-        else
-        {
-            const Float rest_dist = rest_n.dot(r0 - r1) / rest_nrm;
-            const Float curr_dist = curr_n.dot(x0 - x1) / curr_nrm;
-            if(!std::isfinite(rest_dist) || !std::isfinite(curr_dist))
-            {
-                flags |= core::RCCBondedPTReleaseDegenerate;
-            }
-            else if(gap_threshold >= 0.0)
-            {
-                const Float normal_gap =
-                    std::abs(curr_dist) - std::abs(rest_dist);
-                if(normal_gap > gap_threshold)
-                    flags |= core::RCCBondedPTReleaseGap;
-            }
-
-            if(slip_threshold >= 0.0)
-            {
-                Vector2 rest_bary = Vector2::Zero();
-                Vector2 curr_bary = Vector2::Zero();
-                point_triangle_closest_point(r0, r1, r2, r3, rest_bary);
-                point_triangle_closest_point(x0, x1, x2, x3, curr_bary);
-                const Vector2 delta = curr_bary - rest_bary;
-                const Vector3 slip =
-                    delta[0] * (x2 - x1) + delta[1] * (x3 - x1);
-                const Float slip_norm = slip.norm();
-                if(!std::isfinite(slip_norm))
-                    flags |= core::RCCBondedPTReleaseDegenerate;
-                else if(slip_norm > slip_threshold)
-                    flags |= core::RCCBondedPTReleaseSlip;
-            }
-        }
+        else if(slip_norm > slip_threshold)
+            flags |= core::RCCBondedPTReleaseSlip;
     }
 
     return flags;
@@ -419,6 +483,16 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
 
     const SizeT n = pairs.size();
     m_counters.candidate_count += n;
+
+    // Rest-height inputs (xi + d_hat per pair). Empty/zero falls back to the
+    // legacy creation-distance rest shape — only relevant for unit paths
+    // without a contact manager.
+    muda::CBufferView<Float> rest_thickness{};
+    Float                    rest_d_hat = 0.0;
+    if(global_vertex_manager)
+        rest_thickness = global_vertex_manager->thicknesses();
+    if(global_contact_manager)
+        rest_d_hat = global_contact_manager->d_hat();
 
     const auto prev_keys  = m_bridge.locked_keys();
     const auto prev_topos = m_bridge.locked_topos();
@@ -646,6 +720,9 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     {
         auto positions_view = positions;
         auto positions_viewer = positions.viewer().name("positions");
+        auto thickness_view   = rest_thickness;
+        auto thickness_viewer = rest_thickness.viewer().name("thicknesses");
+        const Float d_hat     = rest_d_hat;
         const Float min_separate_distance = m_min_separate_distance;
         const Float det_dm_min = m_det_dm_min;
         DeviceSelect().If(
@@ -655,14 +732,20 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
             new_locked_count,
             [positions_view,
              positions_viewer,
+             thickness_view,
+             thickness_viewer,
+             d_hat,
              min_separate_distance,
              det_dm_min] CUB_RUNTIME_FUNCTION(
                 const RCCBondedPTDeviceEntry& entry)
             {
+                const Float rest_height_target = rest_height_target_for(
+                    entry.topo, thickness_view, thickness_viewer, d_hat);
                 return rest_shape_is_valid(entry,
                                            positions_view,
                                            positions_viewer,
                                            min_separate_distance,
+                                           rest_height_target,
                                            det_dm_min);
             });
     }
@@ -729,14 +812,20 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                     dm_inv = m_new_locked_dm_inv.view().viewer().name("fresh_dm_inv"),
                     rest_volume =
                         m_new_locked_rest_volume.view().viewer().name("fresh_rest_volume"),
+                    thickness_view = rest_thickness,
+                    thickness = rest_thickness.viewer().name("thicknesses"),
+                    d_hat = rest_d_hat,
                     min_separate_distance = m_min_separate_distance,
                     det_dm_min = m_det_dm_min] __device__(int i) mutable
                    {
                        auto entry = entries(i);
+                       const Float rest_height_target = rest_height_target_for(
+                           entry.topo, thickness_view, thickness, d_hat);
                        const bool valid = rest_shape_is_valid(entry,
                                                               positions_view,
                                                               positions,
                                                               min_separate_distance,
+                                                              rest_height_target,
                                                               det_dm_min);
                        if(valid)
                        {
@@ -748,6 +837,7 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
                                                 positions(topo[2]),
                                                 positions(topo[3]),
                                                 min_separate_distance,
+                                                rest_height_target,
                                                 det_dm_min);
                            entry.topo = rest.topo;
                            entries(i) = entry;
@@ -1019,6 +1109,9 @@ void RCCBondedPTSystem::do_build()
     const IndexT skip_v = skip_ccd_attr ? skip_ccd_attr->view()[0] : IndexT{-1};
     m_impl.set_skip_ccd(skip_v < 0 ? true : (skip_v != 0));
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
+    // Rest-height inputs: locked bonds are built with rest gap xi + d_hat.
+    m_impl.global_vertex_manager  = find<GlobalVertexManager>();
+    m_impl.global_contact_manager = find<GlobalContactManager>();
 
     on_init_scene(
         [this]
