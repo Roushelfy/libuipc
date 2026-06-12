@@ -1640,11 +1640,16 @@ class RCCBetaEvolutionTimeIntegrator final : public TimeIntegrator
         if(distance_lock_ratio)
         {
             Float c = distance_lock_ratio->view()[0];
-            // clamp to [0,1]: the lock band d < xi + c*d_hat must stay inside
-            // the DCD activity band (xi, xi + d_hat); c=0 disables distance
-            // locking (d < xi never holds under the IPC barrier).
+            // clamp to [0,2]: c > 1 reaches beyond the contact band — the
+            // trajectory filters extend their activity range to xi + c*d_hat
+            // for it (see rcc_bonded_pt_vt_range_scale; barrier energy is
+            // zero past xi + d_hat so the far pairs are inert). The hard cap
+            // of 2 is the broadphase reach: AABBs expand by d_hat + xi per
+            // primitive, so pairs beyond ~2*(xi + d_hat) never become
+            // candidates. c=0 disables distance locking (d < xi never holds
+            // under the IPC barrier).
             rcc->m_bonded_pt_distance_lock_ratio =
-                std::min(Float{1}, std::max(Float{0}, c));
+                std::min(Float{2}, std::max(Float{0}, c));
         }
 
         on_init_scene(

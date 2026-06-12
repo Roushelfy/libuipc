@@ -132,8 +132,8 @@ MUDA_GENERIC bool rest_shape_is_valid(
     return rest.valid;
 }
 
-// Per-pair rest-height target: xi + d_hat (PT thickness offset + contact band
-// width). Returns 0 (= legacy clamp-only rest build) when the inputs are
+// Per-pair rest-height target: xi + c*d_hat (PT thickness offset + lock-band
+// reach; d_hat arrives pre-scaled by the distance-lock coefficient). Returns 0 (= legacy clamp-only rest build) when the inputs are
 // unavailable, so headless/unit paths without a contact manager keep the old
 // behavior.
 template <typename ThicknessViewer>
@@ -498,15 +498,19 @@ void RCCBondedPTSystem::Impl::lock_from_rcc_pt_snapshot(
     const SizeT n = pairs.size();
     m_counters.candidate_count += n;
 
-    // Rest-height inputs (xi + d_hat per pair). Empty/zero falls back to the
-    // legacy creation-distance rest shape — only relevant for unit paths
-    // without a contact manager.
+    // Rest-height inputs (xi + c*d_hat per pair, c = distance-lock band
+    // coefficient, 1 outside distance-lock mode). Placing the rest gap AT
+    // the lock-band edge makes tension release exactly self-consistent: a
+    // released pair satisfies d > xi + c*d_hat, which is precisely the lock
+    // ineligibility condition — no relock churn by construction. Empty/zero
+    // falls back to the legacy creation-distance rest shape — only relevant
+    // for unit paths without a contact manager.
     muda::CBufferView<Float> rest_thickness{};
     Float                    rest_d_hat = 0.0;
     if(global_vertex_manager)
         rest_thickness = global_vertex_manager->thicknesses();
     if(global_contact_manager)
-        rest_d_hat = global_contact_manager->d_hat();
+        rest_d_hat = global_contact_manager->d_hat() * m_rest_d_hat_ratio;
 
     const auto prev_keys  = m_bridge.locked_keys();
     const auto prev_topos = m_bridge.locked_topos();
@@ -952,6 +956,16 @@ void RCCBondedPTSystem::Impl::set_skip_ccd(bool enabled) noexcept
     m_skip_ccd = enabled;
 }
 
+void RCCBondedPTSystem::Impl::set_vt_range_scale(Float scale) noexcept
+{
+    m_vt_range_scale = std::max(scale, Float{1});
+}
+
+void RCCBondedPTSystem::Impl::set_rest_d_hat_ratio(Float ratio) noexcept
+{
+    m_rest_d_hat_ratio = std::min(Float{2}, std::max(Float{0}, ratio));
+}
+
 bool RCCBondedPTSystem::Impl::enabled() const noexcept
 {
     return m_enabled;
@@ -988,7 +1002,10 @@ void RCCBondedPTSystem::Impl::bind_filter(SimplexTrajectoryFilter* filter) noexc
     m_last_synced_filter_generation =
         filter ? filter->rcc_bonded_pt_filter_generation() : 0;
     if(filter)
+    {
         filter->set_rcc_bonded_pt_skip_ccd(m_skip_ccd);
+        filter->set_rcc_bonded_pt_vt_range_scale(m_vt_range_scale);
+    }
 }
 
 void RCCBondedPTSystem::Impl::feed_filter_keys() const noexcept
@@ -997,6 +1014,7 @@ void RCCBondedPTSystem::Impl::feed_filter_keys() const noexcept
         return;
     simplex_trajectory_filter->set_rcc_bonded_pt_locked_keys(m_bridge.locked_keys());
     simplex_trajectory_filter->set_rcc_bonded_pt_skip_ccd(m_skip_ccd);
+    simplex_trajectory_filter->set_rcc_bonded_pt_vt_range_scale(m_vt_range_scale);
 }
 
 void RCCBondedPTSystem::Impl::clear_filter_keys() const noexcept
@@ -1025,7 +1043,8 @@ void RCCBondedPTSystem::Impl::feed_filter_keys(
     if(!m_enabled)
         return;
     filter.set_rcc_bonded_pt_locked_keys(m_bridge.locked_keys());
-    filter.rcc_bonded_pt_skip_ccd = m_skip_ccd;
+    filter.rcc_bonded_pt_skip_ccd       = m_skip_ccd;
+    filter.rcc_bonded_pt_vt_range_scale = m_vt_range_scale;
 }
 
 void RCCBondedPTSystem::Impl::sync_filter_skipped_count(
@@ -1122,6 +1141,19 @@ void RCCBondedPTSystem::do_build()
     // (the filter feed/bind paths are enabled-gated).
     const IndexT skip_v = skip_ccd_attr ? skip_ccd_attr->view()[0] : IndexT{-1};
     m_impl.set_skip_ccd(skip_v < 0 ? true : (skip_v != 0));
+    // Distance-lock band coefficient c may exceed 1 (lock band d < xi +
+    // c*d_hat reaching beyond the contact band). The trajectory filters
+    // must then keep candidates active out to xi + c*d_hat or the lock
+    // eligibility kernel never sees the far pairs.
+    auto dlock_attr = config.find<IndexT>("rcc_bonded_pt_distance_lock");
+    auto dlock_ratio_attr = config.find<Float>("rcc_bonded_pt_distance_lock_ratio");
+    const bool dlock_on = dlock_attr && dlock_attr->view()[0] != 0;
+    m_impl.set_vt_range_scale(
+        dlock_on && dlock_ratio_attr ? dlock_ratio_attr->view()[0] : Float{1});
+    // Locked rest gap follows the lock band: rest = xi + c*d_hat in
+    // distance-lock mode (release lands exactly outside the band).
+    m_impl.set_rest_d_hat_ratio(
+        dlock_on && dlock_ratio_attr ? dlock_ratio_attr->view()[0] : Float{1});
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
     // Rest-height inputs: locked bonds are built with rest gap xi + d_hat.
     m_impl.global_vertex_manager  = find<GlobalVertexManager>();

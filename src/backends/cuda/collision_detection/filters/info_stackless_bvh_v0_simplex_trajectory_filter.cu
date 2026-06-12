@@ -822,6 +822,7 @@ void InfoStacklessBVHV0SimplexTrajectoryFilter::Impl::filter_active(FilterActive
                  temp_PTs    = temp_PTs.viewer().name("temp_PTs"),
                  temp_VTs    = temp_VTs.viewer().name("temp_VTs"),
                  rcc_locked_keys = info.rcc_bonded_pt_locked_keys(),
+                 rcc_vt_scale = info.rcc_bonded_pt_vt_range_scale(),
                  d_hats = info.d_hats().viewer().name("d_hats")] __device__(int i) mutable
                 {
                     auto& PP = temp_PPs(i);
@@ -863,6 +864,15 @@ void InfoStacklessBVHV0SimplexTrajectoryFilter::Impl::filter_active(FilterActive
                         distance::point_triangle_distance_flag(Ps[0], Ps[1], Ps[2], Ps[3]);
 
                     Vector2 range = D_range(thickness, d_hat);
+                    // Distance-lock reach: keep far candidates active out to
+                    // xi + scale*d_hat (barrier is zero beyond xi + d_hat, so
+                    // the extra pairs are inert; only the lock-eligibility
+                    // kernel consumes them).
+                    if(rcc_vt_scale > Float{1})
+                    {
+                        Float up  = thickness + rcc_vt_scale * d_hat;
+                        range.y() = up * up;
+                    }
 
                     Float D;
                     distance::point_triangle_distance2(flag, Ps[0], Ps[1], Ps[2], Ps[3], D);

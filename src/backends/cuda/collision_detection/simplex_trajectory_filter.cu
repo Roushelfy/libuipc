@@ -351,6 +351,11 @@ void SimplexTrajectoryFilter::set_rcc_bonded_pt_skip_ccd(bool enabled) noexcept
     m_impl.rcc_bonded_pt_skip_ccd = enabled;
 }
 
+void SimplexTrajectoryFilter::set_rcc_bonded_pt_vt_range_scale(Float scale) noexcept
+{
+    m_impl.rcc_bonded_pt_vt_range_scale = std::max(scale, Float{1});
+}
+
 SizeT SimplexTrajectoryFilter::rcc_bonded_pt_filter_skipped_count() const noexcept
 {
     return m_impl.rcc_bonded_pt_filter_skipped_count();
@@ -390,6 +395,11 @@ muda::CBufferView<Vector3> SimplexTrajectoryFilter::DetectInfo::displacements() 
 muda::CBufferView<U64> SimplexTrajectoryFilter::BaseInfo::rcc_bonded_pt_locked_keys() const noexcept
 {
     return m_impl->rcc_bonded_pt_locked_keys;
+}
+
+Float SimplexTrajectoryFilter::BaseInfo::rcc_bonded_pt_vt_range_scale() const noexcept
+{
+    return m_impl->rcc_bonded_pt_vt_range_scale;
 }
 
 bool SimplexTrajectoryFilter::DetectInfo::rcc_bonded_pt_skip_ccd() const noexcept

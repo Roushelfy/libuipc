@@ -82,6 +82,11 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         // path) and the DCD classify/assert kernels (FilterActiveInfo
         // path) both need to skip them.
         muda::CBufferView<U64> rcc_bonded_pt_locked_keys() const noexcept;
+        // Distance-lock reach scale (>= 1): classify kernels extend the
+        // activity range to xi + scale*d_hat so far lock candidates stay
+        // visible. Barrier energy is zero beyond xi + d_hat, so the extra
+        // pairs are inert.
+        Float rcc_bonded_pt_vt_range_scale() const noexcept;
 
       protected:
         friend class SimplexTrajectoryFilter;
@@ -154,6 +159,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         void filter_rcc_bonded_pt_locked_active_pairs();
         void set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
         void clear_rcc_bonded_pt_locked_keys() noexcept;
+        void set_rcc_bonded_pt_vt_range_scale(Float scale) noexcept;
         SizeT rcc_bonded_pt_filter_skipped_count() const noexcept;
         SizeT rcc_bonded_pt_filter_generation() const noexcept;
         bool dump(DumpInfo& info);
@@ -198,6 +204,9 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         // non-penetration guard, so this stays off until the no-penetration
         // scene gate passes (see docs/architecture.md CCD Removal Precondition).
         bool                         rcc_bonded_pt_skip_ccd = false;
+        // Distance-lock reach (>= 1): classify kernels keep candidates
+        // active out to xi + scale*d_hat (inert beyond d_hat; barrier = 0).
+        Float                        rcc_bonded_pt_vt_range_scale = 1.0;
 
         Float reserve_ratio = 1.1;
 
@@ -232,6 +241,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
     void  set_rcc_bonded_pt_locked_keys(muda::CBufferView<U64> locked_keys) noexcept;
     void  clear_rcc_bonded_pt_locked_keys() noexcept;
     void  set_rcc_bonded_pt_skip_ccd(bool enabled) noexcept;
+    void  set_rcc_bonded_pt_vt_range_scale(Float scale) noexcept;
     SizeT rcc_bonded_pt_filter_skipped_count() const noexcept;
     SizeT rcc_bonded_pt_filter_generation() const noexcept;
 

@@ -443,7 +443,9 @@ def build_demo(adhesion_on: bool = True,
         # Phase 7 distance-locked bonding: `--set DISTANCE_LOCK=1` disables the
         # soft adhesion energy entirely (no beta) and locks by the end-of-step
         # distance band d < xi + c*d_hat instead (c = `--set
-        # DISTANCE_LOCK_RATIO=...`, default 0.5, clamped [0,1] by the engine).
+        # DISTANCE_LOCK_RATIO=...`, default 0.5, clamped [0,2] by the engine;
+        # c > 1 locks beyond the contact band — the trajectory filters
+        # extend their candidate range to xi + c*d_hat to match).
         # The preset's Cn/Ct are ignored in this mode (the engine warns once);
         # release gates are unchanged. Recommend LOCK_FACE_INTERIOR_ONLY=1 —
         # without beta's multi-step integration, edge/corner VTs would

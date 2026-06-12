@@ -53,6 +53,8 @@ class RCCBondedPTSystem final : public SimSystem
         void set_enabled(bool enabled) noexcept;
         bool enabled() const noexcept;
         void set_skip_ccd(bool enabled) noexcept;
+        void set_vt_range_scale(Float scale) noexcept;
+        void set_rest_d_hat_ratio(Float ratio) noexcept;
         void set_rest_shape_config(Float min_separate_distance,
                                    Float det_dm_min) noexcept;
         void set_release_config(Float strain_threshold,
@@ -89,7 +91,7 @@ class RCCBondedPTSystem final : public SimSystem
         SimSystemSlot<GlobalTrajectoryFilter>  global_trajectory_filter;
         SimSystemSlot<SimplexTrajectoryFilter> simplex_trajectory_filter;
         // Rest-height inputs: locked bonds are built with rest gap
-        // xi + d_hat (pair thickness + contact band width) instead of the
+        // xi + c*d_hat (pair thickness + lock-band reach) instead of the
         // creation-time distance, so a tension release necessarily leaves
         // the pair outside the lock band (no immediate relock).
         SimSystemSlot<GlobalVertexManager>  global_vertex_manager;
@@ -129,6 +131,17 @@ class RCCBondedPTSystem final : public SimSystem
         SizeT                      m_last_synced_filter_generation = 0;
         bool                       m_enabled = false;
         bool                       m_skip_ccd = false;
+        // Distance-lock reach: when the lock-band coefficient c exceeds 1,
+        // the trajectory filters must keep candidates ACTIVE out to
+        // xi + c*d_hat so the lock-eligibility kernel can see them (the IPC
+        // barrier is zero beyond xi + d_hat, so the extension is energy-
+        // neutral and only costs assembly of inert pairs).
+        Float                      m_vt_range_scale = 1.0;
+        // Locked rest gap = xi + (this ratio)*d_hat. In distance-lock mode
+        // this is the band coefficient c, so a tension release (opening >
+        // rest gap) lands exactly outside the lock band — relock-free by
+        // construction. 1 (= xi + d_hat) outside distance-lock mode.
+        Float                      m_rest_d_hat_ratio = 1.0;
     };
 
     void clear();
