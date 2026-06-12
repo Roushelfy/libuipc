@@ -1394,3 +1394,51 @@ force/gap; genuinely pressed pairs still never release.
 - Gates after the region-clamped opening fix: `[rcc_bonded_pt][scene][distance_lock]` 604/1, `[tension_release]` 421/1, `[pt_lift_release]` 596/1; `uipc_test_backend_cuda "rcc_*"` 277/20; `uipc_test_core "rcc_*"` 131/8 (all on the sm_120 build, RTX PRO 6000).
 - Drop-lift boundary under the new semantics (CCD-wound b09 asset, SKIP_CCD=0): clean hold at release_force 1e-5 / 3e-6 (zero events), 1e-6 (~28 ambient releases, <1%), 3e-7 (~770 releases = 20% attrition, still churn-free and full-height hang); cascade transition between 3e-7 and 3e-8 — at 3e-8 and below, mass release -> structural push-back into the band -> beta>=0.9 relock -> creep ratchet (the coil pays out and sags). Minimum usable release force ~3e-7, recommended 1e-6+. Thresholds now measure net tension above the band-edge prestress (ambient scale 4*kappa*V0*dt^2*2*(d_hat-pitch)/rest ~ 1.3e-6 for this asset), NOT absolute bond load — old-semantics values (1e-7..1e-8) are not comparable.
 - Open item (pre-existing suspect): running ALL sim_case rcc tests in ONE process (`uipc_test_sim_case "rcc_*"`) fails 3 beta-demo tests (cloth_peel, smoke, pick_and_lift) that pass when run individually (smoke 31/31 and pick_and_lift 522/522 verified). cloth_peel could not be verified solo: it grinds at ~160 s/frame in its hold phase on RTX PRO 6000 (two 13x13 cloths pressed to 0.012 with d_hat=0.02 -> every vertex in band, beta attraction vs contact repulsion never converges; full section would take ~10 h) -- its own pathology, and irrelevant to the bonded change by code path: the scene never enables rcc_bonded_pt, so RCCBondedPTSystem never builds and none of the changed kernels execute. These tests predate the bonded work, do not enable rcc_bonded_pt, and there is no record of this 8-test batch ever being green in-process — suspected cross-Engine state interference in the test harness, tracked separately from the bonded semantics change.
+
+### In-Shell Locked Pairs vs The Collision Pipeline (rod-wind end-to-end)
+
+Running the rod-wind demo end-to-end on the new semantics surfaced three
+independent faults, each killed by the next deeper one:
+
+1. **Seed index remap.** Saved bonded-lock topos are GLOBAL vertex indices
+   from the winding scene, whose backend layout is `[hub 1056 | tape 1980]`
+   — ABD bodies are numbered BEFORE FEM geometry regardless of Python
+   creation order (decoded from the asset itself: lock indices use only the
+   hub's outer-ring verts, period-96 half-used gap pattern; zero
+   tri-straddlers at the 1056 boundary). The rod demo inserts extra ABD
+   bodies (rod, carrier) into that block, shifting every tape index. Fix:
+   remap `idx >= hub_nv -> idx + inserted_nv` before `seed_locks`; the
+   backend additionally rejects (instead of device-asserting on) seeded
+   triangles with non-uniform vertex thickness — the signature of a wrong
+   layout — via a negative rest-height sentinel.
+2. **DCD classify assert.** Band-edge rest makes "locked pair inside the
+   thickness shell" a LEGAL state, but the AllP-AllT classify kernel's
+   `D > xi` assert runs BEFORE the locked-pair post-filter and aborted the
+   process the moment the orbit peel front compressed a seam lock (true
+   distance a hair under xi; D prints are squared). Fix: all four BVH
+   trajectory filters skip locked candidates at the source (also covers the
+   PE/PP regions the post-filter never stripped);
+   `rcc_bonded_pt_locked_keys()` moved from DetectInfo to BaseInfo so the
+   FilterActive path can see it.
+3. **CCD TOI degeneracy / Zeno.** With SKIP_CCD=0 an in-shell locked pair
+   makes the thickness-xi ACCD root-find degenerate (toi=0 -> engine
+   assert). A fractional retarget (stop at c*current_distance) fixes the
+   assert but creates Zeno: the global line-search alpha is min over all
+   pairs, so one compressed lock clamps the WHOLE system to ~160 s/frame.
+   Resolution (design decision): locked pairs get CCD thickness ZERO — TOI
+   only blocks an actual surface crossing; keeping the pair off the surface
+   is the bond energy's job, i.e. kappa/d_hat must supply the equivalent
+   barrier. Tuning rounds re-wind the asset, then re-run rod-wind.
+4. **First tuning round** (`-dhat3-k3e8`: D_HAT_RATIO 2->3, kappa 1e8->3e8,
+   re-wound): wind clean (3556 locks, beta 0.988, settled to 1e-5 m/s);
+   rod-wind runs ~5 frames/s vs 0.25 before — the deep-compression slow
+   zone is gone. Release thresholds for this asset need re-calibration
+   (prestress scale moved ~4-6x); the old boundary table applies to the
+   dhat2/k1e8 asset only.
+5. **Fold separation + carrier orbit (in progress).** The folded free end
+   tip-peels open after squeeze release (recoil moment vs the low
+   rf=1e-7); lowering the rod 3 rows hit the hub — keep auto height.
+   Orbit redesigned: the hub's STC disengages at orbit entry and an
+   STC-driven ABD carrier (R = half the hub hole, length 4*HUB_HEIGHT)
+   through the hub hole sweeps the circle; orbit radius auto-adds the hole
+   slack so the tape stays taut. Validation run in flight.
