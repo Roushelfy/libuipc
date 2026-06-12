@@ -1493,3 +1493,20 @@ BENDING_STIFFNESS=500, CARRIER_JOINT=1. Full 10-turn helical validation
 Infra note: parallel sweeps exposed a cross-node pip race (setuptools
 builds inside the shared NFS source dir -> "dist-info File exists"); jobs
 now copy the python dir to node-local /tmp before pip install.
+
+### Speed Sweep Extension (lower kappa / lower d_hat)
+
+| config            | rod time | health |
+|-------------------|----------|--------|
+| dhat2 + kappa3e7  | 598s     | locks grow 1204->1429, no release events |
+| kappa1e7 (dhat3)  | 629s     | locks grow monotonically — release DEAD |
+| kappa3e7 (dhat3)  | 676s     | similar growth pattern |
+| dhat1.5 + kappa1e8| 907s     | slower than dhat3 — d_hat sweet spot is 2-3x |
+
+Kappa curve flattens below 3e7 (1e9:1548 / 3e8:1049 / 1e8:842 / 3e7:676 /
+1e7:629). BUT: bond force scale ~ kappa, so at fixed RCC_RELEASE_FORCE=1e-7
+the release gate stops firing somewhere below kappa 1e8 — the 1-turn runs
+show pure relock growth. Speed at kappa<=3e7 is only usable after
+re-calibrating the release force down with kappa. Recommendation stands:
+kappa 1e8 + dhat3 (842s, peel intact) as the no-recalibration recipe;
+kappa 3e7 + dhat2 (598s, -43% vs old baseline) once rf is re-swept.
