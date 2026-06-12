@@ -1442,3 +1442,26 @@ independent faults, each killed by the next deeper one:
    STC-driven ABD carrier (R = half the hub hole, length 4*HUB_HEIGHT)
    through the hub hole sweeps the circle; orbit radius auto-adds the hole
    slack so the tape stays taut. Validation run in flight.
+
+### Revolute Bearing Lands The Full Rod-Wind Sequence
+
+The carrier-contact bearing ground Newton regardless of lock mode/count
+(983-lock dlock and 3556-lock beta assets both stalled at orbit frames
+940-1140; kappa x10 on the bonds did not help): the hub's spin against a
+rigid-rigid line contact + friction is a nearly flat energy direction.
+Fix: `CARRIER_JOINT=1` (default) replaces the hub-carrier contact with an
+`AffineBodyRevoluteJoint` on the carrier axis and disables that contact
+pair — a bearing is a joint, not a contact. Result: first-ever full
+2460-frame completions, in parallel —
+
+- jointA (dlock asset, kappa 3e8): fold ADDS ~46 locks (low bending 500
+  fixed the tip-peel), orbit peels 1042 -> 940 smoothly, zero frames over
+  200 iters.
+- jointB (beta asset 3556 locks, bend 500 runtime): completes with mild
+  release/relock oscillation (1471 -> 1168), transient spikes only.
+- Contact-mode control with kappa 3e9: still grinding at the same zone —
+  killed.
+
+Drop cross-check on the new assets (rf=1e-7, kappa 3e8): dlock asset holds
+980/983 locks; beta asset releases 2/3 (prestress rescale) — per-asset
+release-force re-calibration confirmed necessary.

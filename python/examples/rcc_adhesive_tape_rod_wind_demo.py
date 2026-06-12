@@ -65,6 +65,7 @@ from uipc.geometry import ground, trimesh, label_surface
 from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
+    AffineBodyRevoluteJoint,
     NeoHookeanShell,
     DiscreteShellBending,
     SoftPositionConstraint,
@@ -72,6 +73,7 @@ from uipc.constitution import (
     ElasticModuli2D,
     RCCAdhesive,
 )
+from uipc.geometry import linemesh
 
 sys.path.insert(0, os.path.dirname(__file__))
 import tape_asset_lib as L
@@ -521,12 +523,23 @@ def build_demo(adhesion_on: bool = True,
     # the carrier through hole contact while the carrier sweeps the circle.
     CARRIER_R   = _cfg_f("CARRIER_R", 0.5 * HUB_R_INNER)
     CARRIER_LEN = _cfg_f("CARRIER_LEN", 4.0 * HUB_HEIGHT)
+    # CARRIER_JOINT=1 (default): the hub-carrier bearing is an
+    # AffineBodyRevoluteJoint on the carrier axis and the hub-carrier
+    # CONTACT pair is disabled — a bearing is a joint, not a line contact
+    # (the rigid-rigid contact + friction left the hub's spin a nearly flat
+    # energy direction and Newton ground 600+ iterations on it).
+    # CARRIER_JOINT=0 restores the contact bearing.
+    CARRIER_JOINT          = _cfg_i("CARRIER_JOINT", 1)
+    CARRIER_JOINT_STRENGTH = _cfg_f("CARRIER_JOINT_STRENGTH", 100.0)
     carrier_c0  = np.array([float(hub_T_up[0, 3]), float(hub_T_up[1, 3]),
                             ROD_CZ], dtype=np.float64)
     carrier_sc = _make_rod_abd_sc(CARRIER_R, CARRIER_LEN, ROD_SIDES,
                                   tuple(carrier_c0))
     abd.apply_to(carrier_sc, ROD_ABD_KAPPA, ROD_DENSITY)
-    rod_contact.apply_to(carrier_sc)
+    carrier_contact = tabular.create("carrier")
+    carrier_contact.apply_to(carrier_sc)
+    tabular.insert(carrier_contact, hub_contact, 0.5, 1.0e9,
+                   enable=(CARRIER_JOINT == 0))
     stc.apply_to(carrier_sc, np.array([STC_ETA_P, STC_ETA_A], dtype=np.float64))
     carrier_obj = scene.objects().create("carrier")
     carrier_geo, _ = carrier_obj.geometries().create(carrier_sc)
@@ -561,6 +574,23 @@ def build_demo(adhesion_on: bool = True,
     # ---- ground ----
     ground_obj = scene.objects().create("ground")
     ground_obj.geometries().create(ground(0.0))
+
+    if CARRIER_JOINT:
+        # Revolute bearing on the carrier axis (+z through the hub center).
+        # Created LAST so its vertices land after every body the seed-lock
+        # remap cares about.
+        half = 0.5 * HUB_HEIGHT
+        joint_mesh = linemesh(
+            np.array([carrier_c0 + [0.0, 0.0, -half],
+                      carrier_c0 + [0.0, 0.0, +half]], dtype=np.float64),
+            np.array([[0, 1]], dtype=np.int32))
+        revolute = AffineBodyRevoluteJoint()
+        revolute.apply_to(joint_mesh,
+                          [hub_geo], [0],
+                          [carrier_geo], [0],
+                          [CARRIER_JOINT_STRENGTH])
+        joint_obj = scene.objects().create("hub_carrier_bearing")
+        joint_obj.geometries().create(joint_mesh)
 
     # ---- free-end row + wrap targets ----
     def vid(i, j): return i * (TAPE_NZ + 1) + j
@@ -813,7 +843,7 @@ def build_demo(adhesion_on: bool = True,
             c0 = carrier_c0 + cur[:3, 3]  # baked center + current translation
             dxr, dyr = float(c0[0] - rod_axis[0]), float(c0[1] - rod_axis[1])
             r_nat = float(np.hypot(dxr, dyr))
-            slack = max(HUB_R_INNER - CARRIER_R, 0.0)
+            slack = 0.0 if CARRIER_JOINT else max(HUB_R_INNER - CARRIER_R, 0.0)
             r = HANG_RADIUS if HANG_RADIUS > 0 else max(r_nat + slack, MIN_ORBIT_R)
             phi0 = float(np.arctan2(dxr, -dyr))   # point(φ0) = current center
             carrier_state["init"] = (r, phi0, float(c0[2]), cur[:3, :3].copy())
