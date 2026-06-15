@@ -11,6 +11,8 @@ CTestTestfile.cmake
 _deps
 site/
 build/
+# out-of-tree build variants (e.g. build-rtx/, build-eval-120/)
+build-*/
 output/
 vcpkg_installed/
 .vscode/.cache 
@@ -39,6 +41,10 @@ cmakebuild/
 
 # vsxmake
 vsxmake*/
+
+# scratch wheel-build helpers and logs
+build_eval_wheel.sh
+wheel-build-*.log
 
 # macOS
 .DS_Store
