@@ -1555,3 +1555,27 @@ band. With that, the r150 recipe (s4 + DISTANCE_LOCK_RATIO=1.5):
 Note: in distance-lock mode the demo probe's "soft=" counter is pure
 bookkeeping (tracked unlocked candidates: occlusion/face-interior/policy
 rejected), zero energy — adhesion coefficients are not assembled.
+
+### Speed-Tier Far-Lock Combo (speed-r150)
+
+Combined the speed recipe (d_hat 2xi, kappa 3e7) with far locking
+(DISTANCE_LOCK_RATIO=1.5), rf=1e-7, bend 500, distance-lock, joint
+bearing. Asset speed-r150.npz: 1711 locks (vs 1204 at ratio 0.95 same
+d_hat/kappa; vs 2122 for r150's d_hat3 — lock count scales with the
+ABSOLUTE band xi + c*d_hat, and 1.5*2xi-band == 0.95*3xi-band here),
+settled to 3.3e-4 m/s.
+
+- drop: ZERO self-release — locked 1723 -> 1724 through hold/lift/top,
+  grows to 1757 on landing; coil held rigid at 0.097 m. The soft kappa
+  (3e7, 1/3 the force scale) lifts the rf=1e-7 relative threshold so even
+  the tangential far locks survive — contrast r150 at kappa 1e8 which
+  shed 37%. Strongest "hold" config seen.
+- 2-turn rod-wind (joint bearing): completes. Lock curve healthy — wind
+  1711 -> fold +~100 -> orbit front-half plateau (pays off the free
+  segment first) -> peel kicks in second half (1862 -> 1550) -> settles
+  1556. Far-lock densification did NOT stall peeling; it only delays peel
+  onset until the front bites into the coil.
+
+So d_hat2/kappa3e7/ratio1.5/rf1e-7 is a "very strong hold, still peels,
+speed tier" point. Hold strength is governed by kappa-vs-rf coupling, not
+by lock count alone.
