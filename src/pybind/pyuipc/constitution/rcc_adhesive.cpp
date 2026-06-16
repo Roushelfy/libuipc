@@ -99,10 +99,13 @@ barrier + friction. See docs/specification/contact_models/rcc_adhesion.md.)");
            Float                 release_strain,
            Float                 release_gap,
            Float                 release_slip,
-           Float                 release_force)
+           Float                 release_force,
+           Float                 distance_lock,
+           Float                 distance_lock_ratio)
         {
             self.set_bonded(tabular, L, R, lock_threshold, release_strain,
-                            release_gap, release_slip, release_force);
+                            release_gap, release_slip, release_force,
+                            distance_lock, distance_lock_ratio);
         },
         py::arg("tabular"),
         py::arg("L"),
@@ -112,9 +115,13 @@ barrier + friction. See docs/specification/contact_models/rcc_adhesion.md.)");
         py::arg("release_gap")    = 1e30,
         py::arg("release_slip")   = 1e30,
         py::arg("release_force")  = 1e30,
+        py::arg("distance_lock")       = -1.0,
+        py::arg("distance_lock_ratio") = -1.0,
         R"(Set PER-PAIR bonded-PT params for an existing (L, R) contact pair
 (lock threshold + release strain/gap/slip/force). Any value < 0 inherits the
-global rcc_bonded_pt_* scene config. bonded kappa is currently global.)");
+global rcc_bonded_pt_* scene config. distance_lock selects this pair's mode
+(< 0 inherit, 0 soft RCC adhesion, > 0 distance-lock) with a per-pair band
+ratio — a scene can mix soft and distance-lock pairs. bonded kappa is global.)");
 
     class_RCCAdhesive.def(
         "default_bonded",
@@ -124,10 +131,13 @@ global rcc_bonded_pt_* scene config. bonded kappa is currently global.)");
            Float              release_strain,
            Float              release_gap,
            Float              release_slip,
-           Float              release_force)
+           Float              release_force,
+           Float              distance_lock,
+           Float              distance_lock_ratio)
         {
             self.default_bonded(tabular, lock_threshold, release_strain,
-                                release_gap, release_slip, release_force);
+                                release_gap, release_slip, release_force,
+                                distance_lock, distance_lock_ratio);
         },
         py::arg("tabular"),
         py::arg("lock_threshold"),
@@ -135,6 +145,8 @@ global rcc_bonded_pt_* scene config. bonded kappa is currently global.)");
         py::arg("release_gap")    = 1e30,
         py::arg("release_slip")   = 1e30,
         py::arg("release_force")  = 1e30,
+        py::arg("distance_lock")       = -1.0,
+        py::arg("distance_lock_ratio") = -1.0,
         R"(Set default per-pair bonded-PT params for unspecified (L, R) pairs (row 0).)");
 
     class_RCCAdhesive.def_static(

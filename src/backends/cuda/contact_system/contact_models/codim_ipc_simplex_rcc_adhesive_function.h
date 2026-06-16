@@ -398,6 +398,8 @@ namespace sym::codim_ipc_rcc_adhesive
     {
         RCCAdhesiveCoeff sum;
         IndexT           enabled_all = 1;
+        IndexT           dlock_all   = 1;
+        Float            dlock_ratio = Float{0};
         for(int j = 1; j < 4; ++j)
         {
             RCCAdhesiveCoeff c = table(cids[0], cids[j]);
@@ -409,6 +411,11 @@ namespace sym::codim_ipc_rcc_adhesive
             sum.p0 += c.p0;
             sum.initial_beta += c.initial_beta;
             enabled_all = enabled_all && c.enabled;
+            // The triangle's three vertices normally share one contact element,
+            // so these agree; AND the mode (lock only if every pair is
+            // distance-lock) and average the band ratio.
+            dlock_all = dlock_all && c.distance_lock;
+            dlock_ratio += c.distance_lock_ratio;
         }
         RCCAdhesiveCoeff r;
         r.Cn           = sum.Cn / 3.0;
@@ -419,6 +426,8 @@ namespace sym::codim_ipc_rcc_adhesive
         r.p0           = sum.p0 / 3.0;
         r.initial_beta = sum.initial_beta / 3.0;
         r.enabled      = enabled_all;
+        r.distance_lock       = dlock_all;
+        r.distance_lock_ratio = dlock_ratio / 3.0;
         return r;
     }
 

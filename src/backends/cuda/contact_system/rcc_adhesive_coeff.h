@@ -36,5 +36,15 @@ struct RCCAdhesiveCoeff
     Float bonded_release_gap    = 1e30;    // release if normal gap exceeds
     Float bonded_release_slip   = 1e30;    // release if tangential slip exceeds
     Float bonded_release_force  = 1e30;    // release if restoring force exceeds
+
+    // Per-pair adhesion MODE (Phase 8). Resolved at rebuild against the global
+    // rcc_bonded_pt_distance_lock flag (per-pair attr sentinel < 0 = inherit):
+    //   0 = soft RCC adhesion (beta law + Cn/Ct energy, optional bond when
+    //       beta >= bonded_lock_threshold);
+    //   1 = distance-lock (no soft energy; lock purely by the end-of-step
+    //       distance band d < (xi + distance_lock_ratio*d_hat)^2).
+    // Lets one scene mix soft-adhesion pairs and distance-lock pairs.
+    IndexT distance_lock       = 0;
+    Float  distance_lock_ratio = 0.5;      // band coefficient c for mode 1
 };
 }  // namespace uipc::backend::cuda

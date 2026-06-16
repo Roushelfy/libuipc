@@ -74,6 +74,11 @@ class UIPC_CONSTITUTION_API RCCAdhesive
     ///       when the corresponding measure exceeds the threshold (1e30 = never)
     /// (bonded kappa is currently global — the ABD-tet energy stiffness.)
     /// Requires the pair to have been inserted via `tabular.insert(L,R,...)`.
+    /// `distance_lock` selects this pair's adhesion MODE: < 0 inherits the
+    /// global rcc_bonded_pt_distance_lock flag, 0 = soft RCC adhesion, > 0 =
+    /// distance-lock (no soft energy; lock by the distance band). With a
+    /// per-pair band ratio (< 0 = inherit the global ratio). A scene may thus
+    /// mix soft-adhesion pairs and distance-lock pairs.
     void set_bonded(core::ContactTabular&       tabular,
                     const core::ContactElement& L,
                     const core::ContactElement& R,
@@ -81,7 +86,9 @@ class UIPC_CONSTITUTION_API RCCAdhesive
                     Float                       release_strain,
                     Float                       release_gap,
                     Float                       release_slip,
-                    Float                       release_force) const;
+                    Float                       release_force,
+                    Float                       distance_lock       = -1.0,
+                    Float                       distance_lock_ratio = -1.0) const;
 
     /// Per-pair bonded params for the default (un-specified) pair (index 0).
     void default_bonded(core::ContactTabular& tabular,
@@ -89,7 +96,9 @@ class UIPC_CONSTITUTION_API RCCAdhesive
                         Float                 release_strain,
                         Float                 release_gap,
                         Float                 release_slip,
-                        Float                 release_force) const;
+                        Float                 release_force,
+                        Float                 distance_lock       = -1.0,
+                        Float                 distance_lock_ratio = -1.0) const;
 
     /// Mark a shell geometry's sticky face for v3 single-sided adhesion.
     ///

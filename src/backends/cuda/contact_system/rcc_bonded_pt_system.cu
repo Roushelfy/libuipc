@@ -1141,19 +1141,26 @@ void RCCBondedPTSystem::do_build()
     // (the filter feed/bind paths are enabled-gated).
     const IndexT skip_v = skip_ccd_attr ? skip_ccd_attr->view()[0] : IndexT{-1};
     m_impl.set_skip_ccd(skip_v < 0 ? true : (skip_v != 0));
-    // Distance-lock band coefficient c may exceed 1 (lock band d < xi +
-    // c*d_hat reaching beyond the contact band). The trajectory filters
-    // must then keep candidates active out to xi + c*d_hat or the lock
-    // eligibility kernel never sees the far pairs.
+    // Lock-band coefficient c may exceed 1 (lock band d < xi + c*d_hat
+    // reaching beyond the contact band); the trajectory filters must then
+    // keep candidates active out to xi + c*d_hat or the lock-eligibility
+    // kernel never sees the far pairs. The global ratio sets the broadphase
+    // REACH whenever it is > 1, regardless of mode — so a beta-mode scene
+    // (or a per-pair distance-lock subset) can also bond beyond the contact
+    // band. Per-pair distance-lock ratios must stay <= this global ceiling.
     auto dlock_attr = config.find<IndexT>("rcc_bonded_pt_distance_lock");
     auto dlock_ratio_attr = config.find<Float>("rcc_bonded_pt_distance_lock_ratio");
-    const bool dlock_on = dlock_attr && dlock_attr->view()[0] != 0;
-    m_impl.set_vt_range_scale(
-        dlock_on && dlock_ratio_attr ? dlock_ratio_attr->view()[0] : Float{1});
-    // Locked rest gap follows the lock band: rest = xi + c*d_hat in
-    // distance-lock mode (release lands exactly outside the band).
+    const bool  dlock_on     = dlock_attr && dlock_attr->view()[0] != 0;
+    const Float global_ratio = dlock_ratio_attr ? dlock_ratio_attr->view()[0] : Float{0.5};
+    // set_vt_range_scale clamps to >= 1, so a sub-unit ratio leaves the
+    // reach at the ordinary contact band (backward compatible).
+    m_impl.set_vt_range_scale(global_ratio);
+    // Locked rest gap follows the lock band: rest = xi + c*d_hat (release
+    // lands exactly outside the band). In distance-lock mode it tracks the
+    // ratio exactly (incl. sub-unit, the validated behavior); in beta mode
+    // it only departs from xi + d_hat when a far band is requested (>1).
     m_impl.set_rest_d_hat_ratio(
-        dlock_on && dlock_ratio_attr ? dlock_ratio_attr->view()[0] : Float{1});
+        dlock_on ? global_ratio : (global_ratio > Float{1} ? global_ratio : Float{1}));
     m_impl.global_trajectory_filter = find<GlobalTrajectoryFilter>();
     // Rest-height inputs: locked bonds are built with rest gap xi + d_hat.
     m_impl.global_vertex_manager  = find<GlobalVertexManager>();

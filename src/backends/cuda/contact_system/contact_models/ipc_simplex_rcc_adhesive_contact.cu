@@ -212,6 +212,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto&       cfg   = world().scene().config();
         auto        cfg_f = [&](const char* k, Float d) -> Float
         { auto a = cfg.find<Float>(k); return a ? a->view()[0] : d; };
+        // Read the global distance-lock flag/ratio straight from the scene
+        // config: the member m_bonded_pt_distance_lock is set in another
+        // system's do_build, which is NOT guaranteed to run before this
+        // on_init_scene rebuild — the config is populated before either.
+        auto cfg_dl_attr = cfg.find<IndexT>("rcc_bonded_pt_distance_lock");
+        const bool  cfg_dlock = cfg_dl_attr && cfg_dl_attr->view()[0] != 0;
+        const Float cfg_ratio = cfg_f("rcc_bonded_pt_distance_lock_ratio", 0.5);
         const Float G_LOCK_raw = cfg_f("rcc_bonded_pt_beta_lock_threshold", 1.0);
         // Distance-lock mode (Phase 7): the indicator lock-beta is 1.0, and the
         // producer's select replaces the global scalar with the per-pair
@@ -221,7 +228,7 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         // keep their raw meaning (> 1 = deliberate per-pair veto).
         // (m_bonded_pt_distance_lock is set in RCCBetaEvolutionTimeIntegrator::
         // do_build, which runs before this on_init_scene callback.)
-        const Float G_LOCK = m_bonded_pt_distance_lock ?
+        const Float G_LOCK = cfg_dlock ?
                                  std::min(G_LOCK_raw, Float{1}) :
                                  G_LOCK_raw;
         const Float G_STRAIN = cfg_f("rcc_bonded_pt_release_strain", 1e30);
@@ -233,6 +240,10 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto attr_brg = contact_models.find<Float>("bonded_release_gap");
         auto attr_brl = contact_models.find<Float>("bonded_release_slip");
         auto attr_brf = contact_models.find<Float>("bonded_release_force");
+        // Phase 8 per-pair mode: bonded_distance_lock (< 0 = inherit the global
+        // flag, 0 = soft, > 0 = distance-lock) and a per-pair band ratio.
+        auto attr_dl  = contact_models.find<Float>("bonded_distance_lock");
+        auto attr_dlr = contact_models.find<Float>("bonded_distance_lock_ratio");
         auto rb = [](auto& attr, SizeT row, Float g) -> Float
         {
             if(!attr)
@@ -240,6 +251,18 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             const Float v = attr->view()[row];
             return (v >= Float{0}) ? v : g;  // sentinel < 0 -> global
         };
+        // Resolve a per-pair distance-lock mode against the global flag.
+        const IndexT G_DLOCK = cfg_dlock ? 1 : 0;
+        const Float  G_RATIO = cfg_ratio;
+        auto resolve_mode = [&](SizeT row) -> IndexT
+        {
+            if(!attr_dl)
+                return G_DLOCK;
+            const Float v = attr_dl->view()[row];
+            return (v < Float{0}) ? G_DLOCK : (v != Float{0} ? 1 : 0);
+        };
+        m_any_soft_pair  = false;
+        m_any_dlock_pair = false;
 
         RCCAdhesiveCoeff default_coeff;
         default_coeff.Cn           = Cn_view[0];
@@ -255,6 +278,17 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         default_coeff.bonded_release_gap    = rb(attr_brg, 0, G_GAP);
         default_coeff.bonded_release_slip   = rb(attr_brl, 0, G_SLIP);
         default_coeff.bonded_release_force  = rb(attr_brf, 0, G_FORCE);
+        default_coeff.distance_lock         = resolve_mode(0);
+        default_coeff.distance_lock_ratio   = rb(attr_dlr, 0, G_RATIO);
+        // A distance-lock pair locks on the indicator lock-beta 1.0, so its
+        // threshold must stay <= 1 regardless of the (beta-mode) global value.
+        if(default_coeff.distance_lock)
+            default_coeff.bonded_lock_threshold =
+                std::min(default_coeff.bonded_lock_threshold, Float{1});
+        // The default element pair also counts toward the mode tallies, since
+        // any contact pair not explicitly in the tabular uses it.
+        if(default_coeff.enabled)
+            (default_coeff.distance_lock ? m_any_dlock_pair : m_any_soft_pair) = true;
 
         std::vector<RCCAdhesiveCoeff> host(m_N * m_N, default_coeff);
 
@@ -275,36 +309,48 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             c.bonded_release_gap    = rb(attr_brg, row, G_GAP);
             c.bonded_release_slip   = rb(attr_brl, row, G_SLIP);
             c.bonded_release_force  = rb(attr_brf, row, G_FORCE);
+            c.distance_lock         = resolve_mode(row);
+            c.distance_lock_ratio   = rb(attr_dlr, row, G_RATIO);
+            if(c.distance_lock)
+                c.bonded_lock_threshold =
+                    std::min(c.bonded_lock_threshold, Float{1});
+            if(c.enabled)
+                (c.distance_lock ? m_any_dlock_pair : m_any_soft_pair) = true;
 
             host[ids.x() * m_N + ids.y()] = c;
             host[ids.y() * m_N + ids.x()] = c;
         }
 
+        // Preserve the global-mode contract so behavior is identical to before
+        // when no per-pair override is used: the global flag picks the BASELINE
+        // path (which always runs, even with no enabled pair yet — the lock
+        // kernels must write m_vt_topos for every VT or the producer reads
+        // uninitialized topos). Per-pair overrides only ADD the other path.
+        (cfg_dlock ? m_any_dlock_pair : m_any_soft_pair) = true;
+
         m_adhesive_tabular.resize(muda::Extent2D{static_cast<size_t>(m_N),
                                                  static_cast<size_t>(m_N)});
         m_adhesive_tabular.view().copy_from(host.data());
 
-        // Phase 7: distance-lock mode never assembles adhesion energy or runs
-        // the beta law, so nonzero adhesion coefficients are a contradictory
-        // config — report once and ignore them. (m_bonded_pt_distance_lock is
-        // set in RCCBetaEvolutionTimeIntegrator::do_build, which runs before
-        // this on_init_scene callback.)
-        if(m_bonded_pt_distance_lock && !m_distance_lock_cnct_warned)
+        // A distance-lock pair never assembles adhesion energy, so nonzero
+        // Cn/Ct on such a pair is a contradictory config — report once and
+        // ignore. Soft pairs in a mixed scene legitimately carry Cn/Ct, so
+        // the check is now per-pair (resolve_mode), not the global flag.
+        if(!m_distance_lock_cnct_warned)
         {
-            bool any_adhesion = false;
-            for(SizeT row = 0; row < Cn_view.size() && !any_adhesion; ++row)
-                any_adhesion = en_view[row] != 0
-                               && (Cn_view[row] > 0 || Ct_view[row] > 0);
-            if(any_adhesion)
+            bool any_dlock_adhesion = false;
+            for(SizeT row = 0; row < Cn_view.size() && !any_dlock_adhesion; ++row)
+                any_dlock_adhesion = en_view[row] != 0 && resolve_mode(row) != 0
+                                     && (Cn_view[row] > 0 || Ct_view[row] > 0);
+            if(any_dlock_adhesion)
             {
                 // Warn ONCE: scenes that touch geometry every frame (e.g. an
                 // animator driving SPC aims) re-run this rebuild every frame.
                 m_distance_lock_cnct_warned = true;
                 logger::warn(
-                    "RCC distance-lock mode (rcc_bonded_pt_distance_lock=1) is "
-                    "on, but an adhesion-enabled contact-model row has "
-                    "Cn/Ct > 0: soft adhesion energy is NOT assembled in this "
-                    "mode and the adhesion coefficients are ignored.");
+                    "RCC: a distance-lock contact-model row has Cn/Ct > 0; "
+                    "soft adhesion energy is NOT assembled for distance-lock "
+                    "pairs and these coefficients are ignored.");
             }
         }
     }
@@ -836,7 +882,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // counts).
     void friction_pair_counts(SizeT& pt, SizeT& ee, SizeT& pe, SizeT& pp) const override
     {
-        pt = (m_stf_for_phase_a && !m_bonded_pt_distance_lock) ?
+        // Report the full VT count whenever ANY pair is soft (those pairs
+        // assemble adhesion energy into the PT slot). A pure distance-lock
+        // scene reports 0 to keep the energy subviews empty. In a MIXED
+        // scene the distance-lock pairs share the slot but write Es=0.
+        pt = (m_stf_for_phase_a && m_any_soft_pair) ?
                  m_stf_for_phase_a->friction_VTs().size() :
                  0;
         ee = 0;
@@ -848,10 +898,11 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     {
         using namespace muda;
 
-        // Phase 7 distance-lock mode: no adhesion energy. friction_pair_counts
-        // reports 0 (the output subviews are empty), and Phase B does not run —
-        // Phase A owns all lock state in this mode.
-        if(m_bonded_pt_distance_lock)
+        // No soft pairs (pure distance-lock scene): no adhesion energy.
+        // friction_pair_counts reports 0 and Phase B does not run — Phase A
+        // owns all lock state. Mixed scenes fall through; the per-VT kernel
+        // zeroes Es for distance-lock pairs.
+        if(!m_any_soft_pair)
             return;
 
         // Once per frame: Phase B match-or-init over the VT primitive list.
@@ -891,7 +942,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                            Vector4i cids  = {contact_ids(PT[0]), contact_ids(PT[1]),
                                              contact_ids(PT[2]), contact_ids(PT[3])};
                            auto     coeff = PT_rcc_coeff(table, cids);
-                           if(!coeff.enabled)
+                           // distance-lock pairs carry no soft energy (mixed
+                           // scene: they share the PT slot but contribute 0).
+                           if(!coeff.enabled || coeff.distance_lock)
                            {
                                Es(i) = 0;
                                return;
@@ -944,9 +997,10 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     {
         using namespace muda;
 
-        // Phase 7 distance-lock mode: no adhesion gradient/Hessian (see
-        // do_compute_energy).
-        if(m_bonded_pt_distance_lock)
+        // No soft pairs (pure distance-lock scene): no adhesion gradient/
+        // Hessian (see do_compute_energy). Mixed scenes fall through; the
+        // per-VT kernel leaves G/H zero for distance-lock pairs.
+        if(!m_any_soft_pair)
             return;
 
         _phase_b_if_new_frame(info);
@@ -988,7 +1042,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                Vector4i cids = {contact_ids(PT[0]), contact_ids(PT[1]),
                                                 contact_ids(PT[2]), contact_ids(PT[3])};
                                auto     coeff = PT_rcc_coeff(table, cids);
-                               if(coeff.enabled)
+                               // distance-lock pairs: no soft gradient/Hessian.
+                               if(coeff.enabled && !coeff.distance_lock)
                                {
                                    Float d_hat = PT_d_hat(d_hats(PT[0]), d_hats(PT[1]),
                                                           d_hats(PT[2]), d_hats(PT[3]));
@@ -1104,6 +1159,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
     // closest-feature distance satisfies d < xi + c*d_hat. c = 0 never locks
     // (IPC keeps d > xi). config rcc_bonded_pt_distance_lock_ratio.
     Float                                    m_bonded_pt_distance_lock_ratio = 0.5;
+    // Phase 8 per-pair mode tallies (set in _rebuild_adhesive_tabular). When
+    // both are true the scene MIXES soft-adhesion pairs and distance-lock
+    // pairs; the eligibility kernel branches per-pair on coeff.distance_lock,
+    // and the soft energy / Phase B run iff m_any_soft_pair. The old global
+    // m_bonded_pt_distance_lock now only seeds per-pair sentinels.
+    bool                                     m_any_soft_pair  = true;
+    bool                                     m_any_dlock_pair = false;
     // Distance-mode lock-eligibility rejection counters (persistent DeviceVars
     // so the per-step hot path avoids alloc/free churn; reset each Phase A).
     muda::DeviceVar<IndexT>                  m_lock_distance_rejected;
@@ -1120,32 +1182,37 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
         auto n           = pairs.size();
         auto positions   = m_gvm_for_phase_a->positions();
 
-        const bool distance_lock = m_bonded_pt_distance_lock;
+        // Per-pair mode (Phase 8): the scene may have soft pairs, distance-
+        // lock pairs, or both. `has_dlock` drives the frame-1 continue and the
+        // v3 build; `has_soft` drives beta evolution. The eligibility kernel
+        // below branches per-pair.
+        const bool has_soft  = m_any_soft_pair;
+        const bool has_dlock = m_any_dlock_pair;
 
         // Make sure m_pos_at_step_begin is sized to the vertex count (first time only).
         if(m_pos_at_step_begin.size() != positions.size())
         {
             m_pos_at_step_begin.resize(positions.size());
-            // Beta mode: no displacement signal yet — just snapshot and skip
-            // evolve (and the lock). Distance mode: the lock needs no
-            // displacement signal; continue so bonds can already form at the
-            // end of frame 1 (friction_VTs is seeded by the frame-1 DCD).
+            // Soft pairs: no displacement signal yet — snapshot and skip
+            // evolve. Distance-lock pairs: the lock needs no displacement, so
+            // continue when any exist so bonds can form at end of frame 1
+            // (friction_VTs is seeded by the frame-1 DCD).
             m_pos_at_step_begin.view().copy_from(positions);
-            if(!distance_lock)
+            if(!has_dlock)
                 return;
         }
 
-        // Distance mode: Phase B (which lazily builds the v3 sticky/occlusion
-        // topology via _ensure_v3_state) does not run, so build it here. Safe:
-        // Phase A runs at end of step, after the vertex reporters have filled
-        // global_vertex_offset.
-        if(distance_lock && !m_v3_built)
+        // Distance-lock pairs need the v3 sticky/occlusion topology, which in a
+        // soft-only scene Phase B builds lazily (_ensure_v3_state). Build it
+        // here when any distance-lock pair exists. Safe: Phase A runs at end of
+        // step, after the vertex reporters have filled global_vertex_offset.
+        if(has_dlock && !m_v3_built)
         {
             _build_sticky_topology(positions.size());
             m_v3_built = true;
         }
 
-        if(n > 0 && !distance_lock)
+        if(n > 0 && has_soft)
         {
             auto contact_ids = m_gvm_for_phase_a->contact_element_ids();
             auto barrier_tab = m_gcm_for_phase_a->contact_tabular();
@@ -1300,7 +1367,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
             IndexT vt_n     = (IndexT)vt_pairs.size();
             m_vt_topos.resize(vt_n);
             m_vt_lock_beta.resize(vt_n);
-            if(vt_n > 0 && !distance_lock)
+            // Soft-pair lock eligibility (beta masking). Runs over the full VT
+            // list and sets topos for ALL pairs; distance-lock pairs get
+            // lockbeta = 0 here and are (re)written by the distance kernel
+            // below. (Per-pair Phase 8 — replaces the old global !distance_lock
+            // gate.)
+            auto el_contact_ids = m_gvm_for_phase_a->contact_element_ids();
+            if(vt_n > 0 && has_soft)
             {
                 ParallelFor()
                     .file_line(__FILE__, __LINE__)
@@ -1310,6 +1383,8 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                             topos    = m_vt_topos.view().viewer().name("vt_topos"),
                             lockbeta = m_vt_lock_beta.view().viewer().name("vt_lock_beta"),
                             Ps       = positions.viewer().name("Ps_lock"),
+                            contact_ids = el_contact_ids.viewer().name("contact_ids"),
+                            rcc_table = m_adhesive_tabular.cviewer().name("rcc_tabular"),
                             face_interior_only = m_bonded_pt_lock_face_interior_only,
                             margin   = m_bonded_pt_lock_face_margin] __device__(int i) mutable
                            {
@@ -1317,6 +1392,17 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                const auto&     vt = VTs(i);
                                const Vector4i& T  = vt.topo;
                                topos(i)           = T;
+
+                               // distance-lock pairs are owned by the distance
+                               // kernel below; zero here so a mixed scene does
+                               // not soft-lock them.
+                               Vector4i cids = {contact_ids(T[0]), contact_ids(T[1]),
+                                                contact_ids(T[2]), contact_ids(T[3])};
+                               if(PT_rcc_coeff(rcc_table, cids).distance_lock)
+                               {
+                                   lockbeta(i) = Float{0};
+                                   return;
+                               }
 
                                bool eligible = true;
                                if(face_interior_only)
@@ -1339,9 +1425,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                lockbeta(i) = eligible ? beta(i) : Float{0};
                            });
             }
-            else if(vt_n > 0)  // distance_lock
+            // Distance-lock eligibility (per-pair Phase 8). Runs over the full
+            // VT list; soft pairs are left to the kernel above (this one
+            // returns without touching them). When has_soft is false the soft
+            // kernel did not run, so this kernel also sets topos for its pairs.
+            if(vt_n > 0 && has_dlock)
             {
-                // Phase 7 distance-mode lock-eligibility kernel. Beta does not
+                // Distance-mode lock-eligibility kernel. Beta does not
                 // exist; the kernel emits an INDICATOR lock-beta (1.0 = all
                 // gates pass, 0.0 = rejected) so the bonded producer's
                 // beta>=threshold select, rest-shape conditioning, age/dedup,
@@ -1382,7 +1472,6 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                             n_tris      = (IndexT)m_shell_triangles.size(),
                             face_interior_only = m_bonded_pt_lock_face_interior_only,
                             margin = m_bonded_pt_lock_face_margin,
-                            ratio = m_bonded_pt_distance_lock_ratio,
                             distance_rejected =
                                 m_lock_distance_rejected.viewer().name(
                                     "distance_rejected"),
@@ -1393,14 +1482,23 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                                using namespace sym::codim_ipc_rcc_adhesive;
                                const auto&     vt = VTs(i);
                                const Vector4i& T  = vt.topo;
-                               topos(i)           = T;
-                               lockbeta(i)        = Float{0};
+                               // Always claim topos (same value the soft kernel
+                               // would write) so the producer never reads an
+                               // uninitialized entry, regardless of which path
+                               // owns this pair.
+                               topos(i) = T;
 
                                Vector4i cids = {contact_ids(T[0]),
                                                 contact_ids(T[1]),
                                                 contact_ids(T[2]),
                                                 contact_ids(T[3])};
                                auto     rcc  = PT_rcc_coeff(rcc_table, cids);
+                               // Soft pairs are owned by the kernel above:
+                               // leave their lockbeta untouched.
+                               if(!rcc.distance_lock)
+                                   return;
+                               lockbeta(i) = Float{0};
+                               const Float ratio = rcc.distance_lock_ratio;
                                if(!rcc.enabled)
                                {
                                    muda::atomic_add(policy_rejected.data(), IndexT{1});
@@ -1460,13 +1558,13 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                     static_cast<SizeT>(h_policy_rejected));
             }
 
-            // Distance mode passes the global threshold clamped to <= 1: the
-            // indicator lock-beta is 1.0, and a beta-mode threshold > 1 must
-            // not silently veto every lock. A per-pair bonded_lock_threshold
-            // > 1 remains a deliberate per-pair veto (the tabular override
-            // replaces this scalar inside the producer's select).
+            // This fallback scalar only applies to pairs absent from the
+            // tabular (the producer's select overrides it per-pair via
+            // bonded_lock_threshold). Clamp to <= 1 when any distance-lock
+            // pair exists so its indicator lock-beta (1.0) is not vetoed; a
+            // per-pair bonded_lock_threshold > 1 remains a deliberate veto.
             const Float lock_threshold =
-                distance_lock ?
+                has_dlock ?
                     std::min(m_bonded_pt_beta_lock_threshold, Float{1}) :
                     m_bonded_pt_beta_lock_threshold;
 
@@ -1476,10 +1574,9 @@ class IPCSimplexRCCAdhesiveContact final : public SimplexFrictionalContact
                 positions,
                 lock_threshold,
                 release_context);
-            // Released-beta carry is a beta-mode contract: in distance mode
-            // beta does not exist and its consumer (Phase B matching) does
-            // not run.
-            if(!distance_lock)
+            // Released-beta carry is a soft-pair contract (its consumer,
+            // Phase B matching, only runs for soft pairs).
+            if(has_soft)
                 m_bonded_pt_beta_carry.merge_released_beta(
                     m_prev_keys_PT,
                     m_prev_beta_PT,
