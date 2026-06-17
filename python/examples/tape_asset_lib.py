@@ -496,6 +496,12 @@ SOLVER_KEYS = {
     "NEWTON_CCD_TOL":       ("newton/ccd_tol",          float),
     "NEWTON_MAX_ITER":      ("newton/max_iter",         int),
     "NEWTON_MIN_ITER":      ("newton/min_iter",         int),
+    # Semi-implicit early-termination (arXiv 2512.12151 Alg.1): once
+    # newton_iter >= min_iter, accumulate beta *= (1-alpha) and stop when
+    # beta <= BETA_TOL. Stops Newton earlier when line-search steps stop
+    # being CCD-limited → fewer iters (faster) + more numerical damping.
+    "NEWTON_SEMI_IMPLICIT": ("newton/semi_implicit/enable",   int),
+    "NEWTON_SEMI_IMPLICIT_BETA_TOL": ("newton/semi_implicit/beta_tol", float),
     "LINE_SEARCH_MAX_ITER": ("line_search/max_iter",    int),
     # Friction transition velocity — below this the friction force
     # smoothly interpolates to zero. Smaller → less "viscous" friction
@@ -1515,6 +1521,52 @@ WIND_PRESETS = {
         "ADH_W":             1.0,
         "RCC_BETA_LOCK_THRESHOLD": 0.9,  # bond locks a face-interior VT when its per-VT beta >= this
         "RCC_RELEASE_FORCE": 3.0e-7,   # bonded release: energy-match to non-bond (W=1); see RCC_RELEASE_FORCE note
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  1.0,
+        "ADH_INITIAL_BETA":  0.0,
+        "SPC_STRENGTH":      10000.0,
+        "SETTLE1_FRAMES":    100,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    500,
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
+    },
+    "speed-r150-bend5k": {
+        # Distance-lock "speed tier" wind, captured from the speed-r150-bend5k
+        # asset (= e5e8-dhat2-cnct1 base + the tuning that ran fastest while
+        # still peeling). Soft tape (E=5e7), thin band (d_hat=2*thickness),
+        # SOFT bonds (kappa=3e7 — the speed sweet spot: ~2.2x faster rod-wind
+        # than kappa=1e8, peeling intact), FAR distance-lock (ratio 1.5 reaches
+        # the next-but-one layer; rest gap = xi + 1.5*d_hat), stiff bending
+        # (5000) for crisp fold/coil. drop holds with zero release; 2-turn
+        # rod-wind completes. Rod-wind/drop should pass --set RCC_KAPPA=3e7 to
+        # match (kappa is a runtime bonded-stiffness knob, not asset-saved).
+        "HUB_R_OUTER":       0.0211,
+        "HUB_R_INNER":       0.01905,
+        "HUB_HEIGHT":        0.020,
+        "TAPE_WIDTH":        0.019,
+        "TAPE_LENGTH":       0.34,
+        "N_TURNS":           2,
+        "TAPE_NZ":           10,
+        "TAPE_YOUNGS":       5.0e7,
+        "TAPE_POISSON":      0.45,
+        "TAPE_MASS_DENSITY": 1300,
+        "TAPE_THICKNESS":    9.0e-5,
+        "D_HAT_RATIO":       2.0,        # D_HAT = 1.8e-4
+        "LAYER_THICKNESS":   2.5e-4,
+        "BUFFER_LENGTH":     0.005,
+        "BENDING_STIFFNESS": 5000.0,     # 10x the default; stiff fold/coil
+        "ADH_CN":            1.0,
+        "ADH_CT":            1.0,
+        "ADH_W":             1.0,
+        # Distance-lock mode: no soft adhesion energy; lock purely by the
+        # end-of-step band d < xi + DISTANCE_LOCK_RATIO*d_hat.
+        "DISTANCE_LOCK":            1,
+        "DISTANCE_LOCK_RATIO":      1.5,   # far reach (clamped <= 2 = broadphase)
+        "LOCK_FACE_INTERIOR_ONLY":  1,
+        "SKIP_CCD":                 0,     # keep CCD thickness guard on locked pairs
+        "RCC_KAPPA":                3.0e7, # soft bonds = speed tier
+        "RCC_BETA_LOCK_THRESHOLD":  0.9,
+        "RCC_RELEASE_FORCE":        1.0e-7,
         "ADH_ETA":           100.0,
         "ADH_BONDING_RATE":  1.0,
         "ADH_INITIAL_BETA":  0.0,

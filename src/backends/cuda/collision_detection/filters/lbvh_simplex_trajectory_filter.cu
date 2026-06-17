@@ -710,6 +710,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
                  temp_PTs    = temp_PTs.viewer().name("temp_PTs"),
                  temp_VTs    = temp_VTs.viewer().name("temp_VTs"),
                  rcc_locked_keys = info.rcc_bonded_pt_locked_keys(),
+                 rcc_has_locks = info.rcc_bonded_pt_locked_keys().size() > 0,
                  rcc_vt_scale = info.rcc_bonded_pt_vt_range_scale(),
                  d_hats = info.d_hats().viewer().name("d_hats")] __device__(int i) mutable
                 {
@@ -731,7 +732,8 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
                     // asserts below, nor classify into PP/PE/PT barrier
                     // entries (the post-filter only strips PTs/VTs; skipping
                     // here covers the edge/vertex regions too).
-                    if(rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
+                    if(rcc_has_locks
+                       && rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
                         return;
 
                     Vector4i vIs  = {V, F(0), F(1), F(2)};
@@ -1194,6 +1196,7 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& info)
                     dxs    = info.displacements().viewer().name("dxs"),
                     d_hats = info.d_hats().viewer().name("d_hats"),
                     rcc_locked_keys = info.rcc_bonded_pt_locked_keys(),
+                 rcc_has_locks = info.rcc_bonded_pt_locked_keys().size() > 0,
                     alpha  = info.alpha(),
                     eta,
                     max_iter,
@@ -1229,7 +1232,8 @@ void LBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& info)
                        // TOI only blocks an actual surface crossing; keeping
                        // the pair OFF the surface is the bond energy's job
                        // (rcc_bonded_pt_kappa / d_hat tuning).
-                       if(rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
+                       if(rcc_has_locks
+                       && rcc_bonded_pt_candidate_is_locked(rcc_locked_keys, V, F))
                            thickness = 0.0;
 
                        Float toi = large_enough_toi;
