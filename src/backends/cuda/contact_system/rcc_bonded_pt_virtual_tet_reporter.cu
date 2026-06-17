@@ -49,8 +49,23 @@ namespace
 struct RCCBondedPTVirtualTetEval
 {
     Float       energy = 0.0;
-    Vector12   gradient = Vector12::Zero();
-    Matrix12x12 hessian = Matrix12x12::Zero();
+    Vector12    gradient = Vector12::Zero();
+    // NOT default-zeroed: a 12x12 zero-init is 144 doubles wasted on the
+    // energy-only and gradient-only paths. Only EVAL_EGH fills it (and the
+    // degenerate early-returns zero it for that mode).
+    Matrix12x12 hessian;
+};
+
+// Evaluation mode (compile-time): energy only / energy+gradient / full.
+// compute_energy needs only E; assemble's gradient_only Newton iterations
+// need only E+G. Computing the 9x9 Hessian + make_spd + dFdx^T H dFdx on
+// those paths is pure waste (the bonded reporter was ~21% of GPU time, with
+// compute_energy alone 14.7% while computing a Hessian it never reads).
+enum RCCEvalMode
+{
+    EVAL_E   = 0,
+    EVAL_EG  = 1,
+    EVAL_EGH = 2
 };
 
 MUDA_GENERIC Vector12 abd_q_from_F(const Matrix3x3& F)
@@ -94,7 +109,36 @@ MUDA_GENERIC Matrix9x9 abd_row_hessian_to_column_hessian(const Matrix9x9& row_H)
     return col_H;
 }
 
+// Energy-only evaluation returning a bare Float — deliberately does NOT
+// construct RCCBondedPTVirtualTetEval, whose Matrix12x12 hessian member is
+// 1152 bytes/thread and spills to local memory, tanking occupancy of the
+// energy kernel (line-search hot path) even when the Hessian is never used.
 template <typename PositionViewer>
+MUDA_GENERIC Float eval_virtual_tet_energy(
+    const Vector4i& tet,
+    muda::CBufferView<Vector3> positions_view,
+    PositionViewer positions,
+    const Matrix3x3& Dm_inv,
+    Float rest_volume,
+    Float kappa,
+    Float dt)
+{
+    namespace AOP = sym::abd_ortho_potential;
+    if(rest_volume <= 0.0 || kappa <= 0.0)
+        return 0.0;
+    const IndexT n = static_cast<IndexT>(positions_view.size());
+    if(tet[0] < 0 || tet[1] < 0 || tet[2] < 0 || tet[3] < 0 || tet[0] >= n
+       || tet[1] >= n || tet[2] >= n || tet[3] >= n)
+        return 0.0;
+    Matrix3x3 F = fem::F(positions(tet[0]), positions(tet[1]),
+                         positions(tet[2]), positions(tet[3]), Dm_inv);
+    Vector12  q = abd_q_from_F(F);
+    Float E_val = 0.0;
+    AOP::E(E_val, kappa, q);
+    return E_val * (rest_volume * dt * dt);
+}
+
+template <int MODE, typename PositionViewer>
 MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     const Vector4i& tet,
     muda::CBufferView<Vector3> positions_view,
@@ -107,13 +151,21 @@ MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     namespace AOP = sym::abd_ortho_potential;
 
     RCCBondedPTVirtualTetEval out;
-    if(rest_volume <= 0.0 || kappa <= 0.0)
+    auto degenerate = [&]() -> RCCBondedPTVirtualTetEval&
+    {
+        // gradient is Zero() by default; zero the hessian only when this mode
+        // actually fills/reads it.
+        if constexpr(MODE >= EVAL_EGH)
+            out.hessian.setZero();
         return out;
+    };
+    if(rest_volume <= 0.0 || kappa <= 0.0)
+        return degenerate();
 
     const IndexT n = static_cast<IndexT>(positions_view.size());
     if(tet[0] < 0 || tet[1] < 0 || tet[2] < 0 || tet[3] < 0 || tet[0] >= n
        || tet[1] >= n || tet[2] >= n || tet[3] >= n)
-        return out;
+        return degenerate();
 
     Vector3 x0 = positions(tet[0]);
     Vector3 x1 = positions(tet[1]);
@@ -128,20 +180,26 @@ MUDA_GENERIC RCCBondedPTVirtualTetEval eval_virtual_tet(
     AOP::E(E_val, kappa, q);
     out.energy = E_val * Vdt2;
 
-    Vector9 dEdVecF_row;
-    AOP::dEdq(dEdVecF_row, kappa, q);
-    Vector9 dEdVecF = abd_row_gradient_to_column_gradient(dEdVecF_row);
-    dEdVecF *= Vdt2;
+    if constexpr(MODE >= EVAL_EG)
+    {
+        Vector9 dEdVecF_row;
+        AOP::dEdq(dEdVecF_row, kappa, q);
+        Vector9 dEdVecF = abd_row_gradient_to_column_gradient(dEdVecF_row);
+        dEdVecF *= Vdt2;
 
-    Matrix9x12 dFdx = fem::dFdx(Dm_inv);
-    out.gradient = dFdx.transpose() * dEdVecF;
+        Matrix9x12 dFdx = fem::dFdx(Dm_inv);
+        out.gradient = dFdx.transpose() * dEdVecF;
 
-    Matrix9x9 ddEddVecF_row;
-    AOP::ddEddq(ddEddVecF_row, kappa, q);
-    Matrix9x9 ddEddVecF = abd_row_hessian_to_column_hessian(ddEddVecF_row);
-    ddEddVecF *= Vdt2;
-    make_spd(ddEddVecF);
-    out.hessian = dFdx.transpose() * ddEddVecF * dFdx;
+        if constexpr(MODE >= EVAL_EGH)
+        {
+            Matrix9x9 ddEddVecF_row;
+            AOP::ddEddq(ddEddVecF_row, kappa, q);
+            Matrix9x9 ddEddVecF = abd_row_hessian_to_column_hessian(ddEddVecF_row);
+            ddEddVecF *= Vdt2;
+            make_spd(ddEddVecF);
+            out.hessian = dFdx.transpose() * ddEddVecF * dFdx;
+        }
+    }
 
     return out;
 }
@@ -206,14 +264,13 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_energy(
                 kappa = m_kappa,
                 dt] __device__(int I) mutable
                {
-                   auto eval = eval_virtual_tet(topos(I),
+                   energies(I) = eval_virtual_tet_energy(topos(I),
                                                 positions_view,
                                                 positions,
                                                 dm_inv(I),
                                                 rest_volume(I),
                                                 kappa,
                                                 dt);
-                   energies(I) = eval.energy;
                });
 }
 
@@ -247,7 +304,7 @@ void RCCBondedPTVirtualTetReporter::Impl::compute_dense_energy_gradient_hessian(
                 kappa = m_kappa,
                 dt] __device__(int I) mutable
                {
-                   auto eval = eval_virtual_tet(topos(I),
+                   auto eval = eval_virtual_tet<EVAL_EGH>(topos(I),
                                                 positions_view,
                                                 positions,
                                                 dm_inv(I),
@@ -290,21 +347,27 @@ void RCCBondedPTVirtualTetReporter::Impl::assemble(
                 gradient_only] __device__(int I) mutable
                {
                    const Vector4i tet = topos(I);
-                   auto eval = eval_virtual_tet(tet,
-                                                positions_view,
-                                                positions,
-                                                dm_inv(I),
-                                                rest_volume(I),
-                                                kappa,
-                                                dt);
+                   // gradient_only Newton iterations skip the Hessian entirely
+                   // (no ddEddq / make_spd / dFdx^T H dFdx).
+                   if(gradient_only)
+                   {
+                       auto eval = eval_virtual_tet<EVAL_EG>(tet,
+                                                positions_view, positions,
+                                                dm_inv(I), rest_volume(I),
+                                                kappa, dt);
+                       DoubletVectorAssembler VA{G3s};
+                       VA.segment<StencilSize>(I * StencilSize)
+                           .write(tet, eval.gradient);
+                       return;
+                   }
 
+                   auto eval = eval_virtual_tet<EVAL_EGH>(tet,
+                                                positions_view, positions,
+                                                dm_inv(I), rest_volume(I),
+                                                kappa, dt);
                    DoubletVectorAssembler VA{G3s};
                    VA.segment<StencilSize>(I * StencilSize).write(tet,
                                                                   eval.gradient);
-
-                   if(gradient_only)
-                       return;
-
                    TripletMatrixAssembler MA{H3x3s};
                    MA.half_block<StencilSize>(I * HalfHessianSize)
                        .write(tet, eval.hessian);
