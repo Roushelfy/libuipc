@@ -61,7 +61,7 @@ except ModuleNotFoundError:
 from uipc import (
     Logger, Matrix4x4, Engine, World, Scene, SceneIO, Animation, view, builtin,
 )
-from uipc.geometry import ground, trimesh, label_surface
+from uipc.geometry import ground, trimesh, label_surface, mesh_partition
 from uipc.core import RCCAdhesionStateAccessorFeature, RCCBondedPTStateAccessorFeature
 from uipc.constitution import (
     AffineBodyConstitution,
@@ -560,6 +560,16 @@ def build_demo(adhesion_on: bool = True,
     spc.apply_to(current_sc, SPC_STRENGTH)
     if adhesion_on:
         RCCAdhesive.set_sticky_side(current_sc, STICKY)
+
+    # TAPE_PARTITION>0: tag the tape with a `mesh_part` vertex attribute so the
+    # FEM solver uses the MAS (multilevel additive Schwarz) preconditioner
+    # instead of block-diagonal Jacobi — domain decomposition that cuts the
+    # PCG iteration count on the deformable shell (the dominant solver cost).
+    # Attribute-only (no vertex reorder) so the seeded-lock index remap is
+    # unaffected. Default off to preserve the diagonal-preconditioner baseline.
+    _part = _cfg_i("TAPE_PARTITION", 0)
+    if _part > 0:
+        mesh_partition(current_sc, _part)
 
     if tape_vel is not None and tape_vel.shape == tape_pos.shape:
         # stand-upright rotates the asset ⇒ rotate the velocity snapshot too

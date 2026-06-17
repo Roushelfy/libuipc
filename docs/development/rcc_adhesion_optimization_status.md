@@ -60,3 +60,38 @@ Deferred, would only revisit with new evidence:
 - ⑧ 4-filter dedup — pure maintainability (the patch has drifted); a 4-kernel refactor
   with zero perf upside, deferred to avoid churning the production hot path.
 - ④ incremental lock merge — lowest payoff (~1.4 % radix sort), bug-prone; skip.
+
+## Solver: linear tolerance & preconditioner (rod-wind, 2-turn, 123 frames)
+
+Separate from the GPU-kernel audit above: the linear PCG solve is the other big wall-clock
+lever. PCG converges on the relative `rᵀM⁻¹r ≤ tol_rate·rz0` test (`tol_rate` = `LIN_TOL_RATE`),
+`max_iter = 2·DoF`. Measured on the `tape_abd002_nodal002w` profile, all runs complete 123
+frames / 2460 Newton solves:
+
+| config | preconditioner | LIN_TOL | PCG iters (mean) | Newton iters/solve | result |
+|---|---|---|---|---|---|
+| baseline | ABD/FEM block-diagonal Jacobi | 1e-4 | 462.9 | 9.5 | ✅ |
+| MAS | FEM multilevel additive Schwarz (part=16) | 1e-4 | 405.6 (−12 %) | 9.2 | ✅ |
+| **default** | block-diagonal Jacobi | **1e-3** | **399.0 (−14 %)** | 9.4 | ✅ −8 % wall |
+| (probe) | block-diagonal Jacobi | 1e-2 | 6.5 | **509.8** 💥 | ❌ stalls, 52 max-iter hits |
+
+Conclusions:
+- **`LIN_TOL_RATE` 1e-4 → 1e-3 is a free −8 % wall win**, no Newton/stability penalty
+  (9.5 → 9.4 iters/solve). The bonded/contact conditioning front-loads PCG iterations, so a
+  tighter final tolerance only shaves the converged tail. Now the profile default.
+- **1e-2 is past the cliff**: the linear direction is too inaccurate, Newton degrades to
+  ~510 iters/solve and hits the 1024 cap (52 non-converged steps) — ~40× the per-frame Newton
+  work. Rejected.
+- **MAS net-negative for this scene.** Verified by code read (`mas_preconditioner_engine.cu`,
+  `fem_mas_preconditioner.cu`): it IS a genuine multilevel method (`MAX_LEVELS=6`, Galerkin
+  `H_L = R_L H R_L^T` per level via `scatter_hessian_to_clusters`; additive — not a
+  multiplicative V-cycle — combining levels by injection `collect_final_Z`). The full Hessian
+  including **contact + bonded** triplets does enter, and distant vertices ARE coupled at
+  coarser levels. But (1) the coarsening hierarchy is built **once** from the **static
+  rest-mesh element graph** (`add_edge` over tets/tris/codim edges), not the dynamic
+  contact/bond graph — so two contacting-but-mesh-distant coil layers only aggregate at very
+  coarse levels, giving weak capture of their stiff coupling; (2) FEM↔ABD bonds are entirely
+  outside the FEM hierarchy (ABD verts have no `mesh_part`); (3) the multilevel apply costs
+  more per PCG iter than diagonal. Result: only −12 % iters, net **+7 % wall**. Loosening to
+  1e-3 with the cheap diagonal preconditioner beats MAS@1e-4 on both PCG mean (399 < 406) and
+  per-apply cost. `TAPE_PARTITION>0` knob retained in the demo for re-evaluation on other scenes.

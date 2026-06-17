@@ -544,7 +544,15 @@ SOLVER_PROFILES = {
     # sweeps: ABD dof tolerance = 0.02/s, nodal displacement tolerance
     # = 0.02 * 19mm tape width at dt=0.01s -> velocity_tol = 0.038m/s.
     "tape_abd002_nodal002w": dict(
-        LIN_TOL_RATE=1e-4,
+        # 1e-3 (was 1e-4): measured -8% wall on the 2-turn rod-wind with no
+        # Newton-iter or stability penalty (9.5->9.4 Newton iters/solve, all
+        # 123 frames complete). The bonded/contact conditioning front-loads
+        # PCG iters, so the final tolerance only shaves the tail (PCG mean
+        # 463->399 -- beating even the MAS multilevel preconditioner @1e-4=406,
+        # at lower per-apply cost); 1e-3 banks that for free. 1e-2 is too loose:
+        # the linear direction degrades and Newton blows up to ~510 iters/solve
+        # and stalls. Override with --set LIN_TOL_RATE=... for tighter solves.
+        LIN_TOL_RATE=1e-3,
         NEWTON_VELOCITY_TOL=3.8e-3,
         NEWTON_TRANSRATE_TOL=2.0e-2,
         NEWTON_MAX_ITER=1024,
