@@ -27,14 +27,14 @@ stages < 4%. **The CPU timer cannot see the occlusion GPU cost — ncu is the ar
 |---|---|---|---|
 | ① | occlusion cast → BVH | **REFUTED — skip** | ncu < 0.3% GPU. Audit's "10^9 tests" was ~100× over: actual n_tris≈4000 × ~1867 locks ≈ 7.5M, negligible on GPU. |
 | ② | producer host↔device syncs | **TODO** | structural; producer not a top GPU kernel but the 4+ syncs bubble the async pipeline. Risk: medium (producer hot path). |
-| ③ | filter `has_locks` guard + drop redundant post-filter | **TODO (next)** | low risk; universal broadphase tax + real double-work in lock scenes. |
+| ③ | filter `has_locks` guard | **DONE** | commit ed6ab3b2. NOTE: the "broadphase tax" was smaller than the audit claimed — `lower_bound` over EMPTY keys is O(1) (0 probes), not log(N); the guard only saves a `PT_pair_key` hash per candidate in non-adhesion scenes. Post-filter NOT removed: it is already gated by `size()==0` and is only 0.6% GPU in lock scenes (removal = correctness risk for ~0 gain). |
 | ④ | lock-set re-sort → incremental merge | **TODO-low** | cub radix sorts ≈ 1.4% GPU. Bug-prone; low payoff. |
 | ⑤ | `_rebuild_adhesive_tabular` dirty-flag | **NEGLIGIBLE** | `m_N` = contact-element count (~5), so the "O(N²) host vector" is ~25 structs, not N_vertices². Audit overstated. ~20 `find()`s/frame are host-trivial. |
 | ⑥ | share energy/grad/hess basis | **LOW / N/A** | this is the SOFT-adhesion path; in distance-lock mode soft energy is not assembled at all. Beta-mode only. |
 | ⑦ | reporter gradient_only skips Hessian | **DONE** | commit 76e80918. + bare-Float energy eval. |
 | ⑧ | 4-filter dedup → shared helper | **TODO (maintainability)** | no perf; the patch already drifted (lbvh lost a debug block). |
 | ⑨ | c>1 VT-range vs AABB under-reach | **REFUTED — sound** | point AABB AND triangle AABB each expand by full `d_hat`, so combined broadphase reach ≈ 2·d_hat covers any scale ≤ 2 (the clamp ceiling). c=1.5 far locks are real. |
-| ⑩ | misc constant factors | **PARTIAL** | DONE: the 12×12 struct local-mem spill (the real cost, via ⑦). TODO-small: `eigen::inverse` per existing lock/frame in `release_flags_from_current_shape` (store Dm instead). PT_rcc_coeff copies / buffer-resize churn: negligible. |
+| ⑩ | misc constant factors | **DONE (the one that mattered)** | the 12×12 struct local-mem spill (the real cost) fixed via ⑦. Re-assessed the rest as NEGLIGIBLE: `eigen::inverse` per lock/frame ≈ 30 flops × 1867 = 56K flops/frame (producer not even top-28 GPU); PT_rcc_coeff copies + buffer-resize churn similarly noise. Not worth touching the producer hot path. |
 
 ## Key lesson
 
@@ -46,10 +46,17 @@ returning a bare `Float` from the energy path cut `compute_energy` 1818→270 µ
 (−85 %, ~12 % of total GPU). Measure GPU kernels with ncu before committing to a rewrite;
 CPU scope timers and big-O estimates both misled here.
 
-## Remaining work order (evidence-based)
+## Final state
 
-1. ③ filter `has_locks` guard + remove redundant post-filter (low risk, universal).
-2. ⑩ producer `eigen::inverse` → stored Dm (small, producer hot path).
-3. ⑧ 4-filter dedup (code health).
-4. ② producer host-sync removal (structural, only if re-profiling justifies the risk).
-5. ④ incremental lock merge (lowest payoff; likely skip).
+The optimization pass is effectively complete. The single real win — ⑦/⑩ bonded-energy
+struct spill, **−85 % compute_energy, ~12 % of total GPU** — is landed (76e80918). ③ is a
+clean universal hygiene guard (ed6ab3b2). Everything else is REFUTED (①⑨), NEGLIGIBLE
+(⑤⑥⑩-rest), or risk-without-measured-payoff (②④⑧).
+
+Deferred, would only revisit with new evidence:
+- ② producer host-sync removal — structural refactor of the producer hot path
+  (over-allocate + device-side counts). The 4 syncs/frame are pipeline bubbles a CPU
+  timer can't size; needs a Nsight Systems timeline to justify the risk.
+- ⑧ 4-filter dedup — pure maintainability (the patch has drifted); a 4-kernel refactor
+  with zero perf upside, deferred to avoid churning the production hot path.
+- ④ incremental lock merge — lowest payoff (~1.4 % radix sort), bug-prone; skip.
