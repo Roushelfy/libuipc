@@ -4,6 +4,7 @@
 #include <dytopo_effect_system/dytopo_effect_reporter.h>
 #include <global_geometry/global_vertex_manager.h>
 #include <muda/buffer/device_buffer.h>
+#include <uipc/core/rcc_bonded_pt_oracle.h>  // RCCBondedPTVirtualTetEnergyModel
 
 namespace uipc::backend::cuda
 {
@@ -18,7 +19,10 @@ class RCCBondedPTVirtualTetReporter final : public DyTopoEffectReporter
     class Impl
     {
       public:
+        // ABDOrtho material (also resets the model to ABDOrtho).
         void set_material(Float kappa) noexcept;
+        // StableNeoHookean material (Lamé mu, lambda; sets the model).
+        void set_material_neohookean(Float mu, Float lambda) noexcept;
         Float kappa() const noexcept;
         bool active() const noexcept;
 
@@ -58,7 +62,11 @@ class RCCBondedPTVirtualTetReporter final : public DyTopoEffectReporter
         S<const geometry::AttributeSlot<Float>> dt_attr;
 
       private:
-        Float m_kappa = 0.0;
+        uipc::core::RCCBondedPTVirtualTetEnergyModel m_energy_model =
+            uipc::core::RCCBondedPTVirtualTetEnergyModel::ABDOrtho;
+        Float m_kappa  = 0.0;  // ABDOrtho material
+        Float m_mu     = 0.0;  // StableNeoHookean Lamé (shear)
+        Float m_lambda = 0.0;  // StableNeoHookean Lamé (dilational)
     };
 
   private:

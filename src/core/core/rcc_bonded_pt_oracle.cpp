@@ -134,6 +134,76 @@ Matrix9x9 abd_ortho_hessian_F(const Matrix3x3& F, Float kappa)
 
     return 0.5 * (H + H.transpose());
 }
+
+// StableNeoHookean F-space energy/gradient/Hessian, reimplemented on the host as
+// an INDEPENDENT reference (the GPU reporter calls sym::stable_neo_hookean_3d::*;
+// the oracle mirrors the closed form from detail/stable_neo_hookean_3d.inl so the
+// test is a genuine cross-check, not the same code path).
+Float snh_energy_F(const Matrix3x3& F, Float mu, Float lambda)
+{
+    const Float J     = F.determinant();
+    const Float Ic    = F.squaredNorm();
+    const Float alpha = 1.0 + 0.75 * mu / lambda;
+    return 0.5 * lambda * (J - alpha) * (J - alpha) + 0.5 * mu * (Ic - 3.0)
+           - 0.5 * mu * std::log(Ic + 1.0);
+}
+
+Matrix3x3 snh_gradient_F(const Matrix3x3& F, Float mu, Float lambda)
+{
+    const Float J  = F.determinant();
+    const Float Ic = F.squaredNorm();
+    Matrix3x3   pJpF;
+    pJpF(0, 0) = F(1, 1) * F(2, 2) - F(1, 2) * F(2, 1);
+    pJpF(0, 1) = F(1, 2) * F(2, 0) - F(1, 0) * F(2, 2);
+    pJpF(0, 2) = F(1, 0) * F(2, 1) - F(1, 1) * F(2, 0);
+    pJpF(1, 0) = F(2, 1) * F(0, 2) - F(2, 2) * F(0, 1);
+    pJpF(1, 1) = F(2, 2) * F(0, 0) - F(2, 0) * F(0, 2);
+    pJpF(1, 2) = F(2, 0) * F(0, 1) - F(2, 1) * F(0, 0);
+    pJpF(2, 0) = F(0, 1) * F(1, 2) - F(1, 1) * F(0, 2);
+    pJpF(2, 1) = F(0, 2) * F(1, 0) - F(0, 0) * F(1, 2);
+    pJpF(2, 2) = F(0, 0) * F(1, 1) - F(0, 1) * F(1, 0);
+    return mu * (1.0 - 1.0 / (Ic + 1.0)) * F
+           + (lambda * (J - 1.0 - 0.75 * mu / lambda)) * pJpF;
+}
+
+Matrix9x9 snh_hessian_F(const Matrix3x3& F, Float mu, Float lambda)
+{
+    const Float J  = F.determinant();
+    const Float Ic = F.squaredNorm();
+
+    Matrix9x9 H1 = 2.0 * Matrix9x9::Identity();
+
+    Vector9 g1;
+    g1.segment<3>(0) = 2.0 * F.col(0);
+    g1.segment<3>(3) = 2.0 * F.col(1);
+    g1.segment<3>(6) = 2.0 * F.col(2);
+
+    Vector9 gJ;
+    gJ.segment<3>(0) = F.col(1).cross(F.col(2));
+    gJ.segment<3>(3) = F.col(2).cross(F.col(0));
+    gJ.segment<3>(6) = F.col(0).cross(F.col(1));
+
+    Matrix3x3 f0hat, f1hat, f2hat;
+    f0hat << 0, -F(2, 0), F(1, 0), F(2, 0), 0, -F(0, 0), -F(1, 0), F(0, 0), 0;
+    f1hat << 0, -F(2, 1), F(1, 1), F(2, 1), 0, -F(0, 1), -F(1, 1), F(0, 1), 0;
+    f2hat << 0, -F(2, 2), F(1, 2), F(2, 2), 0, -F(0, 2), -F(1, 2), F(0, 2), 0;
+
+    Matrix9x9 HJ;
+    HJ.block<3, 3>(0, 0) = Matrix3x3::Zero();
+    HJ.block<3, 3>(0, 3) = -f2hat;
+    HJ.block<3, 3>(0, 6) = f1hat;
+    HJ.block<3, 3>(3, 0) = f2hat;
+    HJ.block<3, 3>(3, 3) = Matrix3x3::Zero();
+    HJ.block<3, 3>(3, 6) = -f0hat;
+    HJ.block<3, 3>(6, 0) = -f1hat;
+    HJ.block<3, 3>(6, 3) = f0hat;
+    HJ.block<3, 3>(6, 6) = Matrix3x3::Zero();
+
+    return (Ic * mu) / (2.0 * (Ic + 1.0)) * H1
+           + lambda * (J - 1.0 - (3.0 * mu) / (4.0 * lambda)) * HJ
+           + (mu / (2.0 * (Ic + 1.0) * (Ic + 1.0))) * g1 * g1.transpose()
+           + lambda * gJ * gJ.transpose();
+}
 }  // namespace
 
 RCCBondedPTRestShape
@@ -205,18 +275,41 @@ RCCBondedPTVirtualTetOracle
 build_rcc_bonded_pt_virtual_tet_oracle(const RCCBondedPTVirtualTetInput& input)
 {
     RCCBondedPTVirtualTetOracle out;
-    if(input.rest_volume <= 0.0 || input.kappa <= 0.0 || input.dt == 0.0
-       || input.energy_model != RCCBondedPTVirtualTetEnergyModel::ABDOrtho)
+    if(input.rest_volume <= 0.0 || input.dt == 0.0)
         return out;
 
     out.F = deformation_gradient(input);
     const Matrix3x3& F = out.F;
     const Float      Vdt2 = input.rest_volume * input.dt * input.dt;
 
-    const Matrix3x3 C = F * F.transpose() - Matrix3x3::Identity();
-    const Float psi = input.kappa * C.squaredNorm();
-    Matrix3x3 dpsi_dF_mat = abd_ortho_gradient_F(F, input.kappa);
-    Matrix9x9 ddpsi_ddF = abd_ortho_hessian_F(F, input.kappa);
+    Float     psi = 0.0;
+    Matrix3x3 dpsi_dF_mat = Matrix3x3::Zero();
+    Matrix9x9 ddpsi_ddF = Matrix9x9::Zero();
+
+    switch(input.energy_model)
+    {
+        case RCCBondedPTVirtualTetEnergyModel::ABDOrtho:
+        {
+            if(input.kappa <= 0.0)
+                return out;
+            const Matrix3x3 C = F * F.transpose() - Matrix3x3::Identity();
+            psi         = input.kappa * C.squaredNorm();
+            dpsi_dF_mat = abd_ortho_gradient_F(F, input.kappa);
+            ddpsi_ddF   = abd_ortho_hessian_F(F, input.kappa);
+            break;
+        }
+        case RCCBondedPTVirtualTetEnergyModel::StableNeoHookean:
+        {
+            if(input.mu <= 0.0 || input.lambda <= 0.0)
+                return out;
+            psi         = snh_energy_F(F, input.mu, input.lambda);
+            dpsi_dF_mat = snh_gradient_F(F, input.mu, input.lambda);
+            ddpsi_ddF   = snh_hessian_F(F, input.mu, input.lambda);
+            break;
+        }
+        default:
+            return out;
+    }
 
     if(input.project_hessian_to_spd)
         ddpsi_ddF = project_spd(ddpsi_ddF);

@@ -37,7 +37,8 @@ build_rcc_bonded_pt_rest_shape_svts(const RCCBondedPTRestShapeInput& input);
 
 enum class RCCBondedPTVirtualTetEnergyModel
 {
-    ABDOrtho = 0
+    ABDOrtho        = 0,
+    StableNeoHookean = 1
 };
 
 struct UIPC_CORE_API RCCBondedPTVirtualTetInput
@@ -50,7 +51,9 @@ struct UIPC_CORE_API RCCBondedPTVirtualTetInput
     Float     rest_volume = 0.0;
     RCCBondedPTVirtualTetEnergyModel energy_model =
         RCCBondedPTVirtualTetEnergyModel::ABDOrtho;
-    Float     kappa = 1e8;
+    Float     kappa = 1e8;            // ABDOrtho material
+    Float     mu = 0.0;               // StableNeoHookean Lamé (shear)
+    Float     lambda = 0.0;           // StableNeoHookean Lamé (dilational)
     Float     dt = 1.0;
     bool      project_hessian_to_spd = true;
 };

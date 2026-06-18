@@ -408,8 +408,18 @@ def build_demo(adhesion_on: bool = True,
         config["rcc_bonded_pt_beta_lock_threshold"] = beta_lock_threshold
         config["rcc_bonded_pt_lock_face_interior_only"] = (
             1 if L.cfg_flag(_CFG, "LOCK_FACE_INTERIOR_ONLY", default=False) else 0)
-        config["rcc_bonded_pt_energy_model"] = "abd_ortho"
+        # Virtual-tet constitution: "abd_ortho" (single kappa) [default] or
+        # "stable_neo_hookean" (Young+Poisson). See docs/development/
+        # rcc_bonded_pt_energy_models.md. kappa is still read so flipping the
+        # model back needs no other change.
+        _energy_model = str(_CFG.get("RCC_ENERGY_MODEL", "abd_ortho"))
+        config["rcc_bonded_pt_energy_model"] = _energy_model
         config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
+        if _energy_model == "stable_neo_hookean":
+            config["rcc_bonded_pt_neohookean_young"] = _cfg_f(
+                "RCC_NEOHOOKEAN_YOUNG", 5.0e7)
+            config["rcc_bonded_pt_neohookean_poisson"] = _cfg_f(
+                "RCC_NEOHOOKEAN_POISSON", 0.45)
         config["rcc_bonded_pt_release_force"] = release_force
         # Phase 7 distance-locked bonding. Precedence: `--set DISTANCE_LOCK=...`
         # wins; else the asset's saved flag (a tape wound in distance-lock mode
