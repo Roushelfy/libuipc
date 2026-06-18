@@ -905,9 +905,44 @@ def build_demo(adhesion_on: bool = True,
             print(f"[rod-wind] seeded {len(lbetas)} bonded locks "
                   f"(tape indices shifted +{shift} past rod+carrier).")
 
+    # tape's global vertex offset for runtime lock-topology dumps: backend
+    # layout is [hub | rod | carrier | tape] (ABD before FEM), so a runtime
+    # global vertex index g maps to tape-local via g - tape_global_offset.
+    _hub_nv = len(np.asarray(view(hub_sc.positions())).reshape(-1, 3))
+    _rc_nv = (len(np.asarray(view(rod_sc.positions())).reshape(-1, 3))
+              + len(np.asarray(view(carrier_sc.positions())).reshape(-1, 3)))
+    _tape_nv = len(np.asarray(tape_pos).reshape(-1, 3))
+
     return {"engine": engine, "world": world, "scene": scene,
             "scene_io": SceneIO(scene), "hub_geo": hub_geo,
-            "tape_geo": tape_geo, "rod_geo": rod_geo, "params": params}
+            "tape_geo": tape_geo, "rod_geo": rod_geo, "params": params,
+            "tape_global_offset": _hub_nv + _rc_nv, "tape_nv": _tape_nv}
+
+
+def _dump_locked_edges(sim, out_path):
+    """EXPERIMENT: write the CURRENT bonded-PT topology as tape-local edges for
+    the contact-aware MAS partition test (feeds UIPC_MESH_PARTITION_EXTRA_EDGES).
+    Captures the LIVE wound topology (incl. new rod-wind locks) -- unlike the
+    asset's init locks. tape-hub/rod (FEM-ABD) endpoints fall outside the tape
+    range and are dropped."""
+    bpt = sim["world"].features().find(RCCBondedPTStateAccessorFeature)
+    topos, _betas = bpt.dump_locked_pairs()
+    topos = np.asarray(topos, dtype=np.int64)
+    off, N = sim["tape_global_offset"], sim["tape_nv"]
+    tl = topos - off
+    edges, n_tt = set(), 0
+    for row in tl:
+        p, t0, t1, t2 = int(row[0]), int(row[1]), int(row[2]), int(row[3])
+        if all(0 <= v < N for v in (p, t0, t1, t2)):
+            n_tt += 1
+        for b in (t0, t1, t2):
+            if 0 <= p < N and 0 <= b < N and p != b:
+                edges.add((min(p, b), max(p, b)))
+    with open(out_path, "w") as f:
+        for a, b in sorted(edges):
+            f.write(f"{a} {b}\n")
+    print(f"[rod-wind] dump: tape_offset={off} N_tape={N} locks={len(topos)} "
+          f"tape_tape={n_tt} edges={len(edges)} -> {out_path}", flush=True)
 
 
 def run_demo():
@@ -940,11 +975,16 @@ def run_demo():
     if ps is None or _CFG.get("HEADLESS"):
         # headless without a record dir: just step + report (CI / quick check)
         w = sim["world"]
+        _dump_at = _cfg_i("DUMP_LOCKS_AT_FRAME", -1)
+        _dump_out = _CFG.get("DUMP_LOCKS_OUT")
         for _ in range(min(TOTAL_FRAMES, _cfg_i("MAX_FRAMES", TOTAL_FRAMES))):
             w.advance()
             if not w.is_valid():
                 print(f"[rod-wind] INVALID at frame {w.frame()}"); break
             w.retrieve()
+            if _dump_at > 0 and _dump_out and w.frame() >= _dump_at:
+                _dump_locked_edges(sim, _dump_out)
+                return
         print(f"[rod-wind] done at frame {w.frame()}/{TOTAL_FRAMES}")
         return
 

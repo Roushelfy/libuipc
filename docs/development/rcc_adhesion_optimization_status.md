@@ -124,9 +124,44 @@ the break-even iteration target was even exceeded). **But the wall got monotonic
 (938 → 976 → 1027 s): the denser contact-augmented clustering raises the MAS per-apply cost more
 than the iteration savings recover (C is slower than B despite 11 % fewer iters). The bottleneck
 was never the iteration count — it is the multilevel-apply cost, and contact-awareness pushes
-that the wrong way. Since even this **ideal static** version is +9 % wall vs the free
-diagonal@1e-3, the **per-frame dynamic** re-anchor (which adds rebuild cost on top) is strictly
-worse and not worth pursuing for this scene. diagonal@1e-3 remains best.
+that the wrong way. This init-locks static version is +9 % wall vs the free diagonal@1e-3.
+(The per-frame question is refined in the follow-up below, which uses a better-targeted
+late-ORBIT snapshot + a per-phase breakdown — the short answer is per-frame's ceiling is
+≈ parity, still not a clear win.) diagonal@1e-3 remains best.
 (Apparatus: `output/distlock_run/{capture_edges.py,run_experiment.sh}` + the
 `UIPC_MESH_PARTITION_EXTRA_EDGES` hook in `mesh_partition.cpp`, kept for re-evaluation on
 contact-stiffness-dominated scenes where the per-apply premium might pay off.)
+
+### Follow-up: per-phase breakdown + late-ORBIT-matched partition (refines the above)
+
+The init-locks partition above was mis-targeted: 97 % of the solver cost is in ORBIT (the
+new-wind phase), where the *dynamic* rod-wind contacts — not the asset's roll bonds — dominate.
+So we (a) bucketed PCG iters/wall by phase, and (b) re-ran with a partition built from the LIVE
+locks captured at a late-ORBIT frame (frame 2000, 2003 locks → 2018 edges, via the demo
+`DUMP_LOCKS_AT_FRAME`/`DUMP_LOCKS_OUT` hook). Per-phase wall (s) on the 2-turn rod-wind:
+
+| phase | diag | MAS rest | MAS init-aug | MAS late-ORBIT-aug |
+|---|---|---|---|---|
+| 3_WRAP (fold) | 14 | 25 | 71 | **96** ← mismatch catastrophe |
+| 7_ORBIT_early | 472 | 495 | 482 | **468** |
+| 8_ORBIT_late | 363 | 368 | 378 | 371 |
+| **ORBIT total** | **835 (iters 9.0M)** | 863 | 860 | **840 (+0.6 %, iters 6.2M −31 %)** |
+| **full-run total** | **938** | 976 (+4 %) | 1027 (+9 %) | 1014 (+8 %) |
+
+Two refinements to the verdict:
+- **In its matched phase (ORBIT, 97 % of cost), contact-aware MAS is essentially break-even on
+  wall (+0.6 %) while cutting iters −31 %** — when the partition matches the active contacts, the
+  multilevel per-apply tax IS nearly recovered. This is the one genuinely encouraging signal.
+- A *static* partition can only match one phase: the late-ORBIT partition wins ORBIT but is
+  catastrophic in WRAP (96 s vs 14 s, 6.8×, badly mismatched to the folding phase). That WRAP
+  blow-up accounts for nearly all of its +8 % overall loss.
+
+A **per-frame** partition would match each phase and avoid the WRAP-type mismatches. Idealized
+per-phase-best ≈ 917 s vs diagonal 938 s ≈ **−2 % wall** — but that is the *ceiling* (perfect
+matching, zero rebuild cost). The win comes from FINE-level re-partitioning, so a real per-frame
+loop pays per-frame METIS + contact D2H + engine re-init (~5–15 ms/frame × 2460 ≈ 12–37 s),
+which is the same order as the ~20 s idealized win. **Net: per-frame's realistic ceiling is
+≈ parity with diagonal@1e-3, not a clear win** — so a multi-day per-frame implementation is not
+justified for this scene. The user's intuition (static partition is phase-mismatched; per-frame
+fixes it) is correct and the ORBIT break-even is real, but the headroom is too thin to bank.
+diagonal@1e-3 remains the pragmatic best. Phase tool: `output/distlock_run/phase_wall.py`.
