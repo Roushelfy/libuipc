@@ -165,3 +165,52 @@ which is the same order as the ~20 s idealized win. **Net: per-frame's realistic
 justified for this scene. The user's intuition (static partition is phase-mismatched; per-frame
 fixes it) is correct and the ORBIT break-even is real, but the headroom is too thin to bank.
 diagonal@1e-3 remains the pragmatic best. Phase tool: `output/distlock_run/phase_wall.py`.
+
+## Bonded-reporter Hessian assembly is register-bound — but so is ALL of FEM (universal)
+
+The bonded reporter's `assemble` (gradient+Hessian) kernel is register-bound: **255 regs/thread
+(the ceiling), ~15.5 % occupancy**. Root cause is the per-element dense linear algebra —
+`fem::dFdx` (9×12) triple product `dFdxᵀ·H9x9·dFdx` + the 9×9 `make_spd` eigendecomposition + the
+12×12 output. (`compute_energy`, by contrast, is 92 regs / 40 % occ after the 76e80918 fix.)
+
+**This is NOT bonded-specific.** `cuobjdump --dump-resource-usage` on the built backend (compile-time,
+no scene needed) shows EVERY FEM constitution's `gradient_hessian` kernel pinned at the same 255-reg
+ceiling, with `LOCAL=0` — i.e. genuine register pressure, NOT local-memory spill:
+
+| kernel (gradient/Hessian) | REG | kernel (compute_energy) | REG |
+|---|---|---|---|
+| ARAP3D / StableNeoHookean3D | 255 | (most) | 60–144 |
+| NeoHookeanShell2D / DiscreteShellBending | 255 | | |
+| KirchhoffRodBending / OrthoPotential | 255 | | |
+| AffineBodyRevoluteJoint | 255 | | |
+| **RCCBondedPTVirtualTetReporter::assemble** | **255** | RCCBonded::compute_energy | 92 |
+| HookeanSpring1D (1D, fewest DOF) | 180 | | |
+
+So the bonded reporter is exactly in line with the rest of libuipc. The 76e80918 energy-path win
+(return bare `Float`, drop the unused 12×12) was a genuine free lunch; the Hessian path legitimately
+needs the 12×12 and has no analogous quick win. The earlier "spill" framing was imprecise — these
+kernels do not spill (`LOCAL=0`), they are occupancy-capped by genuine register need. Speeding it up
+= speeding up libuipc's per-element Hessian assembly across the board (analytic SPD eigensystem to
+replace the `make_spd` EVD, or cooperative-thread assembly) — research-grade, out of scope. The
+practical lever for the bonded reporter is **algorithmic — fewer locked pairs (fewer elements)** —
+not faster per-element math.
+
+### Cross-layer occlusion gate (audit ①) — confirmed not worth it, and correctness-critical
+
+The "隔层检测" is `VT_occlusion_blocked`
+(`codim_ipc_simplex_rcc_adhesive_function.h`): for a candidate adhesion PT pair, cast a segment from
+centroid(T) toward P and test it against all shell triangles (brute-force `for j in 0..n_tris`,
+triangles sharing the pair's 4 verts excluded, with an `engage` early-out). If an intervening
+triangle blocks it the pair is layer-separated and must not bond. It re-runs **once per frame for
+every candidate pair** (fused into the Phase A/B lock-eligibility kernels), O(n_tris·n_pairs) ≈ 7.5M
+segment-tri tests.
+
+- **Worth optimizing? No.** Measured <0.3 % GPU (audit ①). It does NOT use a BVH today (it is the
+  brute-force loop); the audit's "occlusion cast → BVH" was the *proposed* acceleration, refuted.
+  Not to be confused with the core collision-detection broadphase (`StacklessBVH`, ~35 % GPU) — that
+  is the required IPC trajectory filter and cannot be disabled.
+- **Separate toggle? No.** There is no occlusion-specific config key; only `rcc_bonded_pt_enabled`
+  disables the whole bonded system. The gate is always on when bonding is on. It is a CORRECTNESS
+  gate (prevents bonding through an intervening layer), not a perf knob, so disabling it would create
+  physically-wrong through-layer bonds — and it costs <0.3 % anyway. A standalone flag would be a
+  trivial add if ever needed for ablation, but there is no performance reason to.
