@@ -435,11 +435,20 @@ def build_demo(adhesion_on: bool = True,
         # restricts to face-interior VTs (sound point-plane tets, fewer locks).
         config["rcc_bonded_pt_lock_face_interior_only"] = (
             1 if L.cfg_flag(_CFG, "LOCK_FACE_INTERIOR_ONLY", default=False) else 0)
-        config["rcc_bonded_pt_energy_model"] = "abd_ortho"
+        # Virtual-tet constitution: "abd_ortho" (kappa) [default] or
+        # "stable_neo_hookean" (Young+Poisson). RUNTIME config (NOT asset-saved),
+        # so wind / drop / rod-wind must all pass the same RCC_ENERGY_MODEL.
+        _energy_model = str(_CFG.get("RCC_ENERGY_MODEL", "abd_ortho"))
+        config["rcc_bonded_pt_energy_model"] = _energy_model
         # Bond stiffness. `--set RCC_KAPPA=1e7` softens the ABD bond (better
         # Hessian conditioning / fewer line-search blowups on thin sliver tets,
         # at the cost of softer bonds). Default = the build_demo kwarg (1e8).
         config["rcc_bonded_pt_kappa"] = float(_CFG.get("RCC_KAPPA", kappa))
+        if _energy_model == "stable_neo_hookean":
+            config["rcc_bonded_pt_neohookean_young"] = float(
+                _CFG.get("RCC_NEOHOOKEAN_YOUNG", 5.0e7))
+            config["rcc_bonded_pt_neohookean_poisson"] = float(
+                _CFG.get("RCC_NEOHOOKEAN_POISSON", 0.45))
         # Phase 7 distance-locked bonding: `--set DISTANCE_LOCK=1` disables the
         # soft adhesion energy entirely (no beta) and locks by the end-of-step
         # distance band d < xi + c*d_hat instead (c = `--set
