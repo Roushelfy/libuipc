@@ -214,3 +214,24 @@ segment-tri tests.
   gate (prevents bonding through an intervening layer), not a perf knob, so disabling it would create
   physically-wrong through-layer bonds — and it costs <0.3 % anyway. A standalone flag would be a
   trivial add if ever needed for ablation, but there is no performance reason to.
+
+### skip_ccd for locked pairs — measured, no win (and BVH build is untouchable)
+
+All profiles in this doc ran with the rod-wind demo default `SKIP_CCD=0` (CCD ON for locked
+pairs — the safer choice: locked pairs keep the thickness guard). `rcc_bonded_pt_skip_ccd<0`
+(`--set SKIP_CCD=-1`) auto-skips the CCD candidate emission for locked PTs (they are owned by the
+ABD virtual tet). A/B on the 2-turn rod-wind at diagonal@1e-3:
+
+| config | PCG mean | Newton/solve | wall | INVALID |
+|---|---|---|---|---|
+| SKIP_CCD=0 (CCD on, default) | 399 | 9.4 | 938 s | 0 |
+| SKIP_CCD=-1 (skip locked-pair CCD) | 408 | 9.3 | 971 s (+3.5 %) | 0 |
+
+**No win — slightly slower.** skip_ccd only removes the locked-pair CCD candidate emission /
+narrowphase (a small subset), NOT the dominant ~35 % BVH **build**: the build is over ALL surface
+primitives (`point/edge/triangle_aabbs.resize(Vs/Es/Fs.size())`) and a bonded primitive still needs
+detection vs non-bonded primitives, so it cannot be removed from the BVH. Pair-level skipping cannot
+shrink a primitive-level build. The tiny narrowphase saving is swamped by run-to-run variation + a
+slightly perturbed solve (PCG 399→408). So `SKIP_CCD=0` (CCD on) is the right default — safer AND no
+slower. The only ways to cut the BVH build are unrelated to bonding: refit-vs-rebuild between Newton
+iters, or (unsafe/scene-specific) excluding fully-bonded interior primitives from the surface set.
