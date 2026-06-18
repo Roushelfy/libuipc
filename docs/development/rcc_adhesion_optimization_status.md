@@ -95,3 +95,38 @@ Conclusions:
   more per PCG iter than diagonal. Result: only −12 % iters, net **+7 % wall**. Loosening to
   1e-3 with the cheap diagonal preconditioner beats MAS@1e-4 on both PCG mean (399 < 406) and
   per-apply cost. `TAPE_PARTITION>0` knob retained in the demo for re-evaluation on other scenes.
+
+### Contact-aware MAS partition — upper-bound experiment (tested, rejected)
+
+Follow-up question: would re-anchoring the MAS hierarchy on the *current contact/bond*
+topology (instead of the static rest mesh) help? A code feasibility study confirmed the
+hierarchy is already rebuilt every Newton iter (`reorder_realtime`, which even takes a
+`cp_num` contact-count arg — dead/reserved plumbing); the only static thing is the neighbor
+graph, restored from a rest-mesh `_init` snapshot. So contact-awareness = feed an augmented
+neighbor graph. The blocker for the *ideal* version is that fine-cluster bank assignment comes
+from the static `mesh_part` partition, not the graph — so true co-clustering needs re-partitioning.
+
+We measured the **upper bound** (ideal static contact-aware *fine* partition): captured the
+1057 tape-tape bonded PT pairs from the wound-roll asset → 1777 cross-layer FEM-FEM edges (each
+spanning ~71 grid rows ≈ one coil turn; 0 overlap with rest-mesh edges), injected them into
+`mesh_partition`'s METIS adjacency via the env-gated `UIPC_MESH_PARTITION_EXTRA_EDGES` hook, and
+re-ran the 2-turn rod-wind (`speed-r150-bend5k`, `RCC_KAPPA=3e7`) at 1e-3:
+
+| config | partition | PCG mean | Newton/solve | wall (2460 frames) |
+|---|---|---|---|---|
+| diagonal@1e-3 | — | 399 | 9.4 | 938 s |
+| MAS rest-mesh@1e-3 | static rest graph | 328.5 (−18 %) | 8.8 | 976 s (+4 %) |
+| **MAS contact-augmented@1e-3** | rest + 1777 contact edges | **292.4 (−27 %)** | 9.9 | **1027 s (+9 %)** |
+
+**Verdict: confirmed on iterations, rejected on wall.** Co-clustering the contacting layers
+*does* cut PCG iterations exactly as predicted (−27 % vs diagonal, −11 % beyond static MAS —
+the break-even iteration target was even exceeded). **But the wall got monotonically *worse***
+(938 → 976 → 1027 s): the denser contact-augmented clustering raises the MAS per-apply cost more
+than the iteration savings recover (C is slower than B despite 11 % fewer iters). The bottleneck
+was never the iteration count — it is the multilevel-apply cost, and contact-awareness pushes
+that the wrong way. Since even this **ideal static** version is +9 % wall vs the free
+diagonal@1e-3, the **per-frame dynamic** re-anchor (which adds rebuild cost on top) is strictly
+worse and not worth pursuing for this scene. diagonal@1e-3 remains best.
+(Apparatus: `output/distlock_run/{capture_edges.py,run_experiment.sh}` + the
+`UIPC_MESH_PARTITION_EXTRA_EDGES` hook in `mesh_partition.cpp`, kept for re-evaluation on
+contact-stiffness-dominated scenes where the per-apply premium might pay off.)

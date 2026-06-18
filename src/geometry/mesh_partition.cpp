@@ -8,6 +8,8 @@
 #include <set>
 #include <algorithm>
 #include <numeric>
+#include <cstdlib>
+#include <fstream>
 
 namespace uipc::geometry
 {
@@ -53,6 +55,36 @@ static void build_adjacency(vector<idx_t>&           xadj,
         auto edge_view = sc.edges().topo().view();
         for(auto& edge : edge_view)
             add_edge(edge[0], edge[1]);
+    }
+
+    // EXPERIMENT (env-gated): inject extra adjacency edges from a file so the
+    // partition can be made contact/bond-aware. Each line is "a b" (two local
+    // vertex ids). Used to test whether co-clustering dynamically-coupled
+    // vertices (e.g. contacting tape-coil layers) cuts the MAS PCG iteration
+    // count below the diagonal-preconditioner baseline. Read once at init;
+    // add_edge() already bounds-checks, so out-of-range ids are dropped.
+    if(const char* extra_path = std::getenv("UIPC_MESH_PARTITION_EXTRA_EDGES"))
+    {
+        std::ifstream in(extra_path);
+        if(in)
+        {
+            IndexT a = 0, b = 0;
+            SizeT  added = 0;
+            while(in >> a >> b)
+            {
+                add_edge(a, b);
+                ++added;
+            }
+            UIPC_INFO_WITH_LOCATION(
+                "mesh_partition: injected {} extra edges from '{}'.", added, extra_path);
+        }
+        else
+        {
+            UIPC_WARN_WITH_LOCATION(
+                "mesh_partition: UIPC_MESH_PARTITION_EXTRA_EDGES set but "
+                "could not open '{}'.",
+                extra_path);
+        }
     }
 
     // Build CSR format
