@@ -1584,6 +1584,73 @@ WIND_PRESETS = {
         "SETTLE2_FRAMES":    500,
         "SOLVER_PROFILE":    "tape_abd002_nodal002w",
     },
+    # ===== 3M Scotch Heavy Duty Shipping / Packaging Tape 3850 =====
+    # Verified specs (2026-06 research; 3M publishes no full TDS for the
+    # consumer 3850, so material/peel specs are anchored to the
+    # identically-constructed sibling 3M Box Sealing Tape 375 TDS + BOPP
+    # material literature, cross-checked):
+    #   geometry : width 48 mm (1.88 in); total caliper 0.079 mm (3.1 mil =
+    #              ~0.051 mm BOPP backing + ~0.028 mm hot-melt rubber-resin PSA);
+    #              3 in core (ID 76.2 mm); 50 m roll.
+    #   backing  : biaxially-oriented PP — E_MD ≈ 2.2 GPa, E_TD ≈ 5.0 GPa,
+    #              ν ≈ 0.42, ρ ≈ 910; composite-tape ρ ≈ 924 kg/m³.
+    #   strength : tensile MD 613 N/100mm (35 lb/in), elongation 160 %;
+    #              180° peel to steel ≈ 60.2 N/100mm → Kendall G ≈ 1200 J/m².
+    #
+    # Sim mapping — half-thickness convention, all four responses kept faithful
+    # (membrane E·t, bending D, areal mass ρ·t, and the contact layer gap):
+    #   t_sim = ½·0.079 mm = 4.0e-5      → xi = 2·t = real 0.079 mm layer gap
+    #   TAPE_YOUNGS  = 2·E_MD = 4.4e9    (membrane ∝ E·t preserved at half t)
+    #   MASS_DENSITY = 2·924  = 1850     (areal mass ρ·t preserved at half t)
+    #   BENDING_STIFFNESS = D/(A·t_sim), D = E_MD·t_backing³/(12(1−ν²)) ≈ 3.0e-5
+    #       N·m, A = ½·(48mm/10)² = 1.15e-5 m² (square cells)  → κ ≈ 6.5e4 Pa.
+    #   (BOPP is ~60× stiffer than PVC but much thinner and on a coarser
+    #    48 mm-wide mesh, so κ lands near the electrical-tape default.)
+    # NOTE on fidelity vs tractability: the BOPP membrane (4.4e9) is far stiffer
+    # than the speed-tier electrical-tape value (5e7). The tape barely stretches
+    # while winding, so this is physically correct, but it stiffens the Hessian
+    # (more PCG iters). If the wind struggles, soften TAPE_YOUNGS toward 1e9
+    # (still effectively inextensible) via `--set TAPE_YOUNGS=…`.
+    # Geometry for N_TURNS=3: L_wound(6π) ≈ 0.757 m + ~5 cm slack.
+    # Winding/bonding machinery mirrors speed-r150-bend5k (distance-lock) so the
+    # asset is drop / rod-wind pipeline-compatible. 3850's strong adhesive →
+    # for faithful peel in drop/unwind use a higher RCC_RELEASE_FORCE downstream.
+    "scotch3850": {
+        "HUB_R_OUTER":       0.040,     # 3 in core outer (ID 38.1 mm + ~1.9 mm wall)
+        "HUB_R_INNER":       0.0381,    # 3 in core inner radius (ID 76.2 mm / 2)
+        "HUB_HEIGHT":        0.050,     # 48 mm tape width + 2 mm sim margin
+        "TAPE_WIDTH":        0.048,     # 1.88 in = 48 mm
+        "TAPE_LENGTH":       0.84,      # L_wound(3 turns) 0.757 m + ~8 cm slack (protrudes ~4.6 cm when stood upright)
+        "N_TURNS":           3,
+        "TAPE_NZ":           10,        # 4.8 mm cells; TAPE_NX auto (square) ≈ 169
+        "TAPE_YOUNGS":       4.4e9,     # 2.2 GPa (BOPP MD) × 2 (half-thickness membrane comp)
+        "TAPE_POISSON":      0.42,      # BOPP
+        "TAPE_MASS_DENSITY": 1850,      # composite-tape 924 kg/m³ × 2 (areal-mass comp)
+        "TAPE_THICKNESS":    4.0e-5,    # = ½ physical 0.079 mm
+        "D_HAT_RATIO":       2.0,       # D_HAT = 8.0e-5 ≈ real 0.079 mm thickness
+        "LAYER_THICKNESS":   1.2e-4,    # in (2t=8e-5, 2t+d_hat=1.6e-4)
+        "BUFFER_LENGTH":     0.005,
+        "BENDING_STIFFNESS": 6.5e4,     # D/(A·t_sim); BOPP bending (see header)
+        "ADH_CN":            1.0,
+        "ADH_CT":            1.0,
+        "ADH_W":             1.0,
+        # Distance-lock mode (no soft adhesion energy; lock by end-of-step band).
+        "DISTANCE_LOCK":            1,
+        "DISTANCE_LOCK_RATIO":      1.5,
+        "LOCK_FACE_INTERIOR_ONLY":  1,
+        "SKIP_CCD":                 0,
+        "RCC_KAPPA":                3.0e7,
+        "RCC_BETA_LOCK_THRESHOLD":  0.9,
+        "RCC_RELEASE_FORCE":        1.0e-7,
+        "ADH_ETA":           100.0,
+        "ADH_BONDING_RATE":  1.0,
+        "ADH_INITIAL_BETA":  0.0,
+        "SPC_STRENGTH":      10000.0,
+        "SETTLE1_FRAMES":    100,
+        "RELEASE_FRAMES":    500,
+        "SETTLE2_FRAMES":    500,
+        "SOLVER_PROFILE":    "tape_abd002_nodal002w",
+    },
 }
 
 
